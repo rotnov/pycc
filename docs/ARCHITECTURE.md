@@ -65,7 +65,7 @@ Tier 1 — build, test, CI-gated from MVP:
 Rules:
 
 - Runtime has **zero** platform-conditional behavior visible to user code (path/OS specifics live in `pycc_std` behind `os`/`pathlib` just like CPython).
-- Cross-compilation: `pycc build --target <triple>` works from any host (bundled lld, no system linker needed; macOS may require SDK path).
+- Cross-compilation: `pycc build --target <triple>` is currently proven for same-OS/cross-arch only (e.g. macOS x86_64⟷arm64, CI-gated) — cross-OS targets are not yet supported (see D-021). Linking goes through each host's own toolchain driver (system `cc`, or a bundled `clang` on Windows/Linux when a target is given), not a universally bundled linker.
 - Static linking by default on Linux (musl optional), self-contained .exe on Windows, notarization-friendly binary on macOS.
 - CI matrix runs the full conformance suite on all Tier-1 targets; a PEP test only counts as passing when it passes everywhere.
 - Tier 2 (build, best-effort tests): `aarch64-pc-windows-msvc`, `x86_64-unknown-linux-musl`, `wasm32-wasi` (experiment).

@@ -66,12 +66,13 @@ pub fn compile_to_object(
             emit_instr(&builder, print_fn, &user_functions, i64_type, instr)?;
         }
     }
-    // See the module-level comment block below for why these five
-    // .expect()s (this one included) are deliberate rather than
-    // Result-threaded: each covers an operation that is infallible given
-    // how this function always calls it. write_to_file, at the very end,
-    // is the one genuine, externally-triggerable failure mode and stays a
-    // real Result the caller must handle.
+    // See the module-level comment block below for why these .expect()s
+    // (this one included) are deliberate rather than Result-threaded: each
+    // covers an operation that stays infallible given how this function
+    // always calls it. Two calls below are genuine, externally-triggerable
+    // failure modes and stay real Results the caller must handle:
+    // Target::from_triple (a user-supplied --target can legitimately name
+    // a triple LLVM doesn't recognize) and write_to_file, at the very end.
     builder
         .build_return(Some(&i64_type.const_int(0, false)))
         .expect("build_return should not fail: builder is always freshly positioned before this call");
@@ -127,7 +128,10 @@ pub fn compile_to_object(
             RelocMode::Default,
             CodeModel::Default,
         )
-        .expect("creating a target machine for the native host with generic CPU/features should never fail");
+        .expect(
+            "creating a target machine with generic CPU/features should never fail for a \
+             triple Target::from_triple has already accepted",
+        );
     target_machine.write_to_file(&module, FileType::Object, output_path).map_err(llvm_string_to_owned)
 }
 
@@ -326,9 +330,11 @@ mod tests {
 
     #[test]
     fn write_to_file_failure_is_reported_as_an_error() {
-        // A real, reachable failure mode (unlike the five internal
-        // invariants asserted via .expect() in compile_to_object): the
-        // output path's parent directory doesn't exist.
+        // A real, reachable failure mode (unlike the internal invariants
+        // asserted via .expect() in compile_to_object): the output path's
+        // parent directory doesn't exist. an_unknown_target_triple_is_a_
+        // clean_error below covers this function's other genuine failure
+        // mode, Target::from_triple.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
         };
@@ -356,12 +362,28 @@ mod tests {
         compile_to_object(&mir, &obj_path, Some("x86_64-apple-darwin"))
             .expect("cross-compiling to a different Tier-1 target should succeed");
 
-        let output = Command::new("file").arg(&obj_path).output().expect("`file` should run");
-        let description = String::from_utf8_lossy(&output.stdout);
         assert!(
-            description.contains("x86_64"),
-            "expected an x86_64 object file, got: {description}"
+            object_file_cpu_type_is_x86_64(&obj_path),
+            "expected a Mach-O object file with cputype x86_64"
         );
+    }
+
+    /// Reads the Mach-O header directly instead of shelling out to the
+    /// `file` utility, which this test used to do: fragile on Windows,
+    /// where `file` isn't a standard tool and only worked because Git's
+    /// bundled `usr/bin/file.exe` happened to be on `PATH` there -- an
+    /// environment coincidence, not a guarantee. This test only ever
+    /// emits Mach-O (`--target x86_64-apple-darwin`), so a full
+    /// multi-format parser isn't needed -- just enough of
+    /// `mach_header_64`'s fixed layout (magic, then cputype, both
+    /// little-endian on every Tier-1 target this project builds for) to
+    /// assert the emitted object's architecture is genuinely x86_64, not
+    /// a copy-paste no-op.
+    fn object_file_cpu_type_is_x86_64(path: &std::path::Path) -> bool {
+        const MH_MAGIC_64: [u8; 4] = 0xfeed_facf_u32.to_le_bytes();
+        const CPU_TYPE_X86_64: [u8; 4] = 0x0100_0007_u32.to_le_bytes();
+        let bytes = std::fs::read(path).expect("object file should be readable");
+        bytes.len() >= 8 && bytes[0..4] == MH_MAGIC_64 && bytes[4..8] == CPU_TYPE_X86_64
     }
 
     #[test]

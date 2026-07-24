@@ -221,6 +221,54 @@ fn build_and_run_cross_compiled_to_a_different_tier_1_target() {
     assert_eq!(output.stdout, b"42\n");
 }
 
+/// Not real cross-compilation (the triple matches this runner's own arch)
+/// -- this exercises the same --target code path (linker_command,
+/// effective_link_target) using a triple that's available on every Linux
+/// CI runner, unlike x86_64-apple-darwin above which only exists on the
+/// macOS legs. Catches regressions like D-026 (GCC's `cc` rejecting
+/// clang-only `-target` syntax on Linux) that only manifest once
+/// --target reaches the actual link step -- which
+/// targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error
+/// above never reaches (it returns from find_pycc_rt_lib_dir before the
+/// linker is ever invoked).
+#[test]
+fn build_and_run_with_target_set_to_the_host_s_own_triple_on_linux() {
+    if std::env::consts::OS != "linux" {
+        eprintln!("skipping: this test only applies on Linux (see D-026)");
+        return;
+    }
+    let triple = match std::env::consts::ARCH {
+        "x86_64" => "x86_64-unknown-linux-gnu",
+        "aarch64" => "aarch64-unknown-linux-gnu",
+        other => {
+            eprintln!("skipping: no known Tier-1 triple for Linux/{other}");
+            return;
+        }
+    };
+    let rt_lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(triple)
+        .join("debug/libpycc_rt.a");
+    if !rt_lib.exists() {
+        eprintln!("skipping: {triple} pycc_rt build not available in this environment");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_owntriple_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "hello_owntriple.py", "print(42)\n");
+    let out = dir.join("hello_owntriple");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap(), "--target", triple])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"42\n");
+}
+
 #[test]
 fn an_unknown_target_triple_is_a_clean_build_error() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badtriple_{}", std::process::id()));

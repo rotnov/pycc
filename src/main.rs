@@ -58,7 +58,7 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         eprintln!("error: {e}");
         ExitCode::from(2)
     })?;
-    let mut cmd = linker_command();
+    let mut cmd = linker_command(target);
     if let Some(triple) = effective_link_target(target) {
         cmd.arg("-target").arg(triple);
     }
@@ -74,16 +74,43 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
 /// D-015/D-022) -- clang's driver translates GCC-style `-l`/`-L`/`-o` flags
 /// into the `link.exe` invocation this target needs, verified empirically
 /// (`clang -target x86_64-pc-windows-msvc -### ...`) rather than assumed.
-/// Elsewhere, the system `cc` already works (verified: native-build-test
-/// passes on both Linux architectures and macOS) and needs no substitute.
+/// Elsewhere, the system `cc` already works for the no-`--target` case
+/// (verified: native-build-test passes on both Linux architectures and
+/// macOS) -- see this function's other two cfg-gated bodies below for
+/// what changes when `--target` is given (D-026).
 #[cfg(windows)]
-fn linker_command() -> std::process::Command {
+fn linker_command(_target: Option<&str>) -> std::process::Command {
     let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX")).join("bin").join("clang.exe");
     std::process::Command::new(clang)
 }
 
-#[cfg(not(windows))]
-fn linker_command() -> std::process::Command {
+/// Linux's default `cc` is GCC (confirmed: Ubuntu's `ubuntu-latest`/
+/// `ubuntu-24.04-arm` runners), and GCC's driver rejects clang-only
+/// `-target <triple>` syntax outright ("unrecognized command-line option
+/// '-target'") -- for *any* value, even a triple naming this same host
+/// (D-026). Only route through the bundled clang when the caller actually
+/// asked for one: `<LLVM_SYS_221_PREFIX>/bin/clang` is the same
+/// apt.llvm.org prefix layout `ci.yml`'s "Install LLVM 22 (Linux)" step
+/// already installs for `inkwell` itself, so this needs no new install.
+/// The plain, no-target case keeps using the system `cc` unchanged --
+/// verified working there already (D-023 point 1).
+#[cfg(target_os = "linux")]
+fn linker_command(target: Option<&str>) -> std::process::Command {
+    if target.is_some() {
+        let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX")).join("bin").join("clang");
+        std::process::Command::new(clang)
+    } else {
+        std::process::Command::new("cc")
+    }
+}
+
+/// macOS's system `cc` already *is* Apple clang, and D-021 already proved
+/// it handles `--target` correctly for the cross-arch pair CI verifies
+/// (`cross-compile-build`/`cross-compile-verify`) -- left exactly as-is
+/// regardless of `target`, rather than folded into Linux's branch above,
+/// so this fix doesn't change a path that's already tested working.
+#[cfg(all(not(windows), not(target_os = "linux")))]
+fn linker_command(_target: Option<&str>) -> std::process::Command {
     std::process::Command::new("cc")
 }
 
@@ -165,6 +192,25 @@ fn find_pycc_rt_lib_dir(target: Option<&str>) -> Result<std::path::PathBuf, Stri
     find_pycc_rt_lib_dir_in(workspace_root, target, std::path::Path::exists)
 }
 
+/// Rust's `staticlib` output naming is platform-specific: `lib<name>.a` on
+/// Unix-like targets, but `<name>.lib` (no `lib` prefix, COFF format) on
+/// `-msvc` targets -- verified empirically by cross-building `pycc_rt` for
+/// `x86_64-pc-windows-msvc` and inspecting `target/x86_64-pc-windows-msvc/
+/// debug/` directly, not assumed from Unix convention. Keyed on the
+/// *requested* `target` triple, not the host `#[cfg(windows)]` -- an
+/// earlier version used a host-keyed constant, which silently checked for
+/// the wrong filename whenever `--target` crossed OS families (e.g.
+/// requesting an `-msvc` triple from a non-Windows host, or vice versa),
+/// reporting a misleading "no build found" even when the correctly-named
+/// file was right there (caught in PR review before merge).
+fn pycc_rt_lib_filename(target: Option<&str>) -> &'static str {
+    let targets_msvc = match target {
+        Some(triple) => triple.contains("windows-msvc"),
+        None => cfg!(windows),
+    };
+    if targets_msvc { "pycc_rt.lib" } else { "libpycc_rt.a" }
+}
+
 /// Testable core of `find_pycc_rt_lib_dir`: takes the filesystem-existence
 /// check as a parameter instead of calling `Path::exists` directly, so
 /// tests can simulate "no build found" without mutating this workspace's
@@ -179,16 +225,6 @@ fn find_pycc_rt_lib_dir(target: Option<&str>) -> Result<std::path::PathBuf, Stri
 /// closure type -- each one only ever exercising the branches *that
 /// caller* takes, which under `cargo llvm-cov` reads as a real gap in
 /// coverage even though every branch collectively runs somewhere.
-/// Rust's `staticlib` output naming is platform-specific: `lib<name>.a` on
-/// Unix-like targets, but `<name>.lib` (no `lib` prefix, COFF format) on
-/// `-msvc` targets -- verified empirically by cross-building `pycc_rt` for
-/// `x86_64-pc-windows-msvc` and inspecting `target/x86_64-pc-windows-msvc/
-/// debug/` directly, not assumed from Unix convention.
-#[cfg(windows)]
-const PYCC_RT_LIB_FILENAME: &str = "pycc_rt.lib";
-#[cfg(not(windows))]
-const PYCC_RT_LIB_FILENAME: &str = "libpycc_rt.a";
-
 fn find_pycc_rt_lib_dir_in(
     workspace_root: &std::path::Path,
     target: Option<&str>,
@@ -198,7 +234,7 @@ fn find_pycc_rt_lib_dir_in(
         Some(triple) => workspace_root.join("target").join(triple).join("debug"),
         None => workspace_root.join("target/debug"),
     };
-    if exists(&dir.join(PYCC_RT_LIB_FILENAME)) {
+    if exists(&dir.join(pycc_rt_lib_filename(target))) {
         Ok(dir)
     } else if let Some(triple) = target {
         Err(format!(
@@ -245,5 +281,19 @@ mod tests {
         let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), |_| false).unwrap_err();
         assert!(err.contains("x86_64-unknown-linux-gnu"));
         assert!(err.contains("rustup target add"));
+    }
+
+    #[test]
+    fn an_msvc_target_uses_the_dot_lib_filename_regardless_of_host() {
+        // The regression this guards: pycc_rt_lib_filename used to be a
+        // host-#[cfg(windows)] constant, so requesting an -msvc target from
+        // this (non-Windows) test runner silently checked for the wrong
+        // filename (libpycc_rt.a instead of pycc_rt.lib).
+        assert_eq!(pycc_rt_lib_filename(Some("x86_64-pc-windows-msvc")), "pycc_rt.lib");
+    }
+
+    #[test]
+    fn a_non_msvc_target_uses_the_lib_prefix_dot_a_filename() {
+        assert_eq!(pycc_rt_lib_filename(Some("x86_64-unknown-linux-gnu")), "libpycc_rt.a");
     }
 }

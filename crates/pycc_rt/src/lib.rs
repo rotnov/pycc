@@ -7,8 +7,10 @@
 //! linker-driver invocation (`cc`, or on Windows the bundled `clang` --
 //! see D-023) -- in `pycc_codegen`'s own tests (`link_object_with_runtime`)
 //! and in `pycc`'s real `build`/`run` (`src/main.rs`). Nothing in Cargo's
-//! normal dependency graph expresses that relationship, so this file only
-//! exists once this crate has actually been built.
+//! normal dependency graph expresses that relationship, so this crate's
+//! staticlib output only exists once this crate has actually been built
+//! explicitly (or as part of a workspace-wide build) -- unlike this
+//! source file, which is of course always there.
 //!
 //! **Practical consequence:** commands scoped to a single other crate --
 //! `cargo test -p pycc_codegen`, `cargo run --bin pycc -- build ...` run in
