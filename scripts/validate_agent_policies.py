@@ -20,6 +20,7 @@ SHELL_INTERPRETERS = ("sh", "bash", "zsh")
 NODE_INTERPRETERS = ("node", "nodejs")
 COMMAND_LAUNCHERS = ("command", "env", "exec")
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def tracked_files() -> set[str]:
@@ -133,6 +134,9 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
             targets.append(executable)
             continue
         kind = interpreter_kind(executable)
+        if kind is None and is_absolute_script_path(executable):
+            targets.append(executable)
+            continue
         if kind is not None:
             script_tokens = resolved[1:]
             if inline_interpreter_mode(kind, script_tokens):
@@ -144,6 +148,7 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
                 if (
                     explicit_project_path
                     or is_relative_script_path(normalized)
+                    or is_absolute_script_path(normalized)
                     or normalized == token
                 ):
                     targets.append(normalized)
@@ -166,6 +171,14 @@ def is_relative_script_path(token: str) -> bool:
         not token.startswith(("/", "~"))
         and "://" not in token
         and ("/" in token or token.endswith(SCRIPT_SUFFIXES))
+    )
+
+
+def is_absolute_script_path(token: str) -> bool:
+    return (
+        (token.startswith("/") or WINDOWS_ABSOLUTE_PATH.match(token) is not None)
+        and "://" not in token
+        and ("/" in token or "\\" in token or token.endswith(SCRIPT_SUFFIXES))
     )
 
 
@@ -245,7 +258,9 @@ def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[s
                 f"{resolved[0]} {mode}"
             )
     for target in hook_targets(settings):
-        if target.startswith(".ievo/hooks/"):
+        if is_absolute_script_path(target):
+            failures.append(f"shared hook target must not be absolute: {target}")
+        elif target.startswith(".ievo/hooks/"):
             failures.append(f"shared hook target must remain machine-local: {target}")
         elif target not in tracked:
             failures.append(f"shared hook target is not tracked: {target}")

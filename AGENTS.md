@@ -91,11 +91,12 @@
 ### GitHub Codex review loop
 
 - After opening a pull request, request a GitHub Codex review with the exact comment `@codex review`.
-- Permit at most one accepted or started Codex review per head commit. A request that
-  explicitly failed before any review/check was created does not count; one retry on
-  the unchanged head is allowed after that evidence, or after a 15-minute timeout
-  with no bot response, review, or check. Never make more than two request attempts
-  on one head.
+- Permit at most one accepted or started Codex review per head commit. One retry on
+  the unchanged head is allowed after a 15-minute timeout with no review or check.
+  A standalone bot comment is not enough to unlock an early retry because GitHub
+  does not associate top-level comments with the request that triggered them; a
+  delayed response from an older head must not consume the new head's retry budget.
+  Never make more than two request attempts on one head.
 - Before a first request or retry, run
   `python3 scripts/check_codex_review_retry.py <owner/repo> <pr-number>`. Proceed only
   when it prints `REQUEST_ALLOWED` or `RETRY_ALLOWED`; preserve its evidence URL or

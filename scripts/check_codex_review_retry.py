@@ -12,19 +12,6 @@ from typing import Any
 
 
 CODEX_LOGIN = "chatgpt-codex-connector"
-FAILURE_TERMS = (
-    "create an environment for this repo",
-    "not configured",
-    "could not start",
-    "couldn't start",
-    "did not start",
-    "failed to start",
-    "review failed",
-    "request failed",
-    "unable to start",
-    "rate limit",
-    "rejected",
-)
 
 
 def timestamp(value: str) -> dt.datetime:
@@ -87,15 +74,13 @@ def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
         and comment.get("headRefOid") == head
         and is_codex_login(comment.get("author", {}).get("login"))
     ]
-    for response in codex_responses:
-        body = response.get("body", "").lower()
-        if any(term in body for term in FAILURE_TERMS):
-            evidence = response.get("url") or response.get("createdAt")
-            return "RETRY_ALLOWED", f"explicit pre-start failure: {evidence}"
-
     if codex_responses:
         evidence = codex_responses[0].get("url") or codex_responses[0].get("createdAt")
-        return "ARTIFACT_EXISTS", f"Codex responded to the request: {evidence}"
+        return (
+            "ARTIFACT_EXISTS",
+            "unthreaded Codex response cannot be safely correlated with a "
+            f"request after head changes: {evidence}",
+        )
 
     if now - request_time >= dt.timedelta(minutes=15):
         evidence = request.get("url") or request.get("createdAt")

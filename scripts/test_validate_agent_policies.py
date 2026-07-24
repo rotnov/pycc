@@ -204,6 +204,56 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ["shared hook target is not tracked: tools/local-hook.sh"],
         )
 
+    def test_absolute_machine_local_script_is_rejected(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": (
+                                    "/home/alice/project/.ievo/hooks/capture.sh"
+                                ),
+                                "args": [],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            [
+                "shared hook target must not be absolute: "
+                "/home/alice/project/.ievo/hooks/capture.sh"
+            ],
+        )
+
+    def test_absolute_script_argument_is_rejected_but_interpreter_is_allowed(
+        self,
+    ) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "/bin/sh",
+                                "args": ["/home/alice/project/tools/hook.sh"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            [
+                "shared hook target must not be absolute: "
+                "/home/alice/project/tools/hook.sh"
+            ],
+        )
+
     def test_env_launcher_still_validates_relative_script(self) -> None:
         settings = {
             "hooks": {
