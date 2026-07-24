@@ -376,12 +376,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "pycc_mir"
+version = "0.1.0"
+dependencies = [
+ "pycc_hir",
+]
+
+[[package]]
 name = "pycc_parser"
 version = "0.1.0"
 dependencies = [
  "pycc_ast",
  "pycc_diag",
  "ruff_python_parser",
+]
+
+[[package]]
+name = "pycc_types"
+version = "0.1.0"
+dependencies = [
+ "pycc_diag",
+ "pycc_hir",
 ]
 
 [[package]]
