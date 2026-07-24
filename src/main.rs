@@ -5,6 +5,7 @@ use clap::Parser;
 use cli::{Cli, Command};
 use pycc_diag::{Diagnostic, Span};
 use std::process::ExitCode;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -165,13 +166,20 @@ fn render_source_span(path: &str, source: &str, span: Span, label: &str) -> Stri
     let source_prefix = &source[line_start..start];
     let column = source_prefix.chars().count() + 1;
     let highlight_end = end.max(start).min(line_end);
-    let highlight_width = source[start..highlight_end].chars().count().max(1);
+    let highlight_width = UnicodeWidthStr::width(&source[start..highlight_end]).max(1);
     let gutter_width = line_number.to_string().len();
     let empty_gutter = " ".repeat(gutter_width);
-    let caret_padding: String = source_prefix
-        .chars()
-        .map(|character| if character == '\t' { '\t' } else { ' ' })
-        .collect();
+    let mut caret_padding = String::new();
+    for character in source_prefix.chars() {
+        if character == '\t' {
+            caret_padding.push('\t');
+        } else {
+            caret_padding.extend(std::iter::repeat_n(
+                ' ',
+                UnicodeWidthChar::width(character).unwrap_or(0),
+            ));
+        }
+    }
 
     format!(
         " --> {path}:{line_number}:{column}\n{empty_gutter} |\n\

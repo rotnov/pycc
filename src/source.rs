@@ -119,7 +119,19 @@ fn resolve_encoding(label: &str) -> Option<SourceEncoding> {
 }
 
 fn normalize_python_encoding(label: &str) -> String {
-    let normalized = label.to_ascii_lowercase().replace('_', "-");
+    let mut normalized = String::with_capacity(label.len());
+    let mut separator = false;
+    for character in label.chars() {
+        if character.is_ascii_alphanumeric() || character == '.' {
+            if separator && !normalized.is_empty() {
+                normalized.push('-');
+            }
+            normalized.push(character.to_ascii_lowercase());
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
     if normalized == "utf-8" || normalized.starts_with("utf-8-") {
         "utf-8".to_string()
     } else if normalized == "latin-1"
@@ -234,9 +246,11 @@ mod tests {
     #[test]
     fn python_encoding_alias_normalization_matches_the_cookie_rules() {
         assert_eq!(resolved_kind("UTF_8"), "utf8");
+        assert_eq!(resolved_kind("utf--8"), "utf8");
         assert_eq!(resolved_kind("utf8_ucs4"), "utf8");
         assert_eq!(resolved_kind("cp65001"), "utf8");
         assert_eq!(resolved_kind("latin-1-unix"), "latin1");
+        assert_eq!(resolved_kind("latin__1"), "latin1");
         assert_eq!(resolved_kind("cp819"), "latin1");
         assert_eq!(resolved_kind("iso_8859_1"), "latin1");
         assert_eq!(resolved_kind("iso-latin-1"), "latin1");

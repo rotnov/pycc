@@ -28,8 +28,10 @@ encoding declaration on the first or eligible second line. The v0.1 decoder
 supports UTF-8, strict ASCII, and true ISO-8859-1/Latin-1. Other declared
 encodings are unreadable-input errors until pycc has a decoder with mappings
 that exactly match Python's codec. A BOM/cookie conflict or malformed encoded
-input is also an unreadable-input error. After decoding, LF, CRLF, and CR
-physical line endings are normalized to LF before parsing and diagnostic span
+input is also an unreadable-input error. Runs of `-` and `_` in declared codec
+labels are collapsed before alias resolution, matching Python's ASCII codec
+normalization for the cookie grammar. After decoding, LF, CRLF, and CR physical
+line endings are normalized to LF before parsing and diagnostic span
 calculation.
 
 For the other commands, the target contract remains `PATH` = file or project
@@ -97,4 +99,6 @@ JSON format versioned (`"format_version": 1`), one object per diagnostic: code, 
 
 Displayed diagnostic paths are lexically normalized without filesystem
 canonicalization: separators are `/`, redundant `.` components and repeated
-separators are removed, and `..` components are preserved.
+separators are removed, and `..` components are preserved. Human-format caret
+padding uses Unicode display width and retains literal tabs so markers align
+with the rendered source in a terminal.

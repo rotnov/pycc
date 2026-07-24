@@ -41,3 +41,4 @@ pycc_diag = { path = "crates/pycc_diag" }
 pycc_mir = { path = "crates/pycc_mir" }
 pycc_codegen = { path = "crates/pycc_codegen" }
 regex = "1"
+unicode-width = "0.2"

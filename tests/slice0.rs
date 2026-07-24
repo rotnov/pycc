@@ -381,6 +381,30 @@ fn check_accepts_a_pep_263_latin_1_source_file() {
 }
 
 #[test]
+fn check_accepts_python_normalized_encoding_separators() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_encoding_name_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let utf8 = dir.join("utf8.py");
+    std::fs::write(&utf8, b"# coding: utf--8\nprint(1)\n").unwrap();
+    let latin1 = dir.join("latin1.py");
+    std::fs::write(&latin1, b"# coding: latin__1\n# caf\xe9\nprint(2)\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&utf8)
+        .arg(&latin1)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_newlines_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -525,6 +549,36 @@ fn check_aligns_a_diagnostic_caret_after_tab_indentation() {
     assert!(stderr.contains(&format!("{}:2:2", src.display())));
     assert!(stderr.contains("2 | \tx = 1"));
     assert!(stderr.contains("  | \t^^^^^"));
+}
+
+#[test]
+fn check_uses_unicode_display_width_for_diagnostic_carets() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_unicode_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (filename, source, expected) in [
+        (
+            "wide.py",
+            "\u{53d8}\u{91cf}$\n",
+            "1 | \u{53d8}\u{91cf}$\n  |     ^ invalid syntax",
+        ),
+        (
+            "combining.py",
+            "e\u{301}$\n",
+            "1 | e\u{301}$\n  |  ^ invalid syntax",
+        ),
+    ] {
+        let src = write_fixture(&dir, filename, source);
+        let output = Command::new(pycc_bin())
+            .arg("check")
+            .arg(&src)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stderr.contains(expected), "stderr: {stderr}");
+    }
 }
 
 #[test]
