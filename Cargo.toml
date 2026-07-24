@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pycc_diag",
+    "crates/pycc_ast",
+    "crates/pycc_parser",
+    "crates/pycc_hir",
+    "crates/pycc_types",
+    "crates/pycc_mir",
+    "crates/pycc_rt",
+    "crates/pycc_codegen",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97.1"
+
+[package]
+name = "pycc"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "pycc"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+pycc_parser = { path = "crates/pycc_parser" }
+pycc_hir = { path = "crates/pycc_hir" }
+pycc_types = { path = "crates/pycc_types" }
+pycc_mir = { path = "crates/pycc_mir" }
+pycc_codegen = { path = "crates/pycc_codegen" }

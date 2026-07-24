@@ -39,9 +39,9 @@ Only macOS is locally verifiable. Linux x64/arm64 and Windows MSVC exist only vi
 
 Not all 11 crates in [ARCHITECTURE.md](./ARCHITECTURE.md) are needed on day one.
 
-**Built now:** `pycc` (CLI/driver), `pycc_lexer`/`pycc_parser`/`pycc_ast` (thin wrapper over vendored `ruff_python_parser`), `pycc_hir`, `pycc_types` (T0001 strictness + local inference over the v0.1 type subset only), `pycc_mir`, `pycc_codegen` (LLVM via `inkwell`), `pycc_rt` (minimal runtime), `pycc_diag`, `pycc_testkit`.
+**Built now:** `pycc` (CLI/driver), `pycc_parser`/`pycc_ast` (thin wrapper over vendored `ruff_python_parser`), `pycc_hir`, `pycc_types` (T0001 strictness + local inference over the v0.1 type subset only), `pycc_mir`, `pycc_codegen` (LLVM via `inkwell`), `pycc_rt` (minimal runtime), `pycc_diag`.
 
-**Deliberately deferred:** `pycc_own` (ownership/escape analysis is a v0.5 item — semantics-preserving, perf-only, so v0.1 just uses RC/heap without ownership inference), `pycc_std` (real importable modules start v0.2; the Tier-0 builtins v0.1 needs — `print`, `range`, etc. — live as intrinsics directly in `pycc_rt`/`pycc_codegen`).
+**Deliberately deferred:** `pycc_own` (ownership/escape analysis is a v0.5 item — semantics-preserving, perf-only, so v0.1 just uses RC/heap without ownership inference), `pycc_std` (real importable modules start v0.2; the Tier-0 builtins v0.1 needs — `print`, `range`, etc. — live as intrinsics directly in `pycc_rt`/`pycc_codegen`), `pycc_lexer` (D-017 — the vendored parser bundles lexing internally, nothing consumes a standalone token stream yet), `pycc_testkit` (D-018 — no PEP conformance matrix exists yet for a real harness to check against; `tests/slice0.rs` covers PR-2's two named fixtures ad hoc in the meantime).
 
 ## v0.1 execution strategy: thin vertical slice, then breadth
 
@@ -86,7 +86,7 @@ This plan and its revisions are committed to their own short-lived branch off `m
 
 ## Testing scope for v0.1
 
-Of TESTING.md's 7 layers: Layer 1 (per-crate unit tests) from the start, Layer 2 (`pycc_testkit` conformance harness) as early as slice 0, Layer 3 (diagnostic snapshot tests) as soon as `pycc_diag` exists, Layer 5 (runtime property tests) in minimal form for the v0.1 runtime subset. **Out of scope for v0.1**: Layer 4 (differential fuzzing), Layer 6 (OSS corpus), Layer 7's full cross-compiler comparison suite (vs. Nuitka/Codon/mypyc) — these start at v0.2 per ROADMAP.md. The lightweight per-PR frontend timing check is a different, narrower thing that *does* start in v0.1 — see Performance gate above (resolves #12).
+Of TESTING.md's 7 layers: Layer 1 (per-crate unit tests) from the start, Layer 3 (diagnostic snapshot tests) as soon as `pycc_diag` exists, Layer 5 (runtime property tests) in minimal form for the v0.1 runtime subset. **Out of scope for PR-1/PR-2**: Layer 2 (the real `pycc_testkit` conformance harness — deferred per D-018 to PR-4/PR-6, once there's a PEP matrix for it to check against; `tests/slice0.rs` covers the two named slice-0 fixtures ad hoc until then), Layer 4 (differential fuzzing), Layer 6 (OSS corpus), Layer 7's full cross-compiler comparison suite (vs. Nuitka/Codon/mypyc) — these start at v0.2 per ROADMAP.md. The lightweight per-PR frontend timing check is a different, narrower thing that *does* start in v0.1 — see Performance gate above (resolves #12).
 
 **Debug/release conformance (resolves #10):** TESTING.md's conformance-harness rule ("compile `--debug` and `--release` both... flips to ✅ only when green on all Tier-1 targets in both profiles") describes the steady-state contract once `--release` exists. It does not apply yet: `--release`/LTO is a named v0.2 item (see the milestone table above), so for the whole of v0.1 the conformance harness runs `--debug` only, and no v0.1 PEP/feature is held to a `--release` bar that has nothing to build against. TESTING.md's wording is annotated accordingly rather than left to look like a v0.1 requirement no PR could actually satisfy.
 

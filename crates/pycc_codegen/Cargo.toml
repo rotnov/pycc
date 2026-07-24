@@ -1,0 +1,9 @@
+[package]
+name = "pycc_codegen"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+pycc_mir = { path = "../pycc_mir" }
+inkwell = { version = "0.9", default-features = false, features = ["llvm22-1"] }

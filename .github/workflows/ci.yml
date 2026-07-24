@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Pinned per D-014 / TESTING.md "Code coverage" -- never a bare "latest".
+  CARGO_LLVM_COV_VERSION: "0.8.7"
+
+jobs:
+  # PR-1/PR-2 scope: macOS only (matches the primary dev host). The
+  # 5-target Tier-1 matrix (Linux x64/arm64, macOS x64/arm64, Windows MSVC)
+  # and the cross-compiled build are PR-3's job -- see docs/DELIVERY_PLAN.md.
+  build-test-coverage:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show pinned toolchain
+        run: rustup show
+
+      # LLVM 22.1/inkwell 0.9 pin (D-015). Homebrew on GitHub's macOS
+      # runners doesn't ship this by default, so it's installed and pinned
+      # via the env var explicitly, same as the local dev setup in
+      # docs/DELIVERY_PLAN.md's Environment baseline table.
+      - name: Install LLVM 22 (D-015)
+        run: brew install llvm@22
+
+      - name: Export LLVM_SYS_221_PREFIX
+        run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+
+      - name: cargo build --workspace
+        run: cargo build --workspace
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: cargo clippy --workspace
+        run: |
+          rustup component add clippy
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Install cargo-llvm-cov (pinned)
+        run: cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+
+      - name: Coverage gate smoke check
+        run: cargo llvm-cov --version
+
+      - name: cargo llvm-cov --workspace (D-014 gate, 100% lines + regions)
+        run: cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
