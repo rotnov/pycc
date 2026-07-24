@@ -243,6 +243,65 @@ fn check_rejects_a_call_before_its_definition_to_match_python_module_order() {
 }
 
 #[test]
+fn check_rejects_unsupported_function_parameters_before_codegen() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_check_parameters_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "parameters.py",
+        "def helper(value: int) -> None:\n    print(1)\n\nhelper()\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("error[C0001]"));
+    assert!(stderr.contains("zero-argument functions"));
+}
+
+#[test]
+fn check_classifies_an_unsupported_builtin_as_a_capability_error() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_builtin_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "builtin.py", "input()\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("error[C0001]"));
+    assert!(stderr.contains("built-in `input`"));
+}
+
+#[test]
+fn check_normalizes_the_displayed_diagnostic_path() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_path_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_fixture(&dir, "bad.py", "x = 1\n");
+
+    let output = Command::new(pycc_bin())
+        .current_dir(&dir)
+        .args(["check", "./bad.py"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains(" --> bad.py:1:1"));
+    assert!(!stderr.contains(" --> ./bad.py"));
+}
+
+#[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

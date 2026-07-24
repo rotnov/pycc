@@ -1,4 +1,4 @@
-use pycc_ast::{Expr, ExprCall, ModModule, Number, Ranged, Stmt, TextRange};
+use pycc_ast::{Expr, ExprCall, ModModule, Number, Ranged, Stmt, StmtFunctionDef, TextRange};
 use pycc_diag::{Diagnostic, Span};
 use std::collections::{HashMap, HashSet};
 
@@ -58,6 +58,7 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
     for stmt in &module.body {
         match stmt {
             Stmt::FunctionDef(f) => {
+                validate_function_signature(f)?;
                 let mut calls = Vec::new();
                 let body = f
                     .body
@@ -152,7 +153,11 @@ fn lower_stmt(
             ));
         };
         if !module_functions.contains(name.id.as_str()) {
-            return Err(undefined_function(name.id.as_str(), name.range()));
+            return if is_python_builtin(name.id.as_str()) {
+                Err(unsupported_builtin(name.id.as_str(), name.range()))
+            } else {
+                Err(undefined_function(name.id.as_str(), name.range()))
+            };
         }
         calls.push(FunctionCall {
             name: name.id.as_str().to_string(),
@@ -171,7 +176,11 @@ fn validate_available_call(
     active_calls: &mut HashSet<String>,
 ) -> Result<(), Diagnostic> {
     if !available_functions.contains(call.name.as_str()) {
-        return Err(undefined_function(&call.name, call.range));
+        return if is_python_builtin(&call.name) {
+            Err(unsupported_builtin(&call.name, call.range))
+        } else {
+            Err(undefined_function(&call.name, call.range))
+        };
     }
     if !active_calls.insert(call.name.clone()) {
         return Ok(());
@@ -186,6 +195,116 @@ fn validate_available_call(
     }
     active_calls.remove(call.name.as_str());
     Ok(())
+}
+
+fn validate_function_signature(function: &StmtFunctionDef) -> Result<(), Diagnostic> {
+    if function.is_async {
+        return Err(unsupported_function_signature(function.range()));
+    }
+    if !function.decorator_list.is_empty() {
+        return Err(unsupported_function_signature(function.range()));
+    }
+    if function.type_params.is_some() {
+        return Err(unsupported_function_signature(function.range()));
+    }
+    if !function.parameters.is_empty() {
+        return Err(unsupported_function_signature(function.range()));
+    }
+    if !matches!(function.returns.as_deref(), Some(Expr::NoneLiteral(_))) {
+        return Err(unsupported_function_signature(function.range()));
+    }
+    Ok(())
+}
+
+fn unsupported_function_signature(range: TextRange) -> Diagnostic {
+    unsupported(
+        "only undecorated synchronous zero-argument functions returning `None` are supported so far",
+        range,
+    )
+}
+
+fn unsupported_builtin(name: &str, range: TextRange) -> Diagnostic {
+    unsupported(
+        format!("the Python built-in `{name}` is not supported so far"),
+        range,
+    )
+}
+
+fn is_python_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "__import__"
+            | "abs"
+            | "aiter"
+            | "all"
+            | "anext"
+            | "any"
+            | "ascii"
+            | "bin"
+            | "bool"
+            | "breakpoint"
+            | "bytearray"
+            | "bytes"
+            | "callable"
+            | "chr"
+            | "classmethod"
+            | "compile"
+            | "complex"
+            | "delattr"
+            | "dict"
+            | "dir"
+            | "divmod"
+            | "enumerate"
+            | "eval"
+            | "exec"
+            | "filter"
+            | "float"
+            | "format"
+            | "frozenset"
+            | "getattr"
+            | "globals"
+            | "hasattr"
+            | "hash"
+            | "help"
+            | "hex"
+            | "id"
+            | "input"
+            | "int"
+            | "isinstance"
+            | "issubclass"
+            | "iter"
+            | "len"
+            | "list"
+            | "locals"
+            | "map"
+            | "max"
+            | "memoryview"
+            | "min"
+            | "next"
+            | "object"
+            | "oct"
+            | "open"
+            | "ord"
+            | "pow"
+            | "print"
+            | "property"
+            | "range"
+            | "repr"
+            | "reversed"
+            | "round"
+            | "set"
+            | "setattr"
+            | "slice"
+            | "sorted"
+            | "staticmethod"
+            | "str"
+            | "sum"
+            | "super"
+            | "tuple"
+            | "type"
+            | "vars"
+            | "zip"
+    )
 }
 
 fn undefined_function(name: &str, range: TextRange) -> Diagnostic {
@@ -397,6 +516,50 @@ first()
         let module = pycc_parser_test_helper::parse(source);
         let hir = lower(&module).unwrap();
         assert_eq!(hir.items.len(), 3);
+    }
+
+    #[test]
+    fn unsupported_function_signatures_are_rejected() {
+        for source in [
+            "def f(value: int) -> None:\n    print(1)\n",
+            "async def f() -> None:\n    print(1)\n",
+            "@decorator\ndef f() -> None:\n    print(1)\n",
+            "def f[T]() -> None:\n    print(1)\n",
+            "def f():\n    print(1)\n",
+            "def f() -> int:\n    print(1)\n",
+        ] {
+            let module = pycc_parser_test_helper::parse(source);
+            let error = lower(&module).unwrap_err();
+            assert_eq!(error.code, "C0001", "source: {source}");
+            assert!(
+                error.message.contains(
+                    "only undecorated synchronous zero-argument functions returning `None`"
+                ),
+                "source: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_python_builtins_are_capability_errors() {
+        for source in [
+            "input()\n",
+            "int()\n",
+            "input()\n\ndef input() -> None:\n    print(1)\n",
+        ] {
+            let module = pycc_parser_test_helper::parse(source);
+            let error = lower(&module).unwrap_err();
+            assert_eq!(error.code, "C0001", "source: {source}");
+            assert!(error.message.contains("built-in"), "source: {source}");
+        }
+    }
+
+    #[test]
+    fn a_module_function_can_shadow_a_python_builtin_after_its_definition() {
+        let source = "def input() -> None:\n    print(1)\n\ninput()\n";
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower(&module).unwrap();
+        assert_eq!(hir.items.len(), 2);
     }
 
     #[test]

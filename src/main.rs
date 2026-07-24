@@ -96,6 +96,7 @@ fn check_paths(paths: &[String]) -> ExitCode {
 }
 
 fn report_frontend_failure(path: &str, failure: FrontendFailure) -> u8 {
+    let path = normalize_diagnostic_path(path);
     match failure {
         FrontendFailure::Input(message) => {
             eprintln!("error: could not read `{path}`: {message}");
@@ -113,10 +114,37 @@ fn report_frontend_failure(path: &str, failure: FrontendFailure) -> u8 {
                 "error[{}]: {}\n{}",
                 diagnostic.code,
                 diagnostic.message,
-                render_source_span(path, &source, span, label),
+                render_source_span(&path, &source, span, label),
             );
             1
         }
+    }
+}
+
+fn normalize_diagnostic_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let root = if path.starts_with("//") {
+        "//"
+    } else if path.starts_with('/') {
+        "/"
+    } else {
+        ""
+    };
+    let joined = path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+
+    if joined.is_empty() {
+        if root.is_empty() {
+            ".".to_string()
+        } else {
+            root.to_string()
+        }
+    } else {
+        format!("{root}{joined}")
     }
 }
 
@@ -173,4 +201,27 @@ fn find_pycc_rt_lib_dir() -> std::path::PathBuf {
     // pycc binary itself (so end users don't need this lookup at all) is a
     // v0.2+ packaging concern, not part of this slice.
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_diagnostic_path;
+
+    #[test]
+    fn diagnostic_paths_are_lexically_normalized() {
+        assert_eq!(
+            normalize_diagnostic_path(r".\src\.\package\\module.py"),
+            "src/package/module.py"
+        );
+        assert_eq!(
+            normalize_diagnostic_path("/tmp//./package/module.py"),
+            "/tmp/package/module.py"
+        );
+        assert_eq!(
+            normalize_diagnostic_path(r"\\server\share\.\module.py"),
+            "//server/share/module.py"
+        );
+        assert_eq!(normalize_diagnostic_path("."), ".");
+        assert_eq!(normalize_diagnostic_path("/"), "/");
+    }
 }

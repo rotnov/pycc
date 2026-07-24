@@ -94,3 +94,7 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
 ```
 
 JSON format versioned (`"format_version": 1`), one object per diagnostic: code, severity, spans[{file,line,col,len,label}], message, help[], fix{edits[]}?. Consumed by editors and the corpus bot (TESTING.md).
+
+Displayed diagnostic paths are lexically normalized without filesystem
+canonicalization: separators are `/`, redundant `.` components and repeated
+separators are removed, and `..` components are preserved.
