@@ -58,13 +58,32 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         eprintln!("error: {e}");
         ExitCode::from(2)
     })?;
-    let mut cmd = std::process::Command::new("cc");
+    let mut cmd = linker_command();
     if let Some(triple) = target {
         cmd.arg("-target").arg(triple);
     }
     cmd.arg(&obj_path).arg("-L").arg(&rt_lib_dir).arg("-lpycc_rt").arg("-o").arg(out);
-    let status = cmd.status().expect("cc should run");
+    let status = cmd.status().expect("the linker driver should run");
     if status.success() { Ok(()) } else { Err(ExitCode::from(1)) }
+}
+
+/// Windows has no `cc` by default (that's a Unix convention -- MSVC's own
+/// tools are `cl.exe`/`link.exe`), so this uses the `clang` bundled with the
+/// same LLVM install `LLVM_SYS_221_PREFIX` already points builds at (see
+/// D-015/D-020) -- clang's driver translates GCC-style `-l`/`-L`/`-o` flags
+/// into the `link.exe` invocation this target needs, verified empirically
+/// (`clang -target x86_64-pc-windows-msvc -### ...`) rather than assumed.
+/// Elsewhere, the system `cc` already works (verified: native-build-test
+/// passes on both Linux architectures and macOS) and needs no substitute.
+#[cfg(windows)]
+fn linker_command() -> std::process::Command {
+    let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX")).join("bin").join("clang.exe");
+    std::process::Command::new(clang)
+}
+
+#[cfg(not(windows))]
+fn linker_command() -> std::process::Command {
+    std::process::Command::new("cc")
 }
 
 fn run(path: &str) -> ExitCode {
@@ -109,6 +128,16 @@ fn find_pycc_rt_lib_dir(target: Option<&str>) -> Result<std::path::PathBuf, Stri
 /// closure type -- each one only ever exercising the branches *that
 /// caller* takes, which under `cargo llvm-cov` reads as a real gap in
 /// coverage even though every branch collectively runs somewhere.
+/// Rust's `staticlib` output naming is platform-specific: `lib<name>.a` on
+/// Unix-like targets, but `<name>.lib` (no `lib` prefix, COFF format) on
+/// `-msvc` targets -- verified empirically by cross-building `pycc_rt` for
+/// `x86_64-pc-windows-msvc` and inspecting `target/x86_64-pc-windows-msvc/
+/// debug/` directly, not assumed from Unix convention.
+#[cfg(windows)]
+const PYCC_RT_LIB_FILENAME: &str = "pycc_rt.lib";
+#[cfg(not(windows))]
+const PYCC_RT_LIB_FILENAME: &str = "libpycc_rt.a";
+
 fn find_pycc_rt_lib_dir_in(
     workspace_root: &std::path::Path,
     target: Option<&str>,
@@ -118,7 +147,7 @@ fn find_pycc_rt_lib_dir_in(
         Some(triple) => workspace_root.join("target").join(triple).join("debug"),
         None => workspace_root.join("target/debug"),
     };
-    if exists(&dir.join("libpycc_rt.a")) {
+    if exists(&dir.join(PYCC_RT_LIB_FILENAME)) {
         Ok(dir)
     } else if let Some(triple) = target {
         Err(format!(
