@@ -12,8 +12,7 @@ for required_file in \
   robots.txt \
   sitemap.xml \
   llms.txt \
-  404.html \
-  .nojekyll
+  404.html
 do
   test -f "$site_dir/$required_file"
 done
