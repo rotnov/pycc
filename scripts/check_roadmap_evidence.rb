@@ -48,6 +48,11 @@ def coverage_gate_present?(workflow_text, source)
   end
 
   root = yaml_mapping(stream.children.first.root, source)
+  if root.key?("defaults")
+    raise RoadmapEvidenceError,
+          "#{source}: coverage evidence must not inherit run defaults"
+  end
+
   triggers = yaml_mapping(root["on"], "#{source} triggers")
   pull_request = triggers["pull_request"]
   unfiltered_pull_request =
@@ -60,6 +65,10 @@ def coverage_gate_present?(workflow_text, source)
 
   jobs = yaml_mapping(root["jobs"], "#{source} jobs")
   job = yaml_mapping(jobs[COVERAGE_JOB], "#{source} job #{COVERAGE_JOB.inspect}")
+  if job.key?("defaults")
+    raise RoadmapEvidenceError,
+          "#{source}: coverage evidence must not inherit run defaults"
+  end
   if job.key?("needs")
     raise RoadmapEvidenceError,
           "#{source}: coverage evidence must not depend on other jobs"

@@ -203,6 +203,31 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "coverage step must use the default shell"
   end
 
+  def test_rejects_workflow_and_job_run_defaults
+    roadmap = <<~MARKDOWN
+      ### v0.1 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+    inherited_defaults = [
+      coverage_workflow.sub(
+        "jobs:\n",
+        "defaults:\n  run:\n    shell: 'true {0}'\njobs:\n"
+      ),
+      coverage_workflow.sub(
+        "  build-test-coverage:\n",
+        "  build-test-coverage:\n    defaults:\n      run:\n        shell: 'true {0}'\n"
+      )
+    ]
+
+    inherited_defaults.each do |workflow|
+      _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+      refute status.success?
+      assert_includes stderr, "coverage evidence must not inherit run defaults"
+    end
+  end
+
   def test_rejects_coverage_evidence_not_scheduled_for_pull_requests
     roadmap = <<~MARKDOWN
       ### v0.1 acceptance checklist
