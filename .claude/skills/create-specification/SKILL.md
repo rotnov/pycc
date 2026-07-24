@@ -24,7 +24,11 @@ The specification file must define the requirements, constraints, and interfaces
 - Include examples and edge cases where applicable.
 - Ensure the document is self-contained and does not rely on external context.
 
-The specification should be saved in the [/spec/](/spec/) directory and named according to the following convention: `spec-[a-z0-9-]+.md`, where the name should be descriptive of the specification's content and starting with the highlevel purpose, which is one of [schema, tool, data, infrastructure, process, architecture, or design].
+Resolve the repository root first. Save the specification under the repository-relative
+`spec/` directory, creating that directory when it does not exist. Name the file
+`spec-[a-z0-9-]+.md`, where the name is descriptive of the specification's content and
+starts with the high-level purpose, which is one of `schema`, `tool`, `data`,
+`infrastructure`, `process`, `architecture`, or `design`.
 
 The specification file must be formatted in well formed Markdown.
 

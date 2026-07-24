@@ -1,0 +1,46 @@
+name: Agent assets
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CODEX_CLI_VERSION: "0.145.0"
+  CLAUDE_CODE_VERSION: "2.1.219"
+
+jobs:
+  agent-assets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate agent skills and plugin pins
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          python3 scripts/validate_agent_assets.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pinned agent CLIs
+        run: |
+          npm install --global \
+            "@openai/codex@${CODEX_CLI_VERSION}" \
+            "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Show pinned agent CLIs
+        run: |
+          codex --version
+          claude --version
+
+      - name: Validate Codex marketplace from a fresh environment
+        run: ./scripts/check-codex-marketplace.sh
+
+      - name: Validate Claude marketplace from a fresh environment
+        run: ./scripts/check-claude-marketplace.sh
