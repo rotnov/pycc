@@ -7,9 +7,13 @@ requirement — see ARCHITECTURE.md).
 The v0.1 bootstrap is deliberately narrower than the final runtime: the `pycc_rt` Rust
 crate embeds a target-independent C implementation of the two available ABI helpers
 (`print(i64)` and `NameError`). The compiler materializes that source and passes it to
-the same target-aware compiler driver as the generated object. This makes the runtime
-a real packaged dependency without looking up Cargo's profile- or target-specific
-static-library artifacts.
+the same target-aware Clang driver as the generated object. The driver always receives
+LLVM's exact effective target triple; MSVC targets additionally select bundled LLD,
+so a `cc` executable that happens to resolve to MinGW cannot consume an MSVC object.
+`PYCC_CLANG_<NORMALIZED_TARGET>` and then `PYCC_CLANG` provide explicit,
+Clang-compatible tool overrides; an unavailable driver is a clean compile error. This
+makes the runtime a real packaged dependency without looking up Cargo's profile- or
+target-specific static-library artifacts.
 
 This exception ends before the heap/object runtime starts. The object model,
 exceptions, allocator, and later facilities specified below are implemented in the

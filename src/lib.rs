@@ -69,18 +69,11 @@ fn emit_and_link(
     report_codegen_result(codegen(mir, obj_path))?;
     let rt_source_path = obj_path.with_extension("pycc_rt.c");
     report_runtime_result(write_runtime(&rt_source_path))?;
-    let status = std::process::Command::new("cc")
-        .arg(obj_path)
-        .arg(&rt_source_path)
-        .arg("-o")
-        .arg(out)
-        .status()
-        .expect("cc should run");
-    if status.success() {
-        Ok(())
-    } else {
-        Err(ExitCode::from(1))
-    }
+    report_link_result(pycc_codegen::link_object_with_runtime(
+        obj_path,
+        &rt_source_path,
+        std::path::Path::new(out),
+    ))
 }
 
 fn report_codegen_result(result: Result<(), String>) -> Result<(), ExitCode> {
@@ -98,6 +91,16 @@ fn report_runtime_result(result: std::io::Result<()>) -> Result<(), ExitCode> {
         Ok(()) => Ok(()),
         Err(error) => {
             eprintln!("error: could not materialize the bundled runtime: {error}");
+            Err(ExitCode::from(1))
+        }
+    }
+}
+
+fn report_link_result(result: Result<(), String>) -> Result<(), ExitCode> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            eprintln!("error: linking failed: {error}");
             Err(ExitCode::from(1))
         }
     }

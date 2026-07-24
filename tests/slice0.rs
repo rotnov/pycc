@@ -196,6 +196,8 @@ fn unsupported_valid_python_is_a_compile_diagnostic_not_a_panic() {
         ),
         ("keyword argument", "print(42, end=\"\")\n"),
         ("function parameter", "def f(x) -> None:\n    print(42)\n"),
+        ("unsupported builtin", "bool()\n"),
+        ("builtin shadowing", "def len() -> None:\n    print(42)\n"),
     ];
 
     for (label, source) in cases {
@@ -328,4 +330,22 @@ fn a_bad_output_path_is_a_link_error_exit_code_1() {
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(1));
+}
+
+#[test]
+fn an_unavailable_target_compiler_is_a_clean_link_error() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_missing_clang_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "hello.py", "print(42)\n");
+    let out = dir.join("hello");
+
+    let output = Command::new(pycc_bin())
+        .env("PYCC_CLANG", "__pycc_missing_compiler_driver__")
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("could not start target-aware compiler driver"));
+    assert!(!stderr.contains("panicked"));
 }

@@ -1,0 +1,53 @@
+name: Runtime portability
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/runtime-portability.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/pycc_codegen/**"
+      - "crates/pycc_rt/**"
+      - "src/**"
+
+permissions:
+  contents: read
+
+env:
+  LLVM_VERSION: "22.1.1"
+
+jobs:
+  windows-runtime-link:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install pinned LLVM for MSVC
+        shell: bash
+        run: |
+          curl -L --fail -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/clang+llvm-${LLVM_VERSION}-x86_64-pc-windows-msvc.tar.xz"
+          mkdir -p llvm-extract
+          tar -xf llvm.tar.xz -C llvm-extract --strip-components=1
+          llvm_prefix="$(cygpath -w "$(pwd)/llvm-extract")"
+          printf 'LLVM_SYS_221_PREFIX=%s\n' "${llvm_prefix}" >> "$GITHUB_ENV"
+          printf 'PYCC_CLANG=%s\\bin\\clang.exe\n' "${llvm_prefix}" >> "$GITHUB_ENV"
+
+      - name: Install LLVM's libxml2 dependency
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libxml2:x64-windows-static-md
+          $libDir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib"
+          $xml2Lib = Get-ChildItem -Path $libDir -Filter "*xml2*.lib" | Select-Object -First 1
+          if (-not $xml2Lib) {
+            Write-Error "no libxml2 .lib found under $libDir"
+            exit 1
+          }
+          Copy-Item $xml2Lib.FullName "$libDir\xml2s.lib" -Force
+          echo "LIB=$libDir;$env:LIB" >> $env:GITHUB_ENV
+
+      - name: Exercise the target-aware Clang and LLD path
+        run: cargo test -p pycc_codegen tests::target_aware_linker_accepts_an_object_from_the_same_clang_target -- --exact

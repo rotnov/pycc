@@ -9,7 +9,114 @@ use inkwell::types::{FunctionType, IntType, PointerType};
 use inkwell::values::{FunctionValue, GlobalValue};
 use pycc_mir::{MirInstr, MirItem, MirModule};
 use std::collections::{BTreeSet, HashMap};
+use std::ffi::OsString;
 use std::path::Path;
+use std::process::Command;
+
+/// Return the exact target triple used by native object emission.
+///
+/// The copied `String` intentionally outlives the LLVM-owned message. The
+/// wrapper itself is not dropped because LLVM 22.1.1's prebuilt Windows
+/// libraries have been observed to crash while disposing this message.
+pub fn native_target_triple() -> String {
+    let triple = std::mem::ManuallyDrop::new(TargetMachine::get_default_triple());
+    triple.as_str().to_string_lossy().into_owned()
+}
+
+#[derive(Debug, PartialEq)]
+struct LinkCommand {
+    program: OsString,
+    args: Vec<OsString>,
+}
+
+/// Link one generated native object and the v0.1 C runtime with a compiler
+/// driver that is explicitly pinned to the same LLVM target.
+///
+/// `PYCC_CLANG_<NORMALIZED_TARGET>` overrides `PYCC_CLANG`, which in turn
+/// defaults to `clang`. Overrides must name a Clang-compatible driver.
+pub fn link_object_with_runtime(
+    object_path: &Path,
+    runtime_source_path: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
+    let target = native_target_triple();
+    let program = select_clang(&target, environment_var);
+    run_link_command(&link_command(
+        &target,
+        object_path,
+        runtime_source_path,
+        output_path,
+        program,
+    ))
+}
+
+fn normalized_target(target: &str) -> String {
+    target
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn environment_var(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
+}
+
+fn select_clang(target: &str, environment: fn(&str) -> Option<OsString>) -> OsString {
+    let target_key = format!("PYCC_CLANG_{}", normalized_target(target));
+    if let Some(program) = environment(&target_key) {
+        return program;
+    }
+    if let Some(program) = environment("PYCC_CLANG") {
+        return program;
+    }
+    OsString::from("clang")
+}
+
+fn link_command(
+    target: &str,
+    object_path: &Path,
+    runtime_source_path: &Path,
+    output_path: &Path,
+    program: OsString,
+) -> LinkCommand {
+    let mut args = vec![OsString::from(format!("--target={target}"))];
+    if target.ends_with("-windows-msvc") {
+        args.push(OsString::from("-fuse-ld=lld"));
+    }
+    args.extend([
+        object_path.as_os_str().to_owned(),
+        runtime_source_path.as_os_str().to_owned(),
+        OsString::from("-o"),
+        output_path.as_os_str().to_owned(),
+    ]);
+    LinkCommand { program, args }
+}
+
+fn run_link_command(command: &LinkCommand) -> Result<(), String> {
+    let status = Command::new(&command.program)
+        .args(&command.args)
+        .status()
+        .map_err(|error| {
+            format!(
+                "could not start target-aware compiler driver `{}`: {error}",
+                command.program.to_string_lossy()
+            )
+        })?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "target-aware compiler driver `{}` exited with {status}",
+            command.program.to_string_lossy()
+        ))
+    }
+}
 
 pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), String> {
     let context = Context::create();
@@ -131,7 +238,7 @@ pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), Stri
     Target::initialize_native(&InitializationConfig::default()).expect(
         "initializing codegen for the native host should never fail on a supported Tier-1 target",
     );
-    let triple = TargetMachine::get_default_triple();
+    let triple = std::mem::ManuallyDrop::new(TargetMachine::get_default_triple());
     let target = Target::from_triple(&triple)
         .expect("the host's own default target triple should always be a valid target");
     let target_machine = target
@@ -239,6 +346,115 @@ mod tests {
     use super::*;
     use pycc_mir::{MirInstr, MirItem, MirModule};
     use std::process::Command;
+
+    fn target_clang(name: &str) -> Option<OsString> {
+        (name == "PYCC_CLANG_X86_64_PC_WINDOWS_MSVC").then(|| OsString::from("target-clang"))
+    }
+
+    fn global_clang(name: &str) -> Option<OsString> {
+        (name == "PYCC_CLANG").then(|| OsString::from("global-clang"))
+    }
+
+    fn no_clang(_name: &str) -> Option<OsString> {
+        None
+    }
+
+    #[test]
+    fn target_specific_clang_override_wins() {
+        let selected = select_clang("x86_64-pc-windows-msvc", target_clang);
+        assert_eq!(selected, OsString::from("target-clang"));
+    }
+
+    #[test]
+    fn global_clang_override_and_default_are_supported() {
+        let selected = select_clang("aarch64-apple-darwin", global_clang);
+        assert_eq!(selected, OsString::from("global-clang"));
+        assert_eq!(
+            select_clang("aarch64-apple-darwin", no_clang),
+            OsString::from("clang")
+        );
+    }
+
+    #[test]
+    fn msvc_link_command_uses_the_exact_target_and_lld() {
+        let command = link_command(
+            "x86_64-pc-windows-msvc",
+            Path::new("program.o"),
+            Path::new("runtime.c"),
+            Path::new("program.exe"),
+            OsString::from("clang"),
+        );
+        assert_eq!(
+            command.args,
+            [
+                "--target=x86_64-pc-windows-msvc",
+                "-fuse-ld=lld",
+                "program.o",
+                "runtime.c",
+                "-o",
+                "program.exe",
+            ]
+            .map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn non_msvc_link_command_does_not_force_the_windows_linker() {
+        let command = link_command(
+            "aarch64-apple-darwin",
+            Path::new("program.o"),
+            Path::new("runtime.c"),
+            Path::new("program"),
+            OsString::from("clang"),
+        );
+        assert!(!command.args.contains(&OsString::from("-fuse-ld=lld")));
+    }
+
+    #[test]
+    fn missing_compiler_driver_is_a_clean_error() {
+        let command = LinkCommand {
+            program: OsString::from("__pycc_missing_compiler_driver__"),
+            args: vec![],
+        };
+        let error = run_link_command(&command).expect_err("missing driver must fail");
+        assert!(error.contains("could not start target-aware compiler driver"));
+    }
+
+    #[test]
+    fn target_aware_linker_accepts_an_object_from_the_same_clang_target() {
+        let dir = tempfile_dir("target_aware_link");
+        let main_source = dir.join("main.c");
+        let object_path = dir.join("main.o");
+        let runtime_source = dir.join("runtime.c");
+        let binary_path = dir.join(format!("target_aware_link{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(
+            &main_source,
+            "extern void pycc_rt_print_i64(long long);\n\
+             int main(void) { pycc_rt_print_i64(42); return 0; }\n",
+        )
+        .unwrap();
+        pycc_rt::write_c_runtime(&runtime_source).unwrap();
+
+        let target = native_target_triple();
+        let program = select_clang(&target, environment_var);
+        let compile_status = Command::new(&program)
+            .arg(format!("--target={target}"))
+            .args(["-c"])
+            .arg(&main_source)
+            .arg("-o")
+            .arg(&object_path)
+            .status()
+            .expect("configured Clang driver should start");
+        assert!(compile_status.success(), "C fixture compilation failed");
+
+        super::link_object_with_runtime(&object_path, &runtime_source, &binary_path)
+            .expect("target-aware linking should succeed");
+        let output = Command::new(binary_path)
+            .output()
+            .expect("linked fixture should run");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"42\n");
+    }
 
     #[test]
     fn defining_main_without_calling_it_produces_no_output() {
@@ -500,21 +716,10 @@ mod tests {
         dir
     }
 
-    /// Test-only linking helper. `pycc`'s real CLI (Task 8) does this via
-    /// `cc`; duplicated minimally here so pycc_codegen's own tests can prove
-    /// the object file it produces actually links and runs, without
-    /// depending on the `pycc` binary crate (that would be a dependency
-    /// cycle: pycc depends on pycc_codegen, not the other way around).
     fn link_object_with_runtime(obj_path: &std::path::Path, bin_path: &std::path::Path) {
         let rt_source_path = bin_path.with_extension("pycc_rt.c");
         pycc_rt::write_c_runtime(&rt_source_path).expect("embedded runtime should be writable");
-        let status = Command::new("cc")
-            .arg(obj_path)
-            .arg(&rt_source_path)
-            .arg("-o")
-            .arg(bin_path)
-            .status()
-            .expect("cc should run");
-        assert!(status.success(), "linking failed");
+        super::link_object_with_runtime(obj_path, &rt_source_path, bin_path)
+            .expect("target-aware linking should succeed");
     }
 }

@@ -33,6 +33,15 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
     for stmt in &module.body {
         match stmt {
             Stmt::FunctionDef(f) => {
+                if is_python_builtin(f.name.id.as_str()) {
+                    return Err(unsupported(
+                        f,
+                        format!(
+                            "shadowing Python builtin `{}` is not implemented yet",
+                            f.name.id.as_str()
+                        ),
+                    ));
+                }
                 if f.is_async {
                     return Err(unsupported(f, "async functions are not implemented yet"));
                 }
@@ -126,6 +135,14 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
             ));
         };
         Ok(HirStmt::CallPrint { arg })
+    } else if is_python_builtin(name.id.as_str()) {
+        Err(unsupported(
+            name,
+            format!(
+                "Python builtin `{}` is not implemented yet",
+                name.id.as_str()
+            ),
+        ))
     } else {
         let [] = arguments.args.as_ref() else {
             return Err(unsupported(
@@ -140,6 +157,83 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
             name: name.id.as_str().to_string(),
         })
     }
+}
+
+fn is_python_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "__import__"
+            | "abs"
+            | "aiter"
+            | "all"
+            | "anext"
+            | "any"
+            | "ascii"
+            | "bin"
+            | "bool"
+            | "breakpoint"
+            | "bytearray"
+            | "bytes"
+            | "callable"
+            | "chr"
+            | "classmethod"
+            | "compile"
+            | "complex"
+            | "delattr"
+            | "dict"
+            | "dir"
+            | "divmod"
+            | "enumerate"
+            | "eval"
+            | "exec"
+            | "filter"
+            | "float"
+            | "format"
+            | "frozenset"
+            | "getattr"
+            | "globals"
+            | "hasattr"
+            | "hash"
+            | "help"
+            | "hex"
+            | "id"
+            | "input"
+            | "int"
+            | "isinstance"
+            | "issubclass"
+            | "iter"
+            | "len"
+            | "list"
+            | "locals"
+            | "map"
+            | "max"
+            | "memoryview"
+            | "min"
+            | "next"
+            | "object"
+            | "oct"
+            | "open"
+            | "ord"
+            | "pow"
+            | "print"
+            | "property"
+            | "range"
+            | "repr"
+            | "reversed"
+            | "round"
+            | "set"
+            | "setattr"
+            | "slice"
+            | "sorted"
+            | "staticmethod"
+            | "str"
+            | "sum"
+            | "super"
+            | "tuple"
+            | "type"
+            | "vars"
+            | "zip"
+    )
 }
 
 fn unsupported(node: &impl Ranged, message: impl Into<String>) -> Diagnostic {
@@ -241,6 +335,20 @@ mod tests {
             vec![HirItem::TopLevelStmt(HirStmt::CallUserFunction {
                 name: "foo".to_string(),
             })]
+        );
+    }
+
+    #[test]
+    fn unsupported_python_builtins_are_compile_diagnostics() {
+        assert_unsupported("bool()\n", "Python builtin `bool`");
+        assert_unsupported("len()\n", "Python builtin `len`");
+    }
+
+    #[test]
+    fn shadowing_a_python_builtin_is_a_compile_diagnostic() {
+        assert_unsupported(
+            "def bool() -> None:\n    print(42)\n",
+            "shadowing Python builtin `bool`",
         );
     }
 
