@@ -19,6 +19,7 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 | [DELIVERY_PLAN.md](./DELIVERY_PLAN.md) | Milestone decomposition, verified environment baseline, v0.1 crate scope + PR breakdown, autonomy policy | execution order, PR sequencing |
 | [AGENT_TOOLING.md](./AGENT_TOOLING.md) | Agent plugin pins, reviewed update process, validation, and rollback | `.agents/`, `.claude/`, agent-asset CI |
 | [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
+| [DISTRIBUTION.md](./DISTRIBUTION.md) | Source-based pre-commit publication, hook contract, installation limits | `.pre-commit-hooks.yaml`, `pycc check`, release tags |
 
 ## Invariants (short version)
 
@@ -36,4 +37,4 @@ Spec change = PR touching the doc + the tests that enforce it, reviewed against 
 
 ## Not yet specced (known gaps)
 
-`docs/semantics.md` (deviation ledger — starts at v0.1 with D-007 str notes) · packaging/distribution of pycc itself (installers, `rustup`-style) · LSP protocol details (post-1.0) · release artifact signing and provenance (for example, sigstore).
+`docs/semantics.md` (deviation ledger — starts at v0.1 with D-007 str notes) · binary installers and `rustup`-style distribution beyond the source-based pre-commit integration · LSP protocol details (post-1.0) · release artifact signing and provenance (for example, sigstore).

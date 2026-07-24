@@ -18,7 +18,8 @@ pub enum Command {
         path: String,
     },
     Check {
-        path: Option<String>,
+        #[arg(allow_hyphen_values = true)]
+        paths: Vec<String>,
     },
     Test,
     Explain {

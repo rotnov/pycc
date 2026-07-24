@@ -23,7 +23,12 @@ fn a_missing_input_file_is_a_clean_error_not_a_panic() {
     let out = dir.join("out");
 
     let output = Command::new(pycc_bin())
-        .args(["build", missing_path.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .args([
+            "build",
+            missing_path.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -36,7 +41,11 @@ fn build_and_run_explicit_call_to_main() {
     // `main` -- the source has to call it, same as any other function.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "hello.py", "def main() -> None:\n    print(42)\n\nmain()\n");
+    let src = write_fixture(
+        &dir,
+        "hello.py",
+        "def main() -> None:\n    print(42)\n\nmain()\n",
+    );
     let out = dir.join("hello");
 
     let status = Command::new(pycc_bin())
@@ -62,7 +71,11 @@ fn defining_main_without_calling_it_produces_no_output() {
     // pycc_testkit, deferred per DECISIONS.md): zero bytes of stdout.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_uncalled_main_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "hello_uncalled.py", "def main() -> None:\n    print(42)\n");
+    let src = write_fixture(
+        &dir,
+        "hello_uncalled.py",
+        "def main() -> None:\n    print(42)\n",
+    );
     let out = dir.join("hello_uncalled");
 
     let status = Command::new(pycc_bin())
@@ -72,7 +85,10 @@ fn defining_main_without_calling_it_produces_no_output() {
     assert!(status.success());
 
     let output = Command::new(&out).output().unwrap();
-    assert_eq!(output.stdout, b"", "must match CPython's actual output for this source");
+    assert_eq!(
+        output.stdout, b"",
+        "must match CPython's actual output for this source"
+    );
 }
 
 #[test]
@@ -98,7 +114,10 @@ fn run_subcommand_builds_and_executes_in_one_step() {
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "hello_run.py", "print(42)\n");
 
-    let output = Command::new(pycc_bin()).args(["run", src.to_str().unwrap()]).output().unwrap();
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"42\n");
 }
@@ -109,14 +128,20 @@ fn run_subcommand_propagates_a_build_failure() {
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "bad_run.py", "def main(:\n");
 
-    let output = Command::new(pycc_bin()).args(["run", src.to_str().unwrap()]).output().unwrap();
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("L0001"));
 }
 
 #[test]
 fn version_flag_prints_something() {
-    let output = Command::new(pycc_bin()).args(["version", "--verbose"]).output().unwrap();
+    let output = Command::new(pycc_bin())
+        .args(["version", "--verbose"])
+        .output()
+        .unwrap();
     assert!(output.status.success());
     assert!(!output.stdout.is_empty());
 }
@@ -184,8 +209,136 @@ fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let bad_out = dir.join("does_not_exist_dir").join("hello");
 
     let status = Command::new(pycc_bin())
-        .args(["build", src.to_str().unwrap(), "-o", bad_out.to_str().unwrap()])
+        .args([
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            bad_out.to_str().unwrap(),
+        ])
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(1));
+}
+
+#[test]
+fn check_accepts_every_staged_file_in_one_invocation() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_many_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = write_fixture(&dir, "first.py", "print(1)\n");
+    let second = write_fixture(&dir, "second.py", "def helper() -> None:\n    print(2)\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&first)
+        .arg(&second)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_accepts_a_staged_filename_that_starts_with_a_hyphen() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_hyphen_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_fixture(&dir, "--staged.py", "print(1)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", "--staged.py"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_errors_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let invalid = write_fixture(&dir, "invalid.py", "def main(:\n");
+    let missing = dir.join("missing.py");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&invalid)
+        .arg(&missing)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr.contains(invalid.to_str().unwrap()));
+    assert!(stderr.contains("L0001"));
+    assert!(stderr.contains(missing.to_str().unwrap()));
+    assert!(stderr.contains("could not read"));
+}
+
+#[test]
+fn check_rejects_a_currently_unsupported_construct_without_panicking() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_check_unsupported_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "assignment.py", "x = 1\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("C0001"));
+    assert!(!stderr.contains("panicked"));
+}
+
+#[test]
+fn check_without_files_is_a_clean_invocation_error() {
+    let output = Command::new(pycc_bin()).arg("check").output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("at least one Python file"));
+}
+
+#[test]
+fn build_rejects_a_currently_unsupported_construct_without_panicking() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_build_unsupported_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "assignment.py", "x = 1\n");
+    let out = dir.join("assignment");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("C0001"));
+    assert!(!stderr.contains("panicked"));
+}
+
+#[test]
+fn repository_publishes_the_pycc_check_pre_commit_hook() {
+    let manifest_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".pre-commit-hooks.yaml");
+    let manifest = std::fs::read_to_string(manifest_path).unwrap();
+
+    assert_eq!(
+        manifest,
+        "\
+- id: pycc-check
+  name: pycc check
+  description: Check typed Python files with the pycc frontend
+  entry: pycc check
+  language: rust
+  types: [python]
+  require_serial: true
+"
+    );
 }

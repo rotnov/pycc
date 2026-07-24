@@ -8,14 +8,23 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 |---|---|
 | `pycc build [PATH] -o OUT` | compile to native binary (default `--debug`) |
 | `pycc run [PATH] [-- args]` | build + execute |
-| `pycc check [PATH]` | frontend only: parse + types + ownership; ruff-fast, no codegen |
+| `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; no codegen |
 | `pycc test` | run project tests compiled (pytest-style discovery, subset) |
 | `pycc explain CODE` | long-form doc for a diagnostic (`pycc explain T0021`) |
 | `pycc init [NAME]` | scaffold `pycc.toml` + `src/main.py` |
 | `pycc clean` | drop `.pycc/` cache |
 | `pycc version --verbose` | compiler, LLVM, target list |
 
-`PATH` = file or project dir (uses `pycc.toml`); omitted → current dir.
+The current v0.1 slice requires at least one explicit file for `pycc check` and
+accepts multiple files in one invocation, matching the argument shape used by
+pre-commit. It checks every supplied file before exiting. Directory discovery,
+an omitted path meaning the current project, and `pycc.toml` project loading
+arrive with multi-file projects in v0.4. The ownership pass joins `check` when
+`pycc_own` is introduced in v0.5.
+
+For the other commands, the target contract remains `PATH` = file or project
+directory (using `pycc.toml`), with an omitted path meaning the current
+directory once project mode exists.
 
 ## Key flags
 
@@ -53,7 +62,13 @@ paths = ["tests/"]
 
 ## Exit codes
 
-`0` ok · `1` compile errors · `2` bad invocation · `101` compiled program panicked/uncaught exception (matches process exit conventions per-OS).
+`0` ok · `1` compile errors · `2` bad invocation or unreadable input · `101`
+compiled program panicked/uncaught exception (matches process exit conventions
+per-OS).
+
+`pycc check` reports all supplied-file failures. If different files produce
+both compile errors and unreadable-input errors, it exits `2`; otherwise any
+compile error exits `1`.
 
 ## Diagnostics output contract
 

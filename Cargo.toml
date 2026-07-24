@@ -37,5 +37,6 @@ clap = { version = "4", features = ["derive"] }
 pycc_parser = { path = "crates/pycc_parser" }
 pycc_hir = { path = "crates/pycc_hir" }
 pycc_types = { path = "crates/pycc_types" }
+pycc_diag = { path = "crates/pycc_diag" }
 pycc_mir = { path = "crates/pycc_mir" }
 pycc_codegen = { path = "crates/pycc_codegen" }
