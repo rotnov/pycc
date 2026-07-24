@@ -8,11 +8,13 @@ on:
 env:
   # Pinned per D-014 / TESTING.md "Code coverage" -- never a bare "latest".
   CARGO_LLVM_COV_VERSION: "0.8.7"
+  # D-015 pin, installed identically (same exact version) on every OS below.
+  LLVM_VERSION: "22.1.1"
 
 jobs:
-  # PR-1/PR-2 scope: macOS only (matches the primary dev host). The
-  # 5-target Tier-1 matrix (Linux x64/arm64, macOS x64/arm64, Windows MSVC)
-  # and the cross-compiled build are PR-3's job -- see docs/DELIVERY_PLAN.md.
+  # Coverage gate lives on exactly one target, per D-014 ("at least one
+  # Tier-1 target"). This job also builds/tests/lints -- it's the primary
+  # dev host's own architecture (macOS arm64), unchanged from PR-1/PR-2.
   build-test-coverage:
     runs-on: macos-14
     steps:
@@ -21,10 +23,6 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show
 
-      # LLVM 22.1/inkwell 0.9 pin (D-015). Homebrew on GitHub's macOS
-      # runners doesn't ship this by default, so it's installed and pinned
-      # via the env var explicitly, same as the local dev setup in
-      # docs/DELIVERY_PLAN.md's Environment baseline table.
       - name: Install LLVM 22 (D-015)
         run: brew install llvm@22
 
@@ -53,3 +51,122 @@ jobs:
 
       - name: cargo llvm-cov --workspace (D-014 gate, 100% lines + regions)
         run: cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+
+  # PR-3: native build+test+lint on the other 4 Tier-1 targets. No coverage
+  # requirement here -- that's build-test-coverage's job alone, per D-014.
+  native-build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show pinned toolchain
+        run: rustup show
+
+      - name: Install LLVM 22 (Linux, via apt.llvm.org)
+        if: runner.os == 'Linux'
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+      - name: Install LLVM 22 (macOS, via Homebrew)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@22
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+
+      # Downloaded directly from LLVM's own GitHub release (not a third-party
+      # mirror or package manager) -- no Windows package manager reliably
+      # carries LLVM 22 yet, checked before choosing this.
+      - name: Install LLVM 22 (Windows, official prebuilt release)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -L --fail -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/clang+llvm-${LLVM_VERSION}-x86_64-pc-windows-msvc.tar.xz"
+          mkdir -p "${RUNNER_TEMP}/llvm"
+          tar -xf llvm.tar.xz -C "${RUNNER_TEMP}/llvm" --strip-components=1
+          echo "LLVM_SYS_221_PREFIX=${RUNNER_TEMP}/llvm" >> "$GITHUB_ENV"
+
+      - name: cargo build --workspace
+        run: cargo build --workspace
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: cargo clippy --workspace
+        shell: bash
+        run: |
+          rustup component add clippy
+          cargo clippy --workspace --all-targets -- -D warnings
+
+  # PR-3's cross-compilation proof (D-019): pycc, running natively on the
+  # arm64 runner, cross-compiles for x86_64-apple-darwin using its own
+  # --target flag -- same-OS/cross-arch, not cross-OS (see D-019 for why).
+  cross-compile-build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 22
+        run: |
+          brew install llvm@22
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+
+      - name: Add x86_64-apple-darwin Rust target
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Build pycc_rt for x86_64-apple-darwin
+        run: cargo build --target x86_64-apple-darwin -p pycc_rt
+
+      - name: Build pycc (native)
+        run: cargo build -p pycc
+
+      - name: Cross-compile the slice-0 fixture
+        run: |
+          mkdir -p /tmp/cross_fixture
+          printf 'print(42)\n' > /tmp/cross_fixture/hello.py
+          ./target/debug/pycc build /tmp/cross_fixture/hello.py -o /tmp/cross_fixture/hello --target x86_64-apple-darwin
+          file /tmp/cross_fixture/hello
+
+      - name: Upload the cross-compiled binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-compiled-x86_64-apple-darwin
+          path: /tmp/cross_fixture/hello
+
+  # Verifies the cross-compiled binary on its own native hardware -- "built
+  # on one host, executed and verified on its native runner" per
+  # docs/DELIVERY_PLAN.md's PR-3 row, not just "codegen didn't error."
+  cross-compile-verify:
+    needs: cross-compile-build
+    runs-on: macos-15-intel
+    steps:
+      - name: Download the cross-compiled binary
+        uses: actions/download-artifact@v4
+        with:
+          name: cross-compiled-x86_64-apple-darwin
+          path: /tmp/cross_fixture
+
+      - name: Verify it runs natively and prints the right output
+        run: |
+          chmod +x /tmp/cross_fixture/hello
+          file /tmp/cross_fixture/hello
+          output="$(/tmp/cross_fixture/hello)"
+          if [ "$output" != "42" ]; then
+            echo "expected '42', got '${output}'"
+            exit 1
+          fi
+          echo "cross-compiled binary verified on its native x86_64 runner"
