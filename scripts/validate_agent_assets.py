@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import re
@@ -84,6 +85,10 @@ SCRIPT_SUFFIXES = {
     ".zsh",
 }
 SOURCE_SUFFIXES_WITH_INLINE_TESTS = {".c", ".cc", ".cpp", ".h", ".hpp", ".rs"}
+
+
+class RequiredAssetEncodingError(ValueError):
+    """Raised when a required agent asset uses an unsupported text encoding."""
 
 
 def load_json(
@@ -489,6 +494,20 @@ def required_asset_body(relative: Path, text: str) -> str:
     return text[end + len("\n---\n") :]
 
 
+def decode_required_asset(data: bytes) -> str:
+    if data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        raise RequiredAssetEncodingError("UTF-32 is not supported")
+    if data.startswith(codecs.BOM_UTF8):
+        text = data.decode("utf-8-sig")
+    elif data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        text = data.decode("utf-16")
+    else:
+        text = data.decode("utf-8")
+    if "\0" in text:
+        raise RequiredAssetEncodingError("NUL bytes are not allowed")
+    return text
+
+
 def validate_optional_plugin_boundary(
     settings: dict,
     failures: list[str],
@@ -514,10 +533,16 @@ def validate_optional_plugin_boundary(
     for path in paths:
         relative = path.relative_to(root).as_posix()
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = decode_required_asset(path.read_bytes())
         except OSError as error:
             failures.append(
                 f"{relative}: unable to read tracked required agent asset: {error}"
+            )
+            continue
+        except (UnicodeDecodeError, RequiredAssetEncodingError) as error:
+            failures.append(
+                f"{relative}: required agent asset must be UTF-8 or BOM-tagged "
+                f"UTF-16: {error}"
             )
             continue
         text = required_asset_body(Path(relative), text)

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import shutil
@@ -771,6 +772,65 @@ class AgentAssetValidationTests(unittest.TestCase):
 
             self.assertEqual(len(failures), 1)
             self.assertIn("unable to read tracked required agent asset", failures[0])
+
+    def test_utf16_powershell_asset_is_scanned(self) -> None:
+        source = f"Run /{FEATURE_DEV} before continuing.\n"
+        payloads = (
+            codecs.BOM_UTF16_LE + source.encode("utf-16-le"),
+            codecs.BOM_UTF16_BE + source.encode("utf-16-be"),
+        )
+        for payload in payloads:
+            with self.subTest(bom=payload[:2]):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    script = root / "scripts" / "agent-check.ps1"
+                    script.parent.mkdir()
+                    script.write_bytes(payload)
+
+                    failures = self.optional_boundary_failures(
+                        {
+                            "enabledPlugins": {
+                                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                                "ievo@ievo-skills": True,
+                            }
+                        },
+                        root,
+                        [(script, "100644")],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(script.relative_to(root).as_posix(), failures[0])
+
+    def test_unknown_required_asset_encoding_fails_closed(self) -> None:
+        source = f"Run /{FEATURE_DEV} before continuing.\n"
+        payloads = (
+            b"\xffinvalid",
+            source.encode("utf-16-le"),
+            source.encode("utf-16-be"),
+            codecs.BOM_UTF32_LE + source.encode("utf-32-le"),
+            codecs.BOM_UTF32_BE + source.encode("utf-32-be"),
+        )
+        for payload in payloads:
+            with self.subTest(prefix=payload[:4]):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    script = root / "scripts" / "agent-check.ps1"
+                    script.parent.mkdir()
+                    script.write_bytes(payload)
+
+                    failures = self.optional_boundary_failures(
+                        {
+                            "enabledPlugins": {
+                                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                                "ievo@ievo-skills": True,
+                            }
+                        },
+                        root,
+                        [(script, "100644")],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn("must be UTF-8 or BOM-tagged UTF-16", failures[0])
 
     def test_exact_identity_reports_the_matching_shared_marketplace_plugin(
         self,
