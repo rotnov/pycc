@@ -16,6 +16,7 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 | [TESTING.md](./TESTING.md) | 7 test layers, conformance harness, differential fuzzing, corpus bot | CI, `pycc_testkit` |
 | [ROADMAP.md](./ROADMAP.md) | v0.1→v1.0 milestones with binary acceptance criteria | releases |
 | [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-013 (int repr, LLVM, UTF-8 str, no-GIL model…) | irreversible calls |
+| [DELIVERY_PLAN.md](./DELIVERY_PLAN.md) | Milestone decomposition, verified environment baseline, v0.1 crate scope + PR breakdown, autonomy policy | execution order, PR sequencing |
 
 ## Invariants (short version)
 
