@@ -47,10 +47,10 @@ domain, and the sitemap can be submitted directly to search consoles.
 Pull requests that change the website or either validator run the Pages build
 and validation job without deploying. Pushes to `main` that change the website
 validate the static files, upload only `site/`, and deploy through the protected
-`github-pages` environment. The workflow can also be run manually; only a run
-from `main` is allowed to reach the deployment job. The workflow grants
-`pages: write` and OIDC access only to that deployment job; pull-request code
-runs with read-only repository access.
+`github-pages` environment. A manual run performs validation and artifact
+assembly only; deployment authority is reserved for a `push` to `main`. The
+workflow grants `pages: write` and OIDC access only to that deployment job;
+pull-request code runs with read-only repository access.
 
 The site deliberately has no package manager, runtime JavaScript dependency,
 analytics, cookies, or external font request. A small local script only powers

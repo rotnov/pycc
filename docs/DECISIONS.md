@@ -22,10 +22,12 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-016 | Vendored parser pin (D-003): `ruff_python_parser = "0.0.6"`, `ruff_python_ast = "0.0.6"` (crates.io, checked at PR-1 time — re-verify before bumping) | accepted |
 | D-017 | No separate `pycc_lexer` crate for v0.1: the vendored `ruff_python_parser` bundles lexing internally and nothing in the v0.1 pipeline consumes a standalone token stream. `pycc_lexer` is created when D-003's own-parser work (v0.6) actually needs to expose one | accepted |
 | D-018 | `pycc_testkit` deferred past PR-1/PR-2: no PEP conformance matrix exists yet for a real harness to check against; `tests/slice0.rs` covers the two named fixtures ad hoc in the meantime, built for real at PR-4/PR-6 | proposed |
-| D-019 | Every agent task starts from refreshed repository/spec/API evidence and never mutates a stale or dirty base implicitly | accepted |
-| D-020 | Confirmed iEvo defects may be reported publicly without per-report permission, within strict scope and privacy limits | accepted |
-| D-021 | Auto-evolution intent is shared, but executable hooks and generated scripts remain machine-local | accepted |
-| D-022 | `main` is protected by PR, CI, resolved conversations, and an audited emergency path; independent approval starts when a second maintainer is available | accepted |
+| D-019 | Agent surfaces: repository-owned agents and skills support both OpenAI Codex and Claude Code; `AGENTS.md` is the shared instruction source and `CLAUDE.md` imports it | accepted |
+| D-020 | CI trust: pull-request code is untrusted; workflow permissions default to explicit read-only/none, and workflow changes are audited from the trusted base revision | accepted |
+| D-021 | Every agent task starts from refreshed repository/spec/API evidence and never mutates a stale or dirty base implicitly | accepted |
+| D-022 | Confirmed iEvo defects may be reported publicly without per-report permission, within strict scope and privacy limits | accepted |
+| D-023 | Auto-evolution intent is shared, but executable hooks and generated scripts remain machine-local | accepted |
+| D-024 | `main` is protected by PR, CI, resolved conversations, and an audited emergency path; independent approval starts when a second maintainer is available | accepted |
 
 ## Template
 
@@ -80,7 +82,23 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 - Alternatives: scaffold a minimal `pycc_testkit` crate now, even with nothing real for it to do (rejected as premature -- there's no PEP matrix yet for it to check against, so it would be structure without function, the same YAGNI concern D-017 raised about `pycc_lexer`); keep DELIVERY_PLAN.md's "as early as slice 0" wording as-is and treat `tests/slice0.rs` as satisfying it (rejected -- that wording specifically promises TESTING.md's Layer 2 shape, which `tests/slice0.rs` doesn't have, and leaving the mismatch undocumented is exactly the kind of thing this decisions log exists to prevent).
 - Consequences: DELIVERY_PLAN.md's "Testing scope for v0.1" section is corrected to say Layer 2 starts at PR-4/PR-6, not slice 0. `tests/slice0.rs` stays as ad hoc coverage for the two named PR-2 fixtures specifically, not a stand-in for the conformance harness.
 
-## D-019: Agent task preflight and documentation refresh
+## D-019: Codex and Claude Code are equal agent surfaces
+
+- Status: accepted
+- Context: pycc development uses both OpenAI Codex and Claude Code. Letting repository-owned automation exist on only one surface would make the effective development contract depend on which client happened to open a task, while copying complete instruction files per client would let them drift.
+- Decision: `AGENTS.md` is the canonical shared repository instruction source and `CLAUDE.md` imports it. Every new or changed repository-owned agent or skill ships discoverable entrypoints and equivalent behavior, safety gates, inputs, and outputs for both Codex and Claude Code in the same pull request. Platform-specific adapters may differ, but they remain thin and share the underlying implementation where practical.
+- Alternatives: choose one agent platform (rejected because both are active development surfaces); duplicate all rules and implementations independently (rejected because parity would be unverifiable and drift-prone); permit silent single-platform gaps (rejected because task behavior would become client-dependent).
+- Consequences: agent/skill changes are incomplete until discovery plus primary success and failure paths work on both surfaces. A platform API gap needs a safe documented fallback, not an implicit reduction in support.
+
+## D-020: Pull-request CI is an untrusted execution boundary
+
+- Status: accepted
+- Context: workflows may execute scripts and definitions controlled by a pull request, including same-repository branches. Workflow-level write permissions, OIDC, secrets, environments, or inherited state can therefore expose deployment and repository authority before review. A checker executed only from the pull-request revision cannot be its own trust anchor because that revision can change the checker too.
+- Decision: every workflow declares an explicit workflow-level read/none permission baseline. Jobs that execute or consume untrusted pull-request state receive no elevated capability beyond a minimally scoped read-only `GITHUB_TOKEN`. Every privileged job, including one in a push-only or reusable workflow, is isolated behind the exact `push` plus `refs/heads/main` guard. The semantic policy checker provides normal CI feedback, while a separate read-only `pull_request_target` workflow runs the checker from the trusted base commit and downloads only head-revision workflow YAML as non-executable data. The checker also requires the trust-anchor workflow itself to match an independently reviewed SHA-256 allowlist.
+- Alternatives: rely on repository permission defaults (rejected because they are mutable and implicit); trust an in-branch grep checker (rejected because YAML spellings bypass text matching and the PR can modify its own checker); grant workflow-level credentials and skip only the deploy step (rejected because credentials exist before step conditions contain their use).
+- Consequences: after the one-time manually reviewed bootstrap PR introduces the trust anchor, workflow changes must pass the trusted `Workflow policy` check from their base revision. Cross-job artifacts, caches, outputs, reusable workflows, secrets, and environments remain explicit review boundaries even when the static checker accepts the YAML.
+
+## D-021: Agent task preflight and documentation refresh
 
 - Status: accepted
 - Context: this AI-first repository treats specifications and generated Rust API documentation as implementation inputs. Starting from a stale remote ref, stale rustdoc, or an unidentified dirty tree can make an otherwise-correct agent optimize against the wrong contract or overwrite user work.
@@ -89,7 +107,7 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 - Privacy and failure behavior: preflight output stays in the task transcript and must not publish local paths or repository content. A failed fetch or documentation build is recorded and understood; older generated documentation must not be represented as current.
 - Rollback: the isolated worktree/branch can be removed after preserving any intended commits. Changing this mandatory sequence requires a superseding decision because every later agent task depends on it.
 
-## D-020: Autonomous public iEvo bug reporting
+## D-022: Autonomous public iEvo bug reporting
 
 - Status: accepted
 - Context: reproducible defects in the iEvo control plane can affect every agent task until upstream fixes ship. Requiring a new permission round-trip after the user has adopted the project policy delays correction and encourages local-only workarounds that other users cannot discover.
@@ -98,7 +116,7 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 - Privacy and failure behavior: reports omit credentials, personal data, private/proprietary content, raw conversations, and identifying local paths even when the pycc repository is public. If authentication/network submission fails, preserve the pending sanitized report locally and surface the failure; do not repeatedly spam the endpoint.
 - Rollback: a public report cannot be made private retroactively. A mistaken report is corrected and closed with an explicit explanation. Revoking standing authority requires a superseding decision and removal of the matching AGENTS.md section.
 
-## D-021: Shared auto-evolution intent with local hook execution
+## D-023: Shared auto-evolution intent with local hook execution
 
 - Status: accepted
 - Context: the repository wants correction-driven evolution to survive across contributors, but iEvo generates hook scripts under gitignored `.ievo/hooks/`. Committing shared hook entries that invoke those absent targets made every clean clone emit hook errors (issue #28; upstream `ievo-ai/skills#446`).
@@ -107,7 +125,7 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 - Privacy and failure behavior: local hook inputs and generated logs remain local/ignored. Missing local setup must be a silent no-op in shared state, never a failing committed command. Validation failure blocks merge.
 - Rollback: run the iEvo auto-disable workflow locally, remove or supersede the shared flag, remove local hook wiring/scripts, and verify the clean tracked view. A future tracked-wrapper design requires a superseding decision and security review.
 
-## D-022: Protected main and audited emergency bypass
+## D-024: Protected main and audited emergency bypass
 
 - Status: accepted
 - Context: commit `0ac9b1d` reached `main` while PR #3 remained open after a timed-out merge request, proving that commit messages and monitoring conventions do not create a review boundary. An AI-authored compiler needs the repository host—not agent intent—to enforce the PR/CI/review path. The repository currently has one maintainer, and GitHub does not count an author's approval of their own pull request.
