@@ -48,7 +48,7 @@ GitHub Action (`corpus-bot`):
 
 ## Code coverage (D-014)
 
-Distinct from the grammar-coverage gate above (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
+Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
 
 - Tool: `cargo llvm-cov` (rustup `llvm-tools` component; independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match).
 - Gate: `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR.
