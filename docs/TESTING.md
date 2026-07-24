@@ -7,7 +7,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | Layer | Location | What it proves |
 |---|---|---|
 | 1. Unit (Rust) | per-crate `#[cfg(test)]` | lexer/parser/checker/MIR internals |
-| 2. Conformance | `tests/conformance/pyXY/` | one test per PEP: compile with pycc, run, `stdout == CPython 3.14 stdout` |
+| 2. Conformance | `tests/conformance/pyXY/` | each supported language level compiles and runs its cumulative fixture set; `stdout ==` that level's pinned CPython oracle |
 | 3. Diagnostics | `tests/diagnostics/` | rejected constructs fail with the exact code + span (insta-style snapshots) |
 | 4. Differential fuzzing | `tests/fuzz/` | generated typed-Python programs: pycc binary output ≡ CPython output; crashes/mismatches auto-minimized |
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
@@ -17,7 +17,14 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 ## Conformance harness (`pycc_testkit`)
 
 - Each test = single `.py` file, header comment: PEP, category, min pycc milestone.
-- Runner: compile (`--debug` and `--release` both, once `--release` exists — see below) → execute → diff vs CPython 3.14 reference output (recorded, pinned CPython version; re-recorded on CPython patch bumps).
+- Runner: for each supported language level, select that configuration's
+  cumulative fixture range and pinned oracle → compile (`--debug` and
+  `--release` both, once `--release` exists — see below) → execute → diff. The
+  v1.0 Python 3.14 run covers `py30/` through `py314/` against CPython 3.14.6.
+  After the v1.x adoption gate opens, the Python 3.15 run covers `py30/`
+  through `py315/` against a pinned current Python 3.15 patch; the separate
+  Python 3.14 compatibility run remains required. Outputs are recorded and
+  re-recorded on oracle patch bumps.
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
@@ -96,17 +103,26 @@ whenever practical.
 Bootstrap exception: the pull request that first adds `Workflow policy` cannot
 run that workflow from the base revision because it does not exist there yet.
 That one change requires the regular checker, `actionlint`, independent deep
-review, and manual inspection of the pinned action SHAs before merge. Verify
-the first post-merge target run, then make `audit` a required status check; all
-later policy changes are evaluated by the trusted checker from their base
-revision.
+review, and manual inspection of the pinned action SHAs before merge.
+
+The bootstrap is complete. On 2026-07-24, the first post-merge
+[`pull_request_target` run](https://github.com/rotnov/pycc/actions/runs/30129743650)
+checked out the trusted policy implementation from base commit
+`107eccf4d6d4161c26f7257de538cad974bed913`, passed all 31 checker tests and
+70 assertions, and audited all five workflow files at the triggering
+[PR #35](https://github.com/rotnov/pycc/pull/35) head as non-executable data.
+Branch protection is strict and requires both
+`build-test-coverage` and `audit`, bound to the GitHub Actions app. Removing
+either required check, disabling strict mode, or accepting an `audit` context
+from another app is a policy regression; all later policy changes are
+evaluated by the trusted checker from their base revision.
 
 ## Code coverage (D-014)
 
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
 
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
-- Gate: `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. A version-print smoke step runs before the gate so a broken/missing install fails loudly rather than silently.
+- Gate: `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. Run `cargo build --workspace` first: the slice-0 end-to-end tests link the normal debug build of `pycc_rt`, matching the CI sequence. Without that prerequisite the coverage command fails at the link step before it can measure coverage. A version-print smoke step runs before the gate so a broken/missing install fails loudly rather than silently.
 - Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator automatically — the gate measures product code exercised by tests, not tests covering themselves.
 - Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
 
