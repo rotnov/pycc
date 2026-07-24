@@ -29,7 +29,9 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Validate website
-        run: ./scripts/check-site.sh
+        run: |
+          ./scripts/check-site.sh
+          ./scripts/test-check-site.sh
 
       - name: Upload website
         uses: actions/upload-pages-artifact@v4

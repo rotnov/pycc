@@ -33,6 +33,8 @@ ranking.
 `site/robots.txt` and `site/sitemap.xml` must use the same canonical origin.
 The social preview is `site/og.png`. `scripts/check-site.sh` enforces these
 mechanical requirements locally and in the Pages workflow.
+`scripts/test-check-site.sh` proves that the validator accepts the complete
+site and rejects missing files or required metadata.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots
