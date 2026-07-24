@@ -368,6 +368,14 @@ name = "pycc_diag"
 version = "0.1.0"
 
 [[package]]
+name = "pycc_hir"
+version = "0.1.0"
+dependencies = [
+ "pycc_ast",
+ "pycc_parser",
+]
+
+[[package]]
 name = "pycc_parser"
 version = "0.1.0"
 dependencies = [

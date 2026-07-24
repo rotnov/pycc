@@ -4,6 +4,7 @@ members = [
     "crates/pycc_diag",
     "crates/pycc_ast",
     "crates/pycc_parser",
+    "crates/pycc_hir",
 ]
 
 [workspace.package]

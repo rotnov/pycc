@@ -62,6 +62,8 @@ Distinct from the grammar-coverage gate in Meta below (which measures PEP/langua
 
   An uncovered file with no entry in this table is a review-blocking finding, not a gap to wave through.
 
+- **Practical note (learned building `pycc_hir`'s first tests):** a hand-written `match { expected => ..., _ => panic!("...") }` inside a test creates its *own* uncovered region for the `_` arm whenever the test passes — the arm is real, reachable code, just never exercised by a passing test. `assert_eq!`/`.unwrap()` don't have this problem (their internal branching isn't part of the calling crate's instrumented regions). Prefer `#[derive(Debug, PartialEq)]` on the type under test plus `assert_eq!(actual, expected)` over a manual match-and-panic assertion.
+
 ## Meta
 
 Every bug that reaches `main` gets a permanent regression test named after the issue (`tests/regress/issue_1234.py`). Coverage gate: conformance suite must touch 100% of implemented grammar productions (grammar-coverage instrumentation in the parser).
