@@ -3,15 +3,19 @@ set -eu
 
 canonical='https://rotnov.github.io/pycc/'
 site_dir=${SITE_DIR:-site}
+indexnow_key='3361fe03d0f44ab7cdbb1a3ce1461821'
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 for required_file in \
   index.html \
+  index.html.md \
   styles.css \
   site.js \
   og.png \
   robots.txt \
   sitemap.xml \
   llms.txt \
+  "${indexnow_key}.txt" \
   404.html
 do
   test -f "$site_dir/$required_file"
@@ -38,19 +42,59 @@ import sys
 
 
 class MetadataParser(HTMLParser):
+    hidden_body_tags = {"script", "style", "template", "noscript"}
+    void_tags = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+
     def __init__(self):
         super().__init__()
         self.in_title = False
         self.in_json_ld = False
+        self.in_body = False
+        self.hidden_body_depth = 0
+        self.body_element_stack = []
         self.titles = []
         self.current_title = []
         self.links = []
         self.metas = []
         self.json_ld = []
         self.current_json_ld = []
+        self.visible_body_text = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
+        if tag == "body":
+            self.in_body = True
+            return
+        if self.in_body:
+            inline_style = attributes.get("style", "").replace(" ", "").lower()
+            is_hidden = (
+                self.hidden_body_depth > 0
+                or tag in self.hidden_body_tags
+                or "hidden" in attributes
+                or attributes.get("aria-hidden", "").lower() == "true"
+                or "display:none" in inline_style
+                or "visibility:hidden" in inline_style
+            )
+            if tag not in self.void_tags:
+                self.body_element_stack.append((tag, is_hidden))
+                if is_hidden:
+                    self.hidden_body_depth += 1
+            return
         if tag == "title":
             self.in_title = True
             self.current_title = []
@@ -63,6 +107,22 @@ class MetadataParser(HTMLParser):
             self.current_json_ld = []
 
     def handle_endtag(self, tag):
+        if tag == "body":
+            self.in_body = False
+            self.body_element_stack = []
+            self.hidden_body_depth = 0
+            return
+        if self.in_body:
+            if not self.body_element_stack:
+                raise SystemExit(f"Unexpected closing body tag: {tag}")
+            started_tag, was_hidden = self.body_element_stack.pop()
+            if started_tag != tag:
+                raise SystemExit(
+                    f"Mismatched body tags: expected {started_tag}, found {tag}"
+                )
+            if was_hidden:
+                self.hidden_body_depth -= 1
+            return
         if tag == "title" and self.in_title:
             self.titles.append("".join(self.current_title).strip())
             self.in_title = False
@@ -75,6 +135,8 @@ class MetadataParser(HTMLParser):
             self.current_title.append(data)
         if self.in_json_ld:
             self.current_json_ld.append(data)
+        if self.in_body and self.hidden_body_depth == 0:
+            self.visible_body_text.append(data)
 
 
 def require_one(items, description):
@@ -100,6 +162,7 @@ for meta in parser.metas:
 
 required_metadata = (
     "description",
+    "google-site-verification",
     "robots",
     "og:type",
     "og:site_name",
@@ -121,7 +184,11 @@ for key in required_metadata:
         raise SystemExit(f"Metadata field {key!r} must have nonempty content")
 
 expected_values = {
-    "robots": "index, follow, max-image-preview:large",
+    "google-site-verification": "JYWBkUpaYuJgPDksjf5oGOn49o8X41PqUxS--u-eF24",
+    "robots": (
+        "index, follow, max-image-preview:large, "
+        "max-snippet:-1, max-video-preview:-1"
+    ),
     "og:type": "website",
     "og:url": canonical,
     "og:image": f"{canonical}og.png",
@@ -156,6 +223,7 @@ if sitemap_link.get("href") != "sitemap.xml":
     raise SystemExit("Sitemap link must reference sitemap.xml")
 
 software_sources = []
+web_pages = []
 for source in parser.json_ld:
     document = json.loads(source)
     candidates = document.get("@graph", []) if isinstance(document, dict) else []
@@ -165,14 +233,129 @@ for source in parser.json_ld:
         for candidate in candidates
         if isinstance(candidate, dict) and candidate.get("@type") == "SoftwareSourceCode"
     )
+    web_pages.extend(
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict) and candidate.get("@type") == "WebPage"
+    )
 
 software_source = require_one(software_sources, "SoftwareSourceCode JSON-LD object")
+web_page = require_one(web_pages, "WebPage JSON-LD object")
+project_id = f"{canonical}#project"
+web_page_id = f"{canonical}#webpage"
+
+if web_page.get("@id") != web_page_id:
+    raise SystemExit("WebPage JSON-LD must use the canonical webpage ID")
+if web_page.get("url") != canonical:
+    raise SystemExit("WebPage JSON-LD must use the canonical URL")
+if web_page.get("name") != title:
+    raise SystemExit("WebPage JSON-LD name must match the page title")
+if web_page.get("description") != metadata["description"][0]["content"]:
+    raise SystemExit("WebPage JSON-LD description must match the meta description")
+if web_page.get("mainEntity") != {"@id": project_id}:
+    raise SystemExit("WebPage JSON-LD must identify the pycc project as its main entity")
+
+if software_source.get("@id") != project_id:
+    raise SystemExit("SoftwareSourceCode JSON-LD must use the canonical project ID")
+if software_source.get("mainEntityOfPage") != {"@id": web_page_id}:
+    raise SystemExit("SoftwareSourceCode JSON-LD must point back to the webpage")
 if software_source.get("codeRepository") != "https://github.com/rotnov/pycc":
     raise SystemExit("SoftwareSourceCode JSON-LD must link to the public repository")
+
+visible_body_text = " ".join(" ".join(parser.visible_body_text).split())
+required_disclosures = (
+    "Built entirely by AI.",
+    "Managed by a human.",
+    "No project code is handwritten by a human.",
+)
+for disclosure in required_disclosures:
+    if disclosure not in visible_body_text:
+        raise SystemExit(f"Missing visible AI authorship disclosure: {disclosure}")
 PY
 
 assert_once "Sitemap: ${canonical}sitemap.xml" "$site_dir/robots.txt"
-assert_once "<loc>${canonical}</loc>" "$site_dir/sitemap.xml"
+
+python3 - \
+  "$site_dir/sitemap.xml" \
+  "$site_dir/llms.txt" \
+  "$site_dir/index.html.md" \
+  "$canonical" <<'PY'
+from datetime import date
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+
+sitemap_path = Path(sys.argv[1])
+llms_path = Path(sys.argv[2])
+markdown_path = Path(sys.argv[3])
+canonical = sys.argv[4]
+
+namespace = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+root = ET.parse(sitemap_path).getroot()
+urls = root.findall("s:url", namespace)
+if len(urls) != 1:
+    raise SystemExit(f"Expected exactly one sitemap URL; found {len(urls)}")
+
+location = urls[0].findtext("s:loc", namespaces=namespace)
+if location != canonical:
+    raise SystemExit("Sitemap URL must match the canonical URL")
+
+last_modified = urls[0].findtext("s:lastmod", namespaces=namespace)
+try:
+    last_modified_date = date.fromisoformat(last_modified or "")
+except ValueError as error:
+    raise SystemExit("Sitemap lastmod must be an ISO 8601 calendar date") from error
+if last_modified_date > date.today():
+    raise SystemExit("Sitemap lastmod cannot be in the future")
+
+llms = llms_path.read_text()
+if not llms.startswith("# pycc\n\n> "):
+    raise SystemExit("llms.txt must start with the project H1 and blockquote summary")
+for heading in ("## Project", "## Specifications", "## Optional"):
+    if llms.count(heading) != 1:
+        raise SystemExit(f"llms.txt must contain exactly one {heading!r} section")
+for required_link in (
+    f"[Canonical website]({canonical})",
+    f"[Markdown website]({canonical}index.html.md)",
+    "[Source repository](https://github.com/rotnov/pycc)",
+    "[Specification index](https://github.com/rotnov/pycc/blob/main/docs/SPEC.md)",
+):
+    if required_link not in llms:
+        raise SystemExit(f"llms.txt is missing required link: {required_link}")
+
+markdown = markdown_path.read_text()
+if not markdown.startswith("# pycc — AOT compiler for typed Python to native binaries"):
+    raise SystemExit("index.html.md must start with the canonical page title")
+for disclosure in (
+    "fully AI-created, human-managed",
+    "A human only manages goals, constraints,",
+    "No project code is handwritten by a human.",
+):
+    if disclosure not in llms or disclosure not in markdown:
+        raise SystemExit(f"LLM-readable files are missing disclosure: {disclosure}")
+PY
+
+key_file="$site_dir/${indexnow_key}.txt"
+if [ "$(tr -d '\r\n' < "$key_file")" != "$indexnow_key" ]; then
+  echo "IndexNow key file must contain the key from its filename" >&2
+  exit 1
+fi
+
+notify_script="$repo_root/scripts/notify-indexnow.sh"
+test -x "$notify_script"
+sh -n "$notify_script"
+expected_notification=$(printf \
+  'url=%s\nkey=%s\nkeyLocation=%s%s.txt' \
+  "$canonical" \
+  "$indexnow_key" \
+  "$canonical" \
+  "$indexnow_key")
+actual_notification=$(INDEXNOW_DRY_RUN=1 "$notify_script")
+if [ "$actual_notification" != "$expected_notification" ]; then
+  echo "IndexNow notifier does not match the published canonical URL and key" >&2
+  exit 1
+fi
 
 if grep -R -nE '(localhost|127\.0\.0\.1|file://)' "$site_dir"; then
   echo "Website contains a local-only URL" >&2
