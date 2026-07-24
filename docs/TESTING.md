@@ -75,7 +75,9 @@ The initial `ci-build-test-coverage-100` evidence requires all of the following:
 
 - the exact coverage claim in the v0.1 checklist;
 - an unfiltered `pull_request` trigger;
-- the unconditional `build-test-coverage` job and named hard-coverage step;
+- the unconditional, dependency-free, failure-propagating
+  `build-test-coverage` job and named hard-coverage step using the default
+  shell;
 - the exact command
   `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`.
 
