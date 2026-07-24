@@ -2,7 +2,7 @@ mod cli;
 
 use clap::Parser;
 use cli::{Cli, Command};
-use pycc_diag::Diagnostic;
+use pycc_diag::{Diagnostic, Span};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -58,14 +58,23 @@ fn try_build(path: &str, out: &str) -> Result<(), ExitCode> {
 
 enum FrontendFailure {
     Input(String),
-    Compile(Diagnostic),
+    Compile {
+        diagnostic: Diagnostic,
+        source: String,
+    },
 }
 
 fn check_frontend(path: &str) -> Result<pycc_hir::HirModule, FrontendFailure> {
     let source =
         std::fs::read_to_string(path).map_err(|error| FrontendFailure::Input(error.to_string()))?;
-    let module = pycc_parser::parse(&source).map_err(FrontendFailure::Compile)?;
-    let hir = pycc_hir::lower(&module).map_err(FrontendFailure::Compile)?;
+    let module = match pycc_parser::parse(&source) {
+        Ok(module) => module,
+        Err(diagnostic) => return Err(FrontendFailure::Compile { diagnostic, source }),
+    };
+    let hir = match pycc_hir::lower(&module) {
+        Ok(hir) => hir,
+        Err(diagnostic) => return Err(FrontendFailure::Compile { diagnostic, source }),
+    };
     pycc_types::check(&hir).expect("v0.1's type checker is a no-op passthrough; it never fails");
     Ok(hir)
 }
@@ -91,14 +100,44 @@ fn report_frontend_failure(path: &str, failure: FrontendFailure) -> u8 {
             eprintln!("error: could not read `{path}`: {message}");
             2
         }
-        FrontendFailure::Compile(diagnostic) => {
+        FrontendFailure::Compile { diagnostic, source } => {
+            let span = diagnostic
+                .span
+                .expect("compile errors must carry a primary source span");
             eprintln!(
-                "error[{}]: {}\n --> {path}",
-                diagnostic.code, diagnostic.message
+                "error[{}]: {}\n{}",
+                diagnostic.code,
+                diagnostic.message,
+                render_source_span(path, &source, span),
             );
             1
         }
     }
+}
+
+fn render_source_span(path: &str, source: &str, span: Span) -> String {
+    let start = usize::try_from(span.start).expect("source offsets must fit usize");
+    let end = usize::try_from(span.end).expect("source offsets must fit usize");
+    let prefix = &source[..start];
+    let line_number = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let line_start = match prefix.rfind('\n') {
+        Some(newline) => newline + 1,
+        None => 0,
+    };
+    let line_end = match source[start..].find('\n') {
+        Some(relative_newline) => start + relative_newline,
+        None => source.len(),
+    };
+    let source_line = &source[line_start..line_end];
+    let column = source[line_start..start].chars().count() + 1;
+    let highlight_end = end.max(start).min(line_end);
+    let highlight_width = source[start..highlight_end].chars().count().max(1);
+
+    format!(
+        " --> {path}:{line_number}:{column}\n  |\n{line_number} | {source_line}\n  | {}{}",
+        " ".repeat(column - 1),
+        "^".repeat(highlight_width),
+    )
 }
 
 fn run(path: &str) -> ExitCode {

@@ -282,7 +282,7 @@ fn check_rejects_a_currently_unsupported_construct_without_panicking() {
     let dir =
         std::env::temp_dir().join(format!("pycc_e2e_check_unsupported_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "assignment.py", "x = 1\n");
+    let src = write_fixture(&dir, "assignment.py", "def main() -> None:\n    x = 1\n");
 
     let output = Command::new(pycc_bin())
         .arg("check")
@@ -293,6 +293,9 @@ fn check_rejects_a_currently_unsupported_construct_without_panicking() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr.contains("C0001"));
+    assert!(stderr.contains(&format!("{}:2:5", src.display())));
+    assert!(stderr.contains("2 |     x = 1"));
+    assert!(stderr.contains("  |     ^^^^^"));
     assert!(!stderr.contains("panicked"));
 }
 
@@ -309,7 +312,7 @@ fn build_rejects_a_currently_unsupported_construct_without_panicking() {
     let dir =
         std::env::temp_dir().join(format!("pycc_e2e_build_unsupported_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "assignment.py", "x = 1\n");
+    let src = write_fixture(&dir, "assignment.py", "x = 1");
     let out = dir.join("assignment");
 
     let output = Command::new(pycc_bin())
