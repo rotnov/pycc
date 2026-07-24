@@ -67,21 +67,6 @@ def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
 
     request = requests[0]
     request_time = timestamp(request["createdAt"])
-    codex_responses = [
-        comment
-        for comment in comments
-        if timestamp(comment["createdAt"]) > request_time
-        and comment.get("headRefOid") == head
-        and is_codex_login(comment.get("author", {}).get("login"))
-        and comment.get("body", "").lstrip().startswith("Codex Review:")
-    ]
-    if codex_responses:
-        evidence = codex_responses[0].get("url") or codex_responses[0].get("createdAt")
-        return (
-            "ARTIFACT_EXISTS",
-            f"standalone Codex review artifact exists for {head}: {evidence}",
-        )
-
     if now - request_time >= dt.timedelta(minutes=15):
         evidence = request.get("url") or request.get("createdAt")
         return "RETRY_ALLOWED", f"15-minute no-artifact timeout after {evidence}"

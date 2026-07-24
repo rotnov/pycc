@@ -15,12 +15,26 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PREFIXES = (".ievo/", ".claude/", ".agents/", ".github/", "scripts/")
 PROJECT_PREFIXES = ("$CLAUDE_PROJECT_DIR/", "${CLAUDE_PROJECT_DIR}/")
-SCRIPT_SUFFIXES = (".sh", ".py", ".rb", ".pl", ".php", ".js", ".mjs", ".cjs")
+SCRIPT_SUFFIXES = (
+    ".sh",
+    ".py",
+    ".rb",
+    ".pl",
+    ".php",
+    ".ps1",
+    ".js",
+    ".mjs",
+    ".cjs",
+)
 SHELL_INTERPRETERS = ("sh", "bash", "zsh")
 NODE_INTERPRETERS = ("node", "nodejs")
+POWERSHELL_INTERPRETERS = ("powershell", "powershell.exe", "pwsh", "pwsh.exe")
 COMMAND_LAUNCHERS = ("command", "env", "exec")
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+WINDOWS_ABSOLUTE_IN_COMMAND = re.compile(
+    r"(?:^|[\s\"'])[A-Za-z]:[\\/]"
+)
 SHELL_CONTROL = re.compile(r"&&|\|\||[;&|]")
 
 
@@ -57,8 +71,13 @@ def parsed_hook_commands(
                 command = entry.get("command")
                 if not isinstance(command, str):
                     continue
+                command_for_split = (
+                    command.replace("\\", "\\\\")
+                    if WINDOWS_ABSOLUTE_IN_COMMAND.search(command)
+                    else command
+                )
                 try:
-                    command_tokens = shlex.split(command)
+                    command_tokens = shlex.split(command_for_split)
                 except ValueError:
                     command_tokens = [command]
                 argument_tokens = (
@@ -78,6 +97,8 @@ def interpreter_kind(executable: str) -> str | None:
         return "python"
     if name in NODE_INTERPRETERS:
         return "node"
+    if name.lower() in POWERSHELL_INTERPRETERS:
+        return "powershell"
     return None
 
 
@@ -96,6 +117,13 @@ def inline_interpreter_mode(kind: str, tokens: list[str]) -> str | None:
             or token.startswith("--print=")
         ):
             return token
+        if kind == "powershell" and token.startswith("-"):
+            option = token.lstrip("-").split(":", 1)[0].lower()
+            if option and (
+                "command".startswith(option)
+                or "encodedcommand".startswith(option)
+            ):
+                return token
     return None
 
 

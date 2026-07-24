@@ -254,6 +254,87 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_windows_absolute_script_argument_retains_backslashes(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": (
+                                    r"powershell -File C:\Users\alice\hook.ps1"
+                                ),
+                                "args": [],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            [
+                "shared hook target must not be absolute: "
+                r"C:\Users\alice\hook.ps1"
+            ],
+        )
+
+    def test_powershell_file_mode_validates_relative_script(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "pwsh",
+                                "args": ["-File", "tools/hook.ps1"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook target is not tracked: tools/hook.ps1"],
+        )
+
+    def test_inline_powershell_commands_are_rejected(self) -> None:
+        for command, arguments, expected in [
+            (
+                "pwsh",
+                ["-EncodedCommand", "dABvAG8AbABzAC8AaABvAG8AawAuAHAAcwAxAA=="],
+                "pwsh -EncodedCommand",
+            ),
+            (
+                "powershell.exe",
+                ["-Command", "Write-Output ok"],
+                "powershell.exe -Command",
+            ),
+        ]:
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: {expected}"
+                    ],
+                )
+
     def test_env_launcher_still_validates_relative_script(self) -> None:
         settings = {
             "hooks": {

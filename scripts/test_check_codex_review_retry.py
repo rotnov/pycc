@@ -164,7 +164,7 @@ class CodexReviewRetryTests(unittest.TestCase):
             "ARTIFACT_EXISTS",
         )
 
-    def test_codex_success_comment_blocks_duplicate(self) -> None:
+    def test_standalone_success_comment_does_not_block_timeout(self) -> None:
         data = payload()
         data["comments"] = [
             comment("@codex review", "2026-07-24T20:05:00Z"),
@@ -175,26 +175,20 @@ class CodexReviewRetryTests(unittest.TestCase):
                 url="https://example.test/review",
             ),
         ]
-        self.assertEqual(
-            gate.classify(data, NOW)[0],
-            "ARTIFACT_EXISTS",
-        )
+        self.assertEqual(gate.classify(data, NOW)[0], "RETRY_ALLOWED")
 
-    def test_success_comment_that_mentions_no_errors_is_not_a_failure(self) -> None:
+    def test_recent_standalone_success_comment_still_waits(self) -> None:
         data = payload()
         data["comments"] = [
-            comment("@codex review", "2026-07-24T20:05:00Z"),
+            comment("@codex review", "2026-07-24T20:55:00Z"),
             comment(
                 "Codex Review: no errors found.",
-                "2026-07-24T20:06:00Z",
+                "2026-07-24T20:56:00Z",
                 author=gate.CODEX_LOGIN,
                 url="https://example.test/review",
             ),
         ]
-        self.assertEqual(
-            gate.classify(data, NOW)[0],
-            "ARTIFACT_EXISTS",
-        )
+        self.assertEqual(gate.classify(data, NOW)[0], "WAIT")
 
     def test_bot_suffixed_failure_comment_does_not_allow_early_retry(self) -> None:
         data = payload()
