@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -236,7 +238,8 @@ class AgentAssetValidationTests(unittest.TestCase):
                     },
                     "autoUpdate": False,
                 }
-            }
+            },
+            "enabledPlugins": {"ievo@ievo-skills": True},
         }
 
     def validate_claude_settings(
@@ -284,6 +287,136 @@ class AgentAssetValidationTests(unittest.TestCase):
             codex_ref="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         self.assertTrue(any("must match" in failure for failure in failures))
+
+    def validate_enabled_pins(self, settings: dict) -> list[str]:
+        failures: list[str] = []
+        validator.validate_enabled_claude_plugin_pins(settings, failures)
+        return failures
+
+    def production_claude_settings(self) -> dict:
+        return json.loads(
+            (validator.ROOT / ".claude/settings.json").read_text(encoding="utf-8")
+        )
+
+    def production_plugin_source(
+        self,
+        settings: dict,
+        coordinate: str = "feature-dev@pycc-official-pinned",
+    ) -> dict:
+        plugin_name, marketplace_name = coordinate.split("@")
+        plugins = settings["extraKnownMarketplaces"][marketplace_name]["source"][
+            "plugins"
+        ]
+        return next(
+            plugin["source"] for plugin in plugins if plugin["name"] == plugin_name
+        )
+
+    def test_every_production_enabled_claude_plugin_is_exactly_pinned(self) -> None:
+        settings = self.production_claude_settings()
+        self.assertEqual(len(settings["extraKnownMarketplaces"]), 3)
+        self.assertEqual(len(settings["enabledPlugins"]), 12)
+        self.assertEqual(self.validate_enabled_pins(settings), [])
+
+    def test_enabled_claude_plugin_rejects_a_movable_marketplace(self) -> None:
+        settings = self.claude_settings()
+        settings["extraKnownMarketplaces"]["ievo-skills"] = {
+            "source": {
+                "source": "github",
+                "repo": "ievo-ai/skills",
+            },
+            "autoUpdate": False,
+        }
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any("inline settings marketplace" in failure for failure in failures)
+        )
+
+    def test_enabled_claude_plugin_rejects_automatic_updates(self) -> None:
+        settings = self.claude_settings()
+        settings["extraKnownMarketplaces"]["ievo-skills"]["autoUpdate"] = True
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any("autoUpdate must be false" in failure for failure in failures)
+        )
+
+    def test_enabled_claude_plugin_rejects_a_movable_plugin_source(self) -> None:
+        settings = self.claude_settings(sha="v0.58.1")
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any("full immutable commit SHA" in failure for failure in failures)
+        )
+
+    def test_enabled_claude_plugin_rejects_a_non_git_subdir_source(self) -> None:
+        settings = self.production_claude_settings()
+        source = self.production_plugin_source(settings)
+        source["source"] = "github"
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(any("must use git-subdir" in failure for failure in failures))
+
+    def test_enabled_claude_plugin_rejects_an_unapproved_url(self) -> None:
+        settings = self.production_claude_settings()
+        source = self.production_plugin_source(settings)
+        source["url"] = "https://github.com/example/other.git"
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(any("URL must be" in failure for failure in failures))
+
+    def test_enabled_claude_plugin_rejects_the_wrong_subdirectory(self) -> None:
+        settings = self.production_claude_settings()
+        source = self.production_plugin_source(settings)
+        source["path"] = "./plugins/not-feature-dev"
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(any("path must be" in failure for failure in failures))
+
+    def test_enabled_claude_plugin_rejects_a_missing_source(self) -> None:
+        settings = self.production_claude_settings()
+        marketplace = settings["extraKnownMarketplaces"]["pycc-official-pinned"]
+        del marketplace["source"]["plugins"][0]["source"]
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any("source must be an object" in failure for failure in failures)
+        )
+
+    def test_enabled_claude_plugin_rejects_duplicate_entries(self) -> None:
+        settings = self.production_claude_settings()
+        marketplace = settings["extraKnownMarketplaces"]["pycc-official-pinned"]
+        marketplace["source"]["plugins"].append(
+            copy.deepcopy(marketplace["source"]["plugins"][0])
+        )
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any(
+                "exactly one inline marketplace entry" in failure
+                for failure in failures
+            )
+        )
+
+    def test_enabled_claude_plugin_rejects_a_missing_marketplace(self) -> None:
+        settings = self.production_claude_settings()
+        del settings["extraKnownMarketplaces"]["pycc-official-pinned"]
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any("has no declared marketplace" in failure for failure in failures)
+        )
+
+    def test_enabled_claude_plugin_rejects_an_invalid_coordinate(self) -> None:
+        settings = self.production_claude_settings()
+        settings["enabledPlugins"]["feature-dev"] = settings["enabledPlugins"].pop(
+            "feature-dev@pycc-official-pinned"
+        )
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any(
+                "must have the form plugin@marketplace" in failure
+                for failure in failures
+            )
+        )
+
+    def test_enabled_claude_plugin_rejects_ref_even_with_a_sha(self) -> None:
+        settings = self.production_claude_settings()
+        source = self.production_plugin_source(settings)
+        source["ref"] = "main"
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(any("must use sha, not ref" in failure for failure in failures))
 
 
 if __name__ == "__main__":

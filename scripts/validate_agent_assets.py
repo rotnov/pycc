@@ -17,6 +17,13 @@ AUTHENTICATION_POLICIES = {"ON_INSTALL", "ON_USE"}
 IMMUTABLE_SHA = re.compile(r"^[0-9a-f]{40}$")
 IEVO_REPOSITORY_URL = "https://github.com/ievo-ai/skills.git"
 IEVO_PLUGIN_PATH = "./plugins/ievo"
+CLAUDE_MARKETPLACE_REPOSITORIES = {
+    "ievo-skills": IEVO_REPOSITORY_URL,
+    "pycc-official-pinned": (
+        "https://github.com/anthropics/claude-plugins-official.git"
+    ),
+    "pycc-workflows-pinned": "https://github.com/wshobson/agents.git",
+}
 CANONICAL_SKILL_PATH = re.compile(r"`(\.claude/skills/([a-z][a-z0-9-]*)/SKILL\.md)`")
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SLASH_SKILL = re.compile(r"`/([a-z][a-z0-9-]+)`")
@@ -111,6 +118,80 @@ def validate_claude_ievo_marketplace(
         )
 
 
+def validate_enabled_claude_plugin_pins(
+    settings: dict,
+    failures: list[str],
+    settings_path: str = ".claude/settings.json",
+) -> None:
+    marketplaces = settings.get("extraKnownMarketplaces")
+    if not isinstance(marketplaces, dict):
+        failures.append(f"{settings_path}: extraKnownMarketplaces must be an object")
+        return
+    enabled_plugins = settings.get("enabledPlugins")
+    if not isinstance(enabled_plugins, dict):
+        failures.append(f"{settings_path}: enabledPlugins must be an object")
+        return
+
+    for coordinate, enabled in sorted(enabled_plugins.items()):
+        if enabled is not True:
+            continue
+        if not isinstance(coordinate, str) or coordinate.count("@") != 1:
+            failures.append(
+                f"{settings_path}: enabled plugin coordinate {coordinate!r} "
+                "must have the form plugin@marketplace"
+            )
+            continue
+        plugin_name, marketplace_name = coordinate.split("@")
+        marketplace = marketplaces.get(marketplace_name)
+        label = f"{settings_path}: enabled plugin {coordinate}"
+        if not isinstance(marketplace, dict):
+            failures.append(f"{label} has no declared marketplace")
+            continue
+        if marketplace.get("autoUpdate") is not False:
+            failures.append(f"{label} marketplace autoUpdate must be false")
+        source = marketplace.get("source")
+        if (
+            not isinstance(source, dict)
+            or source.get("source") != "settings"
+            or source.get("name") != marketplace_name
+        ):
+            failures.append(
+                f"{label} marketplace must be an inline settings marketplace"
+            )
+            continue
+        plugins = source.get("plugins")
+        if not isinstance(plugins, list):
+            failures.append(f"{label} marketplace plugins must be an array")
+            continue
+        matches = [
+            plugin
+            for plugin in plugins
+            if isinstance(plugin, dict) and plugin.get("name") == plugin_name
+        ]
+        if len(matches) != 1:
+            failures.append(f"{label} must have exactly one inline marketplace entry")
+            continue
+        plugin_source = matches[0].get("source")
+        if not isinstance(plugin_source, dict):
+            failures.append(f"{label} source must be an object")
+            continue
+        if plugin_source.get("source") != "git-subdir":
+            failures.append(f"{label} source must use git-subdir")
+        expected_url = CLAUDE_MARKETPLACE_REPOSITORIES.get(marketplace_name)
+        if expected_url is None:
+            failures.append(f"{label} marketplace is not an approved source")
+        elif plugin_source.get("url") != expected_url:
+            failures.append(f"{label} URL must be {expected_url}")
+        expected_path = f"./plugins/{plugin_name}"
+        if plugin_source.get("path") != expected_path:
+            failures.append(f"{label} path must be {expected_path}")
+        if "ref" in plugin_source:
+            failures.append(f"{label} must use sha, not ref, for an exact pin")
+        sha = plugin_source.get("sha")
+        if not isinstance(sha, str) or IMMUTABLE_SHA.fullmatch(sha) is None:
+            failures.append(f"{label} sha must be a full immutable commit SHA")
+
+
 def validate_marketplaces(failures: list[str]) -> None:
     codex_path = ".agents/plugins/marketplace.json"
     marketplace = load_json(codex_path, failures)
@@ -168,6 +249,7 @@ def validate_marketplaces(failures: list[str]) -> None:
         failures,
         claude_path,
     )
+    validate_enabled_claude_plugin_pins(settings, failures, claude_path)
     validate_skill_parity(SKILLS_ROOT, CODEX_SKILLS_ROOT, failures)
 
 
