@@ -4,7 +4,7 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 
 | Doc | Contents | Drives |
 |---|---|---|
-| [README.md](./README.md) | Vision, positioning vs Codon/Nuitka/mypyc, quick start | everything |
+| [README.md](../README.md) | Vision, positioning vs Codon/Nuitka/mypyc, quick start | everything |
 | [PYTHON_STANDARDS.md](./PYTHON_STANDARDS.md) | All language PEPs 3.0→3.14, one conformance test each; rejected-by-design list; OSS corpus tiers | `tests/conformance`, `tests/diagnostics` |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Pipeline, crates, incremental/parallel design, **cross-platform Tier-1 matrix** | workspace layout, CI matrix |
 | [TYPE_SYSTEM.md](./TYPE_SYSTEM.md) | Strictness rules, type↔representation table, generics, narrowing | `pycc_types` |
@@ -18,6 +18,7 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 | [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-014 (int repr, LLVM, UTF-8 str, no-GIL model, coverage gate…) | irreversible calls |
 | [DELIVERY_PLAN.md](./DELIVERY_PLAN.md) | Milestone decomposition, verified environment baseline, v0.1 crate scope + PR breakdown, autonomy policy | execution order, PR sequencing |
 | [AGENT_TOOLING.md](./AGENT_TOOLING.md) | Agent plugin pins, reviewed update process, validation, and rollback | `.agents/`, `.claude/`, agent-asset CI |
+| [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
 
 ## Invariants (short version)
 
