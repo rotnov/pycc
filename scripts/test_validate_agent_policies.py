@@ -294,9 +294,53 @@ class AgentPolicyValidationTests(unittest.TestCase):
             }
         }
         self.assertEqual(
-            validator.validate_hook_targets(
-                settings, {"scripts/tracked-hook.sh"}
-            ),
+            validator.validate_hook_targets(settings, {"scripts/tracked-hook.sh"}),
+            [],
+        )
+
+    def test_unknown_launcher_validates_path_like_operands(self) -> None:
+        for command, arguments, expected in [
+            ("uv", ["run", "tools/hook.py"], "tools/hook.py"),
+            ("ruby", ["hook.rb"], "hook.rb"),
+            ("custom-runner", ["--quiet", "./bin/hook"], "bin/hook"),
+        ]:
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [f"shared hook target is not tracked: {expected}"],
+                )
+
+    def test_unknown_launcher_accepts_tracked_path_like_operands(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "uv",
+                                "args": ["run", "tools/hook.py"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, {"tools/hook.py"}),
             [],
         )
 

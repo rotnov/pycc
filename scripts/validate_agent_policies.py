@@ -15,7 +15,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PREFIXES = (".ievo/", ".claude/", ".agents/", ".github/", "scripts/")
 PROJECT_PREFIXES = ("$CLAUDE_PROJECT_DIR/", "${CLAUDE_PROJECT_DIR}/")
-SCRIPT_SUFFIXES = (".sh", ".py", ".js", ".mjs", ".cjs")
+SCRIPT_SUFFIXES = (".sh", ".py", ".rb", ".pl", ".php", ".js", ".mjs", ".cjs")
 SHELL_INTERPRETERS = ("sh", "bash", "zsh")
 NODE_INTERPRETERS = ("node", "nodejs")
 COMMAND_LAUNCHERS = ("command", "env", "exec")
@@ -136,6 +136,18 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
         kind = interpreter_kind(executable)
         if kind is None and is_absolute_script_path(executable):
             targets.append(executable)
+            continue
+        if kind is None:
+            for token in resolved[1:]:
+                normalized, explicit_project_path = normalize_hook_token(token)
+                if token.startswith("-"):
+                    continue
+                if (
+                    explicit_project_path
+                    or is_relative_script_path(normalized)
+                    or is_absolute_script_path(normalized)
+                ):
+                    targets.append(normalized)
             continue
         if kind is not None:
             script_tokens = resolved[1:]
