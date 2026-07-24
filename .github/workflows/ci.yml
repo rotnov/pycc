@@ -165,8 +165,18 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --workspace -- --test-threads=1
 
+      # No explicit `shell:` here (unlike this step used to have) -- on
+      # Windows that forced Git Bash, whose own `PATH` startup rewriting
+      # puts its bundled coreutils `link.exe` (the Unix hardlink tool, at
+      # `C:\Program Files\Git\usr\bin\link.exe`) ahead of MSVC's real
+      # linker, breaking any proc-macro dependency's build with a bizarre
+      # "extra operand" error from what is very much not a linker (D-026).
+      # `cargo build`/`cargo test` above already run correctly on Windows
+      # using each OS's own default shell (pwsh here) with no override;
+      # this step's two commands have no bash-specific syntax, so dropping
+      # the override fixes Windows and changes nothing on Linux/macOS
+      # (already bash by default there).
       - name: cargo clippy --workspace
-        shell: bash
         run: |
           rustup component add clippy
           cargo clippy --workspace --all-targets -- -D warnings
