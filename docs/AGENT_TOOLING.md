@@ -21,6 +21,9 @@ Codex does not implicitly register a repository-local marketplace. The bootstrap
 script registers this repository as a marketplace and installs the pinned iEvo plugin.
 Claude Code reads the project-scoped marketplace declaration after the repository is
 trusted and enables the configured plugin without enabling automatic updates.
+The `Agent assets` workflow repeats the validators and isolated Codex bootstrap on
+every pull request and push to `main`, so a developer's global plugin installation
+cannot mask a broken repository pin or bootstrap path.
 
 ## Reviewed update process
 

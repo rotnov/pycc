@@ -1,0 +1,37 @@
+name: Agent assets
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CODEX_CLI_VERSION: "0.145.0"
+
+jobs:
+  agent-assets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate agent skills and plugin pins
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          python3 scripts/validate_agent_assets.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install pinned Codex CLI
+        run: npm install --global "@openai/codex@${CODEX_CLI_VERSION}"
+
+      - name: Show pinned Codex CLI
+        run: codex --version
+
+      - name: Validate Codex marketplace from a fresh environment
+        run: ./scripts/check-codex-marketplace.sh
