@@ -42,6 +42,13 @@
 - Do not report expected behavior, ordinary project failures, or unverified suspicions. Gather enough evidence to make the report actionable and avoid automated issue spam.
 - Link the upstream issue in the task summary and in the local PR when the reported bug affects the change being delivered.
 
+## Keep machine-local hooks local
+
+- Shared `.claude/settings.json` entries must not invoke scripts or other targets that are absent from a clean checkout. A hook whose target is gitignored is a clean-clone defect even when the hook failure is non-blocking.
+- iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Wire them only from the gitignored `.claude/settings.local.json`; never commit those hook entries or the generated scripts.
+- After cloning the repository, enable or refresh iEvo locally, then verify the generated hook entries live in `.claude/settings.local.json`. If the current iEvo version writes them to shared settings, relocate the complete `hooks` object to local settings before committing any repository change.
+- Before changing shared hook configuration, test the tracked-file view of the repository: every referenced command must either exist in that view or be guarded by a tracked wrapper that exits successfully when its local dependency is absent.
+
 ## Testing and hard coverage gate
 
 - One hundred percent line and region coverage is a hard merge invariant under D-014, not a target or guideline.
