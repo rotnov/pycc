@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   # Pinned per D-014 / TESTING.md "Code coverage" -- never a bare "latest".
   CARGO_LLVM_COV_VERSION: "0.8.7"
@@ -17,6 +20,11 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+
+      - name: Check workflow permission policy
+        run: |
+          ruby scripts/test_check_ci_permissions.rb
+          ruby scripts/check_ci_permissions.rb
 
       - name: Show pinned toolchain
         run: rustup show

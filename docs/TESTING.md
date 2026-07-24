@@ -53,6 +53,57 @@ GitHub Action (`corpus-bot`):
 - Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
 
+## CI privilege policy
+
+Every GitHub Actions workflow declares an explicit workflow-level permission
+baseline. The baseline may contain only read or `none` scopes, or
+`permissions: {}`; a job that needs an elevated scope must opt in at job level
+and satisfy the trust-boundary rules in `AGENTS.md`.
+
+CI runs both commands before the build:
+
+```sh
+ruby scripts/test_check_ci_permissions.rb
+ruby scripts/check_ci_permissions.rb
+```
+
+The deterministic checker rejects a workflow with no top-level `permissions`
+declaration, duplicate declarations, scalar shortcuts such as `read-all`, or a
+top-level write/OIDC scope. For every trigger, including `workflow_call`, it
+also rejects jobs with job-level write/OIDC permissions, secret references,
+inherited secrets, or environment access unless they have the exact
+`github.event_name == 'push' && github.ref == 'refs/heads/main'` guard. It
+discovers both `.yml` and `.yaml` files under `.github/workflows/` and parses
+them through Ruby's standard-library `Psych` YAML AST so quoted/spaced keys,
+null values, and duplicates cannot bypass the policy. YAML merge keys and
+aliases are rejected conservatively because the checker must not infer a
+less-privileged expanded job than GitHub executes.
+The audited workflow set must contain `workflow-policy.yml`, and that file must
+match an explicitly approved SHA-256 digest in the trusted checker. This makes
+deletion, renaming, trigger replacement, or an extra executable step fail
+closed. Updating the anchor is intentionally staged: first add the independently
+reviewed prospective digest while the old anchor remains, then change the
+anchor in a later pull request, and remove the retired digest afterward.
+
+The regular PR job runs this checker for fast feedback only; pull-request code
+can change its own workflow. The authoritative `Workflow policy` workflow uses
+`pull_request_target` on every pull request, checks out the trusted base commit,
+downloads only the head revision's workflow YAML through the read-only GitHub
+API, and treats it as data. It never checks out or executes pull-request code,
+so the check can remain required without path-filtered runs getting stuck as
+pending. Job-level trusted-ref exceptions remain a review boundary: reviewers
+must verify the event, actor where relevant, ref, trusted commit, environment,
+and every artifact/cache/output boundary, with a focused negative-event test
+whenever practical.
+
+Bootstrap exception: the pull request that first adds `Workflow policy` cannot
+run that workflow from the base revision because it does not exist there yet.
+That one change requires the regular checker, `actionlint`, independent deep
+review, and manual inspection of the pinned action SHAs before merge. Verify
+the first post-merge target run, then make `audit` a required status check; all
+later policy changes are evaluated by the trusted checker from their base
+revision.
+
 ## Code coverage (D-014)
 
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
