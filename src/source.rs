@@ -37,13 +37,16 @@ pub fn decode_python_source(bytes: &[u8]) -> Result<String, String> {
         None => (bytes, false),
     };
     let declared = detect_encoding_cookie(bytes);
+    if has_utf8_bom
+        && declared
+            .as_deref()
+            .is_some_and(|label| normalize_python_encoding(label) != "utf-8")
+    {
+        return Err("UTF-8 BOM conflicts with the declared source encoding".to_string());
+    }
     let label = declared.as_deref().unwrap_or("utf-8");
     let encoding =
         resolve_encoding(label).ok_or_else(|| format!("unknown source encoding `{label}`"))?;
-
-    if has_utf8_bom && !matches!(encoding, SourceEncoding::Utf8) {
-        return Err("UTF-8 BOM conflicts with the declared source encoding".to_string());
-    }
 
     encoding
         .decode(bytes, label)
@@ -162,6 +165,10 @@ mod tests {
     #[test]
     fn strips_a_utf8_bom_and_accepts_a_matching_cookie() {
         assert_eq!(
+            decode_python_source(b"\xef\xbb\xbfprint(42)\n").unwrap(),
+            "print(42)\n"
+        );
+        assert_eq!(
             decode_python_source(b"\xef\xbb\xbf# coding: utf-8-sig\nprint(42)\n").unwrap(),
             "# coding: utf-8-sig\nprint(42)\n"
         );
@@ -213,6 +220,10 @@ mod tests {
     fn rejects_unknown_encodings_and_bom_conflicts() {
         assert!(decode_python_source(b"# coding: utf-42\nprint(42)\n").is_err());
         assert!(decode_python_source(b"\xef\xbb\xbf# coding: latin-1\nprint(42)\n").is_err());
+        for alias in ["utf8", "cp65001", "utf8_ucs4"] {
+            let source = format!("\u{feff}# coding: {alias}\nprint(42)\n");
+            assert!(decode_python_source(source.as_bytes()).is_err());
+        }
     }
 
     #[test]
