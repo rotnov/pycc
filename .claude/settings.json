@@ -21,9 +21,10 @@
     "ievo-skills": {
       "source": {
         "source": "github",
-        "repo": "ievo-ai/skills"
+        "repo": "ievo-ai/skills",
+        "ref": "v0.58.1"
       },
-      "autoUpdate": true
+      "autoUpdate": false
     }
   },
   "enabledPlugins": {
