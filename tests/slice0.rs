@@ -197,6 +197,7 @@ fn unsupported_valid_python_is_a_compile_diagnostic_not_a_panic() {
         ("keyword argument", "print(42, end=\"\")\n"),
         ("function parameter", "def f(x) -> None:\n    print(42)\n"),
         ("unsupported builtin", "bool()\n"),
+        ("unsupported builtin exception", "ValueError()\n"),
         ("builtin shadowing", "def len() -> None:\n    print(42)\n"),
     ];
 

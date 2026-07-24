@@ -159,81 +159,159 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
     }
 }
 
+// The callable core namespace reported by CPython 3.14 with site initialization
+// disabled (`python3.14 -S`), plus the existing `help` surface. Keeping exception
+// classes and interpreter helpers here prevents unsupported builtins from being
+// misclassified as user functions.
+const PYTHON_314_CALLABLE_BUILTINS: &[&str] = &[
+    "ArithmeticError",
+    "AssertionError",
+    "AttributeError",
+    "BaseException",
+    "BaseExceptionGroup",
+    "BlockingIOError",
+    "BrokenPipeError",
+    "BufferError",
+    "BytesWarning",
+    "ChildProcessError",
+    "ConnectionAbortedError",
+    "ConnectionError",
+    "ConnectionRefusedError",
+    "ConnectionResetError",
+    "DeprecationWarning",
+    "EOFError",
+    "EncodingWarning",
+    "EnvironmentError",
+    "Exception",
+    "ExceptionGroup",
+    "FileExistsError",
+    "FileNotFoundError",
+    "FloatingPointError",
+    "FutureWarning",
+    "GeneratorExit",
+    "IOError",
+    "ImportError",
+    "ImportWarning",
+    "IndentationError",
+    "IndexError",
+    "InterruptedError",
+    "IsADirectoryError",
+    "KeyError",
+    "KeyboardInterrupt",
+    "LookupError",
+    "MemoryError",
+    "ModuleNotFoundError",
+    "NameError",
+    "NotADirectoryError",
+    "NotImplementedError",
+    "OSError",
+    "OverflowError",
+    "PendingDeprecationWarning",
+    "PermissionError",
+    "ProcessLookupError",
+    "PythonFinalizationError",
+    "RecursionError",
+    "ReferenceError",
+    "ResourceWarning",
+    "RuntimeError",
+    "RuntimeWarning",
+    "StopAsyncIteration",
+    "StopIteration",
+    "SyntaxError",
+    "SyntaxWarning",
+    "SystemError",
+    "SystemExit",
+    "TabError",
+    "TimeoutError",
+    "TypeError",
+    "UnboundLocalError",
+    "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "UnicodeError",
+    "UnicodeTranslateError",
+    "UnicodeWarning",
+    "UserWarning",
+    "ValueError",
+    "Warning",
+    "ZeroDivisionError",
+    "_IncompleteInputError",
+    "__build_class__",
+    "__import__",
+    "__loader__",
+    "abs",
+    "aiter",
+    "all",
+    "anext",
+    "any",
+    "ascii",
+    "bin",
+    "bool",
+    "breakpoint",
+    "bytearray",
+    "bytes",
+    "callable",
+    "chr",
+    "classmethod",
+    "compile",
+    "complex",
+    "delattr",
+    "dict",
+    "dir",
+    "divmod",
+    "enumerate",
+    "eval",
+    "exec",
+    "filter",
+    "float",
+    "format",
+    "frozenset",
+    "getattr",
+    "globals",
+    "hasattr",
+    "hash",
+    "help",
+    "hex",
+    "id",
+    "input",
+    "int",
+    "isinstance",
+    "issubclass",
+    "iter",
+    "len",
+    "list",
+    "locals",
+    "map",
+    "max",
+    "memoryview",
+    "min",
+    "next",
+    "object",
+    "oct",
+    "open",
+    "ord",
+    "pow",
+    "print",
+    "property",
+    "range",
+    "repr",
+    "reversed",
+    "round",
+    "set",
+    "setattr",
+    "slice",
+    "sorted",
+    "staticmethod",
+    "str",
+    "sum",
+    "super",
+    "tuple",
+    "type",
+    "vars",
+    "zip",
+];
+
 fn is_python_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "__import__"
-            | "abs"
-            | "aiter"
-            | "all"
-            | "anext"
-            | "any"
-            | "ascii"
-            | "bin"
-            | "bool"
-            | "breakpoint"
-            | "bytearray"
-            | "bytes"
-            | "callable"
-            | "chr"
-            | "classmethod"
-            | "compile"
-            | "complex"
-            | "delattr"
-            | "dict"
-            | "dir"
-            | "divmod"
-            | "enumerate"
-            | "eval"
-            | "exec"
-            | "filter"
-            | "float"
-            | "format"
-            | "frozenset"
-            | "getattr"
-            | "globals"
-            | "hasattr"
-            | "hash"
-            | "help"
-            | "hex"
-            | "id"
-            | "input"
-            | "int"
-            | "isinstance"
-            | "issubclass"
-            | "iter"
-            | "len"
-            | "list"
-            | "locals"
-            | "map"
-            | "max"
-            | "memoryview"
-            | "min"
-            | "next"
-            | "object"
-            | "oct"
-            | "open"
-            | "ord"
-            | "pow"
-            | "print"
-            | "property"
-            | "range"
-            | "repr"
-            | "reversed"
-            | "round"
-            | "set"
-            | "setattr"
-            | "slice"
-            | "sorted"
-            | "staticmethod"
-            | "str"
-            | "sum"
-            | "super"
-            | "tuple"
-            | "type"
-            | "vars"
-            | "zip"
-    )
+    PYTHON_314_CALLABLE_BUILTINS.binary_search(&name).is_ok()
 }
 
 fn unsupported(node: &impl Ranged, message: impl Into<String>) -> Diagnostic {
@@ -342,6 +420,23 @@ mod tests {
     fn unsupported_python_builtins_are_compile_diagnostics() {
         assert_unsupported("bool()\n", "Python builtin `bool`");
         assert_unsupported("len()\n", "Python builtin `len`");
+    }
+
+    #[test]
+    fn builtin_callable_classes_and_helpers_are_compile_diagnostics() {
+        for name in ["ValueError", "Exception", "TypeError", "__build_class__"] {
+            assert_unsupported(&format!("{name}()\n"), &format!("Python builtin `{name}`"));
+        }
+    }
+
+    #[test]
+    fn builtin_table_is_sorted_for_binary_search() {
+        assert!(
+            PYTHON_314_CALLABLE_BUILTINS
+                .windows(2)
+                .all(|names| names[0] < names[1]),
+            "CPython builtin table must stay sorted"
+        );
     }
 
     #[test]

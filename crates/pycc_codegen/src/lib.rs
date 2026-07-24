@@ -453,7 +453,8 @@ mod tests {
             .output()
             .expect("linked fixture should run");
         assert!(output.status.success());
-        assert_eq!(output.stdout, b"42\n");
+        let stdout = String::from_utf8(output.stdout).expect("runtime output must be UTF-8");
+        assert_eq!(stdout.replace("\r\n", "\n"), "42\n");
     }
 
     #[test]
