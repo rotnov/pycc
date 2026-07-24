@@ -1,3 +1,7 @@
+use unicode_width::UnicodeWidthChar;
+
+const TAB_STOP: usize = 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
     pub start: u32,
@@ -61,10 +65,12 @@ impl Diagnostic {
             .find('\n')
             .map_or(source.len(), |index| start + index);
         let line_number = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
-        let column = source[line_start..start].chars().count() + 1;
-        let caret_width = source[start..end.min(line_end)].chars().count().max(1);
+        let source_prefix = &source[line_start..start];
+        let indent_width = display_width(source_prefix, 0);
+        let column = indent_width + 1;
+        let caret_width = display_width(&source[start..end.min(line_end)], indent_width).max(1);
         let normalized_path = path.replace('\\', "/");
-        let source_line = &source[line_start..line_end];
+        let source_line = expand_tabs(&source[line_start..line_end]);
         let gutter_width = line_number.to_string().len();
 
         format!(
@@ -73,11 +79,38 @@ impl Diagnostic {
              {line_number:>gutter_width$} | {source_line}\n\
              {blank:>gutter_width$} | {indent}{carets} {label}",
             blank = "",
-            indent = " ".repeat(column - 1),
+            indent = " ".repeat(indent_width),
             carets = "^".repeat(caret_width),
             label = self.message,
         )
     }
+}
+
+fn display_width(text: &str, initial_width: usize) -> usize {
+    text.chars().fold(0, |width, character| {
+        if character == '\t' {
+            let absolute_width = initial_width + width;
+            width + (TAB_STOP - absolute_width % TAB_STOP)
+        } else {
+            width + UnicodeWidthChar::width(character).unwrap_or(0)
+        }
+    })
+}
+
+fn expand_tabs(text: &str) -> String {
+    let mut expanded = String::with_capacity(text.len());
+    let mut width = 0;
+    for character in text.chars() {
+        if character == '\t' {
+            let spaces = TAB_STOP - width % TAB_STOP;
+            expanded.extend(std::iter::repeat_n(' ', spaces));
+            width += spaces;
+        } else {
+            expanded.push(character);
+            width += UnicodeWidthChar::width(character).unwrap_or(0);
+        }
+    }
+    expanded
 }
 
 #[cfg(test)]
@@ -129,6 +162,23 @@ mod tests {
                 "  |\n",
                 "3 | é\n",
                 "  | ^ expected expression",
+            )
+        );
+    }
+
+    #[test]
+    fn expands_tabs_and_accounts_for_wide_characters_before_the_caret() {
+        let source = "\t界x\n";
+        let start = "\t界".len() as u32;
+        let d = Diagnostic::error("L0003", "unsupported name", Span::new(start, start + 1));
+        assert_eq!(
+            d.render_human("input.py", source),
+            concat!(
+                "error[L0003]: unsupported name\n",
+                " --> input.py:1:7\n",
+                "  |\n",
+                "1 |     界x\n",
+                "  |       ^ unsupported name",
             )
         );
     }

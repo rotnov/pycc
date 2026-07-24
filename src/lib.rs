@@ -107,7 +107,7 @@ fn report_link_result(result: Result<(), String>) -> Result<(), ExitCode> {
 }
 
 fn run(path: &str, args: &[std::ffi::OsString]) -> ExitCode {
-    let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
+    let out = run_output_path(std::process::id());
     if let Err(code) = try_build(
         path,
         out.to_str().expect("temp dir path should be valid UTF-8"),
@@ -118,6 +118,13 @@ fn run(path: &str, args: &[std::ffi::OsString]) -> ExitCode {
         .status()
         .expect("built binary should run");
     ExitCode::from(status.code().unwrap_or(1) as u8)
+}
+
+fn run_output_path(process_id: u32) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "pycc_run_{process_id}{}",
+        std::env::consts::EXE_SUFFIX
+    ))
 }
 
 fn program_command(path: &std::path::Path, args: &[std::ffi::OsString]) -> std::process::Command {
@@ -143,6 +150,15 @@ mod tests {
             args.iter()
                 .map(std::ffi::OsString::as_os_str)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn run_output_uses_the_platform_executable_suffix() {
+        let path = run_output_path(42);
+        assert_eq!(
+            path.file_name().and_then(std::ffi::OsStr::to_str),
+            Some(format!("pycc_run_42{}", std::env::consts::EXE_SUFFIX).as_str())
         );
     }
 
@@ -197,7 +213,7 @@ mod tests {
             std::env::temp_dir().join(format!("pycc_driver_unit_success_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let obj_path = dir.join("program.o");
-        let bin_path = dir.join("program");
+        let bin_path = dir.join(format!("program{}", std::env::consts::EXE_SUFFIX));
         let mir = pycc_mir::MirModule {
             items: vec![pycc_mir::MirItem::TopLevelStmt(
                 pycc_mir::MirInstr::CallPrint { arg: 42 },

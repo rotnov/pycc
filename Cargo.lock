@@ -563,6 +563,9 @@ dependencies = [
 [[package]]
 name = "pycc_diag"
 version = "0.1.0"
+dependencies = [
+ "unicode-width",
+]
 
 [[package]]
 name = "pycc_hir"
