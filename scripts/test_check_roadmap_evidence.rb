@@ -48,6 +48,21 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "checked roadmap item is missing an evidence marker"
   end
 
+  def test_rejects_all_checked_markdown_list_bullets_without_evidence
+    ["*", "+", "1."].each do |bullet|
+      roadmap = <<~MARKDOWN
+        ### v0.1 acceptance checklist
+
+        #{bullet} [x] `pycc check` processes 1k LOC in under 50 ms.
+      MARKDOWN
+
+      _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: "jobs: {}\n")
+
+      refute status.success?, "expected #{bullet.inspect} task item to be checked"
+      assert_includes stderr, "checked roadmap item is missing an evidence marker"
+    end
+  end
+
   def test_rejects_evidence_marker_attached_to_the_wrong_claim
     roadmap = <<~MARKDOWN
       ### v0.1 acceptance checklist
@@ -130,6 +145,62 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     assert status.success?, stderr
     assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_a_coverage_job_with_dependencies
+    roadmap = <<~MARKDOWN
+      ### v0.1 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+    workflow = coverage_workflow
+               .sub(
+                 "jobs:\n",
+                 "jobs:\n  setup:\n    if: false\n    steps: []\n"
+               )
+               .sub(
+                 "  build-test-coverage:\n",
+                 "  build-test-coverage:\n    needs: setup\n"
+               )
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    refute status.success?
+    assert_includes stderr, "coverage evidence must not depend on other jobs"
+  end
+
+  def test_rejects_continue_on_error_for_the_coverage_job
+    roadmap = <<~MARKDOWN
+      ### v0.1 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+    workflow = coverage_workflow.sub(
+      "  build-test-coverage:\n",
+      "  build-test-coverage:\n    continue-on-error: true\n"
+    )
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    refute status.success?
+    assert_includes stderr, "coverage job must propagate failures"
+  end
+
+  def test_rejects_a_custom_shell_for_the_coverage_step
+    roadmap = <<~MARKDOWN
+      ### v0.1 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+    workflow = coverage_workflow.sub(
+      "        run:",
+      "        shell: 'true {0}'\n        run:"
+    )
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    refute status.success?
+    assert_includes stderr, "coverage step must use the default shell"
   end
 
   def test_rejects_coverage_evidence_not_scheduled_for_pull_requests

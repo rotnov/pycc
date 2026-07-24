@@ -6,7 +6,7 @@ require "psych"
 
 class RoadmapEvidenceError < StandardError; end
 
-CHECKED_ITEM = /^\s*-\s+\[[xX]\]\s+(?<claim>.*)$/
+CHECKED_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+\[[xX]\]\s+(?<claim>.*)$/
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
 EVIDENCE_CLAIMS = {
   "ci-build-test-coverage-100" =>
@@ -60,8 +60,22 @@ def coverage_gate_present?(workflow_text, source)
 
   jobs = yaml_mapping(root["jobs"], "#{source} jobs")
   job = yaml_mapping(jobs[COVERAGE_JOB], "#{source} job #{COVERAGE_JOB.inspect}")
+  if job.key?("needs")
+    raise RoadmapEvidenceError,
+          "#{source}: coverage evidence must not depend on other jobs"
+  end
   if job.key?("if")
     raise RoadmapEvidenceError, "#{source}: coverage evidence must run unconditionally"
+  end
+  job_continue_on_error = job["continue-on-error"]
+  unsafe_job_continue_on_error =
+    job_continue_on_error &&
+    yaml_scalar(
+      job_continue_on_error,
+      "#{source} job #{COVERAGE_JOB.inspect} continue-on-error"
+    ).strip != "false"
+  if unsafe_job_continue_on_error
+    raise RoadmapEvidenceError, "#{source}: coverage job must propagate failures"
   end
 
   steps = job["steps"]
@@ -75,6 +89,10 @@ def coverage_gate_present?(workflow_text, source)
 
     next false unless yaml_scalar(step["name"], "#{source} step name") == COVERAGE_STEP
     next false unless yaml_scalar(step["run"], "#{source} step run").strip == COVERAGE_COMMAND
+
+    if step.key?("shell")
+      raise RoadmapEvidenceError, "#{source}: coverage step must use the default shell"
+    end
 
     continue_on_error = step["continue-on-error"]
     unsafe_continue_on_error =
