@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/pycc_diag",
+    "crates/pycc_ast",
 ]
 
 [workspace.package]
