@@ -148,12 +148,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_repository_ci_runs_the_self_tests_and_checker
     repository_root = Pathname(__dir__).parent
-    workflow = Psych.safe_load(
-      (repository_root / ".github/workflows/ci.yml").read,
-      [],
-      [],
-      false
-    )
+    workflow = Psych.load((repository_root / ".github/workflows/ci.yml").read)
     run_blocks = workflow
                  .fetch("jobs")
                  .fetch("build-test-coverage")
