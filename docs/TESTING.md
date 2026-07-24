@@ -102,17 +102,26 @@ whenever practical.
 Bootstrap exception: the pull request that first adds `Workflow policy` cannot
 run that workflow from the base revision because it does not exist there yet.
 That one change requires the regular checker, `actionlint`, independent deep
-review, and manual inspection of the pinned action SHAs before merge. Verify
-the first post-merge target run, then make `audit` a required status check; all
-later policy changes are evaluated by the trusted checker from their base
-revision.
+review, and manual inspection of the pinned action SHAs before merge.
+
+The bootstrap is complete. On 2026-07-24, the first post-merge
+[`pull_request_target` run](https://github.com/rotnov/pycc/actions/runs/30129743650)
+checked out the trusted policy implementation from base commit
+`107eccf4d6d4161c26f7257de538cad974bed913`, passed all 31 checker tests and
+70 assertions, and audited all five workflow files at the triggering
+[PR #35](https://github.com/rotnov/pycc/pull/35) head as non-executable data.
+Branch protection is strict and requires both
+`build-test-coverage` and `audit`, bound to the GitHub Actions app. Removing
+either required check, disabling strict mode, or accepting an `audit` context
+from another app is a policy regression; all later policy changes are
+evaluated by the trusted checker from their base revision.
 
 ## Code coverage (D-014)
 
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
 
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly with `cargo install cargo-llvm-cov --locked --version <pinned>`, caches only that versioned executable under a key containing the runner OS, architecture, and exact version (with no prefix restore fallback), and installs the `llvm-tools-preview` rustup component it drives at runtime separately. A bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). The tool is independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
-- Gate: `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. A version-print smoke step runs after cache restore or installation so a missing, corrupt, or incorrectly keyed binary fails loudly.
+- Gate: `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run from a clean worktree in CI on at least one Tier-1 target per PR. The v0.1 runtime is materialized per compilation, so the gate must not depend on a prior `cargo build --workspace`. A version-print smoke step runs after cache restore or installation so a missing, corrupt, or incorrectly keyed binary fails loudly.
 - Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator automatically — the gate measures product code exercised by tests, not tests covering themselves.
 - Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
 

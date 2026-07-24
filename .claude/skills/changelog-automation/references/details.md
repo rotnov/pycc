@@ -1,4 +1,11 @@
-# changelog-automation — detailed patterns and worked examples
+# Changelog automation — detailed patterns and worked examples
+
+## 1. Complete Keep a Changelog example
+
+```markdown
+# Changelog
+
+All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
@@ -37,7 +44,7 @@
 [1.2.0]: https://github.com/user/repo/compare/v1.1.0...v1.2.0
 ```
 
-### 2. Conventional Commits
+## 2. Conventional Commits
 
 ```
 <type>[optional scope]: <description>
@@ -61,7 +68,7 @@
 | `build`    | Build system     | (usually excluded) |
 | `revert`   | Revert commit    | Removed            |
 
-### 3. Semantic Versioning
+## 3. Semantic Versioning
 
 ```
 MAJOR.MINOR.PATCH
@@ -456,3 +463,16 @@ cz check --rev-range HEAD~5..HEAD
 
 ```markdown
 # Release v2.1.0 - January 15, 2024
+
+## Summary
+
+This release introduces dark mode support and improves checkout performance.
+
+## Upgrade guide
+
+No special steps are required.
+
+## Known issues
+
+- Dark mode may flicker on initial load; a follow-up fix is planned.
+```
