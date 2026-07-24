@@ -59,6 +59,11 @@
 
 ## Code Review Rules
 
+### Solo-maintainer branch protection
+
+- This repository currently has one maintainer. Do not require an approving pull-request review in branch protection: GitHub does not count an author's approval of their own pull request, so that setting deadlocks solo-maintainer work.
+- Keep required status checks, including the 100% coverage gate, and required conversation resolution enabled. Revisit the approving-review requirement when a second human maintainer is available.
+
 ### GitHub Codex review loop
 
 - After opening a pull request, request a GitHub Codex review with the exact comment `@codex review`.

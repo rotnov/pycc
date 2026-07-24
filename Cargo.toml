@@ -20,6 +20,13 @@ name = "pycc"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+description = "Ahead-of-time compiler for typed Python 3.14 that produces standalone native binaries"
+license = "MIT"
+repository = "https://github.com/rotnov/pycc"
+homepage = "https://rotnov.github.io/pycc/"
+readme = "README.md"
+keywords = ["python", "compiler", "aot", "llvm", "static-typing"]
+categories = ["compilers", "command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "pycc"
