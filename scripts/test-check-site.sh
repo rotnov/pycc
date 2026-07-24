@@ -26,7 +26,10 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-required = '<meta name="robots" content="index, follow, max-image-preview:large">'
+required = (
+    'content="index, follow, max-image-preview:large, '
+    'max-snippet:-1, max-video-preview:-1"'
+)
 assert required in content
 path.write_text(content.replace(required, "", 1))
 PY
@@ -71,6 +74,36 @@ PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted a site without the required AI authorship disclosure" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+project_id = "https://rotnov.github.io/pycc/#project"
+assert project_id in content
+path.write_text(content.replace(project_id, f"{project_id}-wrong"))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted disconnected JSON-LD project entities" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt" <<'PY'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).write_text("wrong-key\n")
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an invalid IndexNow ownership key" >&2
   exit 1
 fi
 

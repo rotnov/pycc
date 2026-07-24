@@ -7,12 +7,14 @@ on:
       - "site/**"
       - "scripts/check-site.sh"
       - "scripts/test-check-site.sh"
+      - "scripts/notify-indexnow.sh"
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
       - "site/**"
       - "scripts/check-site.sh"
       - "scripts/test-check-site.sh"
+      - "scripts/notify-indexnow.sh"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -57,3 +59,17 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  notify-indexnow:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    needs: deploy
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Notify IndexNow
+        continue-on-error: true
+        run: ./scripts/notify-indexnow.sh
