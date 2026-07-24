@@ -21,6 +21,11 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show
 
+      - name: cargo fmt --all -- --check
+        run: |
+          rustup component add rustfmt
+          cargo fmt --all -- --check
+
       # LLVM 22.1/inkwell 0.9 pin (D-015). Homebrew on GitHub's macOS
       # runners doesn't ship this by default, so it's installed and pinned
       # via the env var explicitly, same as the local dev setup in
@@ -31,25 +36,40 @@ jobs:
       - name: Export LLVM_SYS_221_PREFIX
         run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
 
-      - name: cargo build --workspace
-        run: cargo build --workspace
-
-      - name: cargo test --workspace
+      # Run before any standalone build. Generated programs must not depend on
+      # a sibling target/debug/libpycc_rt archive left by another Cargo command.
+      - name: cargo test --workspace from a clean target directory
         run: cargo test --workspace
+
+      - name: Release pycc_codegen tests with a custom target directory
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/pycc-release-target
+        run: cargo test --release -p pycc_codegen
 
       - name: cargo clippy --workspace
         run: |
           rustup component add clippy
           cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Cache pinned cargo-llvm-cov binary
+        id: cargo-llvm-cov-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-${{ runner.os }}-${{ runner.arch }}-${{ env.CARGO_LLVM_COV_VERSION }}
+
       - name: Install cargo-llvm-cov (pinned)
+        if: steps.cargo-llvm-cov-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
 
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
       - name: Coverage gate smoke check
-        run: cargo llvm-cov --version
+        run: |
+          actual_version="$(cargo llvm-cov --version)"
+          echo "$actual_version"
+          test "$actual_version" = "cargo-llvm-cov ${CARGO_LLVM_COV_VERSION}"
 
       # Hard merge invariant from D-014. These thresholds must never be
       # lowered or bypassed to make a pull request pass.

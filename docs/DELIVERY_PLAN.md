@@ -8,12 +8,12 @@ Every ROADMAP.md milestone is its own sub-project: its own brainstorm → plan �
 
 | Milestone | New crates / major additions | Depends on | Rough PR count |
 |---|---|---|---|
-| v0.1 hello, binary | `pycc`, `pycc_lexer`/`pycc_parser`/`pycc_ast` (vendored `ruff_python_parser`, D-003), `pycc_hir`, `pycc_types`, `pycc_mir`, `pycc_codegen`, `pycc_rt`, `pycc_diag`, `pycc_testkit`, CI matrix on 5 Tier-1 targets | — | ~7 (detailed below) |
+| v0.1 hello, binary | `pycc`, `pycc_parser`/`pycc_ast` (vendored `ruff_python_parser`, D-003), `pycc_hir`, `pycc_types`, `pycc_mir`, `pycc_codegen`, `pycc_rt`, `pycc_diag`, `pycc_testkit`, CI matrix on 5 Tier-1 targets | — | ~7 (detailed below) |
 | v0.2 collections & generics | `pycc_std` created (`math`, `sys`), monomorphization in `pycc_types`/`pycc_mir`, `--release`/LTO profile, `pycc.toml` | v0.1 | ~5-6 |
 | v0.3 classes & pattern matching | class model, dataclasses, protocols, `match` w/ exhaustiveness, diagnostics registry grows | v0.2 | ~6 |
 | v0.4 projects & incremental | multi-file/import resolution in `pycc_hir`, salsa-style incremental cache, `os`/`pathlib`/`json`/`datetime` | v0.3 | ~6-7 |
 | v0.5 generators & ownership v1 | new crate `pycc_own` (escape analysis, move semantics, RC elision), generators as state machines | v0.4 | ~6-7 |
-| v0.6 threads without GIL | Shareable/move checks in `pycc_own`, cycle collector, own parser replaces vendored `ruff_python_parser` (D-003 resolved) | v0.5 | ~6 |
+| v0.6 threads without GIL | Shareable/move checks in `pycc_own`, cycle collector, new `pycc_lexer` + own parser replace vendored `ruff_python_parser` (D-003/D-017 resolved) | v0.5 | ~6 |
 | v0.7 interop escape hatch | `pycc.interop.cpython` typed boundary | v0.6 | ~4-5 |
 | v0.8 corpus at scale + bot | `corpus-bot` GitHub Action, `socket`/`http.client`/compression stdlib | v0.7 | ~4 |
 | v0.9 async & packaging | `asyncio` subset on state machines, `--lib` C-ABI | v0.8 | ~4-5 |

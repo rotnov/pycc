@@ -436,6 +436,28 @@ mod tests {
     }
 
     #[test]
+    fn recursive_function_body_resolves_its_runtime_binding() {
+        // The slice has no conditional or return instruction with which to
+        // build a terminating recursive fixture. Compiling, verifying, and
+        // linking a self-call still proves that a recursive body resolves
+        // through the runtime binding created for its own definition rather
+        // than depending on source-order predeclaration in the old name map.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "recurse".to_string(),
+                body: vec![MirInstr::CallUserFunction {
+                    name: "recurse".to_string(),
+                }],
+            }],
+        };
+        let dir = tempfile_dir("slice0_recursive_binding");
+        let obj_path = dir.join("slice0_recursive_binding.o");
+        compile_to_object(&mir, &obj_path).expect("recursive codegen should succeed");
+        let bin_path = dir.join("slice0_recursive_binding");
+        link_object_with_runtime(&obj_path, &bin_path);
+    }
+
+    #[test]
     fn a_function_can_be_defined_under_any_name_without_being_called() {
         // There is no longer a "must be named main" restriction: any
         // function name is legal to *define*; only calling one runs it.
