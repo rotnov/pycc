@@ -119,6 +119,25 @@ jobs:
           tar -xf llvm.tar.xz -C llvm-extract --strip-components=1
           echo "LLVM_SYS_221_PREFIX=$(cygpath -w "$(pwd)/llvm-extract")" >> "$GITHUB_ENV"
 
+      # This LLVM release's own llvm-config reports libxml2 as a system lib
+      # (see D-020), so llvm-sys requires a real xml2s.lib to link -- vcpkg
+      # is preinstalled on GitHub's Windows runners (path varies by image,
+      # hence the env var rather than a hardcoded one). static-md matches
+      # Rust's own default dynamic-CRT linkage on this target.
+      - name: Install libxml2 (Windows, via vcpkg, for llvm-sys's system-libs)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libxml2:x64-windows-static-md
+          $libDir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib"
+          $xml2Lib = Get-ChildItem -Path $libDir -Filter "*xml2*.lib" | Select-Object -First 1
+          if (-not $xml2Lib) {
+            Write-Error "no libxml2 .lib found under $libDir"
+            exit 1
+          }
+          Copy-Item $xml2Lib.FullName "$libDir\xml2s.lib" -Force
+          echo "LIB=$libDir;$env:LIB" >> $env:GITHUB_ENV
+
       - name: cargo build --workspace
         run: cargo build --workspace
 
