@@ -54,6 +54,36 @@ GitHub Action (`corpus-bot`):
 - Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
 
+## Roadmap acceptance evidence
+
+A checked acceptance item in [ROADMAP.md](./ROADMAP.md) is a release claim, not
+a manually maintained status decoration. Every `[x]` item must end with an
+inline marker:
+
+```markdown
+<!-- roadmap-evidence: <registered-id> -->
+```
+
+`scripts/check_roadmap_evidence.rb` binds each registered identifier to both
+the exact claim it proves and a deterministic repository check. Missing,
+unknown, or claim-mismatched markers fail. Adding a new evidence type starts
+with a failing public-CLI mutation case in
+`scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
+and documented claim land together.
+
+The initial `ci-build-test-coverage-100` evidence requires all of the following:
+
+- the exact coverage claim in the v0.1 checklist;
+- an unfiltered `pull_request` trigger;
+- the unconditional `build-test-coverage` job and named hard-coverage step;
+- the exact command
+  `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`.
+
+Regular CI runs the self-tests and then the repository checker before building.
+The same required `build-test-coverage` job executes the coverage command, so a
+pull request cannot merge with the marker while its claimed gate is skipped,
+lowered, or failing.
+
 ## CI privilege policy
 
 Every GitHub Actions workflow declares an explicit workflow-level permission
