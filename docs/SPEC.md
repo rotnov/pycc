@@ -1,0 +1,36 @@
+# pycc — Project Specification Index
+
+Entry point to the full spec. Development model is AI-first (D-013): these documents are the contract the code is written against — every claim here must be checkable by a test, benchmark gate, or CI rule.
+
+| Doc | Contents | Drives |
+|---|---|---|
+| [README.md](./README.md) | Vision, positioning vs Codon/Nuitka/mypyc, quick start | everything |
+| [PYTHON_STANDARDS.md](./PYTHON_STANDARDS.md) | All language PEPs 3.0→3.14, one conformance test each; rejected-by-design list; OSS corpus tiers | `tests/conformance`, `tests/diagnostics` |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Pipeline, crates, incremental/parallel design, **cross-platform Tier-1 matrix** | workspace layout, CI matrix |
+| [TYPE_SYSTEM.md](./TYPE_SYSTEM.md) | Strictness rules, type↔representation table, generics, narrowing | `pycc_types` |
+| [MEMORY_OWNERSHIP.md](./MEMORY_OWNERSHIP.md) | Inferred ownership, RC elision, cycles, GIL-free thread safety | `pycc_own`, `pycc_rt` |
+| [RUNTIME.md](./RUNTIME.md) | Object model, exceptions, generators, allocator, CPython interop hatch | `pycc_rt` |
+| [CLI_SPEC.md](./CLI_SPEC.md) | Commands, flags, `pycc.toml`, exit codes, diagnostic formats | `pycc` driver |
+| [DIAGNOSTICS.md](./DIAGNOSTICS.md) | Error-code registry, quality bar, stability rules | `pycc_diag` |
+| [STDLIB_PLAN.md](./STDLIB_PLAN.md) | Builtins + module tiers with target versions, compat policy | `pycc_std` |
+| [TESTING.md](./TESTING.md) | 7 test layers, conformance harness, differential fuzzing, corpus bot | CI, `pycc_testkit` |
+| [ROADMAP.md](./ROADMAP.md) | v0.1→v1.0 milestones with binary acceptance criteria | releases |
+| [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-013 (int repr, LLVM, UTF-8 str, no-GIL model…) | irreversible calls |
+
+## Invariants (short version)
+
+1. **Standard Python 3.14 in, native binary out.** No dialect, no new syntax — ever.
+2. **Strict types are the only mode.** Untyped public API doesn't compile.
+3. **Ownership is inferred, never written.** Semantics-preserving; only performance changes.
+4. **No GIL; safety proven at compile time.**
+5. **Cross-platform Tier-1** (Linux/macOS/Windows, x64+arm64) — a feature doesn't exist until it's green everywhere.
+6. **Every feature has a test; every rejection has a diagnostic test; every deviation is documented.**
+7. **Compiler speed is a feature**: check like ruff, not like mypy.
+
+## Doc lifecycle
+
+Spec change = PR touching the doc + the tests that enforce it, reviewed against DECISIONS.md. CI owns the ✅ marks in PYTHON_STANDARDS.md — humans and agents only add rows, never flip statuses by hand.
+
+## Not yet specced (known gaps)
+
+`docs/semantics.md` (deviation ledger — starts at v0.1 with D-007 str notes) · packaging/distribution of pycc itself (installers, `rustup`-style) · LSP protocol details (post-1.0) · security/supply-chain policy (sigstore for releases).
