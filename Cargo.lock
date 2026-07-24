@@ -539,6 +539,7 @@ dependencies = [
  "pycc_hir",
  "pycc_mir",
  "pycc_parser",
+ "pycc_rt",
  "pycc_types",
 ]
 
@@ -547,6 +548,7 @@ name = "pycc_ast"
 version = "0.1.0"
 dependencies = [
  "ruff_python_ast",
+ "ruff_text_size",
 ]
 
 [[package]]
@@ -555,6 +557,7 @@ version = "0.1.0"
 dependencies = [
  "inkwell",
  "pycc_mir",
+ "pycc_rt",
 ]
 
 [[package]]
@@ -566,6 +569,7 @@ name = "pycc_hir"
 version = "0.1.0"
 dependencies = [
  "pycc_ast",
+ "pycc_diag",
  "pycc_parser",
 ]
 

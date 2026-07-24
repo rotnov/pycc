@@ -19,6 +19,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 |---|---|---|
 | `L0001` | error | syntax error (span + expected set) |
 | `L0002` | error | Python version mismatch (feature needs 3.14 level) |
+| `L0003` | error | valid Python feature is not implemented by this compiler version |
 | `T0001` | error | public function missing annotation |
 | `T0002` | error | `Any` outside interop boundary |
 | `T0003` | error | untyped empty container needs annotation |

@@ -1,11 +1,14 @@
+use inkwell::AddressSpace;
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
-use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
-use inkwell::types::IntType;
-use inkwell::values::FunctionValue;
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+};
+use inkwell::types::{FunctionType, IntType, PointerType};
+use inkwell::values::{FunctionValue, GlobalValue};
 use pycc_mir::{MirInstr, MirItem, MirModule};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), String> {
@@ -18,37 +21,77 @@ pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), Stri
 
     let print_fn_type = void_type.fn_type(&[i64_type.into()], false);
     let print_fn = module.add_function("pycc_rt_print_i64", print_fn_type, Some(Linkage::External));
+    let pointer_type = context.ptr_type(AddressSpace::default());
+    let name_error_fn_type = void_type.fn_type(&[pointer_type.into()], false);
+    let name_error_fn = module.add_function(
+        "pycc_rt_name_error",
+        name_error_fn_type,
+        Some(Linkage::External),
+    );
 
-    // First pass: declare every user-defined function under a mangled name
-    // (never the bare Python name) before emitting any body. Two reasons:
-    // this is what lets a function call another function defined later in
-    // the same module, or itself (recursion -- structurally supported by
-    // this pass ordering, though nothing in v0.1's HIR/MIR can express a
-    // recursive call *with* arguments or a return value yet); and mangling
-    // is what stops a Python-level function actually named `main` from
-    // colliding with the real C-ABI entry point below, which must be
-    // literally named `main` for the OS loader to find it. A def alone has
-    // no runtime effect in Python regardless of its name -- something has
-    // to call it, which is exactly the bug this pass structure fixes (see
-    // git history: an earlier version treated a function merely named
-    // `main` as auto-invoked, which doesn't match CPython at all).
-    let no_arg_void_fn_type = void_type.fn_type(&[], false);
-    let mut user_functions: HashMap<&str, FunctionValue> = HashMap::new();
+    // Every Python name has a runtime binding initialized to null. Executing
+    // a `def` stores that particular definition's function pointer into the
+    // binding. Calls load the binding when they execute, preserving both
+    // call-before-def NameError behavior and later redefinitions.
+    let mut binding_names = BTreeSet::new();
     for item in &mir.items {
+        match item {
+            MirItem::Function { name, body } => {
+                binding_names.insert(name.as_str());
+                for instr in body {
+                    record_called_name(&mut binding_names, instr);
+                }
+            }
+            MirItem::TopLevelStmt(instr) => record_called_name(&mut binding_names, instr),
+        }
+    }
+    let mut bindings = HashMap::new();
+    for name in binding_names {
+        let binding = module.add_global(pointer_type, None, &format!("pybind_{name}"));
+        binding.set_initializer(&pointer_type.const_null());
+        bindings.insert(name.to_string(), binding);
+    }
+
+    // LLVM declarations still come first so bodies can be emitted in any
+    // order. Unlike the old name-keyed map, this vector retains every
+    // repeated definition as a distinct function.
+    let no_arg_void_fn_type = void_type.fn_type(&[], false);
+    let mut function_versions = vec![None; mir.items.len()];
+    for (index, item) in mir.items.iter().enumerate() {
         if let MirItem::Function { name, .. } = item {
-            let mangled = format!("pyfn_{name}");
-            let f = module.add_function(&mangled, no_arg_void_fn_type, None);
-            user_functions.insert(name.as_str(), f);
+            let mangled = format!("pyfn_{name}_def_{index}");
+            function_versions[index] =
+                Some(module.add_function(&mangled, no_arg_void_fn_type, None));
         }
     }
 
     let entry_fn_type = i64_type.fn_type(&[], false);
     let entry_fn = module.add_function("main", entry_fn_type, None);
     let entry_block = context.append_basic_block(entry_fn, "entry");
+    let emitter = Emitter {
+        context: &context,
+        builder: &builder,
+        print_fn,
+        name_error_fn,
+        bindings: &bindings,
+        no_arg_void_fn_type,
+        pointer_type,
+        i64_type,
+    };
     builder.position_at_end(entry_block);
-    for item in &mir.items {
-        if let MirItem::TopLevelStmt(instr) = item {
-            emit_instr(&builder, print_fn, &user_functions, i64_type, instr)?;
+    for (index, item) in mir.items.iter().enumerate() {
+        match item {
+            MirItem::Function { name, .. } => {
+                let function = function_versions[index]
+                    .expect("every function item received an LLVM declaration");
+                builder
+                    .build_store(
+                        bindings[name.as_str()].as_pointer_value(),
+                        function.as_global_value().as_pointer_value(),
+                    )
+                    .expect("storing a function binding should not fail");
+            }
+            MirItem::TopLevelStmt(instr) => emitter.emit_instr(entry_fn, instr),
         }
     }
     // See the module-level comment block below for why these five
@@ -59,17 +102,20 @@ pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), Stri
     // real Result the caller must handle.
     builder
         .build_return(Some(&i64_type.const_int(0, false)))
-        .expect("build_return should not fail: builder is always freshly positioned before this call");
+        .expect(
+            "build_return should not fail: builder is always freshly positioned before this call",
+        );
 
     // Second pass: fill in each user function's body, now that every
     // function (including ones a body might call) is already declared.
-    for item in &mir.items {
-        if let MirItem::Function { name, body } = item {
-            let f = user_functions[name.as_str()];
+    for (index, item) in mir.items.iter().enumerate() {
+        if let MirItem::Function { body, .. } = item {
+            let f =
+                function_versions[index].expect("every function item received an LLVM declaration");
             let block = context.append_basic_block(f, "entry");
             builder.position_at_end(block);
             for instr in body {
-                emit_instr(&builder, print_fn, &user_functions, i64_type, instr)?;
+                emitter.emit_instr(f, instr);
             }
             builder
                 .build_return(None)
@@ -82,8 +128,9 @@ pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), Stri
          a verify() failure here means a bug in pycc_codegen itself, not bad user input",
     );
 
-    Target::initialize_native(&InitializationConfig::default())
-        .expect("initializing codegen for the native host should never fail on a supported Tier-1 target");
+    Target::initialize_native(&InitializationConfig::default()).expect(
+        "initializing codegen for the native host should never fail on a supported Tier-1 target",
+    );
     let triple = TargetMachine::get_default_triple();
     let target = Target::from_triple(&triple)
         .expect("the host's own default target triple should always be a valid target");
@@ -102,29 +149,87 @@ pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), Stri
         .map_err(|e| e.to_string())
 }
 
-fn emit_instr<'ctx>(
-    builder: &inkwell::builder::Builder<'ctx>,
+fn record_called_name<'a>(names: &mut BTreeSet<&'a str>, instr: &'a MirInstr) {
+    if let MirInstr::CallUserFunction { name } = instr {
+        names.insert(name.as_str());
+    }
+}
+
+struct Emitter<'ctx, 'a> {
+    context: &'ctx Context,
+    builder: &'a inkwell::builder::Builder<'ctx>,
     print_fn: FunctionValue<'ctx>,
-    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
+    name_error_fn: FunctionValue<'ctx>,
+    bindings: &'a HashMap<String, GlobalValue<'ctx>>,
+    no_arg_void_fn_type: FunctionType<'ctx>,
+    pointer_type: PointerType<'ctx>,
     i64_type: IntType<'ctx>,
-    instr: &MirInstr,
-) -> Result<(), String> {
-    match instr {
-        MirInstr::CallPrint { arg } => {
-            let arg_value = i64_type.const_int(*arg as u64, true);
-            builder
-                .build_call(print_fn, &[arg_value.into()], "call_print")
-                .expect("build_call should not fail for a well-formed print call");
-            Ok(())
-        }
-        MirInstr::CallUserFunction { name } => {
-            let f = user_functions
-                .get(name.as_str())
-                .ok_or_else(|| format!("pycc_codegen v0.1: call to undefined function `{name}`"))?;
-            builder
-                .build_call(*f, &[], "call_user_fn")
-                .expect("build_call should not fail for a well-formed zero-arg call");
-            Ok(())
+}
+
+impl Emitter<'_, '_> {
+    fn emit_instr(&self, current_fn: FunctionValue<'_>, instr: &MirInstr) {
+        match instr {
+            MirInstr::CallPrint { arg } => {
+                let arg_value = self.i64_type.const_int(*arg as u64, true);
+                self.builder
+                    .build_call(self.print_fn, &[arg_value.into()], "call_print")
+                    .expect("build_call should not fail for a well-formed print call");
+            }
+            MirInstr::CallUserFunction { name } => {
+                let function_pointer = self
+                    .builder
+                    .build_load(
+                        self.pointer_type,
+                        self.bindings[name.as_str()].as_pointer_value(),
+                        "load_python_binding",
+                    )
+                    .expect("loading a function binding should not fail")
+                    .into_pointer_value();
+                let is_missing = self
+                    .builder
+                    .build_is_null(function_pointer, "binding_is_missing")
+                    .expect("checking a function binding should not fail");
+                let missing_block = self.context.append_basic_block(current_fn, "name_error");
+                let call_block = self
+                    .context
+                    .append_basic_block(current_fn, "call_bound_function");
+                let continuation = self
+                    .context
+                    .append_basic_block(current_fn, "after_bound_call");
+                self.builder
+                    .build_conditional_branch(is_missing, missing_block, call_block)
+                    .expect("branching on a function binding should not fail");
+
+                self.builder.position_at_end(missing_block);
+                let name_value = self
+                    .builder
+                    .build_global_string_ptr(name, "missing_python_name")
+                    .expect("building a static function-name string should not fail");
+                self.builder
+                    .build_call(
+                        self.name_error_fn,
+                        &[name_value.as_pointer_value().into()],
+                        "raise_name_error",
+                    )
+                    .expect("calling the runtime NameError helper should not fail");
+                self.builder
+                    .build_unreachable()
+                    .expect("terminating the NameError block should not fail");
+
+                self.builder.position_at_end(call_block);
+                self.builder
+                    .build_indirect_call(
+                        self.no_arg_void_fn_type,
+                        function_pointer,
+                        &[],
+                        "call_user_function",
+                    )
+                    .expect("calling a bound zero-argument function should not fail");
+                self.builder
+                    .build_unconditional_branch(continuation)
+                    .expect("continuing after a bound function call should not fail");
+                self.builder.position_at_end(continuation);
+            }
         }
     }
 }
@@ -164,7 +269,9 @@ mod tests {
                     name: "main".to_string(),
                     body: vec![MirInstr::CallPrint { arg: 42 }],
                 },
-                MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() }),
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "main".to_string(),
+                }),
             ],
         };
         let dir = tempfile_dir("slice0");
@@ -204,7 +311,9 @@ mod tests {
                     name: "main".to_string(),
                     body: vec![MirInstr::CallPrint { arg: 2 }],
                 },
-                MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() }),
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "main".to_string(),
+                }),
             ],
         };
         let dir = tempfile_dir("slice0_combined");
@@ -217,30 +326,113 @@ mod tests {
     }
 
     #[test]
-    fn calling_an_undefined_function_at_top_level_is_rejected() {
+    fn calling_a_function_before_its_definition_raises_name_error_at_runtime() {
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction {
-                name: "does_not_exist".to_string(),
-            })],
+            items: vec![
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "foo".to_string(),
+                }),
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    body: vec![MirInstr::CallPrint { arg: 42 }],
+                },
+            ],
         };
-        let dir = tempfile_dir("slice0_undefined_fn");
-        let obj_path = dir.join("slice0_undefined_fn.o");
-        let err = compile_to_object(&mir, &obj_path).expect_err("should be rejected");
-        assert!(err.contains("does_not_exist"), "error should name the offending function: {err}");
+        let dir = tempfile_dir("slice0_call_before_def");
+        let obj_path = dir.join("slice0_call_before_def.o");
+        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        let bin_path = dir.join("slice0_call_before_def");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("name 'foo' is not defined"));
     }
 
     #[test]
-    fn calling_an_undefined_function_inside_a_function_body_is_rejected() {
+    fn an_undefined_name_in_an_uncalled_function_body_has_no_effect() {
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "main".to_string(),
-                body: vec![MirInstr::CallUserFunction { name: "also_does_not_exist".to_string() }],
+                body: vec![MirInstr::CallUserFunction {
+                    name: "also_does_not_exist".to_string(),
+                }],
             }],
         };
         let dir = tempfile_dir("slice0_undefined_fn_nested");
         let obj_path = dir.join("slice0_undefined_fn_nested.o");
-        let err = compile_to_object(&mir, &obj_path).expect_err("should be rejected");
-        assert!(err.contains("also_does_not_exist"), "error should name the offending function: {err}");
+        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        let bin_path = dir.join("slice0_undefined_fn_nested");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty());
+    }
+
+    #[test]
+    fn repeated_definitions_rebind_the_name_in_execution_order() {
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    body: vec![MirInstr::CallPrint { arg: 1 }],
+                },
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "foo".to_string(),
+                }),
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    body: vec![MirInstr::CallPrint { arg: 2 }],
+                },
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "foo".to_string(),
+                }),
+            ],
+        };
+        let dir = tempfile_dir("slice0_redefinition");
+        let obj_path = dir.join("slice0_redefinition.o");
+        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        let bin_path = dir.join("slice0_redefinition");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"1\n2\n");
+    }
+
+    #[test]
+    fn calls_from_function_bodies_read_the_binding_at_call_time() {
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "call_foo".to_string(),
+                    body: vec![MirInstr::CallUserFunction {
+                        name: "foo".to_string(),
+                    }],
+                },
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    body: vec![MirInstr::CallPrint { arg: 1 }],
+                },
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "call_foo".to_string(),
+                }),
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    body: vec![MirInstr::CallPrint { arg: 2 }],
+                },
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "call_foo".to_string(),
+                }),
+            ],
+        };
+        let dir = tempfile_dir("slice0_body_binding");
+        let obj_path = dir.join("slice0_body_binding.o");
+        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        let bin_path = dir.join("slice0_body_binding");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"1\n2\n");
     }
 
     #[test]
@@ -248,11 +440,15 @@ mod tests {
         // There is no longer a "must be named main" restriction: any
         // function name is legal to *define*; only calling one runs it.
         let mir = MirModule {
-            items: vec![MirItem::Function { name: "helper".to_string(), body: vec![] }],
+            items: vec![MirItem::Function {
+                name: "helper".to_string(),
+                body: vec![],
+            }],
         };
         let dir = tempfile_dir("slice0_any_fn_name");
         let obj_path = dir.join("slice0_any_fn_name.o");
-        compile_to_object(&mir, &obj_path).expect("defining a function under any name should succeed");
+        compile_to_object(&mir, &obj_path)
+            .expect("defining a function under any name should succeed");
     }
 
     #[test]
@@ -264,15 +460,20 @@ mod tests {
             items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
         };
         let bad_path = std::env::temp_dir()
-            .join(format!("pycc_codegen_test_nonexistent_dir_{}", std::process::id()))
+            .join(format!(
+                "pycc_codegen_test_nonexistent_dir_{}",
+                std::process::id()
+            ))
             .join("does_not_exist")
             .join("out.o");
-        let err = compile_to_object(&mir, &bad_path).expect_err("should fail: parent dir doesn't exist");
+        let err =
+            compile_to_object(&mir, &bad_path).expect_err("should fail: parent dir doesn't exist");
         assert!(!err.is_empty());
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("pycc_codegen_test_{label}_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("pycc_codegen_test_{label}_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -283,12 +484,13 @@ mod tests {
     /// depending on the `pycc` binary crate (that would be a dependency
     /// cycle: pycc depends on pycc_codegen, not the other way around).
     fn link_object_with_runtime(obj_path: &std::path::Path, bin_path: &std::path::Path) {
-        let rt_lib_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
+        let rt_source_path = bin_path.with_extension("pycc_rt.c");
+        pycc_rt::write_c_runtime(&rt_source_path).expect("embedded runtime should be writable");
         let status = Command::new("cc")
             .arg(obj_path)
-            .arg("-L").arg(&rt_lib_dir)
-            .arg("-lpycc_rt")
-            .arg("-o").arg(bin_path)
+            .arg(&rt_source_path)
+            .arg("-o")
+            .arg(bin_path)
             .status()
             .expect("cc should run");
         assert!(status.success(), "linking failed");

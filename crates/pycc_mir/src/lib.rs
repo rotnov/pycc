@@ -49,18 +49,25 @@ mod tests {
             items: vec![HirItem::TopLevelStmt(HirStmt::CallPrint { arg: 42 })],
         };
         let mir = build(&hir);
-        assert_eq!(mir.items, vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })]);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })]
+        );
     }
 
     #[test]
     fn builds_a_call_user_function_instr() {
         let hir = HirModule {
-            items: vec![HirItem::TopLevelStmt(HirStmt::CallUserFunction { name: "main".to_string() })],
+            items: vec![HirItem::TopLevelStmt(HirStmt::CallUserFunction {
+                name: "main".to_string(),
+            })],
         };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
-            vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() })]
+            vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                name: "main".to_string()
+            })]
         );
     }
 

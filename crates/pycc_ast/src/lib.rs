@@ -2,6 +2,7 @@ pub use ruff_python_ast::{
     Arguments, Expr, ExprCall, ExprName, ExprNumberLiteral, Identifier, ModModule, Number,
     Parameters, Stmt, StmtExpr, StmtFunctionDef, StmtReturn,
 };
+pub use ruff_text_size::Ranged;
 
 #[cfg(test)]
 mod tests {
