@@ -59,8 +59,9 @@ $plugins
 EOF
 
 prompt_input="$test_codex_home/prompt-input.json"
+project_trust="projects.\"$repo_root\".trust_level=\"trusted\""
 env CODEX_HOME="$test_codex_home" \
-  codex -C "$repo_root" debug prompt-input >"$prompt_input"
+  codex -c "$project_trust" -C "$repo_root" debug prompt-input >"$prompt_input"
 # The Python regex anchors use `$`; the single-quoted program must not shell-expand it.
 # shellcheck disable=SC2016
 python3 -c '
@@ -83,7 +84,7 @@ model_input = "\n".join(
     if isinstance(content, dict)
 )
 skill_roots = {
-    pathlib.Path(root).resolve(): alias
+    alias: pathlib.Path(root).resolve()
     for alias, root in re.findall(
         r"^- `(r[0-9]+)` = `([^`]+)`$",
         model_input,
@@ -91,17 +92,25 @@ skill_roots = {
     )
 }
 expected_root = (repo_root / ".agents" / "skills").resolve()
-assert expected_root in skill_roots, "Codex did not register the project skill root"
-alias = skill_roots[expected_root]
-discovered = sorted(
-    name
-    for name, directory in re.findall(
-        rf"^- ([a-z][a-z0-9-]+):.*\(file: {alias}/([^/]+)/SKILL\.md\)$",
-        model_input,
-        re.MULTILINE,
-    )
-    if name == directory
-)
+discovered = []
+for name, raw_path in re.findall(
+    r"^- ([a-z][a-z0-9-]+):.*\(file: ([^)]+)\)$",
+    model_input,
+    re.MULTILINE,
+):
+    alias, separator, suffix = raw_path.partition("/")
+    skill_path = (
+        skill_roots[alias] / suffix
+        if separator and alias in skill_roots
+        else pathlib.Path(raw_path)
+    ).resolve()
+    if (
+        skill_path.parent.parent == expected_root
+        and skill_path.parent.name == name
+        and skill_path.name == "SKILL.md"
+    ):
+        discovered.append(name)
+discovered.sort()
 assert discovered == wrappers, "Codex did not discover every project skill wrapper"
 assert "pycc-agent-skills:" not in model_input, (
     "repository skills must not be discovered from a global plugin namespace"
