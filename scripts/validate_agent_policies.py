@@ -18,6 +18,8 @@ PROJECT_PREFIXES = ("$CLAUDE_PROJECT_DIR/", "${CLAUDE_PROJECT_DIR}/")
 SCRIPT_SUFFIXES = (".sh", ".py", ".js", ".mjs", ".cjs")
 SHELL_INTERPRETERS = ("sh", "bash", "zsh")
 NODE_INTERPRETERS = ("node", "nodejs")
+COMMAND_LAUNCHERS = ("command", "env", "exec")
+ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 
 
 def tracked_files() -> set[str]:
@@ -95,6 +97,25 @@ def inline_interpreter_mode(kind: str, tokens: list[str]) -> str | None:
     return None
 
 
+def unwrap_command_launcher(tokens: list[str]) -> tuple[list[str], str | None]:
+    resolved = list(tokens)
+    while resolved:
+        executable, _ = normalize_hook_token(resolved[0])
+        launcher = executable.replace("\\", "/").rsplit("/", 1)[-1]
+        if launcher not in COMMAND_LAUNCHERS:
+            return resolved, None
+
+        original = resolved.pop(0)
+        if resolved and resolved[0] == "--":
+            resolved.pop(0)
+        if launcher == "env":
+            while resolved and ENV_ASSIGNMENT.fullmatch(resolved[0]):
+                resolved.pop(0)
+        if not resolved or resolved[0].startswith("-"):
+            return [], f"shared hook command launcher cannot be validated: {original}"
+    return [], "shared hook command launcher has no executable target"
+
+
 def hook_targets(settings: dict[str, Any]) -> list[str]:
     targets: list[str] = []
     for command_tokens, argument_tokens in parsed_hook_commands(settings):
@@ -104,15 +125,16 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
             if explicit_project_path or normalized.startswith(LOCAL_PREFIXES):
                 targets.append(normalized)
 
-        if not command_tokens:
+        resolved, error = unwrap_command_launcher(tokens)
+        if error is not None or not resolved:
             continue
-        executable, _ = normalize_hook_token(command_tokens[0])
+        executable, _ = normalize_hook_token(resolved[0])
         if is_relative_script_path(executable):
             targets.append(executable)
             continue
         kind = interpreter_kind(executable)
         if kind is not None:
-            script_tokens = [*command_tokens[1:], *argument_tokens]
+            script_tokens = resolved[1:]
             if inline_interpreter_mode(kind, script_tokens):
                 continue
             for token in script_tokens:
@@ -199,14 +221,20 @@ def parse_flag(contents: str) -> dict[str, str]:
 def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[str]:
     failures: list[str] = []
     for command_tokens, argument_tokens in parsed_hook_commands(settings):
-        if not command_tokens:
+        resolved, launcher_error = unwrap_command_launcher(
+            [*command_tokens, *argument_tokens]
+        )
+        if launcher_error is not None:
+            failures.append(launcher_error)
             continue
-        executable, _ = normalize_hook_token(command_tokens[0])
+        if not resolved:
+            continue
+        executable, _ = normalize_hook_token(resolved[0])
         kind = interpreter_kind(executable)
         mode = (
             inline_interpreter_mode(
                 kind,
-                [*command_tokens[1:], *argument_tokens],
+                resolved[1:],
             )
             if kind is not None
             else None
@@ -214,7 +242,7 @@ def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[s
         if mode is not None:
             failures.append(
                 "shared hook inline interpreter mode cannot be validated: "
-                f"{command_tokens[0]} {mode}"
+                f"{resolved[0]} {mode}"
             )
     for target in hook_targets(settings):
         if target.startswith(".ievo/hooks/"):

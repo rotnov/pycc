@@ -204,6 +204,72 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ["shared hook target is not tracked: tools/local-hook.sh"],
         )
 
+    def test_env_launcher_still_validates_relative_script(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "env",
+                                "args": ["sh", "tools/local-hook.sh"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook target is not tracked: tools/local-hook.sh"],
+        )
+
+    def test_env_launcher_skips_assignments_before_the_command(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "/usr/bin/env",
+                                "args": [
+                                    "HOOK_MODE=shared",
+                                    "sh",
+                                    "scripts/tracked-hook.sh",
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(
+                settings, {"scripts/tracked-hook.sh"}
+            ),
+            [],
+        )
+
+    def test_opaque_launcher_options_are_rejected_fail_closed(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "env",
+                                "args": ["-S", "sh tools/local-hook.sh"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook command launcher cannot be validated: env"],
+        )
+
     def test_inline_shell_command_is_rejected_fail_closed(self) -> None:
         settings = {
             "hooks": {
