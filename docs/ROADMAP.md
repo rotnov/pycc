@@ -4,7 +4,7 @@ Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone i
 
 ## Current delivery status
 
-Last reviewed against default-branch commit `6317382` on 2026-07-24. This section counts only behavior merged to `main`; an open pull request is work in flight, not implemented behavior.
+Last reviewed on 2026-07-24. This section describes the repository tree in the commit that contains it: behavior and evidence from that same commit count, while work that exists only in another open pull request or unmerged branch remains work in flight.
 
 **Current milestone: v0.1 — in progress.** The first end-to-end vertical slice works on the primary macOS arm64 host, but v0.1 is not yet shippable.
 
@@ -15,7 +15,7 @@ Last reviewed against default-branch commit `6317382` on 2026-07-24. This sectio
 | Type system | Stub | The parser preserves annotations, but [`pycc_types::check`](../crates/pycc_types/src/lib.rs) is still a no-op passthrough. `T0001` strictness and local inference have not landed. |
 | CLI | Partial | `build`, `run`, and `version` have working slice-level paths. `check`, `test`, `explain`, `init`, and `clean` report “not yet implemented”; the broader flags and project-mode contracts in [CLI_SPEC.md](./CLI_SPEC.md) remain planned. |
 | Diagnostics | Partial | Parser failures become `L0001` compile diagnostics and the diagnostic data types exist. Stable spans, the shipped-feature registry, screenshot parity, JSON output, and diagnostics for unsupported valid programs remain open. |
-| Portability | Primary host only on `main` | The active CI compiler job runs on macOS arm64. The five-target Tier-1 matrix, bundled-linker cross-compilation, and cross-host execution evidence required by v0.1 are not yet merged. |
+| Portability | Primary host only | The active compiler [CI run](https://github.com/rotnov/pycc/actions/runs/30132574213) reports the `macos-14-arm64` image and `aarch64-apple-darwin` host. The five-target Tier-1 matrix, bundled-linker cross-compilation, and cross-host execution evidence required by v0.1 are not yet present in this commit. |
 | Quality gates | Partial but enforced | Unit and slice-level end-to-end tests pass, and CI enforces 100% Rust line and region coverage on every PR. The conformance harness, diagnostic snapshots, frontend performance gate, five-target conformance, fuzzing, and corpus layers remain planned according to [TESTING.md](./TESTING.md). |
 
 ### v0.1 acceptance checklist
