@@ -46,6 +46,21 @@ GitHub Action (`corpus-bot`):
 - Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
 
+## Code coverage (D-014)
+
+Distinct from the grammar-coverage gate above (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
+
+- Tool: `cargo llvm-cov` (rustup `llvm-tools` component; independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match).
+- Gate: `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR.
+- Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator automatically — the gate measures product code exercised by tests, not tests covering themselves.
+- Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
+
+  | File pattern | Reason |
+  |---|---|
+  | *(none yet)* | — |
+
+  An uncovered file with no entry in this table is a review-blocking finding, not a gap to wave through.
+
 ## Meta
 
 Every bug that reaches `main` gets a permanent regression test named after the issue (`tests/regress/issue_1234.py`). Coverage gate: conformance suite must touch 100% of implemented grammar productions (grammar-coverage instrumentation in the parser).

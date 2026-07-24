@@ -57,7 +57,7 @@ Three approaches were weighed: (A) thin end-to-end slice first, then grow featur
 
 | PR | Content |
 |---|---|
-| 1 | Workspace scaffold (all crate stubs), `rust-toolchain.toml` (1.97.1), CLI skeleton, CI skeleton. New ADRs appended to DECISIONS.md: LLVM 22.1/inkwell 0.9 pin, vendored `ruff_python_parser` version |
+| 1 | Workspace scaffold (all crate stubs), `rust-toolchain.toml` (1.97.1), CLI skeleton, CI skeleton **with the `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100` gate wired in from the first commit** (D-014). New ADRs appended to DECISIONS.md: LLVM 22.1/inkwell 0.9 pin, vendored `ruff_python_parser` version |
 | 2 | Slice 0: parser → HIR → types (passthrough) → MIR → LLVM codegen → link; "hello binary" runs locally |
 | 3 | CI matrix live on all 5 Tier-1 targets for slice 0 |
 | 4 | Frontend depth: full v0.1 grammar, real T0001 + local inference, first diagnostic codes with snapshot tests |
@@ -80,6 +80,8 @@ This plan is committed to the current branch (`claude/project-overview-53ef3d`, 
 ## Testing scope for v0.1
 
 Of TESTING.md's 7 layers: Layer 1 (per-crate unit tests) from the start, Layer 2 (`pycc_testkit` conformance harness) as early as slice 0, Layer 3 (diagnostic snapshot tests) as soon as `pycc_diag` exists, Layer 5 (runtime property tests) in minimal form for the v0.1 runtime subset. **Out of scope for v0.1**: Layer 4 (differential fuzzing), Layer 6 (OSS corpus), Layer 7 (benchmarks vs. Nuitka/Codon/mypyc) — these start at v0.2 per ROADMAP.md.
+
+Cutting across all of these: the D-014 coverage gate (`cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`) applies to every crate from PR-1 on — it is not a v0.1-specific item but a standing requirement, wired into the CI skeleton before any crate has a chance to accumulate untested code. Each task in the implementation plan below writes its test alongside its code for exactly this reason.
 
 ## Scope honesty
 
