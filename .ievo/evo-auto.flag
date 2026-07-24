@@ -1,0 +1,5 @@
+enabled: true
+enabled_at: 2026-07-24T19:54:39Z
+enabled_by: user-invocation
+signal: corrections-only
+auto_write_scope: project-wide-only

@@ -28,3 +28,4 @@ Thumbs.db
 .ievo/log/
 .ievo/cache/
 .ievo/hooks/
+.ievo/evolution-candidates/
