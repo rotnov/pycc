@@ -49,21 +49,26 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
     let mir = pycc_mir::build(&hir);
 
     let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
+    eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint A: about to call compile_to_object");
     pycc_codegen::compile_to_object(&mir, &obj_path, target).map_err(|e| {
         eprintln!("error: codegen failed: {e}");
         ExitCode::from(1)
     })?;
+    eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint B: compile_to_object returned Ok");
 
     let rt_lib_dir = find_pycc_rt_lib_dir(target).map_err(|e| {
         eprintln!("error: {e}");
         ExitCode::from(2)
     })?;
+    eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint C: find_pycc_rt_lib_dir returned Ok: {}", rt_lib_dir.display());
     let mut cmd = linker_command();
     if let Some(triple) = target {
         cmd.arg("-target").arg(triple);
     }
     cmd.arg(&obj_path).arg("-L").arg(&rt_lib_dir).arg("-lpycc_rt").arg("-o").arg(out);
+    eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint D: about to spawn linker: {cmd:?}");
     let status = cmd.status().expect("the linker driver should run");
+    eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint E: linker exited with {status:?}");
     if status.success() { Ok(()) } else { Err(ExitCode::from(1)) }
 }
 
