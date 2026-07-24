@@ -81,6 +81,30 @@ class MainHistoryAuditTests(unittest.TestCase):
             ],
         )
 
+    def test_revision_enumeration_uses_the_forward_push_range(self) -> None:
+        calls: list[tuple[list[str], dict[str, object]]] = []
+
+        def fake(arguments: list[str], **kwargs: object) -> Result:
+            calls.append((arguments, kwargs))
+            return result(arguments, stdout=f"{'b' * 40}\n")
+
+        commits, error = audit.pushed_commits("a" * 40, "b" * 40, fake)
+        self.assertEqual(commits, ["b" * 40])
+        self.assertIsNone(error)
+        self.assertEqual(
+            calls,
+            [
+                (
+                    ["git", "rev-list", f"{'a' * 40}..{'b' * 40}"],
+                    {
+                        "check": False,
+                        "capture_output": True,
+                        "text": True,
+                    },
+                )
+            ],
+        )
+
     def test_api_failure_is_reported(self) -> None:
         commit = "b" * 40
         fake = runner(

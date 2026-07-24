@@ -637,6 +637,169 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     ],
                 )
 
+    def test_unknown_runtime_inline_subcommands_are_rejected_fail_closed(self) -> None:
+        for subcommand in ("eval", "repl"):
+            with self.subTest(subcommand=subcommand):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": "deno",
+                                        "args": [subcommand, "console.log('inline')"],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: deno {subcommand}"
+                    ],
+                )
+
+    def test_interpreter_loader_options_validate_embedded_targets(self) -> None:
+        for command, arguments, tracked, expected in [
+            (
+                "node",
+                [
+                    "--require=/home/alice/.ievo/hooks/capture.js",
+                    "scripts/tracked.js",
+                ],
+                {"scripts/tracked.js"},
+                (
+                    "shared hook target must not be absolute: "
+                    "/home/alice/.ievo/hooks/capture.js"
+                ),
+            ),
+            (
+                "ruby",
+                ["-r/home/alice/.ievo/hooks/capture.rb", "-v"],
+                set(),
+                (
+                    "shared hook target must not be absolute: "
+                    "/home/alice/.ievo/hooks/capture.rb"
+                ),
+            ),
+            (
+                "node",
+                [
+                    "-r/home/alice/.ievo/hooks/capture.js",
+                    "scripts/tracked.js",
+                ],
+                {"scripts/tracked.js"},
+                (
+                    "shared hook target must not be absolute: "
+                    "/home/alice/.ievo/hooks/capture.js"
+                ),
+            ),
+            (
+                "node",
+                ["--import=$HOME/.ievo/hooks/capture.js", "scripts/tracked.js"],
+                {"scripts/tracked.js"},
+                (
+                    "shared hook target must not be home-relative: "
+                    "$HOME/.ievo/hooks/capture.js"
+                ),
+            ),
+            (
+                "node",
+                ["--require=./tools/preload.js", "scripts/tracked.js"],
+                {"scripts/tracked.js"},
+                "shared hook target is not tracked: tools/preload.js",
+            ),
+        ]:
+            with self.subTest(command=command, arguments=arguments):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, tracked),
+                    [expected],
+                )
+
+    def test_loader_urls_are_rejected_fail_closed(self) -> None:
+        for target in (
+            "file:///home/alice/.ievo/hooks/capture.mjs",
+            "data:text/javascript,console.log('inline')",
+            "https://example.invalid/hook.mjs",
+        ):
+            with self.subTest(target=target):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": "node",
+                                        "args": [
+                                            f"--import={target}",
+                                            "scripts/tracked.js",
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(
+                        settings,
+                        {"scripts/tracked.js"},
+                    ),
+                    [f"shared hook loader URL cannot be validated: {target}"],
+                )
+
+    def test_loader_package_specifiers_are_not_filesystem_targets(self) -> None:
+        for command, arguments in (
+            (
+                "node",
+                ["--require=@scope/package", "scripts/tracked.js"],
+            ),
+            (
+                "ruby",
+                ["-rbundler/setup", "scripts/tracked.rb"],
+            ),
+        ):
+            with self.subTest(command=command):
+                tracked_script = arguments[-1]
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(
+                        settings,
+                        {tracked_script},
+                    ),
+                    [],
+                )
+
     def test_tracked_wrapper_options_are_not_treated_as_inline_code(self) -> None:
         for target in ("scripts/tracked-hook.sh", "scripts/python", "tools/sh"):
             with self.subTest(target=target):
@@ -658,6 +821,27 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     validator.validate_hook_targets(settings, {target}),
                     [],
                 )
+
+    def test_tracked_wrapper_config_option_is_not_an_executable_target(self) -> None:
+        target = "scripts/tracked-hook.sh"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": target,
+                                "args": ["--config=config/local.toml"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, {target}),
+            [],
+        )
 
     def test_inline_python_and_node_commands_are_rejected(self) -> None:
         for command, arguments, expected in [

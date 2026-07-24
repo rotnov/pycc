@@ -39,6 +39,15 @@ OPAQUE_INLINE_OPTIONS = {
     "--eval",
     "--execute",
 }
+OPAQUE_INLINE_SUBCOMMANDS = {"eval", "repl"}
+EMBEDDED_PATH_OPTIONS = {
+    "-r",
+    "--experimental-loader",
+    "--import",
+    "--loader",
+    "--require",
+}
+LOADER_URL_PREFIXES = ("data:", "file:", "http:", "https:")
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_ABSOLUTE_IN_COMMAND = re.compile(r"(?:^|[\s\"'])[A-Za-z]:[\\/]")
@@ -169,6 +178,8 @@ def opaque_inline_mode(executable: str, tokens: list[str]) -> str | None:
         option = lowered.split("=", 1)[0].split(":", 1)[0]
         if option in OPAQUE_INLINE_OPTIONS:
             return token
+        if lowered in OPAQUE_INLINE_SUBCOMMANDS:
+            return token
         if any(
             lowered.startswith(short_option) and len(lowered) > len(short_option)
             for short_option in ("-c", "-e", "-r")
@@ -193,6 +204,31 @@ def opaque_inline_mode(executable: str, tokens: list[str]) -> str | None:
                 and "c" in token[1:]
             ):
                 return token
+    return None
+
+
+def embedded_option_target(kind: str | None, token: str) -> str | None:
+    candidate: str | None = None
+    if token.startswith("-") and "=" in token:
+        option, value = token.split("=", 1)
+        if kind == "node" and option.lower() in EMBEDDED_PATH_OPTIONS:
+            candidate = value
+    elif kind in {"node", "ruby"} and token.startswith("-r") and len(token) > 2:
+        candidate = token[2:].removeprefix("=")
+    if not candidate:
+        return None
+    if candidate.lower().startswith(LOADER_URL_PREFIXES):
+        return candidate
+    explicit_relative_path = candidate.startswith(("./", "../"))
+    normalized, explicit_project_path = normalize_hook_token(candidate)
+    if (
+        explicit_project_path
+        or normalized.startswith(LOCAL_PREFIXES)
+        or explicit_relative_path
+        or is_home_relative_script_path(normalized)
+        or is_absolute_script_path(normalized)
+    ):
+        return normalized
     return None
 
 
@@ -237,6 +273,10 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
             targets.append(executable)
             continue
         kind = interpreter_kind(executable)
+        for token in resolved[1:]:
+            embedded_target = embedded_option_target(kind, token)
+            if embedded_target is not None:
+                targets.append(embedded_target)
         if kind is None and is_absolute_script_path(executable):
             targets.append(executable)
             continue
@@ -399,7 +439,9 @@ def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[s
                 f"{resolved[0]} {mode}"
             )
     for target in hook_targets(settings):
-        if is_home_relative_script_path(target):
+        if target.lower().startswith(LOADER_URL_PREFIXES):
+            failures.append(f"shared hook loader URL cannot be validated: {target}")
+        elif is_home_relative_script_path(target):
             failures.append(f"shared hook target must not be home-relative: {target}")
         elif is_absolute_script_path(target):
             failures.append(f"shared hook target must not be absolute: {target}")
