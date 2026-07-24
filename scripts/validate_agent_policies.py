@@ -51,6 +51,7 @@ EMBEDDED_PATH_OPTIONS = {
     "--require",
 }
 LOADER_URL_PREFIXES = ("data:", "file:", "http:", "https:")
+FAIL_SILENT_WRAPPER_CONTRACTS: dict[str, str] = {}
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_ABSOLUTE_IN_COMMAND = re.compile(r"(?:^|[\s\"'])[A-Za-z]:[\\/]")
@@ -210,16 +211,7 @@ def opaque_inline_mode(executable: str, tokens: list[str]) -> str | None:
     return None
 
 
-def embedded_option_target(kind: str | None, token: str) -> str | None:
-    candidate: str | None = None
-    if token.startswith("-") and "=" in token:
-        option, value = token.split("=", 1)
-        if kind == "node" and option.lower() in EMBEDDED_PATH_OPTIONS:
-            candidate = value
-    elif kind in {"node", "ruby"} and token.startswith("-r") and len(token) > 2:
-        candidate = token[2:].removeprefix("=")
-    if not candidate:
-        return None
+def loader_candidate_target(candidate: str) -> str | None:
     if candidate.lower().startswith(LOADER_URL_PREFIXES):
         return candidate
     explicit_relative_path = candidate.startswith(("./", "../"))
@@ -233,6 +225,30 @@ def embedded_option_target(kind: str | None, token: str) -> str | None:
     ):
         return normalized
     return None
+
+
+def embedded_option_target(kind: str | None, token: str) -> str | None:
+    candidate: str | None = None
+    if token.startswith("-") and "=" in token:
+        option, value = token.split("=", 1)
+        if (
+            kind == "node"
+            and option in EMBEDDED_PATH_OPTIONS
+            or kind == "ruby"
+            and option == "--require"
+        ):
+            candidate = value
+    elif kind in {"node", "ruby"} and token.startswith("-r") and len(token) > 2:
+        candidate = token[2:].removeprefix("=")
+    return loader_candidate_target(candidate) if candidate else None
+
+
+def is_separated_loader_option(kind: str | None, token: str) -> bool:
+    if kind == "node":
+        return token in EMBEDDED_PATH_OPTIONS
+    if kind == "ruby":
+        return token in {"-r", "--require"}
+    return False
 
 
 def unwrap_command_launcher(tokens: list[str]) -> tuple[list[str], str | None]:
@@ -300,7 +316,17 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
             script_tokens = resolved[1:]
             if inline_interpreter_mode(kind, script_tokens):
                 continue
-            for token in script_tokens:
+            loader_operands: set[int] = set()
+            for index, token in enumerate(script_tokens[:-1]):
+                if not is_separated_loader_option(kind, token):
+                    continue
+                loader_operands.add(index + 1)
+                loader_target = loader_candidate_target(script_tokens[index + 1])
+                if loader_target is not None:
+                    targets.append(loader_target)
+            for index, token in enumerate(script_tokens):
+                if index in loader_operands:
+                    continue
                 normalized, explicit_project_path = normalize_hook_token(token)
                 if token.startswith("-"):
                     continue
@@ -404,8 +430,17 @@ def parse_flag(contents: str) -> dict[str, str]:
     return result
 
 
-def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[str]:
+def validate_hook_targets(
+    settings: dict[str, Any],
+    tracked: set[str],
+    wrapper_contracts: dict[str, str] | None = None,
+) -> list[str]:
     failures: list[str] = []
+    contracts = (
+        FAIL_SILENT_WRAPPER_CONTRACTS
+        if wrapper_contracts is None
+        else wrapper_contracts
+    )
     for command_tokens, argument_tokens in parsed_hook_commands(settings):
         resolved, launcher_error = unwrap_command_launcher(
             [*command_tokens, *argument_tokens]
@@ -441,6 +476,15 @@ def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[s
                 "shared hook inline interpreter mode cannot be validated: "
                 f"{resolved[0]} {mode}"
             )
+        script_tokens = resolved[1:]
+        if kind is not None and any(
+            is_separated_loader_option(kind, token) and index + 1 == len(script_tokens)
+            for index, token in enumerate(script_tokens)
+        ):
+            failures.append(
+                "shared hook loader option is missing its operand: "
+                + " ".join(resolved)
+            )
     for target in hook_targets(settings):
         if target.lower().startswith(LOADER_URL_PREFIXES):
             failures.append(f"shared hook loader URL cannot be validated: {target}")
@@ -452,6 +496,37 @@ def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[s
             failures.append(f"shared hook target must remain machine-local: {target}")
         elif target not in tracked:
             failures.append(f"shared hook target is not tracked: {target}")
+        elif target not in contracts:
+            failures.append(
+                f"shared hook target lacks a registered fail-silent contract: {target}"
+            )
+    return failures
+
+
+def validate_wrapper_contracts(
+    tracked: set[str],
+    wrapper_contracts: dict[str, str] | None = None,
+) -> list[str]:
+    contracts = (
+        FAIL_SILENT_WRAPPER_CONTRACTS
+        if wrapper_contracts is None
+        else wrapper_contracts
+    )
+    failures: list[str] = []
+    for wrapper, contract_test in sorted(contracts.items()):
+        if wrapper not in tracked:
+            failures.append(f"fail-silent wrapper is not tracked: {wrapper}")
+        if not contract_test.startswith("scripts/test_") or not contract_test.endswith(
+            ".py"
+        ):
+            failures.append(
+                "fail-silent wrapper contract must be a discovered Python test: "
+                f"{contract_test}"
+            )
+        elif contract_test not in tracked:
+            failures.append(
+                f"fail-silent wrapper contract test is not tracked: {contract_test}"
+            )
     return failures
 
 
@@ -471,6 +546,7 @@ def main() -> int:
     tracked = tracked_files()
     failures.extend(validate_hook_schema(settings))
     failures.extend(validate_hook_targets(settings, tracked))
+    failures.extend(validate_wrapper_contracts(tracked))
     failures.extend(validate_machine_local_files(tracked))
 
     ignore_check = subprocess.run(

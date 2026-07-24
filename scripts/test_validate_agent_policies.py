@@ -8,6 +8,10 @@ import unittest
 import validate_agent_policies as validator
 
 
+def contracts(*targets: str) -> dict[str, str]:
+    return {target: "scripts/test_fail_silent_hook_wrappers.py" for target in targets}
+
+
 class AgentPolicyValidationTests(unittest.TestCase):
     def test_untracked_shared_hook_target_is_rejected(self) -> None:
         settings = {
@@ -49,8 +53,52 @@ class AgentPolicyValidationTests(unittest.TestCase):
             }
         }
         self.assertEqual(
-            validator.validate_hook_targets(settings, {"scripts/safe-wrapper.sh"}),
+            validator.validate_hook_targets(
+                settings,
+                {"scripts/safe-wrapper.sh"},
+                contracts("scripts/safe-wrapper.sh"),
+            ),
             [],
+        )
+
+    def test_unregistered_tracked_wrapper_is_rejected(self) -> None:
+        target = "scripts/safe-wrapper.sh"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "sh",
+                                "args": [target],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, {target}),
+            [f"shared hook target lacks a registered fail-silent contract: {target}"],
+        )
+
+    def test_wrapper_registry_requires_tracked_discovered_contracts(self) -> None:
+        self.assertEqual(
+            validator.validate_wrapper_contracts(
+                set(),
+                {
+                    "scripts/wrapper.sh": "checks/wrapper.py",
+                    "scripts/other.sh": "scripts/test_other_wrapper.py",
+                },
+            ),
+            [
+                "fail-silent wrapper is not tracked: scripts/other.sh",
+                "fail-silent wrapper contract test is not tracked: "
+                "scripts/test_other_wrapper.py",
+                "fail-silent wrapper is not tracked: scripts/wrapper.sh",
+                "fail-silent wrapper contract must be a discovered Python test: "
+                "checks/wrapper.py",
+            ],
         )
 
     def test_tracked_ievo_hook_target_is_still_rejected(self) -> None:
@@ -433,7 +481,11 @@ class AgentPolicyValidationTests(unittest.TestCase):
             }
         }
         self.assertEqual(
-            validator.validate_hook_targets(settings, {"scripts/tracked-hook.sh"}),
+            validator.validate_hook_targets(
+                settings,
+                {"scripts/tracked-hook.sh"},
+                contracts("scripts/tracked-hook.sh"),
+            ),
             [],
         )
 
@@ -479,7 +531,11 @@ class AgentPolicyValidationTests(unittest.TestCase):
             }
         }
         self.assertEqual(
-            validator.validate_hook_targets(settings, {"tools/hook.py"}),
+            validator.validate_hook_targets(
+                settings,
+                {"tools/hook.py"},
+                contracts("tools/hook.py"),
+            ),
             [],
         )
 
@@ -740,6 +796,12 @@ class AgentPolicyValidationTests(unittest.TestCase):
                 {"scripts/tracked.js"},
                 "shared hook target is not tracked: tools/preload.js",
             ),
+            (
+                "ruby",
+                ["--require=./tools/preload.rb", "scripts/tracked.rb"],
+                {"scripts/tracked.rb"},
+                "shared hook target is not tracked: tools/preload.rb",
+            ),
         ]:
             with self.subTest(command=command, arguments=arguments):
                 settings = {
@@ -757,9 +819,72 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     }
                 }
                 self.assertEqual(
-                    validator.validate_hook_targets(settings, tracked),
+                    validator.validate_hook_targets(
+                        settings,
+                        tracked,
+                        contracts(*tracked),
+                    ),
                     [expected],
                 )
+
+    def test_separated_loader_operands_do_not_hide_the_program(self) -> None:
+        for command, arguments, loader, program in (
+            (
+                "node",
+                ["--require", "scripts/loader.js", "tools/hook.js"],
+                "scripts/loader.js",
+                "tools/hook.js",
+            ),
+            (
+                "ruby",
+                ["-r", "scripts/loader.rb", "tools/hook.rb"],
+                "scripts/loader.rb",
+                "tools/hook.rb",
+            ),
+        ):
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(
+                        settings,
+                        {loader},
+                        contracts(loader),
+                    ),
+                    [f"shared hook target is not tracked: {program}"],
+                )
+
+    def test_separated_loader_option_requires_an_operand(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "node",
+                                "args": ["--require"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook loader option is missing its operand: node --require"],
+        )
 
     def test_loader_urls_are_rejected_fail_closed(self) -> None:
         for target in (
@@ -789,6 +914,7 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     validator.validate_hook_targets(
                         settings,
                         {"scripts/tracked.js"},
+                        contracts("scripts/tracked.js"),
                     ),
                     [f"shared hook loader URL cannot be validated: {target}"],
                 )
@@ -824,6 +950,7 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     validator.validate_hook_targets(
                         settings,
                         {tracked_script},
+                        contracts(tracked_script),
                     ),
                     [],
                 )
@@ -846,7 +973,11 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     }
                 }
                 self.assertEqual(
-                    validator.validate_hook_targets(settings, {target}),
+                    validator.validate_hook_targets(
+                        settings,
+                        {target},
+                        contracts(target),
+                    ),
                     [],
                 )
 
@@ -867,7 +998,11 @@ class AgentPolicyValidationTests(unittest.TestCase):
             }
         }
         self.assertEqual(
-            validator.validate_hook_targets(settings, {target}),
+            validator.validate_hook_targets(
+                settings,
+                {target},
+                contracts(target),
+            ),
             [],
         )
 
