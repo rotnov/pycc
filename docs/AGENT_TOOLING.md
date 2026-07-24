@@ -11,6 +11,7 @@ rollbackable just like compiler dependencies.
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
 | Codex | repository skills under `.agents/skills/` | current repository revision | project-scoped; no global installation |
 | Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
+| Codex and Claude Code | `rotnov/skills@i-have-an-issue` | tag `i-have-an-issue-v0.1.0`; reviewed source commit `6cdefb4bfc3d73c43265e56530b85cab0703b3fa`; vendored hash `2a9cbea3a31c59aa42b4ea1c827bcc69982ef925be0400924625cbe773023b22` | manual updates only |
 
 The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin is the
 `sha` of the `git-subdir` plugin source inside the inline settings marketplace in
@@ -38,6 +39,52 @@ checks on every pull request and push to `main`. Claude Code validates the proje
 settings and the extracted inline marketplace with its strict manifest validator, so
 a developer's global plugin installation cannot mask a broken repository pin or
 marketplace declaration.
+
+The `i-have-an-issue` skill is installed with:
+
+```sh
+npx skills@1.5.20 add rotnov/skills#i-have-an-issue-v0.1.0 \
+  --skill i-have-an-issue -a claude-code --copy -y
+```
+
+The complete reviewed copy lives under `.claude/skills/i-have-an-issue/`; the
+matching `.agents/skills/` entry is the repository's standard thin Codex
+wrapper. `skills-lock.json` records the immutable upstream tag, exact reviewed
+commit, and content hash. Updates are deliberate repository changes and must
+preserve the canonical-copy/wrapper split.
+
+The pre-install iEvo security review scanned all seven distributed files
+(30,909 bytes). The content verdict is **YELLOW** because the skill necessarily
+loads outsider-authored GitHub issue and pull-request text into agent context.
+The skill mitigates that indirect prompt-injection exposure by treating those
+artifacts as untrusted evidence and forbidding embedded instructions, secret
+access, or unreviewed command execution. Skills.sh currently retains a Snyk
+`E004` critical result from the previous upstream revision, where a hidden
+iEvo overlay loader appeared in `SKILL.md`; the reviewed source commit removes
+that loader and adds a repository validator that rejects its return. The same
+audit reported `W011`
+for the inherent third-party-content exposure. Gen Agent Trust Hub reported
+Safe and Socket reported zero alerts. Recheck these external signals on the
+next upstream scan; they are context, not a substitute for reviewing the
+vendored bytes. The stale skills.sh index and rescan request are tracked in
+[`vercel-labs/skills#1776`](https://github.com/vercel-labs/skills/issues/1776).
+
+## Project-local alpha skills
+
+`pycc` and `pycc-feedback` follow the
+[Agent Skills specification](https://agentskills.io/specification) but remain
+project-local alpha workflows. They are committed under `.claude/skills/` with
+thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
+They are intentionally absent from `skills-lock.json`, `rotnov/skills`, and
+skills.sh until their trigger and output evals mature.
+
+`pycc` distinguishes the implemented compiler slice from planned
+specifications before running commands. `pycc-feedback` may reproduce,
+minimize, sanitize, run sanitized duplicate searches, and prepare a public
+GitHub draft without approval. Non-public search terms require a separate
+exact-query preview and approval before transmission. The skill must also show
+the exact write payload and receive explicit per-payload user confirmation
+before creating an issue or comment in `rotnov/pycc`.
 
 ## Optional Claude Code plugins
 

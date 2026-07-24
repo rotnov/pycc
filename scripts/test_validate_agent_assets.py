@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,6 +65,122 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
         )
         self.assertIsNone(validator.IMMUTABLE_SHA.fullmatch("v0.58.1"))
+
+    def test_skill_folder_hash_matches_skills_cli_ordering(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "agents").mkdir()
+            (root / "agents" / "openai.yaml").write_bytes(b"agent")
+            (root / "SKILL.md").write_bytes(b"skill")
+
+            expected = hashlib.sha256()
+            expected.update(b"agents/openai.yaml")
+            expected.update(b"agent")
+            expected.update(b"SKILL.md")
+            expected.update(b"skill")
+            self.assertEqual(
+                validator.compute_skill_folder_hash(root),
+                expected.hexdigest(),
+            )
+
+    def skill_lock_failures(
+        self,
+        *,
+        entry_overrides: dict[str, object] | None = None,
+        canonical_present: bool = True,
+    ) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "docs" / "AGENT_TOOLING.md").write_text(
+                (validator.ROOT / "docs" / "AGENT_TOOLING.md").read_text(
+                    encoding="utf-8"
+                ),
+                encoding="utf-8",
+            )
+            lock = json.loads(
+                (validator.ROOT / "skills-lock.json").read_text(encoding="utf-8")
+            )
+            if entry_overrides:
+                lock["skills"]["i-have-an-issue"].update(entry_overrides)
+            (root / "skills-lock.json").write_text(
+                json.dumps(lock),
+                encoding="utf-8",
+            )
+            skills_root = validator.SKILLS_ROOT
+            if not canonical_present:
+                skills_root = root / "empty-skills"
+                skills_root.mkdir()
+            failures: list[str] = []
+            validator.validate_skill_lock(
+                failures,
+                root=root,
+                skills_root=skills_root,
+            )
+            return failures
+
+    def test_skill_lock_binds_reviewed_provenance_and_hash(self) -> None:
+        self.assertEqual(self.skill_lock_failures(), [])
+
+    def test_skill_lock_rejects_mismatched_content_hash(self) -> None:
+        failures = self.skill_lock_failures(
+            entry_overrides={"computedHash": "0" * 64}
+        )
+        self.assertTrue(any(".computedHash must be" in item for item in failures))
+
+    def test_skill_lock_rejects_changed_upstream_source(self) -> None:
+        failures = self.skill_lock_failures(
+            entry_overrides={"source": "attacker/skills"}
+        )
+        self.assertTrue(any(".source must be" in item for item in failures))
+
+    def test_skill_lock_requires_canonical_skill(self) -> None:
+        failures = self.skill_lock_failures(canonical_present=False)
+        self.assertTrue(any("has no canonical" in item for item in failures))
+
+    def alpha_contract_failures(
+        self,
+        *,
+        remove_feedback_text: str | None = None,
+        pycc_eval_count: int | None = None,
+    ) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("pycc", "pycc-feedback"):
+                shutil.copytree(validator.SKILLS_ROOT / name, root / name)
+            if remove_feedback_text is not None:
+                feedback_path = root / "pycc-feedback" / "SKILL.md"
+                feedback_path.write_text(
+                    feedback_path.read_text(encoding="utf-8").replace(
+                        remove_feedback_text,
+                        "",
+                    ),
+                    encoding="utf-8",
+                )
+            if pycc_eval_count is not None:
+                evals_path = root / "pycc" / "evals" / "evals.json"
+                evals = json.loads(evals_path.read_text(encoding="utf-8"))
+                evals["evals"] = evals["evals"][:pycc_eval_count]
+                evals_path.write_text(json.dumps(evals), encoding="utf-8")
+            failures: list[str] = []
+            validator.validate_alpha_skill_contracts(
+                root,
+                failures,
+                root=root,
+            )
+            return failures
+
+    def test_feedback_skill_requires_outbound_query_sanitization(self) -> None:
+        failures = self.alpha_contract_failures(
+            remove_feedback_text="sanitize every outbound query"
+        )
+        self.assertTrue(
+            any("sanitize every outbound query" in item for item in failures)
+        )
+
+    def test_alpha_skill_requires_multiple_evals(self) -> None:
+        failures = self.alpha_contract_failures(pycc_eval_count=1)
+        self.assertTrue(any("at least two evals" in item for item in failures))
 
     def write_skill(
         self,

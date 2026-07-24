@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "skills": {
+    "i-have-an-issue": {
+      "source": "rotnov/skills",
+      "ref": "i-have-an-issue-v0.1.0",
+      "reviewedCommit": "6cdefb4bfc3d73c43265e56530b85cab0703b3fa",
+      "sourceType": "github",
+      "skillPath": "skills/i-have-an-issue/SKILL.md",
+      "computedHash": "2a9cbea3a31c59aa42b4ea1c827bcc69982ef925be0400924625cbe773023b22"
+    }
+  }
+}
