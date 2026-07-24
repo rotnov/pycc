@@ -26,17 +26,35 @@ jobs:
           if [ "$AUDIT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
             commits="$AUDIT_AFTER"
           else
-            commits=$(git rev-list "$AUDIT_BEFORE..$AUDIT_AFTER")
+            if ! commits=$(git rev-list "$AUDIT_BEFORE..$AUDIT_AFTER"); then
+              echo "::error title=Main history audit unavailable::Could not enumerate pushed commits"
+              exit 1
+            fi
+          fi
+          if [ -z "$commits" ]; then
+            echo "::error title=Main history audit unavailable::No pushed commits were found to audit"
+            exit 1
           fi
 
           failed=0
           for commit_sha in $commits; do
-            merged_prs=$(
+            if ! merged_prs=$(
               gh api \
                 -H "Accept: application/vnd.github+json" \
                 "repos/$AUDIT_REPOSITORY/commits/$commit_sha/pulls" \
                 --jq '[.[] | select(.merged_at != null and .base.ref == "main")] | length'
-            )
+            ); then
+              echo "::error title=Main history audit unavailable::GitHub API failed while checking $commit_sha"
+              failed=1
+              continue
+            fi
+            case "$merged_prs" in
+              ""|*[!0-9]*)
+                echo "::error title=Invalid main history audit response::Expected an association count for $commit_sha, got: $merged_prs"
+                failed=1
+                continue
+                ;;
+            esac
             if [ "$merged_prs" -eq 0 ]; then
               echo "::error title=Unassociated main commit::$commit_sha is not associated with a merged pull request targeting main"
               failed=1

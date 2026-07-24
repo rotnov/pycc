@@ -70,6 +70,86 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ["shared hook target is not tracked: .ievo/hooks/scripts/capture.sh"],
         )
 
+    def test_unlisted_repository_relative_target_is_rejected(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "sh",
+                                "args": ["tools/local-hook.sh"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook target is not tracked: tools/local-hook.sh"],
+        )
+
+    def test_project_dir_target_outside_allowlist_is_rejected(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "sh",
+                                "args": ["${CLAUDE_PROJECT_DIR}/bin/local-hook"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook target is not tracked: bin/local-hook"],
+        )
+
+    def test_root_script_without_extension_is_rejected(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "sh",
+                                "args": ["local-hook"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook target is not tracked: local-hook"],
+        )
+
+    def test_dot_relative_command_is_rejected(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "./local-hook",
+                                "args": [],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook target is not tracked: local-hook"],
+        )
+
     def test_string_args_are_rejected(self) -> None:
         settings = {
             "hooks": {

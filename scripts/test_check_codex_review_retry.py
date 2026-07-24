@@ -74,6 +74,16 @@ class CodexReviewRetryTests(unittest.TestCase):
         ]
         self.assertEqual(gate.classify(data, NOW)[0], "ARTIFACT_EXISTS")
 
+    def test_bot_suffixed_review_blocks_duplicate(self) -> None:
+        data = payload()
+        data["reviews"] = [
+            {
+                "author": {"login": f"{gate.CODEX_LOGIN}[bot]"},
+                "commit": {"oid": HEAD},
+            }
+        ]
+        self.assertEqual(gate.classify(data, NOW)[0], "ARTIFACT_EXISTS")
+
     def test_completed_codex_check_blocks_duplicate(self) -> None:
         data = payload()
         data["statusCheckRollup"] = [
@@ -107,6 +117,43 @@ class CodexReviewRetryTests(unittest.TestCase):
             gate.classify(data, NOW)[0],
             "ARTIFACT_EXISTS",
         )
+
+    def test_success_comment_that_mentions_no_errors_is_not_a_failure(self) -> None:
+        data = payload()
+        data["comments"] = [
+            {
+                "author": {"login": "owner"},
+                "body": "@codex review",
+                "createdAt": "2026-07-24T20:05:00Z",
+            },
+            {
+                "author": {"login": gate.CODEX_LOGIN},
+                "body": "Codex Review: no errors found.",
+                "createdAt": "2026-07-24T20:06:00Z",
+                "url": "https://example.test/review",
+            },
+        ]
+        self.assertEqual(
+            gate.classify(data, NOW)[0],
+            "ARTIFACT_EXISTS",
+        )
+
+    def test_bot_suffixed_failure_comment_allows_retry(self) -> None:
+        data = payload()
+        data["comments"] = [
+            {
+                "author": {"login": "owner"},
+                "body": "@codex review",
+                "createdAt": "2026-07-24T20:05:00Z",
+            },
+            {
+                "author": {"login": f"{gate.CODEX_LOGIN}[bot]"},
+                "body": "Unable to start the review.",
+                "createdAt": "2026-07-24T20:06:00Z",
+                "url": "https://example.test/failure",
+            },
+        ]
+        self.assertEqual(gate.classify(data, NOW)[0], "RETRY_ALLOWED")
 
     def test_timeout_without_artifact_allows_retry(self) -> None:
         data = payload()

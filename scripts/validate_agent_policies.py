@@ -14,6 +14,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PREFIXES = (".ievo/", ".claude/", ".agents/", ".github/", "scripts/")
 PROJECT_PREFIXES = ("$CLAUDE_PROJECT_DIR/", "${CLAUDE_PROJECT_DIR}/")
+SCRIPT_SUFFIXES = (".sh", ".py", ".js", ".mjs", ".cjs")
+INTERPRETERS = ("sh", "bash", "zsh", "python", "python3", "node")
 
 
 def tracked_files() -> set[str]:
@@ -44,23 +46,67 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
                 if not isinstance(entry, dict):
                     continue
                 arguments = entry.get("args", [])
-                values = [entry.get("command")]
-                if isinstance(arguments, list):
-                    values.extend(arguments)
-                for value in values:
-                    if not isinstance(value, str):
+                command = entry.get("command")
+                if not isinstance(command, str):
+                    continue
+                try:
+                    command_tokens = shlex.split(command)
+                except ValueError:
+                    command_tokens = [command]
+                argument_tokens = (
+                    [argument for argument in arguments if isinstance(argument, str)]
+                    if isinstance(arguments, list)
+                    else []
+                )
+                tokens = [*command_tokens, *argument_tokens]
+                for token in tokens:
+                    normalized, explicit_project_path = normalize_hook_token(token)
+                    if explicit_project_path or normalized.startswith(LOCAL_PREFIXES):
+                        targets.append(normalized)
+
+                if not command_tokens:
+                    continue
+                executable, _ = normalize_hook_token(command_tokens[0])
+                if is_relative_script_path(executable):
+                    targets.append(executable)
+                    continue
+                if executable in INTERPRETERS:
+                    script_tokens = [*command_tokens[1:], *argument_tokens]
+                    if any(
+                        token in {"-c", "-lc", "-e", "--eval", "-m", "-s"}
+                        for token in script_tokens
+                    ):
                         continue
-                    try:
-                        tokens = shlex.split(value)
-                    except ValueError:
-                        tokens = [value]
-                    for token in tokens:
-                        normalized = token.removeprefix("./")
-                        for project_prefix in PROJECT_PREFIXES:
-                            normalized = normalized.removeprefix(project_prefix)
-                        if normalized.startswith(LOCAL_PREFIXES):
+                    for token in script_tokens:
+                        normalized, explicit_project_path = normalize_hook_token(token)
+                        if token.startswith("-"):
+                            continue
+                        if (
+                            explicit_project_path
+                            or is_relative_script_path(normalized)
+                            or normalized == token
+                        ):
                             targets.append(normalized)
-    return targets
+                            break
+    return list(dict.fromkeys(targets))
+
+
+def normalize_hook_token(token: str) -> tuple[str, bool]:
+    if token.startswith("./"):
+        return token.removeprefix("./"), True
+    normalized = token
+    for project_prefix in PROJECT_PREFIXES:
+        if normalized.startswith(project_prefix):
+            return normalized.removeprefix(project_prefix), True
+    return normalized, False
+
+
+def is_relative_script_path(token: str) -> bool:
+    return (
+        not token.startswith(("/", "~"))
+        and "://" not in token
+        and ("/" in token or token.endswith(SCRIPT_SUFFIXES))
+    )
 
 
 def validate_hook_schema(settings: dict[str, Any]) -> list[str]:

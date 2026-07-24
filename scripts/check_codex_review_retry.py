@@ -18,16 +18,21 @@ FAILURE_TERMS = (
     "could not start",
     "couldn't start",
     "did not start",
-    "failed",
-    "unable",
+    "failed to start",
+    "review failed",
+    "request failed",
+    "unable to start",
     "rate limit",
     "rejected",
-    "error",
 )
 
 
 def timestamp(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def is_codex_login(login: str | None) -> bool:
+    return (login or "").removesuffix("[bot]") == CODEX_LOGIN
 
 
 def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
@@ -42,7 +47,7 @@ def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
     reviews = [
         review
         for review in payload.get("reviews", [])
-        if review.get("author", {}).get("login") == CODEX_LOGIN
+        if is_codex_login(review.get("author", {}).get("login"))
         and review.get("commit", {}).get("oid") == head
     ]
     if reviews:
@@ -85,7 +90,7 @@ def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
         comment
         for comment in comments
         if timestamp(comment["createdAt"]) > request_time
-        and comment.get("author", {}).get("login") == CODEX_LOGIN
+        and is_codex_login(comment.get("author", {}).get("login"))
     ]
     for response in codex_responses:
         body = response.get("body", "").lower()
