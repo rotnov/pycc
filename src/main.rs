@@ -62,11 +62,13 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
     })?;
     eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint C: find_pycc_rt_lib_dir returned Ok: {}", rt_lib_dir.display());
     let mut cmd = linker_command();
-    if let Some(triple) = target {
+    if let Some(triple) = effective_link_target(target) {
         cmd.arg("-target").arg(triple);
     }
     cmd.arg(&obj_path).arg("-L").arg(&rt_lib_dir).arg("-lpycc_rt").arg("-o").arg(out);
     add_windows_system_libs(&mut cmd);
+    #[cfg(windows)]
+    cmd.arg("-v");
     eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint D: about to spawn linker: {cmd:?}");
     let status = cmd.status().expect("the linker driver should run");
     eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint E: linker exited with {status:?}");
@@ -90,6 +92,26 @@ fn linker_command() -> std::process::Command {
 #[cfg(not(windows))]
 fn linker_command() -> std::process::Command {
     std::process::Command::new("cc")
+}
+
+/// A bare `clang.exe` invocation with no `-target` flag was observed
+/// (D-025) resolving inconsistently: some invocations correctly select
+/// MSVC's `lld-link`, others silently fall back to a MinGW/GCC toolchain
+/// discovered on `PATH` (`C:\mingw64`) -- which cannot link `pycc_rt.lib`'s
+/// MSVC-ABI symbols (`__imp_closesocket`, `__chkstk`, the MSVC RTTI
+/// vtable), producing a wall of "undefined reference" errors from GNU
+/// `ld`/`collect2` instead of a normal MSVC link. This is the only Windows
+/// target v0.1 supports (the Tier-1 matrix), so there's no reason to let
+/// the linker guess: force it explicitly instead of relying on clang's
+/// bare-invocation default, which this evidence shows is not reliable.
+#[cfg(windows)]
+fn effective_link_target(target: Option<&str>) -> Option<&str> {
+    Some(target.unwrap_or("x86_64-pc-windows-msvc"))
+}
+
+#[cfg(not(windows))]
+fn effective_link_target(target: Option<&str>) -> Option<&str> {
+    target
 }
 
 /// `pycc_rt.lib` is a Rust `staticlib` -- linking it via `cargo`/`rustc`
