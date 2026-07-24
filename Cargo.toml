@@ -8,6 +8,7 @@ members = [
     "crates/pycc_types",
     "crates/pycc_mir",
     "crates/pycc_rt",
+    "crates/pycc_codegen",
 ]
 
 [workspace.package]
