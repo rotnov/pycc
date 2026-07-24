@@ -22,6 +22,13 @@ an omitted path meaning the current project, and `pycc.toml` project loading
 arrive with multi-file projects in v0.4. The ownership pass joins `check` when
 `pycc_own` is introduced in v0.5.
 
+Before any frontend command parses a file, pycc decodes its bytes using
+Python's source-encoding rules: UTF-8 by default, an optional UTF-8 BOM, and an
+encoding declaration on the first or eligible second line. The v0.1 decoder
+supports strict ASCII, true ISO-8859-1/Latin-1, and the ASCII-compatible legacy
+encodings recognized by its bundled decoder. An unknown encoding, a BOM/cookie
+conflict, or malformed encoded input is an unreadable-input error.
+
 For the other commands, the target contract remains `PATH` = file or project
 directory (using `pycc.toml`), with an omitted path meaning the current
 directory once project mode exists.

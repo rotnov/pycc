@@ -55,7 +55,8 @@ A revision advertised for hook use must satisfy all of the following:
 1. `pre-commit validate-manifest .pre-commit-hooks.yaml` succeeds.
 2. A clean pre-commit environment can install the Rust hook from that exact
    revision.
-3. Multiple valid Python files pass in one invocation.
+3. Multiple valid Python files pass in one invocation, including files with a
+   supported Python source-encoding declaration.
 4. Syntax errors, current-version capability errors, unreadable inputs, and
    mixed failures produce the documented diagnostics and exit codes.
 5. The repository's normal build, tests, documentation, clippy, workflow

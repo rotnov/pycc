@@ -240,6 +240,47 @@ fn check_accepts_every_staged_file_in_one_invocation() {
 }
 
 #[test]
+fn check_accepts_a_pep_263_latin_1_source_file() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_latin1_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("latin1.py");
+    std::fs::write(
+        &src,
+        b"# -*- coding: latin-1 -*-\n# caf\xe9\nprint(42)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_reports_a_malformed_encoded_source_as_an_input_error() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_check_bad_encoding_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("invalid_utf8.py");
+    std::fs::write(&src, b"print(42)\n# \xff\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr.contains("could not read"));
+    assert!(stderr.contains("source is not valid utf-8"));
+}
+
+#[test]
 fn check_accepts_a_staged_filename_that_starts_with_a_hyphen() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_hyphen_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

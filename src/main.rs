@@ -1,4 +1,5 @@
 mod cli;
+mod source;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -65,8 +66,8 @@ enum FrontendFailure {
 }
 
 fn check_frontend(path: &str) -> Result<pycc_hir::HirModule, FrontendFailure> {
-    let source =
-        std::fs::read_to_string(path).map_err(|error| FrontendFailure::Input(error.to_string()))?;
+    let bytes = std::fs::read(path).map_err(|error| FrontendFailure::Input(error.to_string()))?;
+    let source = source::decode_python_source(&bytes).map_err(FrontendFailure::Input)?;
     let module = match pycc_parser::parse(&source) {
         Ok(module) => module,
         Err(diagnostic) => return Err(FrontendFailure::Compile { diagnostic, source }),
