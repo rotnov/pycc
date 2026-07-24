@@ -1,6 +1,21 @@
 # pycc Runtime Specification
 
-`pycc_rt` — the static library linked into every binary. Pure Rust, no libpython, no platform-visible behavior differences (cross-platform is a hard requirement — see ARCHITECTURE.md).
+`pycc_rt` owns the runtime linked into every binary. It never depends on libpython and
+must not introduce platform-visible behavior differences (cross-platform is a hard
+requirement — see ARCHITECTURE.md).
+
+The v0.1 bootstrap is deliberately narrower than the final runtime: the `pycc_rt` Rust
+crate embeds a target-independent C implementation of the two available ABI helpers
+(`print(i64)` and `NameError`). The compiler materializes that source and passes it to
+the same target-aware compiler driver as the generated object. This makes the runtime
+a real packaged dependency without looking up Cargo's profile- or target-specific
+static-library artifacts.
+
+This exception ends before the heap/object runtime starts. The object model,
+exceptions, allocator, and later facilities specified below are implemented in the
+pure-Rust `pycc_rt` static library. Adding another C bootstrap helper beyond the v0.1
+surface requires an explicit decision record rather than silently growing a second
+runtime implementation.
 
 ## Object model
 

@@ -344,7 +344,7 @@ mod tests {
         let bin_path = dir.join("slice0_call_before_def");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.status.code(), Some(101));
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("name 'foo' is not defined"));
     }

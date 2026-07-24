@@ -256,8 +256,15 @@ fn calling_a_function_before_its_definition_is_a_runtime_name_error() {
     assert!(build.status.success());
 
     let output = Command::new(&out).output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(101));
     assert!(String::from_utf8_lossy(&output.stderr).contains("name 'foo' is not defined"));
+
+    let run_output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(run_output.status.code(), Some(101));
+    assert!(String::from_utf8_lossy(&run_output.stderr).contains("name 'foo' is not defined"));
 }
 
 #[test]

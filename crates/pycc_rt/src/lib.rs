@@ -24,7 +24,7 @@ void pycc_rt_print_i64(int64_t value) {
 
 void pycc_rt_name_error(const char *name) {
     fprintf(stderr, "NameError: name '%s' is not defined\n", name);
-    exit(1);
+    exit(101);
 }
 "#;
 
@@ -45,5 +45,6 @@ mod tests {
         let path = dir.join("pycc_rt.c");
         write_c_runtime(&path).unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), C_RUNTIME_SOURCE);
+        assert!(C_RUNTIME_SOURCE.contains("exit(101);"));
     }
 }
