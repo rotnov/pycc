@@ -108,23 +108,81 @@ def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
     return "WAIT", f"request exists for {head}; no retry evidence yet"
 
 
-def load_pr(repository: str, number: int) -> dict[str, Any]:
+def run_gh_json(arguments: list[str]) -> Any:
     result = subprocess.run(
+        ["gh", *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(result.stdout)
+
+
+def flatten_pages(pages: list[Any], object_key: str | None = None) -> list[Any]:
+    items: list[Any] = []
+    for page in pages:
+        page_items = page.get(object_key, []) if object_key else page
+        if not isinstance(page_items, list):
+            raise ValueError("unexpected paginated GitHub response")
+        items.extend(page_items)
+    return items
+
+
+def paginated_rest(endpoint: str, object_key: str | None = None) -> list[Any]:
+    pages = run_gh_json(["api", "--paginate", "--slurp", endpoint])
+    if not isinstance(pages, list):
+        raise ValueError("paginated GitHub response must be a list")
+    return flatten_pages(pages, object_key)
+
+
+def load_pr(repository: str, number: int) -> dict[str, Any]:
+    payload = run_gh_json(
         [
-            "gh",
             "pr",
             "view",
             str(number),
             "--repo",
             repository,
             "--json",
-            "headRefOid,commits,comments,reviews,statusCheckRollup",
+            "headRefOid,commits,statusCheckRollup",
         ],
-        check=True,
-        capture_output=True,
-        text=True,
     )
-    return json.loads(result.stdout)
+    comments = paginated_rest(
+        f"repos/{repository}/issues/{number}/comments?per_page=100"
+    )
+    payload["comments"] = [
+        {
+            "author": {"login": comment.get("user", {}).get("login")},
+            "body": comment.get("body", ""),
+            "createdAt": comment["created_at"],
+            "url": comment.get("html_url"),
+        }
+        for comment in comments
+    ]
+    reviews = paginated_rest(f"repos/{repository}/pulls/{number}/reviews?per_page=100")
+    payload["reviews"] = [
+        {
+            "author": {"login": review.get("user", {}).get("login")},
+            "commit": {"oid": review.get("commit_id")},
+        }
+        for review in reviews
+    ]
+    check_runs = paginated_rest(
+        f"repos/{repository}/commits/{payload['headRefOid']}/check-runs?per_page=100",
+        "check_runs",
+    )
+    status_rollup = payload.get("statusCheckRollup")
+    if not isinstance(status_rollup, list):
+        status_rollup = []
+        payload["statusCheckRollup"] = status_rollup
+    status_rollup.extend(
+        {
+            "name": check.get("name"),
+            "status": check.get("status", "").upper(),
+        }
+        for check in check_runs
+    )
+    return payload
 
 
 def main() -> int:

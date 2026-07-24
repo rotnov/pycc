@@ -27,7 +27,10 @@ class AgentPolicyValidationTests(unittest.TestCase):
         }
         self.assertEqual(
             validator.validate_hook_targets(settings, set()),
-            ["shared hook target is not tracked: .ievo/hooks/scripts/capture.sh"],
+            [
+                "shared hook target must remain machine-local: "
+                ".ievo/hooks/scripts/capture.sh"
+            ],
         )
 
     def test_tracked_shared_wrapper_is_accepted(self) -> None:
@@ -50,6 +53,34 @@ class AgentPolicyValidationTests(unittest.TestCase):
             [],
         )
 
+    def test_tracked_ievo_hook_target_is_still_rejected(self) -> None:
+        target = ".ievo/hooks/scripts/capture.sh"
+        settings = {
+            "hooks": {
+                "UserPromptSubmit": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "sh",
+                                "args": [target],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, {target}),
+            [f"shared hook target must remain machine-local: {target}"],
+        )
+
+    def test_force_added_ievo_hook_file_is_rejected(self) -> None:
+        target = ".ievo/hooks/scripts/capture.sh"
+        self.assertEqual(
+            validator.validate_machine_local_files({target}),
+            [f"machine-local iEvo hook must not be tracked: {target}"],
+        )
+
     def test_shell_form_untracked_target_is_rejected(self) -> None:
         settings = {
             "hooks": {
@@ -67,7 +98,10 @@ class AgentPolicyValidationTests(unittest.TestCase):
         }
         self.assertEqual(
             validator.validate_hook_targets(settings, set()),
-            ["shared hook target is not tracked: .ievo/hooks/scripts/capture.sh"],
+            [
+                "shared hook target must remain machine-local: "
+                ".ievo/hooks/scripts/capture.sh"
+            ],
         )
 
     def test_unlisted_repository_relative_target_is_rejected(self) -> None:
@@ -148,6 +182,26 @@ class AgentPolicyValidationTests(unittest.TestCase):
         self.assertEqual(
             validator.validate_hook_targets(settings, set()),
             ["shared hook target is not tracked: local-hook"],
+        )
+
+    def test_absolute_interpreter_still_validates_relative_script(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "/bin/sh",
+                                "args": ["tools/local-hook.sh"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook target is not tracked: tools/local-hook.sh"],
         )
 
     def test_string_args_are_rejected(self) -> None:

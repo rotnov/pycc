@@ -70,7 +70,8 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
                 if is_relative_script_path(executable):
                     targets.append(executable)
                     continue
-                if executable in INTERPRETERS:
+                interpreter = executable.replace("\\", "/").rsplit("/", 1)[-1]
+                if interpreter in INTERPRETERS:
                     script_tokens = [*command_tokens[1:], *argument_tokens]
                     if any(
                         token in {"-c", "-lc", "-e", "--eval", "-m", "-s"}
@@ -151,10 +152,20 @@ def parse_flag(contents: str) -> dict[str, str]:
 
 
 def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[str]:
+    failures: list[str] = []
+    for target in hook_targets(settings):
+        if target.startswith(".ievo/hooks/"):
+            failures.append(f"shared hook target must remain machine-local: {target}")
+        elif target not in tracked:
+            failures.append(f"shared hook target is not tracked: {target}")
+    return failures
+
+
+def validate_machine_local_files(tracked: set[str]) -> list[str]:
     return [
-        f"shared hook target is not tracked: {target}"
-        for target in hook_targets(settings)
-        if target not in tracked
+        f"machine-local iEvo hook must not be tracked: {target}"
+        for target in sorted(tracked)
+        if target.startswith(".ievo/hooks/")
     ]
 
 
@@ -166,6 +177,7 @@ def main() -> int:
     tracked = tracked_files()
     failures.extend(validate_hook_schema(settings))
     failures.extend(validate_hook_targets(settings, tracked))
+    failures.extend(validate_machine_local_files(tracked))
 
     ignore_check = subprocess.run(
         ["git", "check-ignore", "--quiet", ".claude/settings.local.json"],

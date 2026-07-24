@@ -24,6 +24,24 @@ def payload() -> dict:
 
 
 class CodexReviewRetryTests(unittest.TestCase):
+    def test_flattens_all_array_pages(self) -> None:
+        self.assertEqual(
+            gate.flatten_pages([[{"id": 1}], [{"id": 2}]]),
+            [{"id": 1}, {"id": 2}],
+        )
+
+    def test_flattens_all_check_run_pages(self) -> None:
+        self.assertEqual(
+            gate.flatten_pages(
+                [
+                    {"check_runs": [{"id": 1}]},
+                    {"check_runs": [{"id": 2}]},
+                ],
+                "check_runs",
+            ),
+            [{"id": 1}, {"id": 2}],
+        )
+
     def test_first_request_is_allowed(self) -> None:
         self.assertEqual(gate.classify(payload(), NOW)[0], "REQUEST_ALLOWED")
 
