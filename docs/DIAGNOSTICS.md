@@ -49,7 +49,10 @@ Note on `O0201`: legal Python never observes moves (see MEMORY_OWNERSHIP.md — 
 ## Quality bar
 
 - Every error: primary span, ≥1 label, expected/found where applicable, help with a suggestion when one is safe.
-- Human diagnostics preserve parser/lowering byte ranges, expand tabs to four-column stops, and compute location columns and caret placement from terminal display width so tabs and wide Unicode characters remain aligned.
+- Human diagnostics preserve parser/lowering byte ranges, strip presentation-only
+  carriage returns from CRLF source lines, expand tabs to four-column stops, and
+  compute location columns and caret placement from terminal display width so tabs
+  and wide Unicode characters remain aligned.
 - Suggestions marked machine-applicable are applied by `pycc check --fix` and must be idempotent + tested.
 - Message text changes are allowed; codes and JSON structure are not (corpus bot fingerprints on code + span shape).
 - Diagnostics on all Tier-1 platforms byte-identical (paths normalized).

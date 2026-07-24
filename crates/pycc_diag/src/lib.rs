@@ -70,7 +70,12 @@ impl Diagnostic {
         let column = indent_width + 1;
         let caret_width = display_width(&source[start..end.min(line_end)], indent_width).max(1);
         let normalized_path = path.replace('\\', "/");
-        let source_line = expand_tabs(&source[line_start..line_end]);
+        let display_line_end = if source.as_bytes().get(line_end.wrapping_sub(1)) == Some(&b'\r') {
+            line_end - 1
+        } else {
+            line_end
+        };
+        let source_line = expand_tabs(&source[line_start..display_line_end]);
         let gutter_width = line_number.to_string().len();
 
         format!(
@@ -178,6 +183,23 @@ mod tests {
                 " --> input.py:1:7\n",
                 "  |\n",
                 "1 |     界x\n",
+                "  |       ^ unsupported name",
+            )
+        );
+    }
+
+    #[test]
+    fn strips_carriage_returns_from_crlf_source_lines() {
+        let source = "x\r\n\t界y\r\n";
+        let start = source.find('y').unwrap() as u32;
+        let d = Diagnostic::error("L0003", "unsupported name", Span::new(start, start + 1));
+        assert_eq!(
+            d.render_human("input.py", source),
+            concat!(
+                "error[L0003]: unsupported name\n",
+                " --> input.py:2:7\n",
+                "  |\n",
+                "2 |     界y\n",
                 "  |       ^ unsupported name",
             )
         );
