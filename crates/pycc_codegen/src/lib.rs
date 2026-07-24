@@ -115,7 +115,11 @@ pub fn compile_to_object(
     });
     eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 8: triple resolved to {}", triple.as_str().to_string_lossy());
     let target = Target::from_triple(&triple).map_err(|e| {
-        format!("pycc_codegen: `{}` is not a target LLVM knows how to generate code for: {e}", triple.as_str().to_string_lossy())
+        format!(
+            "pycc_codegen: `{}` is not a target LLVM knows how to generate code for: {}",
+            triple.as_str().to_string_lossy(),
+            llvm_string_to_owned(e)
+        )
     })?;
     eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 9: Target::from_triple done");
     let target_machine = target
@@ -129,9 +133,23 @@ pub fn compile_to_object(
         )
         .expect("creating a target machine for the native host with generic CPU/features should never fail");
     eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 10: create_target_machine done");
-    let result = target_machine.write_to_file(&module, FileType::Object, output_path).map_err(|e| e.to_string());
+    let result = target_machine.write_to_file(&module, FileType::Object, output_path).map_err(llvm_string_to_owned);
     eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 11: write_to_file done, ok={}", result.is_ok());
     result
+}
+
+/// See D-023/D-024: every message inkwell hands back as an `LLVMString` --
+/// `Target::from_triple`'s and `TargetMachine::write_to_file`'s error
+/// paths, on top of `TargetTriple` itself -- shares the same broken `Drop`
+/// (`LLVMDisposeMessage`) on Windows against this LLVM release. Converts
+/// to an owned `String` (a real copy, safe to keep and format past this
+/// call) and forgets the original rather than letting it drop. General
+/// fix at the one place `LLVMString` crosses into this crate's error
+/// values, not a patch per call site -- so a future one isn't missed.
+fn llvm_string_to_owned(message: inkwell::support::LLVMString) -> String {
+    let owned = message.to_string();
+    std::mem::forget(message);
+    owned
 }
 
 /// Skipped on Windows: `module.verify()` crashes there with an access

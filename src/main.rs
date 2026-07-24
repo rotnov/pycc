@@ -66,6 +66,7 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         cmd.arg("-target").arg(triple);
     }
     cmd.arg(&obj_path).arg("-L").arg(&rt_lib_dir).arg("-lpycc_rt").arg("-o").arg(out);
+    add_windows_system_libs(&mut cmd);
     eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint D: about to spawn linker: {cmd:?}");
     let status = cmd.status().expect("the linker driver should run");
     eprintln!("PYCC_DEBUG_WINDOWS: try_build checkpoint E: linker exited with {status:?}");
@@ -90,6 +91,36 @@ fn linker_command() -> std::process::Command {
 fn linker_command() -> std::process::Command {
     std::process::Command::new("cc")
 }
+
+/// `pycc_rt.lib` is a Rust `staticlib` -- linking it via `cargo`/`rustc`
+/// (as happens when building `pycc.exe` itself) automatically adds every
+/// Windows system library Rust's std transitively needs; invoking the
+/// linker driver directly here (see `linker_command` above) does not. This
+/// set is the exact one rustc itself passed when linking `pycc.exe` on
+/// this same CI runner (D-024) -- confirmed from that link's own log, not
+/// guessed. `#[cfg(not(windows))]`'s no-op keeps the other platforms,
+/// where system libs are found automatically, unaffected.
+#[cfg(windows)]
+fn add_windows_system_libs(cmd: &mut std::process::Command) {
+    for lib in [
+        "ws2_32",
+        "ntdll",
+        "userenv",
+        "advapi32",
+        "shell32",
+        "ole32",
+        "uuid",
+        "psapi",
+        "dbghelp",
+        "kernel32",
+        "legacy_stdio_definitions",
+    ] {
+        cmd.arg(format!("-l{lib}"));
+    }
+}
+
+#[cfg(not(windows))]
+fn add_windows_system_libs(_cmd: &mut std::process::Command) {}
 
 fn run(path: &str) -> ExitCode {
     let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
