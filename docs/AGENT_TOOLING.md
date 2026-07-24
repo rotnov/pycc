@@ -11,7 +11,7 @@ rollbackable just like compiler dependencies.
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
 | Codex | repository skills under `.agents/skills/` | current repository revision | project-scoped; no global installation |
 | Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
-| Codex and Claude Code | `rotnov/skills@i-have-an-issue` | tag `i-have-an-issue-v0.1.0`; reviewed source commit `6cdefb4bfc3d73c43265e56530b85cab0703b3fa`; vendored hash `2a9cbea3a31c59aa42b4ea1c827bcc69982ef925be0400924625cbe773023b22` | manual updates only |
+| Codex and Claude Code | `rotnov/skills@i-have-an-issue` | tag `i-have-an-issue-v0.1.1`; reviewed source commit `1bc6bcee3766a7e62b936343a48ebb56a3767470`; vendored hash `99e492ccae20ad3acf02e28dd76c7d74de28c7cf2141bfc7a2942c46c4bf687c` | manual updates only |
 
 The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin is the
 `sha` of the `git-subdir` plugin source inside the inline settings marketplace in
@@ -43,7 +43,7 @@ marketplace declaration.
 The `i-have-an-issue` skill is installed with:
 
 ```sh
-npx skills@1.5.20 add rotnov/skills#i-have-an-issue-v0.1.0 \
+npx skills@1.5.20 add rotnov/skills#i-have-an-issue-v0.1.1 \
   --skill i-have-an-issue -a claude-code --copy -y
 ```
 
@@ -54,7 +54,7 @@ commit, and content hash. Updates are deliberate repository changes and must
 preserve the canonical-copy/wrapper split.
 
 The pre-install iEvo security review scanned all seven distributed files
-(30,909 bytes). The content verdict is **YELLOW** because the skill necessarily
+(31,206 bytes). The content verdict is **YELLOW** because the skill necessarily
 loads outsider-authored GitHub issue and pull-request text into agent context.
 The skill mitigates that indirect prompt-injection exposure by treating those
 artifacts as untrusted evidence and forbidding embedded instructions, secret

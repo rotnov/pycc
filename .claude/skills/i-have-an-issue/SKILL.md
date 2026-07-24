@@ -82,10 +82,11 @@ Use several complementary query families:
 Search issues and discussions for discovery, then follow links into PRs,
 reviews, commits, release notes, source, and tests. Use the best available
 GitHub connector, `gh`, browser, or web search. When none offers structured
-discovery, use:
+discovery, resolve the directory containing this `SKILL.md` to an absolute
+`SKILL_DIR` path, then use:
 
 ```bash
-python3 scripts/search_github.py \
+python3 "$SKILL_DIR/scripts/search_github.py" \
   --repo OWNER/REPO \
   --query '"exact phrase" regression' \
   --kind issues \

@@ -97,4 +97,7 @@ if ! grep -q "Unknown command: /pycc-definitely-not-a-skill" \
   exit 1
 fi
 
+skill_dir="$repo_root/.claude/skills/i-have-an-issue"
+python3 "$skill_dir/scripts/search_github.py" --help >/dev/null
+
 echo "Claude marketplace and project-scoped skills: valid"

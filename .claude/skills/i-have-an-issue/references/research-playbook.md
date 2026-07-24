@@ -99,10 +99,13 @@ When a thread says "fixed", find the code or release that makes it true.
 
 ## 5. Use the bundled search helper
 
-The helper uses GitHub's public Search API and Python's standard library:
+The helper uses GitHub's public Search API and Python's standard library.
+Resolve the directory containing the active `SKILL.md` to an absolute
+`SKILL_DIR` path first; never resolve `scripts/search_github.py` from the
+current working directory.
 
 ```bash
-python3 scripts/search_github.py \
+python3 "$SKILL_DIR/scripts/search_github.py" \
   --repo rust-lang/rust \
   --query '"incremental compilation" corruption' \
   --kind issues \
@@ -114,7 +117,7 @@ python3 scripts/search_github.py \
 Search commits:
 
 ```bash
-python3 scripts/search_github.py \
+python3 "$SKILL_DIR/scripts/search_github.py" \
   --repo OWNER/REPO \
   --query 'invalidate cache key' \
   --kind commits \

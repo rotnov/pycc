@@ -120,4 +120,7 @@ assert "pycc-agent-skills:" not in model_input, (
 )
 ' "$prompt_input" "$repo_root"
 
+skill_dir="$repo_root/.claude/skills/i-have-an-issue"
+python3 "$skill_dir/scripts/search_github.py" --help >/dev/null
+
 echo "Codex pinned marketplace and project-scoped skills: valid"

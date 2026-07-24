@@ -3,11 +3,11 @@
   "skills": {
     "i-have-an-issue": {
       "source": "rotnov/skills",
-      "ref": "i-have-an-issue-v0.1.0",
-      "reviewedCommit": "6cdefb4bfc3d73c43265e56530b85cab0703b3fa",
+      "ref": "i-have-an-issue-v0.1.1",
+      "reviewedCommit": "1bc6bcee3766a7e62b936343a48ebb56a3767470",
       "sourceType": "github",
       "skillPath": "skills/i-have-an-issue/SKILL.md",
-      "computedHash": "2a9cbea3a31c59aa42b4ea1c827bcc69982ef925be0400924625cbe773023b22"
+      "computedHash": "99e492ccae20ad3acf02e28dd76c7d74de28c7cf2141bfc7a2942c46c4bf687c"
     }
   }
 }
