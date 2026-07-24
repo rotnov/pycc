@@ -1,7 +1,8 @@
 # Agent tooling supply-chain policy
 
-Repository-scoped agent instructions and plugins are executable control-plane inputs.
-They must be reproducible, reviewed, and rollbackable just like compiler dependencies.
+Repository-owned agent instructions and the cross-platform plugin baseline documented
+here are executable control-plane inputs. They must be reproducible, reviewed, and
+rollbackable just like compiler dependencies.
 
 ## Current pins
 
@@ -37,6 +38,19 @@ checks on every pull request and push to `main`. Claude Code validates the proje
 settings and the extracted inline marketplace with its strict manifest validator, so
 a developer's global plugin installation cannot mask a broken repository pin or
 marketplace declaration.
+
+## Optional Claude Code plugins
+
+`.claude/settings.json` also enables optional third-party capability plugins from the
+`anthropics/claude-plugins-official` and `wshobson/agents` marketplaces. Those
+marketplace sources are not pinned, are not installed by the Codex bootstrap, and are
+not part of the reproducible cross-platform baseline above. Repository instructions,
+tests, and required workflows must not depend on them.
+
+Treat bytes resolved from those marketplaces as mutable and review them before use.
+If an optional plugin becomes a repository dependency, pin a reviewed immutable
+revision, provide the equivalent Codex capability or a safe documented fallback, and
+extend the agent-asset checks in the same pull request.
 
 ## Reviewed update process
 
