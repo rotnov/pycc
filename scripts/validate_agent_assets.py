@@ -62,6 +62,14 @@ PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 # reviewed, stable authenticated runs exist for both supported client surfaces.
 AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
 REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
+PINNED_CLAUDE_PLUGINS = {"ievo@ievo-skills"}
+REQUIRED_AGENT_FILES = ("AGENTS.md", "CLAUDE.md")
+REQUIRED_AGENT_GLOBS = (
+    ".agents/skills/**/*.md",
+    ".claude/skills/**/*.md",
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+)
 
 
 def load_json(
@@ -325,7 +333,107 @@ def validate_marketplaces(failures: list[str]) -> None:
         failures,
         claude_path,
     )
+    validate_optional_plugin_boundary(settings, failures)
     validate_skill_parity(SKILLS_ROOT, CODEX_SKILLS_ROOT, failures)
+
+
+def optional_claude_plugins(settings: dict) -> dict[str, str]:
+    enabled_plugins = settings.get("enabledPlugins")
+    if not isinstance(enabled_plugins, dict):
+        return {}
+
+    optional: dict[str, str] = {}
+    for identity in enabled_plugins:
+        if not isinstance(identity, str):
+            continue
+        name, separator, marketplace = identity.rpartition("@")
+        if (
+            separator
+            and name
+            and marketplace
+            and identity not in PINNED_CLAUDE_PLUGINS
+        ):
+            optional[identity] = marketplace
+    return optional
+
+
+def required_agent_files(root: Path) -> list[Path]:
+    paths = [root / relative for relative in REQUIRED_AGENT_FILES]
+    for pattern in REQUIRED_AGENT_GLOBS:
+        paths.extend(root.glob(pattern))
+    return sorted({path for path in paths if path.is_file()})
+
+
+def has_token(text: str, token: str) -> bool:
+    boundary = r"[A-Za-z0-9_-]"
+    return (
+        re.search(
+            rf"(?<!{boundary}){re.escape(token)}(?!{boundary})",
+            text,
+        )
+        is not None
+    )
+
+
+def mask_token(text: str, token: str) -> str:
+    boundary = r"[A-Za-z0-9_-]"
+    return re.sub(
+        rf"(?<!{boundary}){re.escape(token)}(?!{boundary})",
+        lambda match: " " * len(match.group(0)),
+        text,
+    )
+
+
+def validate_optional_plugin_boundary(
+    settings: dict,
+    failures: list[str],
+    root: Path = ROOT,
+) -> None:
+    optional = optional_claude_plugins(settings)
+    if not optional:
+        return
+
+    names: dict[str, list[str]] = {}
+    for identity, marketplace in optional.items():
+        name = identity.rpartition("@")[0]
+        names.setdefault(name, []).append(identity)
+    marketplaces = set(optional.values())
+
+    for path in required_agent_files(root):
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(root)
+        for identity in sorted(optional, key=lambda value: (-len(value), value)):
+            if has_token(text, identity):
+                failures.append(
+                    f"{relative}: required agent asset references optional Claude "
+                    f"plugin {identity}; pin it and provide Codex parity first"
+                )
+                break
+        else:
+            fallback_text = text
+            for identity in PINNED_CLAUDE_PLUGINS:
+                fallback_text = mask_token(fallback_text, identity)
+            for name in sorted(names, key=lambda value: (-len(value), value)):
+                if has_token(fallback_text, name):
+                    identities = ", ".join(sorted(names[name]))
+                    failures.append(
+                        f"{relative}: required agent asset references optional "
+                        f"Claude plugin name {name} ({identities}); pin it and "
+                        "provide Codex parity first"
+                    )
+                    break
+            else:
+                for marketplace in sorted(
+                    marketplaces,
+                    key=lambda value: (-len(value), value),
+                ):
+                    if has_token(fallback_text, marketplace):
+                        failures.append(
+                            f"{relative}: required agent asset references optional "
+                            f"Claude marketplace {marketplace}; pin the dependency "
+                            "and provide Codex parity first"
+                        )
+                        break
 
 
 def frontmatter_scalar(path: Path, key: str) -> str | None:

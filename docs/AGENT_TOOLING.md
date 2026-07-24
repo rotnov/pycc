@@ -116,13 +116,18 @@ credentials.
 `.claude/settings.json` also enables optional third-party capability plugins from the
 `anthropics/claude-plugins-official` and `wshobson/agents` marketplaces. Those
 marketplace sources are not pinned, are not installed by the Codex bootstrap, and are
-not part of the reproducible cross-platform baseline above. Repository instructions,
-tests, and required workflows must not depend on them.
+not part of the reproducible cross-platform baseline above. The exemption is the
+exact validated `ievo@ievo-skills` identity, not every plugin that happens to share
+that marketplace name. Repository instructions, tests, and required workflows must
+not depend on optional plugins. The agent-asset validator scans the shared
+instructions, both skill trees, and required workflows and rejects references to an
+optional plugin or its marketplace.
 
 Treat bytes resolved from those marketplaces as mutable and review them before use.
 If an optional plugin becomes a repository dependency, pin a reviewed immutable
 revision, provide the equivalent Codex capability or a safe documented fallback, and
-extend the agent-asset checks in the same pull request.
+extend the pinned-marketplace and parity checks in the same pull request before adding
+the required reference.
 
 ## Reviewed update process
 

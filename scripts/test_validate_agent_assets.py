@@ -450,6 +450,160 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
         self.assertTrue(any("must match" in failure for failure in failures))
 
+    def test_required_asset_cannot_reference_an_optional_claude_plugin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill = root / ".claude" / "skills" / "example" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text(
+                "Run `/feature-dev` before implementing the task.\n",
+                encoding="utf-8",
+            )
+            settings = {
+                "enabledPlugins": {
+                    "feature-dev@claude-plugins-official": True,
+                    "ievo@ievo-skills": True,
+                }
+            }
+            failures: list[str] = []
+
+            validator.validate_optional_plugin_boundary(
+                settings,
+                failures,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(
+                "feature-dev@claude-plugins-official",
+                failures[0],
+            )
+
+    def test_required_workflow_cannot_reference_an_optional_marketplace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "required.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "# Requires claude-code-workflows at runtime.\n",
+                encoding="utf-8",
+            )
+            settings = {
+                "enabledPlugins": {
+                    "tdd-workflows@claude-code-workflows": True,
+                }
+            }
+            failures: list[str] = []
+
+            validator.validate_optional_plugin_boundary(
+                settings,
+                failures,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(
+                "marketplace claude-code-workflows",
+                failures[0],
+            )
+
+    def test_unvalidated_sibling_in_pinned_marketplace_is_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text(
+                "Use `mutable-helper@ievo-skills` for every change.\n",
+                encoding="utf-8",
+            )
+            settings = {
+                "enabledPlugins": {
+                    "ievo@ievo-skills": True,
+                    "mutable-helper@ievo-skills": True,
+                }
+            }
+            failures: list[str] = []
+
+            validator.validate_optional_plugin_boundary(
+                settings,
+                failures,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("mutable-helper@ievo-skills", failures[0])
+
+    def test_exact_identity_reports_the_matching_shared_marketplace_plugin(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text(
+                "Use `code-review@claude-plugins-official`.\n",
+                encoding="utf-8",
+            )
+            settings = {
+                "enabledPlugins": {
+                    "feature-dev@claude-plugins-official": True,
+                    "code-review@claude-plugins-official": True,
+                    "pr-review-toolkit@claude-plugins-official": True,
+                }
+            }
+            failures: list[str] = []
+
+            validator.validate_optional_plugin_boundary(
+                settings,
+                failures,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("code-review@claude-plugins-official", failures[0])
+            self.assertNotIn("pr-review-toolkit", failures[0])
+
+    def test_pinned_baseline_plugin_is_not_treated_as_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text("Use `ievo@ievo-skills`.\n", encoding="utf-8")
+            settings = {
+                "enabledPlugins": {
+                    "ievo@ievo-skills": True,
+                }
+            }
+            failures: list[str] = []
+
+            validator.validate_optional_plugin_boundary(
+                settings,
+                failures,
+                root,
+            )
+
+            self.assertEqual(failures, [])
+
+    def test_pinned_identity_stays_exempt_with_optional_marketplace_sibling(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text("Use `ievo@ievo-skills`.\n", encoding="utf-8")
+            settings = {
+                "enabledPlugins": {
+                    "ievo@ievo-skills": True,
+                    "mutable-helper@ievo-skills": True,
+                }
+            }
+            failures: list[str] = []
+
+            validator.validate_optional_plugin_boundary(
+                settings,
+                failures,
+                root,
+            )
+
+            self.assertEqual(failures, [])
+
 
 if __name__ == "__main__":
     unittest.main()
