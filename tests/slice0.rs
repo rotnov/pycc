@@ -292,10 +292,17 @@ fn an_unknown_target_triple_is_a_clean_build_error() {
 
 #[test]
 fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
-    // aarch64-unknown-linux-gnu is a real LLVM target (codegen succeeds)
-    // but this dev host / CI job has no pycc_rt cross-build for it -- the
+    // riscv64-unknown-linux-gnu is a real LLVM target (codegen succeeds)
+    // but isn't part of this project's Tier-1 or Tier-2 matrix (see
+    // ARCHITECTURE.md), so no CI job anywhere builds pycc_rt for it -- the
     // clean, actionable error from find_pycc_rt_lib_dir, not a raw linker
-    // failure about a missing -lpycc_rt.
+    // failure about a missing -lpycc_rt. Deliberately NOT one of the two
+    // Linux Tier-1 triples (x86_64/aarch64-unknown-linux-gnu): D-026's own
+    // CI step builds pycc_rt for whichever of those matches the runner's
+    // own arch, so using either here would flip this test's assumption
+    // false on that one runner (this exact regression was caught in PR
+    // review: this test failed on ubuntu-24.04-arm once D-026 gave that
+    // runner its own aarch64-unknown-linux-gnu build).
     let dir = std::env::temp_dir().join(format!("pycc_e2e_no_rt_build_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "hello_no_rt.py", "print(42)\n");
@@ -308,7 +315,7 @@ fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
             "-o",
             out.to_str().unwrap(),
             "--target",
-            "aarch64-unknown-linux-gnu",
+            "riscv64-unknown-linux-gnu",
         ])
         .output()
         .unwrap();
