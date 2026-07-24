@@ -17,6 +17,7 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-011 | Cross-platform is Tier-1 from v0.1: Windows/MSVC is CI-gated day one, bundled lld, no system toolchain required | proposed |
 | D-012 | Language level: exactly CPython 3.14 in v1 (`python = "3.14"` in pycc.toml). No per-version grammar switches until v1.x | proposed |
 | D-013 | Development model: AI-first — the compiler is written by AI agents; these specs are the executable contract. Every spec claim must be mechanically checkable (test, benchmark gate, or CI rule), because "the spec" is what agents optimize against | proposed |
+| D-014 | Testing: 100% line+region coverage (`cargo llvm-cov`), CI-gated on every PR from v0.1 on. Exemptions are whole-file only (`--ignore-filename-regex`), each entry justified in TESTING.md — no function-level opt-out exists on stable Rust | accepted |
 
 ## Template
 
@@ -30,3 +31,11 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 ```
 
 Entries D-001…D-013 get their long-form sections as they graduate to `accepted` (first PR that depends on the decision must include it).
+
+## D-014: 100% test coverage requirement
+
+- Status: accepted
+- Context: pycc is a compiler — silent gaps in its own test suite are exactly the kind of bug that surfaces as a miscompile in someone else's code, far from where the gap was introduced. The project needs a binary, CI-enforced floor, not an aspirational target. Verified on the pinned toolchain (rustc 1.97.1) before adopting: `#[coverage(off)]` is still gated behind `#![feature(coverage_attribute)]` (rust-lang/rust#84605) and unavailable on stable — so any exemption mechanism must not depend on it.
+- Decision: `cargo llvm-cov` (wraps `-C instrument-coverage`, ships via the `llvm-tools` rustup component — independent of the Homebrew LLVM 22.1.1 used for `inkwell` codegen, no version coupling between the two) gates every PR at `--fail-under-lines 100 --fail-under-regions 100`. Branch coverage is reported when available but not gated (requires nightly; the project stays on stable per D-011's toolchain posture). The only exemption granularity is whole-file, via `--ignore-filename-regex`, because per-function exemption has no stable mechanism — this is a feature, not a limitation: it keeps platform-conditional or otherwise-unreachable code in its own file rather than letting an exemption hide inside an otherwise-normal one. Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator by cargo-llvm-cov by default, so coverage measures product code exercised by tests, not tests covering themselves.
+- Alternatives: `grcov`/`tarpaulin` (older, less precise than LLVM source-based coverage now that `cargo llvm-cov` exists and the project already standardizes on LLVM tooling); a percentage target below 100% (rejected — a threshold like 95% lets the uncovered 5% drift to wherever it's least inconvenient to test, which is usually exactly the error-handling and edge-case code that matters most for a compiler); no gate at all (rejected outright, contradicts D-013's premise that specs and quality bars must be mechanically checkable).
+- Consequences: every new file needs tests before merge, including CI/tooling glue where that's checked into a coverable crate. Genuinely untestable code (OS-specific branches exercised only on a different Tier-1 target, for instance) must live in its own file and get a named, justified entry in the exemption list in TESTING.md — an undocumented exemption is a review-blocking finding, same as an undocumented CPython deviation elsewhere in the spec. Wired into CI starting PR-1 (see DELIVERY_PLAN.md), not retrofitted later, so no crate ever accumulates an uncovered backlog.

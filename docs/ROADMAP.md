@@ -6,7 +6,7 @@ Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone i
 
 Functions, `int`/`float`/`str`/`bool`, arithmetic, comparisons, `if`/`while`/`for`+`range`, f-strings (basic), `print`, module-level code, recursion. Frontend: strict annotations (`T0001`), local inference. Backend: LLVM debug builds, vendored parser allowed.
 
-**Accept:** `fib`, `mandelbrot-ascii` compile & match CPython output on 5 targets; `pycc check` on 1k LOC < 50 ms; error demo screenshot-parity with CLI_SPEC.md; CI matrix live.
+**Accept:** `fib`, `mandelbrot-ascii` compile & match CPython output on 5 targets; `pycc check` on 1k LOC < 50 ms; error demo screenshot-parity with CLI_SPEC.md; CI matrix live; 100% line+region coverage gate green on every crate (D-014, see TESTING.md).
 
 ## v0.2 — collections & generics
 
