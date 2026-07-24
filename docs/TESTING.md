@@ -17,8 +17,9 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 ## Conformance harness (`pycc_testkit`)
 
 - Each test = single `.py` file, header comment: PEP, category, min pycc milestone.
-- Runner: compile (`--debug` and `--release` both) → execute → diff vs CPython 3.14 reference output (recorded, pinned CPython version; re-recorded on CPython patch bumps).
+- Runner: compile (`--debug` and `--release` both, once `--release` exists — see below) → execute → diff vs CPython 3.14 reference output (recorded, pinned CPython version; re-recorded on CPython patch bumps).
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
+- **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
 ## Differential fuzzing
 
@@ -50,8 +51,8 @@ GitHub Action (`corpus-bot`):
 
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
 
-- Tool: `cargo llvm-cov` (rustup `llvm-tools` component; independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match).
-- Gate: `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR.
+- Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
+- Gate: `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. A version-print smoke step runs before the gate so a broken/missing install fails loudly rather than silently.
 - Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator automatically — the gate measures product code exercised by tests, not tests covering themselves.
 - Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
 

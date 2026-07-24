@@ -31,6 +31,7 @@ Verified empirically on the primary dev host (macOS, aarch64-apple-darwin) befor
 | Local linker | Apple clang 21 / Xcode CLT `ld64` | Sufficient for the first vertical slice on native host; bundled `lld` for cross-compilation is wired when `--target` work starts, not before |
 | crates.io | Reachable (a bare `curl -I` 403s on crates.io's anti-bot filter — mundane, not a sandbox restriction; a real UA gets 200) | `cargo build` can fetch `ruff_python_parser`, `inkwell`, `rayon`, `mimalloc` |
 | `gh` CLI | Authenticated, `repo`+`workflow` scopes | Can open PRs and push `.github/workflows` |
+| `cargo-llvm-cov` | **Not** part of the rustup `llvm-tools` component — it is a separately distributed binary (own crate/release) that *uses* `llvm-tools-preview`'s `llvm-cov`/`llvm-profdata` at runtime. An earlier version of this plan conflated the two (caught by repo audit, issue #13); a spec that just says "install llvm-tools" fails in CI with "no such command: llvm-cov" | PR-1's CI skeleton installs both, explicitly and pinned: `rustup component add llvm-tools-preview` **and** a pinned `cargo-llvm-cov` install (e.g. a pinned version of `taiki-e/install-action` or `cargo install cargo-llvm-cov --locked --version <pinned>`) — never a bare "latest," per D-014's own no-unreviewed-drift spirit. A smoke step prints `cargo llvm-cov --version` before the gate runs, so a broken install fails loudly instead of silently reporting 0% |
 
 Only macOS is locally verifiable. Linux x64/arm64 and Windows MSVC exist only via CI — so CI must be wired right after the first local slice works, not as a v0.1 finishing touch (see PR-3 below).
 
@@ -57,13 +58,19 @@ Three approaches were weighed: (A) thin end-to-end slice first, then grow featur
 
 | PR | Content |
 |---|---|
-| 1 | Workspace scaffold (all crate stubs), `rust-toolchain.toml` (1.97.1), CLI skeleton, CI skeleton **with the `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100` gate wired in from the first commit** (D-014). New ADRs appended to DECISIONS.md: LLVM 22.1/inkwell 0.9 pin, vendored `ruff_python_parser` version |
-| 2 | Slice 0: parser → HIR → types (passthrough) → MIR → LLVM codegen → link; "hello binary" runs locally |
-| 3 | CI matrix live on all 5 Tier-1 targets for slice 0 |
-| 4 | Frontend depth: full v0.1 grammar, real T0001 + local inference, first diagnostic codes with snapshot tests |
-| 5 | Codegen depth: full v0.1 feature set (int/float/str/bool, arithmetic, control flow, recursion, f-strings); runtime fleshed out (overflow→bigint per D-001, small-string opt per D-007) |
-| 6 | `pycc_testkit`: fib + mandelbrot-ascii vs. CPython 3.14.3 on all 5 targets × 2 profiles; `pycc check` benchmark <50ms/1k LOC; diagnostic output matches CLI_SPEC.md's example byte-for-byte |
+| 1 | Workspace scaffold (all crate stubs), `rust-toolchain.toml` (1.97.1), CLI skeleton, CI skeleton **with the coverage gate wired in from the first commit** (D-014): pinned `cargo-llvm-cov` installer (it is a separate binary, not part of `llvm-tools` — see the Environment baseline note below) + the `llvm-tools-preview` rustup component, `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`. New ADRs appended to DECISIONS.md: LLVM 22.1/inkwell 0.9 pin, vendored `ruff_python_parser` version |
+| 2 | Slice 0: parser → HIR → types (passthrough) → MIR → LLVM codegen → link; "hello binary" runs locally. Covers **both** entry shapes named in ROADMAP.md's v0.1 scope: a `main()`-defining module, and a module with only top-level statements and no `main()` — module-level execution is a named conformance case here, not an incidental side effect of the `main()` path |
+| 3 | CI matrix live on all 5 Tier-1 targets for slice 0, **plus one cross-compiled build**: at least one Tier-1 target built via `pycc build --target <triple>` with bundled `lld` from a *different* host, with the resulting binary executed and verified on its native runner. Cross-compilation is a v0.1 requirement from D-011/README/ARCHITECTURE/CLI_SPEC, not a nice-to-have — it does not get to hide behind "CI matrix live" meaning same-host-per-target builds only |
+| 4 | Frontend depth: full v0.1 grammar, real T0001 + local inference, first diagnostic codes with snapshot tests. First per-PR frontend benchmark baseline recorded here (see Performance gate below) since this is the first PR with a non-trivial frontend to measure |
+| 5 | Codegen depth: full v0.1 feature set (int/float/str/bool, arithmetic, control flow, recursion, f-strings); runtime fleshed out (overflow→bigint per D-001, small-string opt per D-007). `--debug` profile only — `--release`/LTO is a v0.2 item (see Testing scope below), not built here |
+| 6 | `pycc_testkit`: fib + mandelbrot-ascii vs. CPython 3.14.3 on all 5 targets, `--debug` profile; `pycc check` benchmark <50ms/1k LOC; diagnostic output matches CLI_SPEC.md's example byte-for-byte |
 | 7 | Buffer: close whatever's left so all v0.1 ROADMAP.md acceptance bullets are simultaneously green |
+
+Each row above absorbs one gap an automated repo audit found in the original version of this plan (tracked as GitHub issues #9–#13): the cross-compilation gap (#9, → PR-3), the debug/release conformance contradiction (#10, → PR-5/PR-6 and Testing scope below), the missing module-level-execution case (#11, → PR-2), the missing early performance gate (#12, → PR-4 and Performance gate below), and the `cargo-llvm-cov` installation error (#13, → PR-1 and Environment baseline below). Issue #14 (measure platform-specific code per-platform rather than exempting it) is deferred — there is no platform-specific code yet for the question to apply to; it rides along whenever D-014 next gets touched.
+
+### Performance gate (resolves #12)
+
+ARCHITECTURE.md requires benchmarks in CI on every PR with a >2% frontend-regression merge block, starting immediately — not deferred to a single check in PR-6. Once PR-4 makes the frontend non-trivially executable, every subsequent PR records a `pycc check` timing run (criterion-style, checked into CI history) and fails if it regresses >2% against the previous PR's baseline. This is deliberately lightweight and distinct from the full pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which stays out of scope until v0.2 as already planned.
 
 ## Autonomy policy ("no questions" mechanics)
 
@@ -75,11 +82,13 @@ This policy governs architectural/implementation forks only. Standing safety rul
 
 ## Delivery mechanics
 
-This plan is committed to the current branch (`claude/project-overview-53ef3d`, currently identical to `main`) and opened as a docs-only PR. Every subsequent PR in the table above is its own feature branch off `main`, merged only once CI is green on all Tier-1 targets and that PR's slice of the v0.1 acceptance criteria is demonstrably met.
+This plan and its revisions are committed to their own short-lived branch off `main` and opened as a docs-only PR, reviewed before merge like any other change — review weight matched to risk, a read-through for docs rather than the full multi-agent pipeline reserved for compiler code. Every subsequent PR in the table above is its own feature branch off `main`, merged only once CI is green on all Tier-1 targets and that PR's slice of the v0.1 acceptance criteria is demonstrably met.
 
 ## Testing scope for v0.1
 
-Of TESTING.md's 7 layers: Layer 1 (per-crate unit tests) from the start, Layer 2 (`pycc_testkit` conformance harness) as early as slice 0, Layer 3 (diagnostic snapshot tests) as soon as `pycc_diag` exists, Layer 5 (runtime property tests) in minimal form for the v0.1 runtime subset. **Out of scope for v0.1**: Layer 4 (differential fuzzing), Layer 6 (OSS corpus), Layer 7 (benchmarks vs. Nuitka/Codon/mypyc) — these start at v0.2 per ROADMAP.md.
+Of TESTING.md's 7 layers: Layer 1 (per-crate unit tests) from the start, Layer 2 (`pycc_testkit` conformance harness) as early as slice 0, Layer 3 (diagnostic snapshot tests) as soon as `pycc_diag` exists, Layer 5 (runtime property tests) in minimal form for the v0.1 runtime subset. **Out of scope for v0.1**: Layer 4 (differential fuzzing), Layer 6 (OSS corpus), Layer 7's full cross-compiler comparison suite (vs. Nuitka/Codon/mypyc) — these start at v0.2 per ROADMAP.md. The lightweight per-PR frontend timing check is a different, narrower thing that *does* start in v0.1 — see Performance gate above (resolves #12).
+
+**Debug/release conformance (resolves #10):** TESTING.md's conformance-harness rule ("compile `--debug` and `--release` both... flips to ✅ only when green on all Tier-1 targets in both profiles") describes the steady-state contract once `--release` exists. It does not apply yet: `--release`/LTO is a named v0.2 item (see the milestone table above), so for the whole of v0.1 the conformance harness runs `--debug` only, and no v0.1 PEP/feature is held to a `--release` bar that has nothing to build against. TESTING.md's wording is annotated accordingly rather than left to look like a v0.1 requirement no PR could actually satisfy.
 
 Cutting across all of these: the D-014 coverage gate (`cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`) applies to every crate from PR-1 on — it is not a v0.1-specific item but a standing requirement, wired into the CI skeleton before any crate has a chance to accumulate untested code. Each task in the implementation plan below writes its test alongside its code for exactly this reason.
 
