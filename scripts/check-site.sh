@@ -42,12 +42,31 @@ import sys
 
 
 class MetadataParser(HTMLParser):
+    hidden_body_tags = {"script", "style", "template", "noscript"}
+    void_tags = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+
     def __init__(self):
         super().__init__()
         self.in_title = False
         self.in_json_ld = False
         self.in_body = False
         self.hidden_body_depth = 0
+        self.body_element_stack = []
         self.titles = []
         self.current_title = []
         self.links = []
@@ -60,9 +79,23 @@ class MetadataParser(HTMLParser):
         attributes = dict(attrs)
         if tag == "body":
             self.in_body = True
-        elif self.in_body and tag in {"script", "style", "template", "noscript"}:
-            self.hidden_body_depth += 1
-        elif tag == "title":
+            return
+        if self.in_body:
+            inline_style = attributes.get("style", "").replace(" ", "").lower()
+            is_hidden = (
+                self.hidden_body_depth > 0
+                or tag in self.hidden_body_tags
+                or "hidden" in attributes
+                or attributes.get("aria-hidden", "").lower() == "true"
+                or "display:none" in inline_style
+                or "visibility:hidden" in inline_style
+            )
+            if tag not in self.void_tags:
+                self.body_element_stack.append((tag, is_hidden))
+                if is_hidden:
+                    self.hidden_body_depth += 1
+            return
+        if tag == "title":
             self.in_title = True
             self.current_title = []
         elif tag == "link":
@@ -76,9 +109,21 @@ class MetadataParser(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "body":
             self.in_body = False
-        elif self.in_body and tag in {"script", "style", "template", "noscript"}:
-            self.hidden_body_depth -= 1
-        elif tag == "title" and self.in_title:
+            self.body_element_stack = []
+            self.hidden_body_depth = 0
+            return
+        if self.in_body:
+            if not self.body_element_stack:
+                raise SystemExit(f"Unexpected closing body tag: {tag}")
+            started_tag, was_hidden = self.body_element_stack.pop()
+            if started_tag != tag:
+                raise SystemExit(
+                    f"Mismatched body tags: expected {started_tag}, found {tag}"
+                )
+            if was_hidden:
+                self.hidden_body_depth -= 1
+            return
+        if tag == "title" and self.in_title:
             self.titles.append("".join(self.current_title).strip())
             self.in_title = False
         elif tag == "script" and self.in_json_ld:

@@ -84,6 +84,23 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
+visible_note = '<p class="ai-built-note">'
+assert visible_note in content
+path.write_text(content.replace(visible_note, '<p class="ai-built-note" hidden>', 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an AI authorship disclosure in a hidden subtree" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
 project_id = "https://rotnov.github.io/pycc/#project"
 assert project_id in content
 path.write_text(content.replace(project_id, f"{project_id}-wrong"))
