@@ -7,7 +7,7 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | Layer | Location | What it proves |
 |---|---|---|
 | 1. Unit (Rust) | per-crate `#[cfg(test)]` | lexer/parser/checker/MIR internals |
-| 2. Conformance | `tests/conformance/pyXY/` | one test per PEP: compile with pycc, run, `stdout == CPython 3.14 stdout` |
+| 2. Conformance | `tests/conformance/pyXY/` | one test per PEP: compile with pycc, run, `stdout == pinned CPython oracle stdout` for the fixture's language track |
 | 3. Diagnostics | `tests/diagnostics/` | rejected constructs fail with the exact code + span (insta-style snapshots) |
 | 4. Differential fuzzing | `tests/fuzz/` | generated typed-Python programs: pycc binary output ≡ CPython output; crashes/mismatches auto-minimized |
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |

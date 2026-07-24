@@ -3,13 +3,18 @@
 [![CI](https://github.com/rotnov/pycc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rotnov/pycc/actions/workflows/ci.yml)
 [![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)
 
-**A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14 into standalone native binaries. Like `gcc`, but for Python.**
+**A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14—the v1.0 language target—into standalone native binaries. Like `gcc`, but for Python.**
 
 `pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast, standalone native binary. No interpreter, no venv, no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
 
 Written in Rust (1.97+). Built to be extremely fast — both the compiler itself and the binaries it produces.
 
 > Status: early design / pre-alpha. The supported-language roadmap lives in [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
+
+Python 3.14 is the v1.0 target, not a permanent language ceiling. Later
+standard Python language levels may enter only through explicit versioned
+conformance gates and superseding design decisions; pycc never adds its own
+syntax or dialect.
 
 [Project website](https://rotnov.github.io/pycc/) · [Specification](./docs/SPEC.md) · [Roadmap](./docs/ROADMAP.md)
 
@@ -23,7 +28,7 @@ Python tooling solves every piece of this separately, but no tool does the whole
 
 | | Enforces types at compile time | Standalone binary | Plain Python syntax |
 |---|---|---|---|
-| **pycc (design target)** | ✅ hard compile error | ✅ single executable | ✅ standard CPython 3.14 |
+| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ single executable | ✅ standard CPython 3.14 |
 | Codon | ✅ (via inference) | ✅ | ⚠️ Python-like dialect, own stdlib |
 | Nuitka | ❌ | ✅ | ✅ |
 | mypyc | ✅ | ❌ C extension, needs CPython | ✅ |
@@ -70,7 +75,7 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
 
 Design principles:
 
-- **Standard Python only.** No new keywords, no dialect. Target grammar and semantics: CPython 3.14 (t-strings, deferred annotations per PEP 649/749, pattern matching, PEP 695 generics).
+- **Standard Python only.** No pycc-specific keywords or dialect. The v1.0 target grammar and semantics are CPython 3.14 (t-strings, deferred annotations per PEP 649/749, pattern matching, PEP 695 generics); later standard Python levels use separate versioned gates.
 - **Types are the contract.** Public functions must be annotated; annotations are verified, then used for static dispatch and unboxed native representations. No interpreter loop in the output.
 - **Fast above all.** Compiler in Rust 1.97+, zero-copy parsing, per-module parallel compilation, incremental caching. Goal: frontend + type check of a mid-size project in well under a second — compiling should feel like `ruff`, not like `webpack`.
 - **Ownership under the hood.** Rust-style ownership and escape analysis *inferred* from standard Python — no new syntax. Locals that don't escape live on the stack, values with a single owner are moved instead of shared, reference counting only where sharing is proven. Goal: predictable memory, no tracing-GC pauses.
@@ -80,13 +85,15 @@ Design principles:
 
 `eval` / `exec`, runtime monkey-patching, dynamic attribute injection, untyped public APIs. Dynamic Python is great — but pycc targets the statically-typed subset you already write in production code. Every rejected construct gets a clear diagnostic, and that diagnostic is itself a tested guarantee (see below).
 
-Semantics follow CPython 3.14 wherever they are statically expressible; every deliberate deviation will be documented in `docs/semantics.md`.
+Semantics follow the selected supported CPython language level wherever they
+are statically expressible; v1.0 selects CPython 3.14. Every deliberate
+deviation will be documented in `docs/semantics.md`.
 
 ## Testing strategy
 
-Two layers, both required for every release:
+Three layers, all required for every release:
 
-1. **Conformance suite.** Every language standard pycc supports maps to a PEP, and every PEP has its own test in `tests/conformance/` — compile, run, compare against CPython 3.14 output. Unsupported-by-design features get *negative* tests asserting the exact compile error. The full matrix: [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
+1. **Conformance suite.** Every language standard pycc supports maps to a PEP, and every PEP has its own test in `tests/conformance/` — compile, run, compare against the pinned CPython oracle for that fixture's language track. The v1 track uses CPython 3.14. Unsupported-by-design features get *negative* tests asserting the exact compile error. The full matrix: [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 2. **Real-world corpus.** CI compiles well-typed open-source projects (`black`, `packaging`, `attrs`, `mypy`, ...) and runs their own test suites against the compiled artifacts — the same way ruff validates against a real-repo ecosystem. Pass rate per project is tracked release to release.
 3. **Ecosystem bot.** A scheduled job picks popular PyPI/GitHub projects, compiles them with the latest pycc, and auto-files a structured issue *in this repo* for every new incompatibility: minimized repro, diagnostic, PEP reference. When pycc uncovers a genuine type bug in an upstream project, we report it upstream — manually and curated, never bot-spammed.
 

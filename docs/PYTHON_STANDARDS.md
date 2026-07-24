@@ -1,6 +1,6 @@
 # Python Language Standards → pycc Conformance Matrix
 
-Every language standard (PEP) that defines Python up to the v1 target,
+Every language standard (PEP) that defines Python up to the v1.0 target,
 **3.14**, mapped to a conformance test. Accepted Python 3.15 standards are
 tracked separately as a post-v1.0 preview. This file is the single source of
 truth for what pycc must implement. A feature is "supported" only when its test
@@ -30,6 +30,13 @@ D-012 remains unchanged: v1 accepts exactly Python 3.14. The 3.15 rows do not
 expand the v1 grammar or acceptance gate. Promoting them into a supported
 language level requires Python 3.15 final, the post-v1 roadmap gate, and a new
 ADR that supersedes D-012.
+
+The gate-opening change must also add a machine-readable supported-language
+registry consumed by project-configuration validation and `pycc_testkit`. For
+each accepted language level, the registry binds its configuration value,
+fixture directory, and pinned CPython oracle. CI must reject drift between that
+registry, this matrix, and the conformance jobs. Until then, preview rows are
+planning inventory only and do not make Python 3.15 a supported input level.
 
 For each newly observed upstream release:
 
@@ -182,7 +189,7 @@ For each newly observed upstream release:
 
 *n/a: PEP 744 (JIT — pycc is AOT), new REPL.*
 
-## Python 3.14 ← primary target
+## Python 3.14 ← v1.0 target
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|

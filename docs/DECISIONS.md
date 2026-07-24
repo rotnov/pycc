@@ -15,7 +15,7 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-009 | Stdlib written in typed Python, compiled by pycc itself; Rust intrinsics only at the syscall/math floor | proposed |
 | D-010 | Diagnostics: codes stable forever, JSON format versioned, `explain` registry mandatory per code | proposed |
 | D-011 | Cross-platform is Tier-1 from v0.1: Windows/MSVC is CI-gated day one, bundled lld, no system toolchain required | proposed |
-| D-012 | Language level: exactly CPython 3.14 in v1 (`python = "3.14"` in pycc.toml). No per-version grammar switches until v1.x | proposed |
+| D-012 | Language level: exactly CPython 3.14 in v1.0 (`python = "3.14"` in pycc.toml). No per-version grammar switches before v1.x; a later standard Python level requires a superseding ADR plus a machine-checked support/matrix/oracle mapping. pycc-specific syntax remains forbidden | proposed |
 | D-013 | Development model: AI-first — the compiler is written by AI agents; these specs are the executable contract. Every spec claim must be mechanically checkable (test, benchmark gate, or CI rule), because "the spec" is what agents optimize against | proposed |
 | D-014 | Testing: 100% line+region coverage (`cargo llvm-cov`), CI-gated on every PR from v0.1 on. Exemptions are whole-file only (`--ignore-filename-regex`), each entry justified in TESTING.md — no function-level opt-out exists on stable Rust | accepted |
 | D-015 | Codegen toolchain pin: LLVM 22.1.1 (Homebrew, single keg — the `llvm@17`..`llvm@22` opt-paths on the dev host are stale symlinks to it, not distinct installs) + `inkwell = "0.9"` with feature `llvm22-1` | accepted |
