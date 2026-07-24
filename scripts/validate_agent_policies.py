@@ -22,6 +22,9 @@ SCRIPT_SUFFIXES = (
     ".pl",
     ".php",
     ".ps1",
+    ".bat",
+    ".cmd",
+    ".vbs",
     ".js",
     ".mjs",
     ".cjs",
@@ -328,7 +331,7 @@ def is_relative_script_path(token: str) -> bool:
         not token.startswith(("/", "~"))
         and not is_home_relative_script_path(token)
         and "://" not in token
-        and ("/" in token or token.endswith(SCRIPT_SUFFIXES))
+        and ("/" in token or token.lower().endswith(SCRIPT_SUFFIXES))
     )
 
 
@@ -336,7 +339,7 @@ def is_absolute_script_path(token: str) -> bool:
     return (
         (token.startswith("/") or WINDOWS_ABSOLUTE_PATH.match(token) is not None)
         and "://" not in token
-        and ("/" in token or "\\" in token or token.endswith(SCRIPT_SUFFIXES))
+        and ("/" in token or "\\" in token or token.lower().endswith(SCRIPT_SUFFIXES))
     )
 
 
@@ -348,7 +351,7 @@ def is_home_relative_script_path(token: str) -> bool:
             or normalized.startswith(HOME_ENV_PREFIXES)
         )
         and "://" not in token
-        and ("/" in token or "\\" in token or token.endswith(SCRIPT_SUFFIXES))
+        and ("/" in token or "\\" in token or token.lower().endswith(SCRIPT_SUFFIXES))
     )
 
 

@@ -164,6 +164,34 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ["shared hook target is not tracked: local-hook"],
         )
 
+    def test_untracked_root_windows_scripts_are_rejected(self) -> None:
+        for target in (
+            "local-hook.bat",
+            "local-hook.BAT",
+            "local-hook.Cmd",
+            "local-hook.vbs",
+            "local-hook.VBS",
+        ):
+            with self.subTest(target=target):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": target,
+                                        "args": [],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [f"shared hook target is not tracked: {target}"],
+                )
+
     def test_dot_relative_command_is_rejected(self) -> None:
         settings = {
             "hooks": {

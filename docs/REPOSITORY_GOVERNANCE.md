@@ -8,6 +8,9 @@ enforce the normal delivery path.
 - Pull request required; direct pushes are rejected.
 - The branch must be current with `main` before merge.
 - Required status checks: `build-test-coverage` and the trusted `audit` context.
+  `build-test-coverage` runs the agent-policy tests and clean-clone validator;
+  the standalone `agent-policy` job provides faster feedback until its exact
+  context has run successfully on `main` and is added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
   Requiring the author's own approval would deadlock every pull request. Enable one
   independent approval, stale-approval dismissal, and last-push approval when a

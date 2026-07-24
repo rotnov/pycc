@@ -12,6 +12,7 @@ from typing import Any
 
 
 CODEX_LOGIN = "chatgpt-codex-connector"
+AUTHORIZED_REQUEST_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 
 def timestamp(value: str) -> dt.datetime:
@@ -56,6 +57,7 @@ def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
         for comment in comments
         if comment.get("body", "").strip() == "@codex review"
         and comment.get("headRefOid") == head
+        and comment.get("authorAssociation") in AUTHORIZED_REQUEST_ASSOCIATIONS
     ]
     if not requests:
         return "REQUEST_ALLOWED", f"no request exists for {head}"
@@ -123,6 +125,7 @@ def timeline_comments(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             comments.append(
                 {
                     "author": {"login": event.get("user", {}).get("login")},
+                    "authorAssociation": event.get("author_association"),
                     "body": event.get("body", ""),
                     "createdAt": event["created_at"],
                     "url": event.get("html_url"),
