@@ -100,10 +100,19 @@ pub fn compile_to_object(
     // support for a target's backend if that backend was initialized.
     Target::initialize_all(&InitializationConfig::default());
     eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 7: Target::initialize_all done");
-    let triple = match target_triple {
+    // ManuallyDrop, not a plain value: see D-023. TargetTriple wraps an
+    // LLVMString (inkwell's own message wrapper around LLVMCreateMessage /
+    // LLVMGetDefaultTargetTriple), whose Drop calls LLVMDisposeMessage --
+    // this crashes on Windows against the official prebuilt LLVM 22.1.1
+    // release. Suppressing the drop here, at the point of creation, covers
+    // every exit path uniformly (the early `?` below included), not just
+    // the success path a trailing forget would. Leaks one small string per
+    // compile on every platform -- negligible in a short-lived CLI process,
+    // and simpler than cfg-gating a type difference for a Windows-only leak.
+    let triple = std::mem::ManuallyDrop::new(match target_triple {
         Some(t) => TargetTriple::create(t),
         None => TargetMachine::get_default_triple(),
-    };
+    });
     eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 8: triple resolved to {}", triple.as_str().to_string_lossy());
     let target = Target::from_triple(&triple).map_err(|e| {
         format!("pycc_codegen: `{}` is not a target LLVM knows how to generate code for: {e}", triple.as_str().to_string_lossy())

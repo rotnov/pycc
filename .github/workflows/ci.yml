@@ -142,7 +142,19 @@ jobs:
         run: cargo build --workspace
 
       - name: cargo test --workspace
+        if: runner.os != 'Windows'
         run: cargo test --workspace
+
+      # --test-threads=1: tests/slice0.rs spawns pycc.exe as a child process
+      # per test; parallel runs interleave their stderr output at the OS
+      # pipe level (Rust's own per-test output capture doesn't isolate
+      # inherited child-process output the same way), which made an earlier
+      # Windows-crash investigation (D-023) hard to attribute to specific
+      # tests from the CI log alone. Serialized here so that if this ever
+      # needs repeating, the log is unambiguous; not needed on other OSes.
+      - name: cargo test --workspace (single-threaded, see D-023)
+        if: runner.os == 'Windows'
+        run: cargo test --workspace -- --test-threads=1
 
       - name: cargo clippy --workspace
         shell: bash
