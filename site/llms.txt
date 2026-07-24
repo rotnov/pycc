@@ -1,0 +1,14 @@
+# pycc
+
+> pycc is a strict ahead-of-time compiler for typed, standard Python 3.14. Its
+> design target is a standalone native binary produced through Rust and LLVM.
+
+Project status: pre-alpha. The first end-to-end compiler slice exists; broad
+language coverage and production readiness are roadmap work.
+
+Canonical website: https://rotnov.github.io/pycc/
+Source repository: https://github.com/rotnov/pycc
+Specification index: https://github.com/rotnov/pycc/blob/main/docs/SPEC.md
+Language standards matrix: https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md
+Roadmap: https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md
+License: MIT
