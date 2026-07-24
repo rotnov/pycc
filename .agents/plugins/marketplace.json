@@ -1,0 +1,22 @@
+{
+  "name": "ievo-skills",
+  "interface": {
+    "displayName": "iEvo"
+  },
+  "plugins": [
+    {
+      "name": "ievo",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/ievo-ai/skills.git",
+        "path": "./plugins/ievo",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "NONE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

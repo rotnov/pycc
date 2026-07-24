@@ -23,3 +23,8 @@ target/
 # OS
 .DS_Store
 Thumbs.db
+
+# iEvo local-only artifacts
+.ievo/log/
+.ievo/cache/
+.ievo/hooks/
