@@ -55,6 +55,14 @@ class AgentAssetValidationTests(unittest.TestCase):
     def test_absolute_link_target_stays_absolute_for_rejection(self) -> None:
         self.assertEqual(validator.link_target("/spec/"), "/spec/")
 
+    def test_immutable_pin_requires_a_full_commit_sha(self) -> None:
+        self.assertIsNotNone(
+            validator.IMMUTABLE_SHA.fullmatch(
+                "7d5f3e12d0556cb6c5df2974e2babe0433674186"
+            )
+        )
+        self.assertIsNone(validator.IMMUTABLE_SHA.fullmatch("v0.58.1"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,10 +8,11 @@ They must be reproducible, reviewed, and rollbackable just like compiler depende
 | Surface | Dependency | Pin | Automatic updates |
 |---|---|---|---|
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
-| Claude Code | `ievo@ievo-skills` | release `v0.58.1` | `autoUpdate: false` |
+| Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
 
 The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin lives
-in `.claude/settings.json`. A fresh Codex checkout is bootstrapped explicitly:
+in `.claude/settings.json`; both resolve the same immutable commit rather than
+trusting a movable release tag. A fresh Codex checkout is bootstrapped explicitly:
 
 ```sh
 ./scripts/bootstrap-agent-tools.sh
