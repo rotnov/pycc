@@ -344,6 +344,54 @@ class AgentPolicyValidationTests(unittest.TestCase):
             [],
         )
 
+    def test_chained_hook_commands_are_rejected_fail_closed(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": (
+                                    "tools/tracked.sh && tools/untracked.sh"
+                                ),
+                                "args": [],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, {"tools/tracked.sh"}),
+            [
+                "shared hook shell control operators cannot be validated: "
+                "tools/tracked.sh && tools/untracked.sh"
+            ],
+        )
+
+    def test_shell_control_operator_attached_to_token_is_rejected(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "tools/tracked.sh;tools/untracked.sh",
+                                "args": [],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, {"tools/tracked.sh"}),
+            [
+                "shared hook shell control operators cannot be validated: "
+                "tools/tracked.sh;tools/untracked.sh"
+            ],
+        )
+
     def test_opaque_launcher_options_are_rejected_fail_closed(self) -> None:
         settings = {
             "hooks": {

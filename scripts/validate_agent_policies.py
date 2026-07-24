@@ -21,6 +21,7 @@ NODE_INTERPRETERS = ("node", "nodejs")
 COMMAND_LAUNCHERS = ("command", "env", "exec")
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+SHELL_CONTROL = re.compile(r"&&|\|\||[;&|]")
 
 
 def tracked_files() -> set[str]:
@@ -121,6 +122,8 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
     targets: list[str] = []
     for command_tokens, argument_tokens in parsed_hook_commands(settings):
         tokens = [*command_tokens, *argument_tokens]
+        if any(SHELL_CONTROL.search(token) for token in tokens):
+            continue
         for token in tokens:
             normalized, explicit_project_path = normalize_hook_token(token)
             if explicit_project_path or normalized.startswith(LOCAL_PREFIXES):
@@ -253,6 +256,12 @@ def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[s
             failures.append(launcher_error)
             continue
         if not resolved:
+            continue
+        if any(SHELL_CONTROL.search(token) for token in resolved):
+            failures.append(
+                "shared hook shell control operators cannot be validated: "
+                + " ".join(resolved)
+            )
             continue
         executable, _ = normalize_hook_token(resolved[0])
         kind = interpreter_kind(executable)

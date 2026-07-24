@@ -117,7 +117,7 @@ class CodexReviewRetryTests(unittest.TestCase):
                 url="https://example.test/failure",
             ),
         ]
-        self.assertEqual(gate.classify(data, NOW)[0], "ARTIFACT_EXISTS")
+        self.assertEqual(gate.classify(data, NOW)[0], "RETRY_ALLOWED")
 
     def test_second_attempt_reaches_retry_limit(self) -> None:
         data = payload()
@@ -207,25 +207,20 @@ class CodexReviewRetryTests(unittest.TestCase):
                 url="https://example.test/failure",
             ),
         ]
-        self.assertEqual(gate.classify(data, NOW)[0], "ARTIFACT_EXISTS")
+        self.assertEqual(gate.classify(data, NOW)[0], "RETRY_ALLOWED")
 
-    def test_delayed_old_head_failure_cannot_unlock_new_head_retry(self) -> None:
+    def test_recent_unthreaded_failure_waits_for_timeout(self) -> None:
         data = payload()
         data["comments"] = [
-            comment("@codex review", "2026-07-24T20:05:00Z"),
+            comment("@codex review", "2026-07-24T20:55:00Z"),
             comment(
                 "Unable to start the review.",
-                "2026-07-24T20:06:00Z",
+                "2026-07-24T20:56:00Z",
                 author=gate.CODEX_LOGIN,
-                url="https://example.test/delayed-old-head-failure",
+                url="https://example.test/uncorrelated-failure",
             ),
         ]
-        state, evidence = gate.classify(
-            data,
-            dt.datetime(2026, 7, 24, 20, 10, tzinfo=dt.UTC),
-        )
-        self.assertEqual(state, "ARTIFACT_EXISTS")
-        self.assertIn("cannot be safely correlated", evidence)
+        self.assertEqual(gate.classify(data, NOW)[0], "WAIT")
 
     def test_timeout_without_artifact_allows_retry(self) -> None:
         data = payload()
