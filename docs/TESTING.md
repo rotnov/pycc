@@ -96,10 +96,18 @@ whenever practical.
 Bootstrap exception: the pull request that first adds `Workflow policy` cannot
 run that workflow from the base revision because it does not exist there yet.
 That one change requires the regular checker, `actionlint`, independent deep
-review, and manual inspection of the pinned action SHAs before merge. Verify
-the first post-merge target run, then make `audit` a required status check; all
-later policy changes are evaluated by the trusted checker from their base
-revision.
+review, and manual inspection of the pinned action SHAs before merge.
+
+The bootstrap is complete. On 2026-07-24, the first post-merge
+[`pull_request_target` run](https://github.com/rotnov/pycc/actions/runs/30129743650)
+checked out the trusted policy implementation from base commit
+`107eccf4d6d4161c26f7257de538cad974bed913`, passed all 31 checker tests and
+70 assertions, and audited the pull request's five workflow files as
+non-executable data. Branch protection is strict and requires both
+`build-test-coverage` and `audit`, bound to the GitHub Actions app. Removing
+either required check, disabling strict mode, or accepting an `audit` context
+from another app is a policy regression; all later policy changes are
+evaluated by the trusted checker from their base revision.
 
 ## Code coverage (D-014)
 
