@@ -1,4 +1,4 @@
-use pycc_ast::ModModule;
+use pycc_ast::{ModModule, Ranged};
 use pycc_diag::{Diagnostic, Span};
 
 pub fn parse(source: &str) -> Result<ModModule, Diagnostic> {
@@ -9,7 +9,14 @@ pub fn parse(source: &str) -> Result<ModModule, Diagnostic> {
     // `Parsed::into_result` source before writing this, not assumed.
     ruff_python_parser::parse_module(source)
         .map(|parsed| parsed.into_syntax())
-        .map_err(|e| Diagnostic::error("L0001", e.to_string(), Span::new(0, 0)))
+        .map_err(|error| {
+            let range = error.range();
+            Diagnostic::error(
+                "L0001",
+                error.to_string(),
+                Span::new(range.start().into(), range.end().into()),
+            )
+        })
 }
 
 #[cfg(test)]
@@ -30,7 +37,8 @@ mod tests {
 
     #[test]
     fn syntax_error_becomes_an_l0001_diagnostic() {
-        let err = parse("def main(:\n").unwrap_err();
+        let err = parse("print(1)\n$\n").unwrap_err();
         assert_eq!(err.code, "L0001");
+        assert_eq!(err.span, Some(Span::new(9, 10)));
     }
 }

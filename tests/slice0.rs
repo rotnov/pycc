@@ -259,7 +259,7 @@ fn check_accepts_a_staged_filename_that_starts_with_a_hyphen() {
 fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_errors_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let invalid = write_fixture(&dir, "invalid.py", "def main(:\n");
+    let invalid = write_fixture(&dir, "invalid.py", "print(1)\n$\n");
     let missing = dir.join("missing.py");
 
     let output = Command::new(pycc_bin())
@@ -273,6 +273,9 @@ fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr.contains(invalid.to_str().unwrap()));
     assert!(stderr.contains("L0001"));
+    assert!(stderr.contains(&format!("{}:2:1", invalid.display())));
+    assert!(stderr.contains("2 | $"));
+    assert!(stderr.contains("  | ^"));
     assert!(stderr.contains(missing.to_str().unwrap()));
     assert!(stderr.contains("could not read"));
 }
@@ -297,6 +300,46 @@ fn check_rejects_a_currently_unsupported_construct_without_panicking() {
     assert!(stderr.contains("2 |     x = 1"));
     assert!(stderr.contains("  |     ^^^^^"));
     assert!(!stderr.contains("panicked"));
+}
+
+#[test]
+fn check_aligns_a_diagnostic_caret_after_tab_indentation() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_tab_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "tab.py", "def main() -> None:\n\tx = 1\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains(&format!("{}:2:2", src.display())));
+    assert!(stderr.contains("2 | \tx = 1"));
+    assert!(stderr.contains("  | \t^^^^^"));
+}
+
+#[test]
+fn check_sizes_the_diagnostic_gutter_for_three_digit_line_numbers() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_gutter_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut source = "print(1)\n".repeat(99);
+    source.push_str("x = 1\n");
+    let src = write_fixture(&dir, "line_100.py", &source);
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains(&format!("{}:100:1", src.display())));
+    assert!(stderr.contains("100 | x = 1"));
+    assert!(stderr.contains("    | ^^^^^"));
 }
 
 #[test]

@@ -129,13 +129,21 @@ fn render_source_span(path: &str, source: &str, span: Span) -> String {
         None => source.len(),
     };
     let source_line = &source[line_start..line_end];
-    let column = source[line_start..start].chars().count() + 1;
+    let source_prefix = &source[line_start..start];
+    let column = source_prefix.chars().count() + 1;
     let highlight_end = end.max(start).min(line_end);
     let highlight_width = source[start..highlight_end].chars().count().max(1);
+    let gutter_width = line_number.to_string().len();
+    let empty_gutter = " ".repeat(gutter_width);
+    let caret_padding: String = source_prefix
+        .chars()
+        .map(|character| if character == '\t' { '\t' } else { ' ' })
+        .collect();
 
     format!(
-        " --> {path}:{line_number}:{column}\n  |\n{line_number} | {source_line}\n  | {}{}",
-        " ".repeat(column - 1),
+        " --> {path}:{line_number}:{column}\n{empty_gutter} |\n\
+         {line_number:>gutter_width$} | {source_line}\n\
+         {empty_gutter} | {caret_padding}{}",
         "^".repeat(highlight_width),
     )
 }
