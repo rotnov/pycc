@@ -6,6 +6,13 @@ on:
     paths:
       - "site/**"
       - "scripts/check-site.sh"
+      - "scripts/test-check-site.sh"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - "scripts/check-site.sh"
+      - "scripts/test-check-site.sh"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

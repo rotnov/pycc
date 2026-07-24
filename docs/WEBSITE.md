@@ -44,10 +44,11 @@ domain, and the sitemap can be submitted directly to search consoles.
 
 ## Publication
 
-Pushes to `main` that change the website trigger the Pages workflow. The
-workflow validates the static files, uploads only `site/`, and deploys through
-the protected `github-pages` environment. It can also be run manually; only a
-run from `main` is allowed to reach the deployment job.
+Pull requests that change the website or either validator run the Pages build
+and validation job without deploying. Pushes to `main` that change the website
+validate the static files, upload only `site/`, and deploy through the protected
+`github-pages` environment. The workflow can also be run manually; only a run
+from `main` is allowed to reach the deployment job.
 
 The site deliberately has no package manager, runtime JavaScript dependency,
 analytics, cookies, or external font request. A small local script only powers
