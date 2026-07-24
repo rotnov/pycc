@@ -6,3 +6,4 @@ rust-version.workspace = true
 
 [dependencies]
 ruff_python_ast = "0.0.6"
+ruff_text_size = "0.0.6"

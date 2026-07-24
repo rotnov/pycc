@@ -1,4 +1,4 @@
-use pycc_ast::{Expr, ExprCall, ModModule, Number, Stmt};
+use pycc_ast::{Expr, ExprCall, ModModule, Number, Ranged, Stmt, TextRange};
 use pycc_diag::{Diagnostic, Span};
 
 #[derive(Debug, PartialEq)]
@@ -58,6 +58,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
     let Stmt::Expr(expr_stmt) = stmt else {
         return Err(unsupported(
             "only a bare call expression statement is supported so far",
+            stmt.range(),
         ));
     };
     let Expr::Call(ExprCall {
@@ -66,39 +67,52 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
     else {
         return Err(unsupported(
             "only a call expression statement is supported so far",
+            stmt.range(),
         ));
     };
     let Expr::Name(name) = func.as_ref() else {
-        return Err(unsupported("only calling a bare name is supported so far"));
+        return Err(unsupported(
+            "only calling a bare name is supported so far",
+            stmt.range(),
+        ));
     };
     if !arguments.keywords.is_empty() {
-        return Err(unsupported("keyword arguments are not supported so far"));
+        return Err(unsupported(
+            "keyword arguments are not supported so far",
+            stmt.range(),
+        ));
     }
 
     if name.id.as_str() == "print" {
         let [Expr::NumberLiteral(lit)] = arguments.args.as_ref() else {
             return Err(unsupported(
                 "print() must take exactly one integer literal argument so far",
+                stmt.range(),
             ));
         };
         let Number::Int(i) = &lit.value else {
             return Err(unsupported(
                 "only integer literal arguments are supported so far",
+                stmt.range(),
             ));
         };
         let Some(arg) = i.as_i64() else {
             return Err(unsupported(
                 "integer literal is too large for v0.1's i64-only HIR",
+                stmt.range(),
             ));
         };
         Ok(HirStmt::CallPrint { arg })
     } else {
         let [] = arguments.args.as_ref() else {
-            return Err(unsupported(format!(
-                "calling a user-defined function with arguments is not supported yet -- only \
+            return Err(unsupported(
+                format!(
+                    "calling a user-defined function with arguments is not supported yet -- only \
                  zero-argument calls like `{}()`",
-                name.id.as_str(),
-            )));
+                    name.id.as_str(),
+                ),
+                stmt.range(),
+            ));
         };
         Ok(HirStmt::CallUserFunction {
             name: name.id.as_str().to_string(),
@@ -106,8 +120,12 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
     }
 }
 
-fn unsupported(message: impl Into<String>) -> Diagnostic {
-    Diagnostic::error("C0001", message, Span::new(0, 0))
+fn unsupported(message: impl Into<String>, range: TextRange) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        message,
+        Span::new(range.start().into(), range.end().into()),
+    )
 }
 
 #[cfg(test)]
@@ -162,9 +180,17 @@ mod tests {
 
     #[test]
     fn non_expr_statement_is_unsupported() {
-        let module = pycc_parser_test_helper::parse("x = 1\n");
+        let source = "x = 1\n";
+        let module = pycc_parser_test_helper::parse(source);
         let error = lower(&module).unwrap_err();
         assert_eq!(error.code, "C0001");
+        assert_eq!(
+            error.span,
+            Some(Span::new(
+                0,
+                u32::try_from(source.trim_end().len()).unwrap()
+            ))
+        );
         assert!(
             error
                 .message
@@ -174,9 +200,12 @@ mod tests {
 
     #[test]
     fn unsupported_statement_inside_a_function_is_reported() {
-        let module = pycc_parser_test_helper::parse("def main() -> None:\n    x = 1\n");
+        let source = "def main() -> None:\n    x = 1\n";
+        let module = pycc_parser_test_helper::parse(source);
         let error = lower(&module).unwrap_err();
         assert_eq!(error.code, "C0001");
+        let start = u32::try_from(source.find("x = 1").unwrap()).unwrap();
+        assert_eq!(error.span, Some(Span::new(start, start + 5)));
         assert!(
             error
                 .message
