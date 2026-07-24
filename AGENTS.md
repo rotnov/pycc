@@ -32,6 +32,13 @@
 - If the repository later adds a checked-in documentation generator, keep its output deterministic, document one canonical regeneration command, and add a CI `--check`-style freshness gate.
 - When a checked-in generated document exists, edit its source or generator, regenerate it, and commit the source and generated output together. Never patch generated output by hand.
 
+## Support Codex and Claude Code
+
+- Project development workflows target both OpenAI Codex and Claude Code. `AGENTS.md` is the shared canonical instruction source; keep `CLAUDE.md` as its import instead of duplicating the rules.
+- Every new or changed repository-owned agent or skill must be discoverable and usable on both platforms. Add or update the Codex and Claude Code entrypoints, manifests, adapters, commands, and hooks together in the same pull request.
+- Keep the behavior contract, safety gates, inputs, and outputs equivalent across the two platforms. Share the underlying implementation where practical; when platform APIs differ, keep the adapters thin and document the mapping.
+- Test discovery and the primary success and failure paths on both platforms before merge. If a required capability is unavailable on one platform, provide a safe documented fallback rather than silently shipping a single-platform workflow.
+
 ## Report iEvo bugs upstream
 
 - Treat a reproducible iEvo malfunction, regression, broken hook, invalid command, or contradiction in an iEvo skill as an upstream bug.
@@ -56,6 +63,15 @@
 - Every behavior change must include tests for its success, failure, and relevant edge paths so the gate is satisfied by meaningful execution rather than incidental line hits.
 - Never lower either threshold, remove either flag, disable the job, narrow the measured workspace, or exclude code merely to make a pull request pass.
 - The only permitted exemption is a whole-file `--ignore-filename-regex` entry justified by an accepted design constraint and recorded in the exemption table in `docs/TESTING.md`. An undocumented exemption is a review-blocking defect.
+
+## CI and deployment privilege boundaries
+
+- Treat workflow definitions, scripts, and build inputs from every pull request as untrusted, including pull requests from branches in the base repository.
+- A job that checks out or executes pull-request-controlled code, or consumes its artifacts, caches, or outputs, must use the minimum token permissions it needs: normally `contents: read`, or `permissions: {}` when repository access is unnecessary. Beyond that minimally scoped `GITHUB_TOKEN`, it must not receive write scopes, OIDC access, any secret or credential, or a protected environment.
+- Grant any elevated capability only to the smallest isolated job that needs it. Every privileged job, including jobs in reusable workflows and workflows without a pull-request trigger, must use the exact `push` plus `refs/heads/main` guard enforced by `scripts/check_ci_permissions.rb`. It must establish its trusted commit source, validate the actor when actor identity is part of the trust decision, and must not execute untrusted code or consume untrusted state unless provenance and integrity are verified against that commit.
+- Gate publish and deploy jobs to `refs/heads/main` and a protected environment. If the repository later adds a release-branch or tag deployment, extend the checker's explicit allowlist and record the corresponding ref-protection evidence in the same pull request before granting privilege. Never rely on a skipped step to contain credentials granted at workflow scope or to an earlier validation job.
+- Regular CI must run `ruby scripts/check_ci_permissions.rb` for fast feedback. The read-only `Workflow policy` check is the trust anchor: it runs on every pull request from the base commit under `pull_request_target`, never checks out or executes pull-request code, and audits the head revision's YAML as data. Keep that check required before merging.
+- Whenever a workflow adds a `pull_request`, `pull_request_target`, or chained trigger, begins executing a repository script, transfers state between jobs, or changes job-level `permissions`, review every job's effective permissions and all artifact, cache, output, and reusable-workflow boundaries. Add a focused negative-event check for privileged behavior where practical; otherwise record the unautomated trust assumptions and verification evidence in the owning specification or workflow.
 
 ## Code Review Rules
 
