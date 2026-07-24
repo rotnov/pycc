@@ -42,6 +42,42 @@ impl Diagnostic {
             span: None,
         }
     }
+
+    pub fn render_human(&self, path: &str, source: &str) -> String {
+        let level = match self.severity {
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+        };
+        let header = format!("{level}[{}]: {}", self.code, self.message);
+        let Some(span) = self.span else {
+            return header;
+        };
+
+        let start = span.start as usize;
+        let end = span.end as usize;
+        let before = &source[..start];
+        let line_start = before.rfind('\n').map_or(0, |index| index + 1);
+        let line_end = source[start..]
+            .find('\n')
+            .map_or(source.len(), |index| start + index);
+        let line_number = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+        let column = source[line_start..start].chars().count() + 1;
+        let caret_width = source[start..end.min(line_end)].chars().count().max(1);
+        let normalized_path = path.replace('\\', "/");
+        let source_line = &source[line_start..line_end];
+        let gutter_width = line_number.to_string().len();
+
+        format!(
+            "{header}\n --> {normalized_path}:{line_number}:{column}\n\
+             {blank:>gutter_width$} |\n\
+             {line_number:>gutter_width$} | {source_line}\n\
+             {blank:>gutter_width$} | {indent}{carets} {label}",
+            blank = "",
+            indent = " ".repeat(column - 1),
+            carets = "^".repeat(caret_width),
+            label = self.message,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -61,5 +97,39 @@ mod tests {
         let d = Diagnostic::warning("W1001", "unreachable code");
         assert_eq!(d.severity, Severity::Warning);
         assert_eq!(d.span, None);
+        assert_eq!(
+            d.render_human("input.py", ""),
+            "warning[W1001]: unreachable code"
+        );
+    }
+
+    #[test]
+    fn renders_a_primary_span_with_a_label() {
+        let d = Diagnostic::error("L0003", "assignment is unsupported", Span::new(0, 7));
+        assert_eq!(
+            d.render_human(r"src\input.py", "x = 1\ny"),
+            concat!(
+                "error[L0003]: assignment is unsupported\n",
+                " --> src/input.py:1:1\n",
+                "  |\n",
+                "1 | x = 1\n",
+                "  | ^^^^^ assignment is unsupported",
+            )
+        );
+    }
+
+    #[test]
+    fn renders_a_zero_width_span_on_a_later_final_line() {
+        let d = Diagnostic::error("L0001", "expected expression", Span::new(3, 3));
+        assert_eq!(
+            d.render_human("input.py", "x\n\né"),
+            concat!(
+                "error[L0001]: expected expression\n",
+                " --> input.py:3:1\n",
+                "  |\n",
+                "3 | é\n",
+                "  | ^ expected expression",
+            )
+        );
     }
 }

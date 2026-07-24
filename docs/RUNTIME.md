@@ -15,6 +15,11 @@ Clang-compatible tool overrides; an unavailable driver is a clean compile error.
 makes the runtime a real packaged dependency without looking up Cargo's profile- or
 target-specific static-library artifacts.
 
+The bootstrap writes protocol output as exact bytes. On Windows it switches the C
+stdout/stderr descriptors to binary mode before emitting `\n`, preventing the CRT
+from translating line feeds to `\r\n`; the same fixtures assert byte-identical stdout
+and stderr on every Tier-1 host.
+
 This exception ends before the heap/object runtime starts. The object model,
 exceptions, allocator, and later facilities specified below are implemented in the
 pure-Rust `pycc_rt` static library. Adding another C bootstrap helper beyond the v0.1

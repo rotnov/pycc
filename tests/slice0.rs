@@ -218,6 +218,16 @@ fn unsupported_valid_python_is_a_compile_diagnostic_not_a_panic() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.code(), Some(1), "case `{label}`: {stderr}");
         assert!(stderr.contains("L0003"), "case `{label}`: {stderr}");
+        assert!(
+            stderr.contains("unsupported.py:1:"),
+            "case `{label}`: {stderr}"
+        );
+        assert!(
+            stderr
+                .lines()
+                .any(|line| line.contains('|') && line.contains('^')),
+            "case `{label}`: {stderr}"
+        );
         assert!(!stderr.contains("panicked"), "case `{label}`: {stderr}");
     }
 }

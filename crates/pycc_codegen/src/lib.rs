@@ -421,40 +421,46 @@ mod tests {
     }
 
     #[test]
-    fn target_aware_linker_accepts_an_object_from_the_same_clang_target() {
-        let dir = tempfile_dir("target_aware_link");
-        let main_source = dir.join("main.c");
-        let object_path = dir.join("main.o");
+    fn target_aware_linker_accepts_generated_objects_with_exact_output_bytes() {
+        let dir = tempfile_dir("target_aware_generated_link");
+        let object_path = dir.join("program.o");
         let runtime_source = dir.join("runtime.c");
-        let binary_path = dir.join(format!("target_aware_link{}", std::env::consts::EXE_SUFFIX));
-        std::fs::write(
-            &main_source,
-            "extern void pycc_rt_print_i64(long long);\n\
-             int main(void) { pycc_rt_print_i64(42); return 0; }\n",
-        )
-        .unwrap();
+        let binary_path = dir.join(format!("program{}", std::env::consts::EXE_SUFFIX));
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+        };
+        compile_to_object(&mir, &object_path).expect("LLVM object emission should succeed");
         pycc_rt::write_c_runtime(&runtime_source).unwrap();
-
-        let target = native_target_triple();
-        let program = select_clang(&target, environment_var);
-        let compile_status = Command::new(&program)
-            .arg(format!("--target={target}"))
-            .args(["-c"])
-            .arg(&main_source)
-            .arg("-o")
-            .arg(&object_path)
-            .status()
-            .expect("configured Clang driver should start");
-        assert!(compile_status.success(), "C fixture compilation failed");
 
         super::link_object_with_runtime(&object_path, &runtime_source, &binary_path)
             .expect("target-aware linking should succeed");
-        let output = Command::new(binary_path)
+        let output = Command::new(&binary_path)
             .output()
             .expect("linked fixture should run");
         assert!(output.status.success());
-        let stdout = String::from_utf8(output.stdout).expect("runtime output must be UTF-8");
-        assert_eq!(stdout.replace("\r\n", "\n"), "42\n");
+        assert_eq!(output.stdout, b"42\n");
+        assert!(output.stderr.is_empty());
+
+        let name_error_object = dir.join("name_error.o");
+        let name_error_binary = dir.join(format!("name_error{}", std::env::consts::EXE_SUFFIX));
+        let name_error_mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                name: "missing".to_string(),
+            })],
+        };
+        compile_to_object(&name_error_mir, &name_error_object)
+            .expect("LLVM NameError object emission should succeed");
+        super::link_object_with_runtime(&name_error_object, &runtime_source, &name_error_binary)
+            .expect("target-aware NameError linking should succeed");
+        let name_error = Command::new(name_error_binary)
+            .output()
+            .expect("linked NameError fixture should run");
+        assert_eq!(name_error.status.code(), Some(101));
+        assert!(name_error.stdout.is_empty());
+        assert_eq!(
+            name_error.stderr,
+            b"NameError: name 'missing' is not defined\n"
+        );
     }
 
     #[test]

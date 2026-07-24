@@ -50,4 +50,4 @@ jobs:
           echo "LIB=$libDir;$env:LIB" >> $env:GITHUB_ENV
 
       - name: Exercise the target-aware Clang and LLD path
-        run: cargo test -p pycc_codegen tests::target_aware_linker_accepts_an_object_from_the_same_clang_target -- --exact
+        run: cargo test -p pycc_codegen tests::target_aware_linker_accepts_generated_objects_with_exact_output_bytes -- --exact

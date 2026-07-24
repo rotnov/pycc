@@ -37,7 +37,7 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pyc
 | `pycc_own` | Ownership, escape, Send/Sync-style thread checks |
 | `pycc_mir` | Typed SSA IR + optimization passes |
 | `pycc_codegen` | LLVM backend via `inkwell`; `--emit llvm-ir\|obj\|mir` |
-| `pycc_rt` | Runtime staticlib (see RUNTIME.md) — pure Rust, `#![no_std]`-friendly core |
+| `pycc_rt` | Packaged runtime (see RUNTIME.md) — v0.1 embeds the two-helper C bootstrap; the heap/object runtime is a pure-Rust staticlib with a `#![no_std]`-friendly core |
 | `pycc_std` | Compiled stdlib subset (typed Python + Rust intrinsics, see STDLIB_PLAN.md) |
 | `pycc_diag` | Diagnostics engine, error registry (see DIAGNOSTICS.md) |
 | `pycc_testkit` | Conformance/differential test harness (see TESTING.md) |

@@ -17,12 +17,28 @@ pub const C_RUNTIME_SOURCE: &str = r#"#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
+static void pycc_rt_use_binary_stream(FILE *stream) {
+#ifdef _WIN32
+    if (_setmode(_fileno(stream), _O_BINARY) == -1) {
+        exit(101);
+    }
+#else
+    (void)stream;
+#endif
+}
 
 void pycc_rt_print_i64(int64_t value) {
+    pycc_rt_use_binary_stream(stdout);
     printf("%" PRId64 "\n", value);
 }
 
 void pycc_rt_name_error(const char *name) {
+    pycc_rt_use_binary_stream(stderr);
     fprintf(stderr, "NameError: name '%s' is not defined\n", name);
     exit(101);
 }
@@ -46,5 +62,6 @@ mod tests {
         write_c_runtime(&path).unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), C_RUNTIME_SOURCE);
         assert!(C_RUNTIME_SOURCE.contains("exit(101);"));
+        assert!(C_RUNTIME_SOURCE.contains("_setmode(_fileno(stream), _O_BINARY)"));
     }
 }

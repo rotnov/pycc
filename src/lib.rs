@@ -36,11 +36,11 @@ fn try_build(path: &str, out: &str) -> Result<(), ExitCode> {
         ExitCode::from(2)
     })?;
     let module = pycc_parser::parse(&source).map_err(|diag| {
-        eprintln!("error[{}]: {}", diag.code, diag.message);
+        eprintln!("{}", diag.render_human(path, &source));
         ExitCode::from(1)
     })?;
     let hir = pycc_hir::lower(&module).map_err(|diag| {
-        eprintln!("error[{}]: {}", diag.code, diag.message);
+        eprintln!("{}", diag.render_human(path, &source));
         ExitCode::from(1)
     })?;
     pycc_types::check(&hir).expect("v0.1's type checker is a no-op passthrough; it never fails");
