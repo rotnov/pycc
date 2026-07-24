@@ -3,9 +3,9 @@
 //! This crate's real consumer is not Rust code but pycc-generated object
 //! files, which reference `pycc_rt_print_i64` by symbol name and are
 //! linked against this crate's `staticlib` output (`libpycc_rt.a` on
-//! Unix-like targets, `pycc_rt.lib` on `-msvc` targets -- see D-021) via a
+//! Unix-like targets, `pycc_rt.lib` on `-msvc` targets -- see D-023) via a
 //! linker-driver invocation (`cc`, or on Windows the bundled `clang` --
-//! see D-021) -- in `pycc_codegen`'s own tests (`link_object_with_runtime`)
+//! see D-023) -- in `pycc_codegen`'s own tests (`link_object_with_runtime`)
 //! and in `pycc`'s real `build`/`run` (`src/main.rs`). Nothing in Cargo's
 //! normal dependency graph expresses that relationship, so this file only
 //! exists once this crate has actually been built.

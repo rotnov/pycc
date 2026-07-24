@@ -78,7 +78,7 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
 /// Windows has no `cc` by default (that's a Unix convention -- MSVC's own
 /// tools are `cl.exe`/`link.exe`), so this uses the `clang` bundled with the
 /// same LLVM install `LLVM_SYS_221_PREFIX` already points builds at (see
-/// D-015/D-020) -- clang's driver translates GCC-style `-l`/`-L`/`-o` flags
+/// D-015/D-022) -- clang's driver translates GCC-style `-l`/`-L`/`-o` flags
 /// into the `link.exe` invocation this target needs, verified empirically
 /// (`clang -target x86_64-pc-windows-msvc -### ...`) rather than assumed.
 /// Elsewhere, the system `cc` already works (verified: native-build-test
@@ -95,7 +95,7 @@ fn linker_command() -> std::process::Command {
 }
 
 /// A bare `clang.exe` invocation with no `-target` flag was observed
-/// (D-025) resolving inconsistently: some invocations correctly select
+/// (D-023) resolving inconsistently: some invocations correctly select
 /// MSVC's `lld-link`, others silently fall back to a MinGW/GCC toolchain
 /// discovered on `PATH` (`C:\mingw64`) -- which cannot link `pycc_rt.lib`'s
 /// MSVC-ABI symbols (`__imp_closesocket`, `__chkstk`, the MSVC RTTI
@@ -119,7 +119,7 @@ fn effective_link_target(target: Option<&str>) -> Option<&str> {
 /// Windows system library Rust's std transitively needs; invoking the
 /// linker driver directly here (see `linker_command` above) does not. This
 /// set is the exact one rustc itself passed when linking `pycc.exe` on
-/// this same CI runner (D-024) -- confirmed from that link's own log, not
+/// this same CI runner (D-023) -- confirmed from that link's own log, not
 /// guessed. `#[cfg(not(windows))]`'s no-op keeps the other platforms,
 /// where system libs are found automatically, unaffected.
 #[cfg(windows)]

@@ -25,6 +25,8 @@ target/
 Thumbs.db
 
 # iEvo local-only artifacts
+.claude/settings.local.json
 .ievo/log/
 .ievo/cache/
 .ievo/hooks/
+.ievo/evolution-candidates/

@@ -1,12 +1,21 @@
-# pycc
+# pycc — ahead-of-time compiler for typed Python
 
-**An ahead-of-time compiler for type-annotated Python. Like `gcc`, but for Python.**
+[![CI](https://github.com/rotnov/pycc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rotnov/pycc/actions/workflows/ci.yml)
+[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)
 
-`pycc` takes standard Python 3.14 source code, enforces every type annotation at compile time, and produces a fast, standalone native binary. No interpreter, no venv, no new language to learn — if it's valid typed Python, it compiles. If the types are wrong, it doesn't.
+**A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14 into standalone native binaries. Like `gcc`, but for Python.**
+
+`pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast, standalone native binary. No interpreter, no venv, no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
 
 Written in Rust (1.97+). Built to be extremely fast — both the compiler itself and the binaries it produces.
 
-> Status: early design / pre-alpha. The spec lives in [`PYTHON_STANDARDS.md`](./PYTHON_STANDARDS.md).
+> Status: early design / pre-alpha. The supported-language roadmap lives in [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
+
+[Project website](https://rotnov.github.io/pycc/) · [Specification](./docs/SPEC.md) · [Roadmap](./docs/ROADMAP.md)
+
+## The experiment
+
+**pycc is an experiment in autonomous, AI-native software development: the project writes itself.** AI agents create its specifications, code, tests, documentation, reviews, and release automation. Humans set goals and constraints; not a single line of project code is handwritten by a human.
 
 ## Why
 
@@ -14,7 +23,7 @@ Python tooling solves every piece of this separately, but no tool does the whole
 
 | | Enforces types at compile time | Standalone binary | Plain Python syntax |
 |---|---|---|---|
-| **pycc** | ✅ hard compile error | ✅ single executable | ✅ standard CPython 3.14 |
+| **pycc (design target)** | ✅ hard compile error | ✅ single executable | ✅ standard CPython 3.14 |
 | Codon | ✅ (via inference) | ✅ | ⚠️ Python-like dialect, own stdlib |
 | Nuitka | ❌ | ✅ | ✅ |
 | mypyc | ✅ | ❌ C extension, needs CPython | ✅ |
@@ -77,7 +86,7 @@ Semantics follow CPython 3.14 wherever they are statically expressible; every de
 
 Two layers, both required for every release:
 
-1. **Conformance suite.** Every language standard pycc supports maps to a PEP, and every PEP has its own test in `tests/conformance/` — compile, run, compare against CPython 3.14 output. Unsupported-by-design features get *negative* tests asserting the exact compile error. The full matrix: [`PYTHON_STANDARDS.md`](./PYTHON_STANDARDS.md).
+1. **Conformance suite.** Every language standard pycc supports maps to a PEP, and every PEP has its own test in `tests/conformance/` — compile, run, compare against CPython 3.14 output. Unsupported-by-design features get *negative* tests asserting the exact compile error. The full matrix: [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 2. **Real-world corpus.** CI compiles well-typed open-source projects (`black`, `packaging`, `attrs`, `mypy`, ...) and runs their own test suites against the compiled artifacts — the same way ruff validates against a real-repo ecosystem. Pass rate per project is tracked release to release.
 3. **Ecosystem bot.** A scheduled job picks popular PyPI/GitHub projects, compiles them with the latest pycc, and auto-files a structured issue *in this repo* for every new incompatibility: minimized repro, diagnostic, PEP reference. When pycc uncovers a genuine type bug in an upstream project, we report it upstream — manually and curated, never bot-spammed.
 
@@ -95,7 +104,7 @@ Two layers, both required for every release:
 - [ ] Ecosystem bot: compile top PyPI packages nightly, auto-file incompatibility issues
 - [ ] CPython interop escape hatch (call untyped third-party libs through an embedded interpreter)
 
-Cross-platform is not a roadmap item — Linux, macOS and Windows (x64 + arm64) are CI-gated from v0.1, including `pycc build --target` cross-compilation. Full spec: [SPEC.md](./SPEC.md).
+Cross-platform is not a roadmap item — Linux, macOS and Windows (x64 + arm64) are CI-gated from v0.1, including `pycc build --target` cross-compilation. Full spec: [`docs/SPEC.md`](./docs/SPEC.md).
 
 ## Building from source
 
