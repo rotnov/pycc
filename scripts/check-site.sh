@@ -171,6 +171,9 @@ if software_source.get("codeRepository") != "https://github.com/rotnov/pycc":
     raise SystemExit("SoftwareSourceCode JSON-LD must link to the public repository")
 PY
 
+assert_once "Built entirely by AI." "$index"
+assert_once "Managed by a human." "$index"
+assert_once "No project code is handwritten by a human." "$index"
 assert_once "Sitemap: ${canonical}sitemap.xml" "$site_dir/robots.txt"
 assert_once "<loc>${canonical}</loc>" "$site_dir/sitemap.xml"
 

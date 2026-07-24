@@ -12,6 +12,8 @@ indexable explanation of pycc:
 - pycc is an ahead-of-time compiler for typed, standard Python 3.14;
 - the intended output is a standalone native binary;
 - the implementation is written in Rust and uses LLVM;
+- the project is created entirely by AI agents, while a human manages goals,
+  constraints, priorities, and product decisions without writing project code;
 - the project is pre-alpha, and design targets are not presented as released
   features.
 
@@ -29,6 +31,11 @@ ranking.
 - Open Graph and X card metadata;
 - `SoftwareSourceCode` JSON-LD linked to the public repository;
 - page-level crawl permission and a sitemap reference.
+
+Visible page copy must also state that AI agents create the entire project, the
+human role is management, and no project code is handwritten by a human. This
+development-model claim is part of the public project identity, not hidden
+metadata.
 
 `site/robots.txt` and `site/sitemap.xml` must use the same canonical origin.
 The social preview is `site/og.png`. `scripts/check-site.sh` enforces these

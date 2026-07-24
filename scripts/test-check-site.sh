@@ -44,8 +44,8 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 required = (
-    'content="pycc is a pre-alpha project building a strict ahead-of-time '
-    'compiler for typed Python 3.14, targeting native binaries with Rust and LLVM."'
+    'content="pycc is a fully AI-created, human-managed pre-alpha project '
+    'building an ahead-of-time compiler for typed Python 3.14 with Rust and LLVM."'
 )
 assert required in content
 path.write_text(content.replace(required, 'content=""', 1))
@@ -53,6 +53,23 @@ PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted an empty required metadata value" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = "No project code is handwritten by a human."
+assert required in content
+path.write_text(content.replace(required, "Human authorship is not disclosed.", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a site without the required AI authorship disclosure" >&2
   exit 1
 fi
 
