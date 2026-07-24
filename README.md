@@ -1,5 +1,8 @@
 # pycc — ahead-of-time compiler for typed Python
 
+[![CI](https://github.com/rotnov/pycc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rotnov/pycc/actions/workflows/ci.yml)
+[![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)
+
 **A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14 into standalone native binaries. Like `gcc`, but for Python.**
 
 `pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast, standalone native binary. No interpreter, no venv, no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
@@ -9,6 +12,10 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > Status: early design / pre-alpha. The supported-language roadmap lives in [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 
 [Project website](https://rotnov.github.io/pycc/) · [Specification](./docs/SPEC.md) · [Roadmap](./docs/ROADMAP.md)
+
+## The experiment
+
+**pycc is an experiment in autonomous, AI-native software development: the project writes itself.** AI agents create its specifications, code, tests, documentation, reviews, and release automation. Humans set goals and constraints; not a single line of project code is handwritten by a human.
 
 ## Why
 
