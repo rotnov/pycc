@@ -91,7 +91,9 @@ deviation will be documented in `docs/semantics.md`.
 
 ## Testing strategy
 
-The planned release strategy has three layers:
+The complete internal test architecture has seven layers, defined in
+[`docs/TESTING.md`](./docs/TESTING.md). Three public compatibility mechanisms
+are especially important:
 
 1. **Conformance suite.** Every language standard pycc supports maps to a PEP, and every PEP has its own test in `tests/conformance/`. Each supported language level compiles and runs its cumulative fixture set, then compares output with that level's pinned CPython oracle. The v1 track uses CPython 3.14. Unsupported-by-design features get *negative* tests asserting the exact compile error. The full matrix: [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 2. **Real-world corpus.** CI compiles well-typed open-source projects (`black`, `packaging`, `attrs`, `mypy`, ...) and runs their own test suites against the compiled artifacts — the same way ruff validates against a real-repo ecosystem. Pass rate per project is tracked release to release.
