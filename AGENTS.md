@@ -6,7 +6,7 @@
 - Treat the documents under `docs/` as part of the implementation contract, not as an after-the-fact description.
 - Before changing behavior, architecture, public APIs, the CLI, diagnostics, build or release processes, tests, or supported language semantics, read the relevant specification.
 
-## Before starting a new task
+## Before starting a new task ([D-019](docs/DECISIONS.md#d-019-agent-task-preflight-and-documentation-refresh))
 
 1. Inspect `git status --short --branch` and record the current commit before any repository mutation. Preserve all existing user changes.
 2. Fetch and prune remote refs without changing checked-out files, then resolve the remote's default branch dynamically.
@@ -32,7 +32,7 @@
 - If the repository later adds a checked-in documentation generator, keep its output deterministic, document one canonical regeneration command, and add a CI `--check`-style freshness gate.
 - When a checked-in generated document exists, edit its source or generator, regenerate it, and commit the source and generated output together. Never patch generated output by hand.
 
-## Report iEvo bugs upstream
+## Report iEvo bugs upstream ([D-020](docs/DECISIONS.md#d-020-autonomous-public-ievo-bug-reporting))
 
 - Treat a reproducible iEvo malfunction, regression, broken hook, invalid command, or contradiction in an iEvo skill as an upstream bug.
 - Report confirmed iEvo bugs autonomously to the public `ievo-ai/skills` GitHub repository without asking the user for additional permission.
@@ -42,12 +42,18 @@
 - Do not report expected behavior, ordinary project failures, or unverified suspicions. Gather enough evidence to make the report actionable and avoid automated issue spam.
 - Link the upstream issue in the task summary and in the local PR when the reported bug affects the change being delivered.
 
-## Keep machine-local hooks local
+## Keep machine-local hooks local ([D-021](docs/DECISIONS.md#d-021-shared-auto-evolution-intent-with-local-hook-execution))
 
 - Shared `.claude/settings.json` entries must not invoke scripts or other targets that are absent from a clean checkout. A hook whose target is gitignored is a clean-clone defect even when the hook failure is non-blocking.
 - iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Wire them only from the gitignored `.claude/settings.local.json`; never commit those hook entries or the generated scripts.
 - After cloning the repository, enable or refresh iEvo locally, then verify the generated hook entries live in `.claude/settings.local.json`. If the current iEvo version writes them to shared settings, relocate the complete `hooks` object to local settings before committing any repository change.
 - Before changing shared hook configuration, test the tracked-file view of the repository: every referenced command must either exist in that view or be guarded by a tracked wrapper that exits successfully when its local dependency is absent.
+
+## Protect main ([D-022](docs/DECISIONS.md#d-022-protected-main-and-audited-emergency-bypass))
+
+- `main` accepts changes only through pull requests. Branch protection requires the current CI check, an approving review from someone other than the last pusher, resolved conversations, and an up-to-date branch.
+- Administrators and automation credentials do not bypass the rule for ordinary work. The emergency procedure, audit expectations, and recovery steps live in [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md).
+- A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
 
 ## Testing and hard coverage gate
 
@@ -62,7 +68,17 @@
 ### GitHub Codex review loop
 
 - After opening a pull request, request a GitHub Codex review with the exact comment `@codex review`.
-- Request at most one Codex review per head commit. After fixes produce a new head commit, request another review only when the previous findings may no longer describe the current diff.
+- Permit at most one accepted or started Codex review per head commit. A request that
+  explicitly failed before any review/check was created does not count; one retry on
+  the unchanged head is allowed after that evidence, or after a 15-minute timeout
+  with no bot response, review, or check. Never make more than two request attempts
+  on one head.
+- Before a first request or retry, run
+  `python3 scripts/check_codex_review_retry.py <owner/repo> <pr-number>`. Proceed only
+  when it prints `REQUEST_ALLOWED` or `RETRY_ALLOWED`; preserve its evidence URL or
+  timeout timestamps in the task log. `WAIT`, `ARTIFACT_EXISTS`, and
+  `RETRY_LIMIT_REACHED` forbid another request on that head.
+- After fixes produce a new head commit, request another review only when the previous findings may no longer describe the current diff.
 - Monitor the resulting standard GitHub review, inline comments, issue comments, reactions, and unresolved review threads. Treat actionable inline comments as unfinished work.
 - Address every verified P0/P1 finding and every other actionable correctness or contract finding before merge. Keep fixes focused, push them to the pull request branch, and re-run the review and CI gates.
 - Merge only when required checks, including the 100% coverage gate, are green and no unresolved actionable review thread remains.

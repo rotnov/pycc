@@ -22,6 +22,10 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-016 | Vendored parser pin (D-003): `ruff_python_parser = "0.0.6"`, `ruff_python_ast = "0.0.6"` (crates.io, checked at PR-1 time — re-verify before bumping) | accepted |
 | D-017 | No separate `pycc_lexer` crate for v0.1: the vendored `ruff_python_parser` bundles lexing internally and nothing in the v0.1 pipeline consumes a standalone token stream. `pycc_lexer` is created when D-003's own-parser work (v0.6) actually needs to expose one | accepted |
 | D-018 | `pycc_testkit` deferred past PR-1/PR-2: no PEP conformance matrix exists yet for a real harness to check against; `tests/slice0.rs` covers the two named fixtures ad hoc in the meantime, built for real at PR-4/PR-6 | proposed |
+| D-019 | Every agent task starts from refreshed repository/spec/API evidence and never mutates a stale or dirty base implicitly | accepted |
+| D-020 | Confirmed iEvo defects may be reported publicly without per-report permission, within strict scope and privacy limits | accepted |
+| D-021 | Auto-evolution intent is shared, but executable hooks and generated scripts remain machine-local | accepted |
+| D-022 | `main` is protected by PR, CI, independent review, and an audited emergency path | accepted |
 
 ## Template
 
@@ -75,3 +79,39 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 - Decision: PR-1/PR-2 use a hand-written `tests/slice0.rs` integration test instead -- it compiles fixtures through the real `pycc` binary and asserts exact stdout, which is a genuine (if narrow) proof that the pipeline works end to end, but it is not TESTING.md's Layer 2 harness. `pycc_testkit` gets built for real once PR-4/PR-6 gives it PEPs to actually track (PR-6 is where DELIVERY_PLAN.md already schedules the first real conformance run: fib + mandelbrot-ascii vs. CPython on all 5 targets).
 - Alternatives: scaffold a minimal `pycc_testkit` crate now, even with nothing real for it to do (rejected as premature -- there's no PEP matrix yet for it to check against, so it would be structure without function, the same YAGNI concern D-017 raised about `pycc_lexer`); keep DELIVERY_PLAN.md's "as early as slice 0" wording as-is and treat `tests/slice0.rs` as satisfying it (rejected -- that wording specifically promises TESTING.md's Layer 2 shape, which `tests/slice0.rs` doesn't have, and leaving the mismatch undocumented is exactly the kind of thing this decisions log exists to prevent).
 - Consequences: DELIVERY_PLAN.md's "Testing scope for v0.1" section is corrected to say Layer 2 starts at PR-4/PR-6, not slice 0. `tests/slice0.rs` stays as ad hoc coverage for the two named PR-2 fixtures specifically, not a stand-in for the conformance harness.
+
+## D-019: Agent task preflight and documentation refresh
+
+- Status: accepted
+- Context: this AI-first repository treats specifications and generated Rust API documentation as implementation inputs. Starting from a stale remote ref, stale rustdoc, or an unidentified dirty tree can make an otherwise-correct agent optimize against the wrong contract or overwrite user work.
+- Decision: before a new task mutates the repository, the agent records status and HEAD, fetches/prunes without changing checked-out files, resolves the remote default branch, starts from that exact commit in a clean task branch/worktree, generates `cargo doc --workspace --no-deps`, and reads the specification/rustdoc that owns the affected area. Continuing dirty work is allowed only in place and only after comparing it with refreshed remote state; no implicit pull, merge, rebase, reset, or branch switch is authorized.
+- Authority and scope: the preflight authorizes read-only Git/network discovery, creation of an isolated task branch/worktree, and local generated rustdoc. It does not authorize integrating upstream changes into a dirty tree, publishing a branch, or changing external systems.
+- Privacy and failure behavior: preflight output stays in the task transcript and must not publish local paths or repository content. A failed fetch or documentation build is recorded and understood; older generated documentation must not be represented as current.
+- Rollback: the isolated worktree/branch can be removed after preserving any intended commits. Changing this mandatory sequence requires a superseding decision because every later agent task depends on it.
+
+## D-020: Autonomous public iEvo bug reporting
+
+- Status: accepted
+- Context: reproducible defects in the iEvo control plane can affect every agent task until upstream fixes ship. Requiring a new permission round-trip after the user has adopted the project policy delays correction and encourages local-only workarounds that other users cannot discover.
+- Decision: after reproducing an iEvo malfunction, contradiction, broken hook, or invalid command and searching open and closed upstream issues, agents may create or update a public `ievo-ai/skills` issue without additional per-report permission. Duplicates, expected behavior, unverified suspicion, and ordinary pycc failures are not reportable.
+- Authority and scope: the standing authority covers only the minimum useful iEvo report and evidence. It does not authorize publishing unrelated pycc material, reporting to other projects, or changing upstream code/labels/issue state beyond the report itself.
+- Privacy and failure behavior: reports omit credentials, personal data, private/proprietary content, raw conversations, and identifying local paths even when the pycc repository is public. If authentication/network submission fails, preserve the pending sanitized report locally and surface the failure; do not repeatedly spam the endpoint.
+- Rollback: a public report cannot be made private retroactively. A mistaken report is corrected and closed with an explicit explanation. Revoking standing authority requires a superseding decision and removal of the matching AGENTS.md section.
+
+## D-021: Shared auto-evolution intent with local hook execution
+
+- Status: accepted
+- Context: the repository wants correction-driven evolution to survive across contributors, but iEvo generates hook scripts under gitignored `.ievo/hooks/`. Committing shared hook entries that invoke those absent targets made every clean clone emit hook errors (issue #28; upstream `ievo-ai/skills#446`).
+- Decision: `.ievo/evo-auto.flag` records shared intent with `signal: corrections-only` and `auto_write_scope: project-wide-only`. Generated scripts and their hook wiring are machine-local: `.ievo/hooks/` and `.claude/settings.local.json` are ignored, while shared `.claude/settings.json` may reference only tracked targets or tracked fail-silent wrappers. Agents validate the tracked-file view in CI.
+- Authority and scope: automatic capture may record confirmed user corrections under the configured project-wide scope. It does not broaden authority for external writes, source-code changes, secrets collection, or arbitrary per-agent behavior changes. Candidate lessons outside the auto-write scope remain reviewable candidates.
+- Privacy and failure behavior: local hook inputs and generated logs remain local/ignored. Missing local setup must be a silent no-op in shared state, never a failing committed command. Validation failure blocks merge.
+- Rollback: run the iEvo auto-disable workflow locally, remove or supersede the shared flag, remove local hook wiring/scripts, and verify the clean tracked view. A future tracked-wrapper design requires a superseding decision and security review.
+
+## D-022: Protected main and audited emergency bypass
+
+- Status: accepted
+- Context: commit `0ac9b1d` reached `main` while PR #3 remained open after a timed-out merge request, proving that commit messages and monitoring conventions do not create a review boundary. An AI-authored compiler needs the repository host—not agent intent—to enforce the PR/CI/review path.
+- Decision: protect `main` for administrators and automation alike. Require an up-to-date pull request, the current `build-test-coverage` status, one approving review from someone other than the last pusher, stale-review dismissal, resolved conversations, and disallow force pushes/deletion. A push-triggered audit verifies every resulting main commit is associated with a merged PR. New required checks are added to protection only after they have run successfully on `main`.
+- Authority and scope: normal agent/bot credentials may open/update PRs but cannot bypass protection. Repository administrators retain the platform ability to edit protection only for the documented emergency procedure; that authority is not delegated to routine tasks.
+- Privacy and failure behavior: the audit publishes only repository-native commit/PR identifiers. A direct or unassociated commit fails the audit, requires a governance incident, and blocks releases until history/protection are reconciled. CI/provider outages delay merge rather than weakening requirements.
+- Rollback: emergency relaxation is time-bounded, linked to an incident, records before/after settings, and restores protection immediately after recovery. Permanently weakening the rule requires a superseding decision and explicit review.

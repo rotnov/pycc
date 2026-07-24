@@ -1,0 +1,45 @@
+name: Main history audit
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  main-history-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require every pushed main commit to belong to a merged PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_REPOSITORY: ${{ github.repository }}
+          AUDIT_BEFORE: ${{ github.event.before }}
+          AUDIT_AFTER: ${{ github.sha }}
+        run: |
+          if [ "$AUDIT_BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            commits="$AUDIT_AFTER"
+          else
+            commits=$(git rev-list "$AUDIT_BEFORE..$AUDIT_AFTER")
+          fi
+
+          failed=0
+          for commit_sha in $commits; do
+            merged_prs=$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/$AUDIT_REPOSITORY/commits/$commit_sha/pulls" \
+                --jq '[.[] | select(.merged_at != null and .base.ref == "main")] | length'
+            )
+            if [ "$merged_prs" -eq 0 ]; then
+              echo "::error title=Unassociated main commit::$commit_sha is not associated with a merged pull request targeting main"
+              failed=1
+            fi
+          done
+          exit "$failed"
