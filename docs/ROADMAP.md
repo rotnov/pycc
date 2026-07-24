@@ -2,6 +2,47 @@
 
 Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone isn't done until they're green on **all Tier-1 platforms** (Linux x64/arm64, macOS x64/arm64, Windows x64).
 
+## Current delivery status
+
+Last reviewed on 2026-07-24. This section describes the repository tree in the commit that contains it: behavior and evidence from that same commit count, while work that exists only in another open pull request or unmerged branch remains work in flight.
+
+**Current milestone: v0.1 — in progress.** The first end-to-end vertical slice works on the primary macOS arm64 host, but v0.1 is not yet shippable.
+
+| Area | Status on `main` | Evidence and remaining gap |
+|---|---|---|
+| Compiler pipeline | Partial | The workspace contains the driver plus `pycc_ast`, `pycc_parser`, `pycc_hir`, `pycc_types`, `pycc_mir`, `pycc_codegen`, `pycc_rt`, and `pycc_diag`. [`tests/slice0.rs`](../tests/slice0.rs) proves source → parser → HIR → type-check passthrough → MIR → LLVM object → host linker → native executable. |
+| Language surface | Slice only | Module-level `print(<i64 literal>)`, zero-argument function definitions, and explicit zero-argument calls work. Arithmetic, variables, arguments and return values, control flow, recursion with values, floats/strings/bools, `range`, and f-strings remain v0.1 work. Unsupported valid Python can still reach explicit slice-limit panics in [`pycc_hir`](../crates/pycc_hir/src/lib.rs). |
+| Type system | Stub | The parser preserves annotations, but [`pycc_types::check`](../crates/pycc_types/src/lib.rs) is still a no-op passthrough. `T0001` strictness and local inference have not landed. |
+| CLI | Partial | `build`, `run`, and `version` have working slice-level paths. `check`, `test`, `explain`, `init`, and `clean` report “not yet implemented”; the broader flags and project-mode contracts in [CLI_SPEC.md](./CLI_SPEC.md) remain planned. |
+| Diagnostics | Partial | Parser failures become `L0001` compile diagnostics and the diagnostic data types exist. Stable spans, the shipped-feature registry, screenshot parity, JSON output, and diagnostics for unsupported valid programs remain open. |
+| Portability | Primary host only | The active compiler [CI run](https://github.com/rotnov/pycc/actions/runs/30132574213) reports the `macos-14-arm64` image and `aarch64-apple-darwin` host. The five-target Tier-1 matrix, bundled-linker cross-compilation, and cross-host execution evidence required by v0.1 are not yet present in this commit. |
+| Quality gates | Partial but enforced | Unit and slice-level end-to-end tests pass, and CI enforces 100% Rust line and region coverage on every PR. The conformance harness, diagnostic snapshots, frontend performance gate, five-target conformance, fuzzing, and corpus layers remain planned according to [TESTING.md](./TESTING.md). |
+
+### v0.1 acceptance checklist
+
+- [ ] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets.
+- [ ] `pycc check` processes 1k LOC in under 50 ms.
+- [ ] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.
+- [ ] The five-target native CI matrix and one cross-host compilation path are live on `main`.
+- [x] The 100% line and region coverage gate is required and green for the current slice.
+
+The next delivery slices remain the sequence defined in [DELIVERY_PLAN.md](./DELIVERY_PLAN.md): Tier-1 CI and cross-compilation, frontend depth with real strict typing and the performance gate, full v0.1 codegen/runtime breadth, the conformance testkit and named demos, then the final v0.1 acceptance pass.
+
+## CPython release alignment
+
+Last reviewed **2026-07-24**. D-012 still fixes v1 to the Python 3.14 language
+level; patch releases advance the differential oracle without changing that
+language-level decision.
+
+| Track | Current upstream release | Roadmap action |
+|---|---|---|
+| v1 stable oracle | Python **3.14.6** final (2026-06-10) | Use 3.14.6 for new conformance recordings and the PR-6 CI oracle; keep all earlier 3.14 behavior green. |
+| Next language level | Python **3.15.0b4** (2026-07-18), final beta | Track feature-frozen Final/Accepted standards in `PYTHON_STANDARDS.md`; adoption starts only after v1.0 and Python 3.15.0 final. |
+
+Every newly observed Python release updates this table and
+`PYTHON_STANDARDS.md` together. Observable maintenance-release semantics also
+update the relevant runtime/stdlib spec and differential fixtures.
+
 ## v0.1 — "hello, binary"
 
 Functions, `int`/`float`/`str`/`bool`, arithmetic, comparisons, `if`/`while`/`for`+`range`, f-strings (basic), `print`, module-level code, recursion. Frontend: strict annotations (`T0001`), local inference. Backend: LLVM debug builds, vendored parser allowed.
@@ -58,9 +99,24 @@ Corpus Tier-3 (`mypy`, `httpx`, `rich`) tracked; corpus-bot auto-issues live; `s
 
 ## v1.0 — spec freeze
 
-PYTHON_STANDARDS matrix: every row ✅ or explicitly `rejected-by-design` with negative test; semantics deviations doc complete; benchmarks vs CPython/Nuitka/Codon/mypyc published; diagnostics/JSON formats frozen (semver).
+PYTHON_STANDARDS Python 3.0–3.14 matrix: every row ✅ or explicitly
+`rejected-by-design` with negative test; the Python 3.15 preview rows do not
+gate v1.0. Semantics deviations doc complete; benchmarks vs
+CPython/Nuitka/Codon/mypyc published; diagnostics/JSON formats frozen (semver).
 
 **Accept:** corpus Tier-1..3 green 3 releases in a row; fuzzer finds 0 mismatches for 30 consecutive days; docs site.
+
+## v1.x — Python 3.15 adoption
+
+Starts only after both pycc v1.0 and upstream Python 3.15.0 final. Add the 3.15
+grammar, typing rules, import behavior, builtins, and stdlib surface listed in
+the preview matrix while preserving Python 3.14 compatibility.
+
+**Accept:** every Python 3.15 matrix row is ✅ or explicitly
+`rejected-by-design` with a negative test; differential conformance runs
+against a pinned current Python 3.15 patch on all Tier-1 targets; the complete
+Python 3.14 suite remains green; a new ADR supersedes D-012 and records the
+supported-version policy.
 
 ## Post-1.0 (parking lot)
 

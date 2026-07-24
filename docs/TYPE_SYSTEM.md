@@ -43,6 +43,14 @@ Flow-sensitive checker on HIR control-flow graph: `isinstance`, `is None`, truth
 
 Per PEP 649/749 (3.14): annotations are lazily evaluated code — pycc evaluates them **statically at compile time**; string annotations and `from __future__ import annotations` files accepted. Runtime introspection of `__annotations__` is supported for dataclass-style use, computed at compile time.
 
+## Python 3.15 typing preview (post-v1.0)
+
+The preview does not expand the v1 Python 3.14 contract. The v1.x language
+upgrade in ROADMAP.md adds four type-system obligations: singleton-value typing
+and `is` narrowing for `sentinel()` (PEP 661), typed `TypedDict` extra items
+(PEP 728), `TypeForm` (PEP 747), and disjoint-base reasoning (PEP 800). Each is
+tracked by its own `py315/` conformance row in PYTHON_STANDARDS.md.
+
 ## Class model (compiled subset)
 
 Supported: single + multiple inheritance with C3 MRO resolved at compile time, `@property`, `classmethod`/`staticmethod`, `__init_subclass__`/`__set_name__` executed at compile time when statically evaluable, dataclasses (557) and `dataclass_transform` (681), `@override` (698) enforced, dunder protocol methods (`__len__`, `__iter__`, `__enter__`…) → static dispatch.

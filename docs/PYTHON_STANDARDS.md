@@ -1,15 +1,45 @@
 # Python Language Standards → pycc Conformance Matrix
 
-Every language standard (PEP) that defines Python up to **3.14**, mapped to a conformance test. This file is the single source of truth for what pycc must implement. A feature is "supported" only when its test passes; a feature is "rejected by design" only when its *negative* test asserts the exact diagnostic.
+Every language standard (PEP) that defines Python up to the v1 target,
+**3.14**, mapped to a conformance test. Accepted Python 3.15 standards are
+tracked separately as a post-v1.0 preview. This file is the single source of
+truth for what pycc must implement. A feature is "supported" only when its test
+passes; a feature is "rejected by design" only when its *negative* test asserts
+the exact diagnostic.
 
 **Conventions**
 
-- Test path: `tests/conformance/pyXY/pep_NNNN_slug.py` — compiled by pycc, executed, stdout compared against CPython 3.14 running the same file.
+- Test path: `tests/conformance/pyXY/pep_NNNN_slug.py` — compiled by pycc, executed, and compared with the pinned oracle for that language track. Python 3.0–3.14 rows use CPython 3.14.6; preview `py315/` rows use a pinned current Python 3.15 patch only after the v1.x adoption gate opens.
 - Negative tests: `tests/diagnostics/dNNNN_slug.py` — must *fail to compile* with the documented error code.
 - Category: `syntax` · `typing` · `sem` (semantics/data model) · `import` · `rt` (runtime) — `rt`-only PEPs may need design docs instead of codegen.
 - Status: ☐ planned · ⚙ in progress · ✅ passing.
 
 Reference: [PEP index](https://peps.python.org/), [What's New in Python](https://docs.python.org/3/whatsnew/).
+
+## Upstream release baseline
+
+Last reviewed against the official Python release pages, release-schedule PEPs,
+and What's New documents on **2026-07-24**:
+
+| Track | Upstream checkpoint | pycc consequence |
+|---|---|---|
+| v1 stable oracle | Python **3.14.6** final, released 2026-06-10 | Pin new conformance recordings and CI oracle setup to 3.14.6; re-record outputs when the oracle moves from 3.14.3. |
+| Post-v1 preview | Python **3.15.0b4**, released 2026-07-18 | Feature-frozen since 3.15.0b1; track only Final/Accepted Standards Track PEPs below until 3.15.0 final. |
+
+D-012 remains unchanged: v1 accepts exactly Python 3.14. The 3.15 rows do not
+expand the v1 grammar or acceptance gate. Promoting them into a supported
+language level requires Python 3.15 final, the post-v1 roadmap gate, and a new
+ADR that supersedes D-012.
+
+For each newly observed upstream release:
+
+1. Update this baseline and [ROADMAP.md](./ROADMAP.md) in the same change.
+2. For a 3.14 maintenance release, review What's New and the changelog for
+   observable semantic changes, then advance the pinned differential oracle.
+3. For a 3.15 prerelease after feature freeze, add newly Final/Accepted
+   Standards Track PEPs to the preview section; Draft, Deferred, and Rejected
+   proposals are not implementation commitments.
+4. Do not flip conformance statuses by hand; CI still owns the status column.
 
 ## Python 3.0–3.2 (foundations)
 
@@ -164,6 +194,32 @@ Reference: [PEP index](https://peps.python.org/), [What's New in Python](https:/
 | [779](https://peps.python.org/pep-0779/) | Free-threading officially supported → pycc: GIL-free native threads | rt | `py314/pep_0779_threads.py` | ☐ |
 
 *n/a: PEP 768 (remote debugging interface), 784 (zstd in stdlib — will ship in pycc stdlib subset), 741 (C API config), 761 (release signing), 776 (Emscripten).*
+
+## Python 3.15 preview (post-v1.0)
+
+These rows reflect the feature-frozen 3.15.0b4 surface. They are planning
+inputs for the post-v1.0 language-level upgrade and are not part of the Python
+3.14 v1 acceptance gate.
+
+| PEP | Feature | Cat | Test | St |
+|---|---|---|---|---|
+| [661](https://peps.python.org/pep-0661/) | `sentinel()` builtin, singleton-value typing, and `is` narrowing | typing | `py315/pep_0661_sentinel.py` | ☐ |
+| [686](https://peps.python.org/pep-0686/) | UTF-8 mode becomes the default encoding behavior | rt | `py315/pep_0686_utf8_default.py` | ☐ |
+| [728](https://peps.python.org/pep-0728/) | `TypedDict` with typed extra items | typing | `py315/pep_0728_typeddict_extra_items.py` | ☐ |
+| [747](https://peps.python.org/pep-0747/) | `TypeForm` annotations for type expressions | typing | `py315/pep_0747_typeform.py` | ☐ |
+| [791](https://peps.python.org/pep-0791/) | `math.integer` integer-specific mathematics | rt | `py315/pep_0791_math_integer.py` | ☐ |
+| [798](https://peps.python.org/pep-0798/) | `*`/`**` unpacking in comprehensions and generator expressions | syntax | `py315/pep_0798_unpacking_comprehensions.py` | ☐ |
+| [799](https://peps.python.org/pep-0799/) | Standard `profiling` package | rt | `py315/pep_0799_profiling.py` | ☐ |
+| [800](https://peps.python.org/pep-0800/) | Disjoint bases in the type system | typing | `py315/pep_0800_disjoint_bases.py` | ☐ |
+| [810](https://peps.python.org/pep-0810/) | Explicit `lazy import` / `lazy from` syntax and deferred import semantics | import | `py315/pep_0810_lazy_imports.py` | ☐ |
+| [814](https://peps.python.org/pep-0814/) | Builtin immutable `frozendict` | sem | `py315/pep_0814_frozendict.py` | ☐ |
+| [829](https://peps.python.org/pep-0829/) | Auditable package-startup `.start` files | import | `py315/pep_0829_package_startup.py` | ☐ |
+
+*n/a for native Python semantics: PEP 782 (`PyBytesWriter` C API), 788
+(interpreter-finalization C API guards), 793/803/820 (extension entry points,
+free-threaded stable ABI, and unified C slots), and 831 (CPython frame-pointer
+build policy). Revisit the C API items only for the v0.7+ CPython interop
+boundary.*
 
 ## Rejected by design → negative tests
 
