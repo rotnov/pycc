@@ -9,11 +9,12 @@
 ## Before starting a new task
 
 1. Inspect `git status --short --branch` and record the current commit before any repository mutation. Preserve all existing user changes.
-2. Refresh remote refs without changing checked-out files, then identify the task's target branch and compare it with the current base.
-3. Integrate the target branch only when the task authorizes that mutation and the operation can preserve existing work. Prefer a fast-forward update; never merge, rebase, reset, switch branches, or pull over uncommitted or user-owned changes.
-4. Confirm which commit is the actual task base, then run `cargo doc --workspace --no-deps` before making implementation changes. This refreshes the local Rust API documentation in `target/doc/` from that exact source revision.
-5. Read `docs/SPEC.md`, the relevant linked specifications, and the generated documentation for the crates affected by the task.
-6. If documentation generation fails, record and understand the failure before changing code. Do not present documentation generated from an older revision as current.
+2. Fetch and prune remote refs without changing checked-out files, then resolve the remote's default branch dynamically.
+3. Start every new task from the exact latest commit of that remote default branch in a clean task branch or isolated worktree.
+4. When continuing an existing task branch, compare it with the refreshed default branch and integrate only when the task authorizes that mutation and existing work can be preserved. Prefer a fast-forward update; never merge, rebase, reset, switch branches, or pull over uncommitted or user-owned changes.
+5. Confirm which commit is the actual task base, then run `cargo doc --workspace --no-deps` before making implementation changes. This refreshes the local Rust API documentation in `target/doc/` from that exact source revision.
+6. Read `docs/SPEC.md`, the relevant linked specifications, and the generated documentation for the crates affected by the task.
+7. If documentation generation fails, record and understand the failure before changing code. Do not present documentation generated from an older revision as current.
 
 ## Keep documentation current
 
@@ -40,6 +41,30 @@
 - Public reports must never contain credentials, secrets, personal information, private repository data, proprietary source or documentation, raw conversation text, or identifying local paths. Replace those details with neutral placeholders.
 - Do not report expected behavior, ordinary project failures, or unverified suspicions. Gather enough evidence to make the report actionable and avoid automated issue spam.
 - Link the upstream issue in the task summary and in the local PR when the reported bug affects the change being delivered.
+
+## Testing and hard coverage gate
+
+- One hundred percent line and region coverage is a hard merge invariant under D-014, not a target or guideline.
+- CI must run `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` on every pull request. Do not merge while this gate is missing, skipped, cancelled, failing, or still in progress.
+- Every behavior change must include tests for its success, failure, and relevant edge paths so the gate is satisfied by meaningful execution rather than incidental line hits.
+- Never lower either threshold, remove either flag, disable the job, narrow the measured workspace, or exclude code merely to make a pull request pass.
+- The only permitted exemption is a whole-file `--ignore-filename-regex` entry justified by an accepted design constraint and recorded in the exemption table in `docs/TESTING.md`. An undocumented exemption is a review-blocking defect.
+
+## Code Review Rules
+
+### GitHub Codex review loop
+
+- After opening a pull request, request a GitHub Codex review with the exact comment `@codex review`.
+- Request at most one Codex review per head commit. After fixes produce a new head commit, request another review only when the previous findings may no longer describe the current diff.
+- Monitor the resulting standard GitHub review, inline comments, issue comments, reactions, and unresolved review threads. Treat actionable inline comments as unfinished work.
+- Address every verified P0/P1 finding and every other actionable correctness or contract finding before merge. Keep fixes focused, push them to the pull request branch, and re-run the review and CI gates.
+- Merge only when required checks, including the 100% coverage gate, are green and no unresolved actionable review thread remains.
+- Codex review is an additional high-signal pass, not a replacement for tests, specifications, branch protection, or independent review.
+
+### Review focus
+
+- Check implementation against the relevant documents linked from `docs/SPEC.md`, especially public contracts, diagnostics, portability, error paths, ownership, and cross-crate boundaries.
+- Flag concrete correctness, security, compatibility, test, and documentation defects. Leave formatting, lint, and other deterministic mechanical checks to CI.
 
 ## Completion check
 

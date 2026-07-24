@@ -51,5 +51,7 @@ jobs:
       - name: Coverage gate smoke check
         run: cargo llvm-cov --version
 
-      - name: cargo llvm-cov --workspace (D-014 gate, 100% lines + regions)
+      # Hard merge invariant from D-014. These thresholds must never be
+      # lowered or bypassed to make a pull request pass.
+      - name: Hard coverage gate — 100% lines + regions (D-014)
         run: cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
