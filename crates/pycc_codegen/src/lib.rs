@@ -2,7 +2,10 @@ use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
 use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
+use inkwell::types::IntType;
+use inkwell::values::FunctionValue;
 use pycc_mir::{MirInstr, MirItem, MirModule};
+use std::collections::HashMap;
 use std::path::Path;
 
 pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), String> {
@@ -16,41 +19,63 @@ pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), Stri
     let print_fn_type = void_type.fn_type(&[i64_type.into()], false);
     let print_fn = module.add_function("pycc_rt_print_i64", print_fn_type, Some(Linkage::External));
 
-    let main_fn_type = i64_type.fn_type(&[], false);
-    let main_fn = module.add_function("main", main_fn_type, None);
-    let entry_block = context.append_basic_block(main_fn, "entry");
-    builder.position_at_end(entry_block);
-
-    let mut user_main_body: Option<&[MirInstr]> = None;
+    // First pass: declare every user-defined function under a mangled name
+    // (never the bare Python name) before emitting any body. Two reasons:
+    // this is what lets a function call another function defined later in
+    // the same module, or itself (recursion -- structurally supported by
+    // this pass ordering, though nothing in v0.1's HIR/MIR can express a
+    // recursive call *with* arguments or a return value yet); and mangling
+    // is what stops a Python-level function actually named `main` from
+    // colliding with the real C-ABI entry point below, which must be
+    // literally named `main` for the OS loader to find it. A def alone has
+    // no runtime effect in Python regardless of its name -- something has
+    // to call it, which is exactly the bug this pass structure fixes (see
+    // git history: an earlier version treated a function merely named
+    // `main` as auto-invoked, which doesn't match CPython at all).
+    let no_arg_void_fn_type = void_type.fn_type(&[], false);
+    let mut user_functions: HashMap<&str, FunctionValue> = HashMap::new();
     for item in &mir.items {
-        match item {
-            MirItem::TopLevelStmt(instr) => emit_instr(&builder, print_fn, i64_type, instr),
-            MirItem::Function { name, body } if name == "main" => user_main_body = Some(body),
-            MirItem::Function { name, .. } => {
-                return Err(format!(
-                    "pycc_codegen v0.1: only a function named `main` is supported so far, got `{name}`"
-                ));
-            }
+        if let MirItem::Function { name, .. } = item {
+            let mangled = format!("pyfn_{name}");
+            let f = module.add_function(&mangled, no_arg_void_fn_type, None);
+            user_functions.insert(name.as_str(), f);
         }
     }
-    if let Some(body) = user_main_body {
-        for instr in body {
-            emit_instr(&builder, print_fn, i64_type, instr);
+
+    let entry_fn_type = i64_type.fn_type(&[], false);
+    let entry_fn = module.add_function("main", entry_fn_type, None);
+    let entry_block = context.append_basic_block(entry_fn, "entry");
+    builder.position_at_end(entry_block);
+    for item in &mir.items {
+        if let MirItem::TopLevelStmt(instr) = item {
+            emit_instr(&builder, print_fn, &user_functions, i64_type, instr)?;
         }
     }
-    // The five .expect()s below are deliberate, not sloppy error handling:
-    // each covers an operation that is infallible given how this function
-    // always calls it (a freshly positioned builder, IR this function
-    // always generates validly by construction, the native host's own
-    // default target). None of them can be triggered by any input this
-    // function accepts, so returning a Result callers would have to
-    // handle -- for an error condition no caller-supplied MIR could ever
-    // cause -- would be misleading, not more defensive. Compare
-    // write_to_file below: a real filesystem-dependent failure mode,
-    // which stays a genuine Result the caller must handle.
+    // See the module-level comment block below for why these five
+    // .expect()s (this one included) are deliberate rather than
+    // Result-threaded: each covers an operation that is infallible given
+    // how this function always calls it. write_to_file, at the very end,
+    // is the one genuine, externally-triggerable failure mode and stays a
+    // real Result the caller must handle.
     builder
         .build_return(Some(&i64_type.const_int(0, false)))
         .expect("build_return should not fail: builder is always freshly positioned before this call");
+
+    // Second pass: fill in each user function's body, now that every
+    // function (including ones a body might call) is already declared.
+    for item in &mir.items {
+        if let MirItem::Function { name, body } = item {
+            let f = user_functions[name.as_str()];
+            let block = context.append_basic_block(f, "entry");
+            builder.position_at_end(block);
+            for instr in body {
+                emit_instr(&builder, print_fn, &user_functions, i64_type, instr)?;
+            }
+            builder
+                .build_return(None)
+                .expect("build_return should not fail: builder is always freshly positioned before this call");
+        }
+    }
 
     module.verify().expect(
         "generated IR should always be well-formed for this fixed instruction shape; \
@@ -79,15 +104,29 @@ pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), Stri
 
 fn emit_instr<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
-    print_fn: inkwell::values::FunctionValue<'ctx>,
-    i64_type: inkwell::types::IntType<'ctx>,
+    print_fn: FunctionValue<'ctx>,
+    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
+    i64_type: IntType<'ctx>,
     instr: &MirInstr,
-) {
-    let MirInstr::CallPrint { arg } = instr;
-    let arg_value = i64_type.const_int(*arg as u64, true);
-    builder
-        .build_call(print_fn, &[arg_value.into()], "call_print")
-        .expect("build_call should not fail for a well-formed print call");
+) -> Result<(), String> {
+    match instr {
+        MirInstr::CallPrint { arg } => {
+            let arg_value = i64_type.const_int(*arg as u64, true);
+            builder
+                .build_call(print_fn, &[arg_value.into()], "call_print")
+                .expect("build_call should not fail for a well-formed print call");
+            Ok(())
+        }
+        MirInstr::CallUserFunction { name } => {
+            let f = user_functions
+                .get(name.as_str())
+                .ok_or_else(|| format!("pycc_codegen v0.1: call to undefined function `{name}`"))?;
+            builder
+                .build_call(*f, &[], "call_user_fn")
+                .expect("build_call should not fail for a well-formed zero-arg call");
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -97,12 +136,36 @@ mod tests {
     use std::process::Command;
 
     #[test]
-    fn compiles_main_calling_print_to_a_running_binary() {
+    fn defining_main_without_calling_it_produces_no_output() {
+        // The regression test for the bug this file's git history fixed:
+        // a function definition alone must never run, regardless of its
+        // name -- matches CPython exactly (confirmed empirically against
+        // python3.14 on this exact source: zero bytes of stdout).
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "main".to_string(),
                 body: vec![MirInstr::CallPrint { arg: 42 }],
             }],
+        };
+        let dir = tempfile_dir("slice0_uncalled_main");
+        let obj_path = dir.join("slice0_uncalled_main.o");
+        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        let bin_path = dir.join("slice0_uncalled_main");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"");
+    }
+
+    #[test]
+    fn compiles_an_explicit_call_to_main_to_a_running_binary() {
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "main".to_string(),
+                    body: vec![MirInstr::CallPrint { arg: 42 }],
+                },
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() }),
+            ],
         };
         let dir = tempfile_dir("slice0");
         let obj_path = dir.join("slice0.o");
@@ -128,11 +191,12 @@ mod tests {
     }
 
     #[test]
-    fn top_level_statements_run_before_a_combined_user_main() {
-        // Not one of PR-2's two named fixtures, but RUNTIME.md's ordering
-        // guarantee ("top-level code ... runs once ... at process start")
-        // has to hold even when a module happens to define both -- so it
-        // gets a test now rather than being an unverified assumption.
+    fn top_level_statements_run_in_order_including_a_call_to_main() {
+        // RUNTIME.md's ordering guarantee ("top-level code ... runs once
+        // ... at process start") applies to top-level statements
+        // themselves running in source order -- which now includes an
+        // explicit call to a user function as just another top-level
+        // statement, not a special auto-invoked case.
         let mir = MirModule {
             items: vec![
                 MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 1 }),
@@ -140,6 +204,7 @@ mod tests {
                     name: "main".to_string(),
                     body: vec![MirInstr::CallPrint { arg: 2 }],
                 },
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() }),
             ],
         };
         let dir = tempfile_dir("slice0_combined");
@@ -152,14 +217,42 @@ mod tests {
     }
 
     #[test]
-    fn a_function_named_anything_other_than_main_is_rejected() {
+    fn calling_an_undefined_function_at_top_level_is_rejected() {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                name: "does_not_exist".to_string(),
+            })],
+        };
+        let dir = tempfile_dir("slice0_undefined_fn");
+        let obj_path = dir.join("slice0_undefined_fn.o");
+        let err = compile_to_object(&mir, &obj_path).expect_err("should be rejected");
+        assert!(err.contains("does_not_exist"), "error should name the offending function: {err}");
+    }
+
+    #[test]
+    fn calling_an_undefined_function_inside_a_function_body_is_rejected() {
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "main".to_string(),
+                body: vec![MirInstr::CallUserFunction { name: "also_does_not_exist".to_string() }],
+            }],
+        };
+        let dir = tempfile_dir("slice0_undefined_fn_nested");
+        let obj_path = dir.join("slice0_undefined_fn_nested.o");
+        let err = compile_to_object(&mir, &obj_path).expect_err("should be rejected");
+        assert!(err.contains("also_does_not_exist"), "error should name the offending function: {err}");
+    }
+
+    #[test]
+    fn a_function_can_be_defined_under_any_name_without_being_called() {
+        // There is no longer a "must be named main" restriction: any
+        // function name is legal to *define*; only calling one runs it.
         let mir = MirModule {
             items: vec![MirItem::Function { name: "helper".to_string(), body: vec![] }],
         };
-        let dir = tempfile_dir("slice0_bad_fn_name");
-        let obj_path = dir.join("slice0_bad_fn_name.o");
-        let err = compile_to_object(&mir, &obj_path).expect_err("should be rejected");
-        assert!(err.contains("helper"), "error should name the offending function: {err}");
+        let dir = tempfile_dir("slice0_any_fn_name");
+        let obj_path = dir.join("slice0_any_fn_name.o");
+        compile_to_object(&mir, &obj_path).expect("defining a function under any name should succeed");
     }
 
     #[test]

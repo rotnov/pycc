@@ -3,6 +3,7 @@ use pycc_hir::{HirItem, HirModule, HirStmt};
 #[derive(Debug, PartialEq)]
 pub enum MirInstr {
     CallPrint { arg: i64 },
+    CallUserFunction { name: String },
 }
 
 #[derive(Debug, PartialEq)]
@@ -31,8 +32,10 @@ pub fn build(hir: &HirModule) -> MirModule {
 }
 
 fn lower_instr(stmt: &HirStmt) -> MirInstr {
-    let HirStmt::CallPrint { arg } = stmt;
-    MirInstr::CallPrint { arg: *arg }
+    match stmt {
+        HirStmt::CallPrint { arg } => MirInstr::CallPrint { arg: *arg },
+        HirStmt::CallUserFunction { name } => MirInstr::CallUserFunction { name: name.clone() },
+    }
 }
 
 #[cfg(test)]
@@ -47,6 +50,18 @@ mod tests {
         };
         let mir = build(&hir);
         assert_eq!(mir.items, vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })]);
+    }
+
+    #[test]
+    fn builds_a_call_user_function_instr() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::CallUserFunction { name: "main".to_string() })],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() })]
+        );
     }
 
     #[test]
