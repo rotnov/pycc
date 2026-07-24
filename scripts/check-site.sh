@@ -42,16 +42,23 @@ class MetadataParser(HTMLParser):
         super().__init__()
         self.in_title = False
         self.in_json_ld = False
+        self.in_body = False
+        self.hidden_body_depth = 0
         self.titles = []
         self.current_title = []
         self.links = []
         self.metas = []
         self.json_ld = []
         self.current_json_ld = []
+        self.visible_body_text = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
-        if tag == "title":
+        if tag == "body":
+            self.in_body = True
+        elif self.in_body and tag in {"script", "style", "template", "noscript"}:
+            self.hidden_body_depth += 1
+        elif tag == "title":
             self.in_title = True
             self.current_title = []
         elif tag == "link":
@@ -63,7 +70,11 @@ class MetadataParser(HTMLParser):
             self.current_json_ld = []
 
     def handle_endtag(self, tag):
-        if tag == "title" and self.in_title:
+        if tag == "body":
+            self.in_body = False
+        elif self.in_body and tag in {"script", "style", "template", "noscript"}:
+            self.hidden_body_depth -= 1
+        elif tag == "title" and self.in_title:
             self.titles.append("".join(self.current_title).strip())
             self.in_title = False
         elif tag == "script" and self.in_json_ld:
@@ -75,6 +86,8 @@ class MetadataParser(HTMLParser):
             self.current_title.append(data)
         if self.in_json_ld:
             self.current_json_ld.append(data)
+        if self.in_body and self.hidden_body_depth == 0:
+            self.visible_body_text.append(data)
 
 
 def require_one(items, description):
@@ -169,11 +182,18 @@ for source in parser.json_ld:
 software_source = require_one(software_sources, "SoftwareSourceCode JSON-LD object")
 if software_source.get("codeRepository") != "https://github.com/rotnov/pycc":
     raise SystemExit("SoftwareSourceCode JSON-LD must link to the public repository")
+
+visible_body_text = " ".join(" ".join(parser.visible_body_text).split())
+required_disclosures = (
+    "Built entirely by AI.",
+    "Managed by a human.",
+    "No project code is handwritten by a human.",
+)
+for disclosure in required_disclosures:
+    if disclosure not in visible_body_text:
+        raise SystemExit(f"Missing visible AI authorship disclosure: {disclosure}")
 PY
 
-assert_once "Built entirely by AI." "$index"
-assert_once "Managed by a human." "$index"
-assert_once "No project code is handwritten by a human." "$index"
 assert_once "Sitemap: ${canonical}sitemap.xml" "$site_dir/robots.txt"
 assert_once "<loc>${canonical}</loc>" "$site_dir/sitemap.xml"
 

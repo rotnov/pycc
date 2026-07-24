@@ -65,7 +65,8 @@ path = Path(sys.argv[1])
 content = path.read_text()
 required = "No project code is handwritten by a human."
 assert required in content
-path.write_text(content.replace(required, "Human authorship is not disclosed.", 1))
+replacement = f"Human authorship is not disclosed.<!-- {required} -->"
+path.write_text(content.replace(required, replacement, 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
