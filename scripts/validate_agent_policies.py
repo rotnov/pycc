@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -15,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PREFIXES = (".ievo/", ".claude/", ".agents/", ".github/", "scripts/")
 PROJECT_PREFIXES = ("$CLAUDE_PROJECT_DIR/", "${CLAUDE_PROJECT_DIR}/")
 SCRIPT_SUFFIXES = (".sh", ".py", ".js", ".mjs", ".cjs")
-INTERPRETERS = ("sh", "bash", "zsh", "python", "python3", "node")
+SHELL_INTERPRETERS = ("sh", "bash", "zsh")
+NODE_INTERPRETERS = ("node", "nodejs")
 
 
 def tracked_files() -> set[str]:
@@ -28,11 +30,13 @@ def tracked_files() -> set[str]:
     return {entry.decode("utf-8") for entry in result.stdout.split(b"\0") if entry}
 
 
-def hook_targets(settings: dict[str, Any]) -> list[str]:
-    targets: list[str] = []
+def parsed_hook_commands(
+    settings: dict[str, Any],
+) -> list[tuple[list[str], list[str]]]:
+    commands: list[tuple[list[str], list[str]]] = []
     hooks = settings.get("hooks", {})
     if not isinstance(hooks, dict):
-        return targets
+        return commands
     for groups in hooks.values():
         if not isinstance(groups, list):
             continue
@@ -58,37 +62,70 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
                     if isinstance(arguments, list)
                     else []
                 )
-                tokens = [*command_tokens, *argument_tokens]
-                for token in tokens:
-                    normalized, explicit_project_path = normalize_hook_token(token)
-                    if explicit_project_path or normalized.startswith(LOCAL_PREFIXES):
-                        targets.append(normalized)
+                commands.append((command_tokens, argument_tokens))
+    return commands
 
-                if not command_tokens:
+
+def interpreter_kind(executable: str) -> str | None:
+    name = executable.replace("\\", "/").rsplit("/", 1)[-1]
+    if name in SHELL_INTERPRETERS:
+        return "shell"
+    if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", name):
+        return "python"
+    if name in NODE_INTERPRETERS:
+        return "node"
+    return None
+
+
+def inline_interpreter_mode(kind: str, tokens: list[str]) -> str | None:
+    for token in tokens:
+        if token == "--":
+            return None
+        if kind == "shell" and token.startswith("-") and "c" in token[1:]:
+            return token
+        if kind == "python" and token.startswith(("-c", "-m")):
+            return token
+        if kind == "node" and (
+            token in {"-e", "--eval", "-p", "--print"}
+            or token.startswith(("-e=", "-p="))
+            or token.startswith("--eval=")
+            or token.startswith("--print=")
+        ):
+            return token
+    return None
+
+
+def hook_targets(settings: dict[str, Any]) -> list[str]:
+    targets: list[str] = []
+    for command_tokens, argument_tokens in parsed_hook_commands(settings):
+        tokens = [*command_tokens, *argument_tokens]
+        for token in tokens:
+            normalized, explicit_project_path = normalize_hook_token(token)
+            if explicit_project_path or normalized.startswith(LOCAL_PREFIXES):
+                targets.append(normalized)
+
+        if not command_tokens:
+            continue
+        executable, _ = normalize_hook_token(command_tokens[0])
+        if is_relative_script_path(executable):
+            targets.append(executable)
+            continue
+        kind = interpreter_kind(executable)
+        if kind is not None:
+            script_tokens = [*command_tokens[1:], *argument_tokens]
+            if inline_interpreter_mode(kind, script_tokens):
+                continue
+            for token in script_tokens:
+                normalized, explicit_project_path = normalize_hook_token(token)
+                if token.startswith("-"):
                     continue
-                executable, _ = normalize_hook_token(command_tokens[0])
-                if is_relative_script_path(executable):
-                    targets.append(executable)
-                    continue
-                interpreter = executable.replace("\\", "/").rsplit("/", 1)[-1]
-                if interpreter in INTERPRETERS:
-                    script_tokens = [*command_tokens[1:], *argument_tokens]
-                    if any(
-                        token in {"-c", "-lc", "-e", "--eval", "-m", "-s"}
-                        for token in script_tokens
-                    ):
-                        continue
-                    for token in script_tokens:
-                        normalized, explicit_project_path = normalize_hook_token(token)
-                        if token.startswith("-"):
-                            continue
-                        if (
-                            explicit_project_path
-                            or is_relative_script_path(normalized)
-                            or normalized == token
-                        ):
-                            targets.append(normalized)
-                            break
+                if (
+                    explicit_project_path
+                    or is_relative_script_path(normalized)
+                    or normalized == token
+                ):
+                    targets.append(normalized)
+                    break
     return list(dict.fromkeys(targets))
 
 
@@ -132,8 +169,16 @@ def validate_hook_schema(settings: dict[str, Any]) -> list[str]:
                 if not isinstance(entry, dict):
                     failures.append(f"{location} must be an object")
                     continue
-                if not isinstance(entry.get("command"), str):
+                command = entry.get("command")
+                if not isinstance(command, str):
                     failures.append(f"{location}.command must be a string")
+                else:
+                    try:
+                        shlex.split(command)
+                    except ValueError as error:
+                        failures.append(
+                            f"{location}.command is not valid shell syntax: {error}"
+                        )
                 arguments = entry.get("args", [])
                 if not isinstance(arguments, list) or not all(
                     isinstance(argument, str) for argument in arguments
@@ -153,6 +198,24 @@ def parse_flag(contents: str) -> dict[str, str]:
 
 def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[str]:
     failures: list[str] = []
+    for command_tokens, argument_tokens in parsed_hook_commands(settings):
+        if not command_tokens:
+            continue
+        executable, _ = normalize_hook_token(command_tokens[0])
+        kind = interpreter_kind(executable)
+        mode = (
+            inline_interpreter_mode(
+                kind,
+                [*command_tokens[1:], *argument_tokens],
+            )
+            if kind is not None
+            else None
+        )
+        if mode is not None:
+            failures.append(
+                "shared hook inline interpreter mode cannot be validated: "
+                f"{command_tokens[0]} {mode}"
+            )
     for target in hook_targets(settings):
         if target.startswith(".ievo/hooks/"):
             failures.append(f"shared hook target must remain machine-local: {target}")

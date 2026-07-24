@@ -204,6 +204,92 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ["shared hook target is not tracked: tools/local-hook.sh"],
         )
 
+    def test_inline_shell_command_is_rejected_fail_closed(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": (
+                                    "sh -c 'exec .ievo/hooks/scripts/capture.sh'"
+                                ),
+                                "args": [],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook inline interpreter mode cannot be validated: sh -c"],
+        )
+
+    def test_inline_shell_argument_is_rejected_fail_closed(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "/bin/bash",
+                                "args": [
+                                    "-lc",
+                                    ("exec $CLAUDE_PROJECT_DIR/tools/local-hook.sh"),
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            ["shared hook inline interpreter mode cannot be validated: /bin/bash -lc"],
+        )
+
+    def test_inline_python_and_node_commands_are_rejected(self) -> None:
+        for command, arguments, expected in [
+            (
+                "/usr/bin/python3.14",
+                ["-c", "exec(open('tools/hook.py').read())"],
+                "/usr/bin/python3.14 -c",
+            ),
+            (
+                "python3",
+                ["-cprint('inline')"],
+                "python3 -cprint('inline')",
+            ),
+            (
+                "node",
+                ["--eval=require('./tools/hook.js')"],
+                "node --eval=require('./tools/hook.js')",
+            ),
+        ]:
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: {expected}"
+                    ],
+                )
+
     def test_string_args_are_rejected(self) -> None:
         settings = {
             "hooks": {
@@ -223,6 +309,25 @@ class AgentPolicyValidationTests(unittest.TestCase):
             validator.validate_hook_schema(settings),
             ["hooks.SessionStart[0].hooks[0].args must be a list of strings"],
         )
+
+    def test_malformed_shell_command_is_rejected_fail_closed(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "sh -c 'unterminated",
+                                "args": [],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        failures = validator.validate_hook_schema(settings)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("command is not valid shell syntax", failures[0])
 
     def test_flag_parser_preserves_policy_values(self) -> None:
         self.assertEqual(
