@@ -22,7 +22,10 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 
 ## Invariants (short version)
 
-1. **Standard Python 3.14 in, native binary out.** No dialect, no new syntax — ever.
+1. **Standard Python in, native binary out.** pycc never adds its own dialect or
+   syntax. The v1.0 language level is exactly CPython 3.14; admitting a later
+   standard Python language level requires its versioned roadmap gate and a
+   superseding ADR.
 2. **Strict types are the only mode.** Untyped public API doesn't compile.
 3. **Ownership is inferred, never written.** Semantics-preserving; only performance changes.
 4. **No GIL; safety proven at compile time.**
