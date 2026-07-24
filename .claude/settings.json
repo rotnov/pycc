@@ -17,9 +17,17 @@
         "source": "github",
         "repo": "wshobson/agents"
       }
+    },
+    "ievo-skills": {
+      "source": {
+        "source": "github",
+        "repo": "ievo-ai/skills"
+      },
+      "autoUpdate": true
     }
   },
   "enabledPlugins": {
+    "ievo@ievo-skills": true,
     "feature-dev@claude-plugins-official": true,
     "code-review@claude-plugins-official": true,
     "pr-review-toolkit@claude-plugins-official": true,
