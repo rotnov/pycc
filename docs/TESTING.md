@@ -85,7 +85,10 @@ can change its own workflow. The authoritative `Workflow policy` workflow uses
 downloads only the head revision's workflow YAML through the read-only GitHub
 API, and treats it as data. It never checks out or executes pull-request code,
 so the check can remain required without path-filtered runs getting stuck as
-pending. Job-level trusted-ref exceptions remain a review boundary: reviewers
+pending. Its checkout uses `github.sha`, which `pull_request_target` defines as
+the latest commit on the base branch; do not substitute the webhook payload's
+potentially stale `pull_request.base.sha`. Job-level trusted-ref exceptions
+remain a review boundary: reviewers
 must verify the event, actor where relevant, ref, trusted commit, environment,
 and every artifact/cache/output boundary, with a focused negative-event test
 whenever practical.
