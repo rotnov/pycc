@@ -134,7 +134,9 @@ required and scanned. Every selected asset is checked regardless of file extensi
 using strict UTF-8 or BOM-tagged UTF-16 decoding; unknown encodings fail closed.
 UTF-32 and NUL-bearing text are rejected explicitly so BOM-less UTF-16 cannot
 masquerade as UTF-8. References to an optional plugin or its marketplace are rejected.
-The exact iEvo exemption applies only while
+For a pinned marketplace, only the exact validated baseline identity is exempt; an
+unknown or disabled sibling is still rejected. The exact iEvo exemption applies only
+while
 `enabledPlugins["ievo@ievo-skills"]` is `true`.
 
 Treat bytes resolved from those marketplaces as mutable and review them before use.

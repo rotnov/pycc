@@ -486,12 +486,15 @@ def mask_token(text: str, token: str) -> str:
 
 
 def required_asset_body(relative: Path, text: str) -> str:
-    if relative.parts[:2] != (".ievo", "evolution") or not text.startswith("---\n"):
+    if relative.parts[:2] != (".ievo", "evolution"):
         return text
-    end = text.find("\n---\n", 4)
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.startswith("---\n"):
+        return normalized
+    end = normalized.find("\n---\n", 4)
     if end == -1:
-        return text
-    return text[end + len("\n---\n") :]
+        return normalized
+    return normalized[end + len("\n---\n") :]
 
 
 def decode_required_asset(data: bytes) -> str:
@@ -515,14 +518,18 @@ def validate_optional_plugin_boundary(
     repository_files: Iterable[tuple[Path, str]] | None = None,
 ) -> None:
     optional = optional_claude_plugins(settings)
-    if not optional:
-        return
 
     names: dict[str, list[str]] = {}
     for identity, marketplace in optional.items():
         name = identity.rpartition("@")[0]
         names.setdefault(name, []).append(identity)
     marketplaces = set(optional.values())
+    pinned_marketplaces = {
+        identity.rpartition("@")[2]
+        for identity in PINNED_CLAUDE_PLUGINS
+        if "@" in identity
+    }
+    enabled_pinned = PINNED_CLAUDE_PLUGINS.difference(optional)
 
     try:
         paths = required_agent_files(root, repository_files)
@@ -546,6 +553,27 @@ def validate_optional_plugin_boundary(
             )
             continue
         text = required_asset_body(Path(relative), text)
+        pinned_violation: str | None = None
+        boundary = r"[A-Za-z0-9_-]"
+        for marketplace in pinned_marketplaces:
+            pattern = re.compile(
+                rf"(?<!{boundary})([A-Za-z0-9_-]+)@"
+                rf"{re.escape(marketplace)}(?!{boundary})"
+            )
+            for match in pattern.finditer(text):
+                identity = f"{match.group(1)}@{marketplace}"
+                if identity not in enabled_pinned:
+                    pinned_violation = identity
+                    break
+            if pinned_violation is not None:
+                break
+        if pinned_violation is not None:
+            failures.append(
+                f"{relative}: required agent asset references unvalidated Claude "
+                f"plugin {pinned_violation}; pin it and provide Codex parity first"
+            )
+            continue
+
         for identity in sorted(optional, key=lambda value: (-len(value), value)):
             if has_token(text, identity):
                 failures.append(
@@ -555,7 +583,6 @@ def validate_optional_plugin_boundary(
                 break
         else:
             fallback_text = text
-            enabled_pinned = PINNED_CLAUDE_PLUGINS.difference(optional)
             for identity in enabled_pinned:
                 fallback_text = mask_token(fallback_text, identity)
             for name in sorted(names, key=lambda value: (-len(value), value)):

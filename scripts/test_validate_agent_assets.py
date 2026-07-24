@@ -567,6 +567,27 @@ class AgentAssetValidationTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn(f"{MUTABLE_HELPER}@ievo-skills", failures[0])
 
+    def test_unconfigured_sibling_in_pinned_marketplace_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text(
+                f"Use `{MUTABLE_HELPER}@ievo-skills` for every change.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(f"{MUTABLE_HELPER}@ievo-skills", failures[0])
+
     def test_scoped_instruction_files_reject_optional_plugin_references(self) -> None:
         for filename in ("AGENTS.md", "CLAUDE.md"):
             with self.subTest(filename=filename):
@@ -670,49 +691,57 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
 
     def test_ievo_overlay_provenance_is_not_a_required_dependency(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            overlay = root / ".ievo" / "evolution" / "skills" / "demo.md"
-            overlay.parent.mkdir(parents=True)
-            overlay.write_text(
-                "---\n"
-                "source:\n"
-                f"  path: plugins/{FEATURE_DEV}/skills/demo\n"
-                "---\n\n"
-                "# Local vendored overlay\n",
-                encoding="utf-8",
-            )
-            settings = {
-                "enabledPlugins": {
-                    f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
-                    "ievo@ievo-skills": True,
-                }
-            }
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    overlay = root / ".ievo" / "evolution" / "skills" / "demo.md"
+                    overlay.parent.mkdir(parents=True)
+                    provenance = newline.join(
+                        (
+                            "---",
+                            "source:",
+                            f"  path: plugins/{FEATURE_DEV}/skills/demo",
+                            "---",
+                            "",
+                        )
+                    )
+                    overlay.write_text(
+                        provenance + "# Local vendored overlay" + newline,
+                        encoding="utf-8",
+                    )
+                    settings = {
+                        "enabledPlugins": {
+                            f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                            "ievo@ievo-skills": True,
+                        }
+                    }
 
-            failures = self.optional_boundary_failures(
-                settings,
-                root,
-                [(overlay, "100644")],
-            )
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                        [(overlay, "100644")],
+                    )
 
-            self.assertEqual(failures, [])
-            overlay.write_text(
-                "---\n"
-                "source:\n"
-                f"  path: plugins/{FEATURE_DEV}/skills/demo\n"
-                "---\n\n"
-                f"Run /{FEATURE_DEV} before continuing.\n",
-                encoding="utf-8",
-            )
+                    self.assertEqual(failures, [])
+                    overlay.write_text(
+                        provenance
+                        + f"Run /{FEATURE_DEV} before continuing."
+                        + newline,
+                        encoding="utf-8",
+                    )
 
-            failures = self.optional_boundary_failures(
-                settings,
-                root,
-                [(overlay, "100644")],
-            )
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                        [(overlay, "100644")],
+                    )
 
-            self.assertEqual(len(failures), 1)
-            self.assertIn(overlay.relative_to(root).as_posix(), failures[0])
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(
+                        overlay.relative_to(root).as_posix(),
+                        failures[0],
+                    )
 
     def test_required_agent_asset_symlink_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
