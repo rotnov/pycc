@@ -10,11 +10,11 @@
         "source": "git-subdir",
         "url": "https://github.com/ievo-ai/skills.git",
         "path": "./plugins/ievo",
-        "ref": "main"
+        "ref": "7d5f3e12d0556cb6c5df2974e2babe0433674186"
       },
       "policy": {
         "installation": "INSTALLED_BY_DEFAULT",
-        "authentication": "NONE"
+        "authentication": "ON_INSTALL"
       },
       "category": "Productivity"
     }

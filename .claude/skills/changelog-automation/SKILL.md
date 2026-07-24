@@ -33,46 +33,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Detailed patterns and worked examples
+## [Unreleased]
 
-Detailed pattern documentation lives in `references/details.md`. Read that file when the navigation tier above is insufficient.
+### Added
 
-## Summary
+- Dark mode preference
 
-This release introduces dark mode support and improves checkout performance
-by 40%. It also includes important security updates.
-
-## Highlights
-
-### 🌙 Dark Mode
-
-Users can now switch to dark mode from settings. The preference is
-automatically saved and synced across devices.
-
-### ⚡ Performance
+### Changed
 
 - Checkout flow is 40% faster
-- Reduced bundle size by 15%
 
-## Breaking Changes
-
-None in this release.
-
-## Upgrade Guide
-
-No special steps required. Standard deployment process applies.
-
-## Known Issues
-
-- Dark mode may flicker on initial load (fix scheduled for v2.1.1)
-
-## Dependencies Updated
-
-| Package | From    | To      | Reason                   |
-| ------- | ------- | ------- | ------------------------ |
-| react   | 18.2.0  | 18.3.0  | Performance improvements |
-| lodash  | 4.17.20 | 4.17.21 | Security patch           |
+[Unreleased]: https://github.com/user/repo/compare/v1.2.0...HEAD
 ```
+
+## Detailed patterns and worked examples
+
+Detailed pattern documentation lives in
+[`references/details.md`](references/details.md). Read that file when the quick example
+above is insufficient.
 
 ## Commit Message Examples
 

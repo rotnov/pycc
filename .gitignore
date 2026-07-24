@@ -20,6 +20,9 @@ target
 target/
 # pycc cache
 .pycc/
+# Python tooling caches
+__pycache__/
+*.py[cod]
 # OS
 .DS_Store
 Thumbs.db
