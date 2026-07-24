@@ -116,7 +116,7 @@ def privileged_job?(entries, job_node, context)
 end
 
 def parse_workflow(text, source)
-  stream = Psych.parse_stream(text, source)
+  stream = Psych.parse_stream(text, filename: source)
   if stream.children.length != 1 || stream.children.first.root.nil?
     raise PolicyError, "workflow must contain exactly one YAML document"
   end
