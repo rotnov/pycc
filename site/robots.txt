@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://rotnov.github.io/pycc/sitemap.xml
