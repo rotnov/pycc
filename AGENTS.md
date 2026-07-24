@@ -21,6 +21,12 @@
 - Documentation work is part of every implementation task. Update all affected documentation in the same change and commit as the code; a change is incomplete while its docs describe the old behavior.
 - Keep descriptions honest about what exists now versus what is planned. Update examples, commands, status markers, acceptance criteria, and cross-references when their underlying behavior changes.
 - Keep `docs/ROADMAP.md` current in the same pull request whenever behavior, platform support, milestone acceptance evidence, or delivery sequencing changes. Its current-status section describes the repository tree in the commit that contains it: count behavior and evidence added by that same commit, but never count work that exists only in another open pull request or unmerged branch.
+- Mark a roadmap acceptance item `[x]` only with an inline
+  `roadmap-evidence` identifier recognized by
+  `scripts/check_roadmap_evidence.rb`. Add a failing public-CLI mutation test
+  before teaching the checker a new identifier, and run both
+  `ruby scripts/test_check_roadmap_evidence.rb` and
+  `ruby scripts/check_roadmap_evidence.rb`.
 - When milestone decomposition, dependencies, or execution order changes, update `docs/DELIVERY_PLAN.md` together with the roadmap.
 - When adding, removing, renaming, or changing the purpose of a specification document under `docs/`, update `docs/SPEC.md` so it remains the reliable specification map.
 - Record irreversible or project-wide design choices in `docs/DECISIONS.md`. Do not silently rewrite an accepted decision; add a new decision that supersedes it.
