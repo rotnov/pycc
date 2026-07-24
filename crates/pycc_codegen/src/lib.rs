@@ -390,19 +390,53 @@ mod tests {
     }
 
     /// Test-only linking helper. `pycc`'s real CLI (Task 8) does this via
-    /// `cc`; duplicated minimally here so pycc_codegen's own tests can prove
-    /// the object file it produces actually links and runs, without
-    /// depending on the `pycc` binary crate (that would be a dependency
-    /// cycle: pycc depends on pycc_codegen, not the other way around).
+    /// `cc`/clang (see `src/main.rs`'s `linker_command`/`effective_link_target`/
+    /// `add_windows_system_libs`); duplicated minimally here so
+    /// pycc_codegen's own tests can prove the object file it produces
+    /// actually links and runs, without depending on the `pycc` binary
+    /// crate (that would be a dependency cycle: pycc depends on
+    /// pycc_codegen, not the other way around). Needs the same Windows
+    /// handling as `main.rs`, and for the same reasons: there's no default
+    /// `cc` there (D-021) -- on this runner it silently resolved to
+    /// MinGW's `gcc`, which cannot link the MSVC-ABI `pycc_rt.lib` (the
+    /// exact "undefined reference to `__imp_...`"/`collect2` wall D-021
+    /// already diagnosed for `main.rs`, reproduced here because this
+    /// helper wasn't covered by that fix); clang's bare-invocation default
+    /// target also proved unreliable (D-025), so `-target` must be
+    /// explicit too.
     fn link_object_with_runtime(obj_path: &std::path::Path, bin_path: &std::path::Path) {
         let rt_lib_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
-        let status = Command::new("cc")
-            .arg(obj_path)
-            .arg("-L").arg(&rt_lib_dir)
-            .arg("-lpycc_rt")
-            .arg("-o").arg(bin_path)
-            .status()
-            .expect("cc should run");
+
+        #[cfg(windows)]
+        let mut cmd = {
+            let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX")).join("bin").join("clang.exe");
+            let mut cmd = Command::new(clang);
+            cmd.arg("-target").arg("x86_64-pc-windows-msvc");
+            cmd
+        };
+        #[cfg(not(windows))]
+        let mut cmd = Command::new("cc");
+
+        cmd.arg(obj_path).arg("-L").arg(&rt_lib_dir).arg("-lpycc_rt").arg("-o").arg(bin_path);
+
+        #[cfg(windows)]
+        for lib in [
+            "ws2_32",
+            "ntdll",
+            "userenv",
+            "advapi32",
+            "shell32",
+            "ole32",
+            "uuid",
+            "psapi",
+            "dbghelp",
+            "kernel32",
+            "legacy_stdio_definitions",
+        ] {
+            cmd.arg(format!("-l{lib}"));
+        }
+
+        let status = cmd.status().expect("the linker driver should run");
         assert!(status.success(), "linking failed");
     }
 }
