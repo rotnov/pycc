@@ -3,7 +3,9 @@ set -eu
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 test_claude_config=$(mktemp -d "${TMPDIR:-/tmp}/pycc-claude-config.XXXXXX")
-marketplace_root="$test_claude_config/inline-marketplace"
+marketplaces_root="$test_claude_config/inline-marketplaces"
+enabled_plugins_file="$test_claude_config/enabled-plugins.txt"
+installed_plugins_file="$test_claude_config/installed-plugins.json"
 
 cleanup() {
   rm -rf -- "$test_claude_config"
@@ -25,29 +27,77 @@ if printf '%s\n' "$doctor_output" | grep -q "Invalid settings"; then
   exit 1
 fi
 
-mkdir -p "$marketplace_root/.claude-plugin"
+mkdir -p "$marketplaces_root"
 python3 - "$repo_root/.claude/settings.json" \
-  "$marketplace_root/.claude-plugin/marketplace.json" <<'PY'
+  "$marketplaces_root" "$enabled_plugins_file" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-settings_path, marketplace_path = map(Path, sys.argv[1:])
+settings_path = Path(sys.argv[1])
+marketplaces_root = Path(sys.argv[2])
+enabled_plugins_path = Path(sys.argv[3])
 settings = json.loads(settings_path.read_text(encoding="utf-8"))
-source = settings["extraKnownMarketplaces"]["ievo-skills"]["source"]
-marketplace = {
-    "name": source["name"],
-    "owner": {"name": "pycc maintainers"},
-    "description": "Pinned repository agent tooling.",
-    "plugins": source["plugins"],
-}
-marketplace_path.write_text(
-    json.dumps(marketplace, indent=2) + "\n",
-    encoding="utf-8",
-)
+for name, configuration in settings["extraKnownMarketplaces"].items():
+    source = configuration["source"]
+    if source.get("source") != "settings":
+        raise SystemExit(f"{name}: marketplace is not inline and immutable")
+    marketplace_path = marketplaces_root / name / ".claude-plugin" / "marketplace.json"
+    marketplace_path.parent.mkdir(parents=True)
+    marketplace = {
+        "name": source["name"],
+        "owner": {"name": "pycc maintainers"},
+        "description": "Pinned repository agent tooling.",
+        "plugins": source["plugins"],
+    }
+    marketplace_path.write_text(
+        json.dumps(marketplace, indent=2) + "\n",
+        encoding="utf-8",
+    )
+enabled = [
+    coordinate
+    for coordinate, value in settings["enabledPlugins"].items()
+    if value is True
+]
+enabled_plugins_path.write_text("\n".join(sorted(enabled)) + "\n", encoding="utf-8")
 PY
 
-env CLAUDE_CONFIG_DIR="$test_claude_config" \
-  claude plugin validate --strict "$marketplace_root"
+for marketplace_root in "$marketplaces_root"/*; do
+  env CLAUDE_CONFIG_DIR="$test_claude_config" \
+    claude plugin validate --strict "$marketplace_root"
+  env CLAUDE_CONFIG_DIR="$test_claude_config" \
+    claude plugin marketplace add "$marketplace_root"
+done
 
-echo "Claude marketplace: project settings and inline manifest are valid"
+while IFS= read -r coordinate; do
+  env CLAUDE_CONFIG_DIR="$test_claude_config" \
+    claude plugin install --scope user "$coordinate"
+done <"$enabled_plugins_file"
+
+env CLAUDE_CONFIG_DIR="$test_claude_config" \
+  claude plugin list --json >"$installed_plugins_file"
+python3 - "$enabled_plugins_file" "$installed_plugins_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+expected = {
+    line
+    for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+    if line
+}
+payload = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+entries = payload.get("installed", []) if isinstance(payload, dict) else payload
+if not isinstance(entries, list):
+    raise SystemExit("Claude plugin list must be an array")
+installed = {
+    plugin["id"]
+    for plugin in entries
+    if isinstance(plugin, dict) and isinstance(plugin.get("id"), str)
+}
+missing = sorted(expected - installed)
+if missing:
+    raise SystemExit("enabled plugins were not installed: " + ", ".join(missing))
+PY
+
+echo "Claude marketplaces: manifests and pinned plugin installs are valid"

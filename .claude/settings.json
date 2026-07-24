@@ -6,17 +6,122 @@
     ]
   },
   "extraKnownMarketplaces": {
-    "claude-plugins-official": {
+    "pycc-official-pinned": {
       "source": {
-        "source": "github",
-        "repo": "anthropics/claude-plugins-official"
-      }
+        "source": "settings",
+        "name": "pycc-official-pinned",
+        "plugins": [
+          {
+            "name": "feature-dev",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/anthropics/claude-plugins-official.git",
+              "path": "./plugins/feature-dev",
+              "sha": "15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f"
+            }
+          },
+          {
+            "name": "code-review",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/anthropics/claude-plugins-official.git",
+              "path": "./plugins/code-review",
+              "sha": "15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f"
+            }
+          },
+          {
+            "name": "pr-review-toolkit",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/anthropics/claude-plugins-official.git",
+              "path": "./plugins/pr-review-toolkit",
+              "sha": "15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f"
+            }
+          },
+          {
+            "name": "rust-analyzer-lsp",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/anthropics/claude-plugins-official.git",
+              "path": "./plugins/rust-analyzer-lsp",
+              "sha": "15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f"
+            }
+          },
+          {
+            "name": "claude-security",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/anthropics/claude-plugins-official.git",
+              "path": "./plugins/claude-security",
+              "sha": "15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f"
+            }
+          },
+          {
+            "name": "security-guidance",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/anthropics/claude-plugins-official.git",
+              "path": "./plugins/security-guidance",
+              "sha": "15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f"
+            }
+          }
+        ]
+      },
+      "autoUpdate": false
     },
-    "claude-code-workflows": {
+    "pycc-workflows-pinned": {
       "source": {
-        "source": "github",
-        "repo": "wshobson/agents"
-      }
+        "source": "settings",
+        "name": "pycc-workflows-pinned",
+        "plugins": [
+          {
+            "name": "systems-programming",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/wshobson/agents.git",
+              "path": "./plugins/systems-programming",
+              "sha": "c4b82b0ad771190355eb8e204b1329732a18449a"
+            }
+          },
+          {
+            "name": "security-scanning",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/wshobson/agents.git",
+              "path": "./plugins/security-scanning",
+              "sha": "c4b82b0ad771190355eb8e204b1329732a18449a"
+            }
+          },
+          {
+            "name": "dependency-management",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/wshobson/agents.git",
+              "path": "./plugins/dependency-management",
+              "sha": "c4b82b0ad771190355eb8e204b1329732a18449a"
+            }
+          },
+          {
+            "name": "tdd-workflows",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/wshobson/agents.git",
+              "path": "./plugins/tdd-workflows",
+              "sha": "c4b82b0ad771190355eb8e204b1329732a18449a"
+            }
+          },
+          {
+            "name": "performance-testing-review",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/wshobson/agents.git",
+              "path": "./plugins/performance-testing-review",
+              "sha": "c4b82b0ad771190355eb8e204b1329732a18449a"
+            }
+          }
+        ]
+      },
+      "autoUpdate": false
     },
     "ievo-skills": {
       "source": {
@@ -39,16 +144,16 @@
   },
   "enabledPlugins": {
     "ievo@ievo-skills": true,
-    "feature-dev@claude-plugins-official": true,
-    "code-review@claude-plugins-official": true,
-    "pr-review-toolkit@claude-plugins-official": true,
-    "rust-analyzer-lsp@claude-plugins-official": true,
-    "claude-security@claude-plugins-official": true,
-    "security-guidance@claude-plugins-official": true,
-    "systems-programming@claude-code-workflows": true,
-    "security-scanning@claude-code-workflows": true,
-    "dependency-management@claude-code-workflows": true,
-    "tdd-workflows@claude-code-workflows": true,
-    "performance-testing-review@claude-code-workflows": true
+    "feature-dev@pycc-official-pinned": true,
+    "code-review@pycc-official-pinned": true,
+    "pr-review-toolkit@pycc-official-pinned": true,
+    "rust-analyzer-lsp@pycc-official-pinned": true,
+    "claude-security@pycc-official-pinned": true,
+    "security-guidance@pycc-official-pinned": true,
+    "systems-programming@pycc-workflows-pinned": true,
+    "security-scanning@pycc-workflows-pinned": true,
+    "dependency-management@pycc-workflows-pinned": true,
+    "tdd-workflows@pycc-workflows-pinned": true,
+    "performance-testing-review@pycc-workflows-pinned": true
   }
 }
