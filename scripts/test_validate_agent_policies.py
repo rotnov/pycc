@@ -229,6 +229,36 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_home_relative_machine_local_scripts_are_rejected(self) -> None:
+        for target in (
+            "~/local-hook.sh",
+            "~alice/local-hook.sh",
+            r"~\.ievo\hooks\capture.ps1",
+            "$HOME/.ievo/hooks/capture.sh",
+            "${HOME}/.ievo/hooks/capture.sh",
+            r"%USERPROFILE%\.ievo\hooks\capture.ps1",
+            r"$env:USERPROFILE\.ievo\hooks\capture.ps1",
+        ):
+            with self.subTest(target=target):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": target,
+                                        "args": [],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [f"shared hook target must not be home-relative: {target}"],
+                )
+
     def test_absolute_script_argument_is_rejected_but_interpreter_is_allowed(
         self,
     ) -> None:
@@ -536,6 +566,99 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ["shared hook inline interpreter mode cannot be validated: /bin/bash -lc"],
         )
 
+    def test_shell_variants_and_powershell_preview_reject_inline_modes(self) -> None:
+        for command, arguments, expected in [
+            (
+                "dash",
+                [
+                    "-c",
+                    r""". "$HOME"$(printf %b '\057.ievo\057hooks\057capture.sh')""",
+                ],
+                "dash -c",
+            ),
+            ("ash", ["-c", "echo inline"], "ash -c"),
+            ("ksh.exe", ["-c", "echo inline"], "ksh.exe -c"),
+            ("fish", ["-c", "echo inline"], "fish -c"),
+            ("pwsh-preview", ["-Command", "Write-Output ok"], "pwsh-preview -Command"),
+        ]:
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: {expected}"
+                    ],
+                )
+
+    def test_unknown_interpreter_inline_options_are_rejected_fail_closed(self) -> None:
+        for command, arguments, expected in [
+            ("busybox", ["sh", "-c", "echo inline"], "busybox -c"),
+            ("perl", ["-e", "print 'inline'"], "perl -e"),
+            ("perl", ["-eprint('inline')"], "perl -eprint('inline')"),
+            ("perl", ["-weprint('inline')"], "perl -weprint('inline')"),
+            ("php", ["-r", "1"], "php -r"),
+            ("php", ["-rCODE"], "php -rCODE"),
+            ("busybox", ["sh", "-xc", "echo inline"], "busybox -xc"),
+        ]:
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: {expected}"
+                    ],
+                )
+
+    def test_tracked_wrapper_options_are_not_treated_as_inline_code(self) -> None:
+        for target in ("scripts/tracked-hook.sh", "scripts/python", "tools/sh"):
+            with self.subTest(target=target):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": target,
+                                        "args": ["-c", "config.toml"],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, {target}),
+                    [],
+                )
+
     def test_inline_python_and_node_commands_are_rejected(self) -> None:
         for command, arguments, expected in [
             (
@@ -576,6 +699,82 @@ class AgentPolicyValidationTests(unittest.TestCase):
                         f"validated: {expected}"
                     ],
                 )
+
+    def test_windows_interpreter_executables_reject_inline_modes(self) -> None:
+        for command, arguments, expected in [
+            (
+                "python.exe",
+                ["-c", "exec(open('tools/hook.py').read())"],
+                "python.exe -c",
+            ),
+            (
+                "node.exe",
+                ["--eval=require('./tools/hook.js')"],
+                "node.exe --eval=require('./tools/hook.js')",
+            ),
+            (
+                "py.exe",
+                ["-c", "exec(open('tools/hook.py').read())"],
+                "py.exe -c",
+            ),
+            (
+                "pyw.exe",
+                ["-c", "exec(open('tools/hook.py').read())"],
+                "pyw.exe -c",
+            ),
+            (
+                "pythonw.exe",
+                ["-c", "exec(open('tools/hook.py').read())"],
+                "pythonw.exe -c",
+            ),
+        ]:
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: {expected}"
+                    ],
+                )
+
+    def test_inline_ruby_commands_are_rejected(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "ruby.exe",
+                                "args": [
+                                    "-eload File.join('.ievo','hooks','capture.rb')"
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, set()),
+            [
+                "shared hook inline interpreter mode cannot be validated: "
+                "ruby.exe -eload File.join('.ievo','hooks','capture.rb')"
+            ],
+        )
 
     def test_string_args_are_rejected(self) -> None:
         settings = {

@@ -26,13 +26,43 @@ SCRIPT_SUFFIXES = (
     ".mjs",
     ".cjs",
 )
-SHELL_INTERPRETERS = ("sh", "bash", "zsh")
+SHELL_INTERPRETERS = ("sh", "bash", "zsh", "dash", "ash", "ksh", "mksh", "fish")
 NODE_INTERPRETERS = ("node", "nodejs")
-POWERSHELL_INTERPRETERS = ("powershell", "powershell.exe", "pwsh", "pwsh.exe")
+POWERSHELL_INTERPRETERS = ("powershell", "pwsh", "pwsh-preview")
 COMMAND_LAUNCHERS = ("command", "env", "exec")
+OPAQUE_INLINE_OPTIONS = {
+    "-c",
+    "-e",
+    "-r",
+    "--command",
+    "--encodedcommand",
+    "--eval",
+    "--execute",
+}
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
 WINDOWS_ABSOLUTE_IN_COMMAND = re.compile(r"(?:^|[\s\"'])[A-Za-z]:[\\/]")
+HOME_RELATIVE_PATH = re.compile(r"^~[^/\\]*[/\\]")
+HOME_ENV_PREFIXES = (
+    "$home/",
+    "$home\\",
+    "${home}/",
+    "${home}\\",
+    "$userprofile/",
+    "$userprofile\\",
+    "${userprofile}/",
+    "${userprofile}\\",
+    "$env:userprofile/",
+    "$env:userprofile\\",
+    "%userprofile%/",
+    "%userprofile%\\",
+)
+HOME_RELATIVE_IN_COMMAND = re.compile(
+    r"(?:^|[\s\"'])(?:~[^/\\\s\"']*|"
+    r"\$(?:home|userprofile)|\$\{(?:home|userprofile)\}|"
+    r"\$env:userprofile|%userprofile%)[/\\]",
+    re.IGNORECASE,
+)
 SHELL_CONTROL = re.compile(r"&&|\|\||[;&|]")
 
 
@@ -72,6 +102,7 @@ def parsed_hook_commands(
                 command_for_split = (
                     command.replace("\\", "\\\\")
                     if WINDOWS_ABSOLUTE_IN_COMMAND.search(command)
+                    or HOME_RELATIVE_IN_COMMAND.search(command)
                     else command
                 )
                 try:
@@ -88,15 +119,21 @@ def parsed_hook_commands(
 
 
 def interpreter_kind(executable: str) -> str | None:
-    name = executable.replace("\\", "/").rsplit("/", 1)[-1]
+    name = executable.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    name = name.removesuffix(".exe")
     if name in SHELL_INTERPRETERS:
         return "shell"
-    if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", name):
+    if name in {"py", "pyw"} or re.fullmatch(
+        r"pythonw?(?:\d+(?:\.\d+)*)?",
+        name,
+    ):
         return "python"
     if name in NODE_INTERPRETERS:
         return "node"
-    if name.lower() in POWERSHELL_INTERPRETERS:
+    if name in POWERSHELL_INTERPRETERS:
         return "powershell"
+    if re.fullmatch(r"ruby(?:\d+(?:\.\d+)*)?", name):
+        return "ruby"
     return None
 
 
@@ -119,6 +156,41 @@ def inline_interpreter_mode(kind: str, tokens: list[str]) -> str | None:
             option = token.lstrip("-").split(":", 1)[0].lower()
             if option and (
                 "command".startswith(option) or "encodedcommand".startswith(option)
+            ):
+                return token
+        if kind == "ruby" and token.startswith("-e"):
+            return token
+    return None
+
+
+def opaque_inline_mode(executable: str, tokens: list[str]) -> str | None:
+    for token in tokens:
+        lowered = token.lower()
+        option = lowered.split("=", 1)[0].split(":", 1)[0]
+        if option in OPAQUE_INLINE_OPTIONS:
+            return token
+        if any(
+            lowered.startswith(short_option) and len(lowered) > len(short_option)
+            for short_option in ("-c", "-e", "-r")
+        ):
+            return token
+
+    name = executable.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    name = name.removesuffix(".exe")
+    if name == "perl":
+        for token in tokens:
+            if (
+                token.startswith("-")
+                and not token.startswith("--")
+                and "e" in token[1:]
+            ):
+                return token
+    if name == "busybox" and tokens and tokens[0] in SHELL_INTERPRETERS:
+        for token in tokens[1:]:
+            if (
+                token.startswith("-")
+                and not token.startswith("--")
+                and "c" in token[1:]
             ):
                 return token
     return None
@@ -161,6 +233,9 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
         if is_relative_script_path(executable):
             targets.append(executable)
             continue
+        if is_home_relative_script_path(executable):
+            targets.append(executable)
+            continue
         kind = interpreter_kind(executable)
         if kind is None and is_absolute_script_path(executable):
             targets.append(executable)
@@ -173,6 +248,7 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
                 if (
                     explicit_project_path
                     or is_relative_script_path(normalized)
+                    or is_home_relative_script_path(normalized)
                     or is_absolute_script_path(normalized)
                 ):
                     targets.append(normalized)
@@ -188,6 +264,7 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
                 if (
                     explicit_project_path
                     or is_relative_script_path(normalized)
+                    or is_home_relative_script_path(normalized)
                     or is_absolute_script_path(normalized)
                     or normalized == token
                 ):
@@ -209,6 +286,7 @@ def normalize_hook_token(token: str) -> tuple[str, bool]:
 def is_relative_script_path(token: str) -> bool:
     return (
         not token.startswith(("/", "~"))
+        and not is_home_relative_script_path(token)
         and "://" not in token
         and ("/" in token or token.endswith(SCRIPT_SUFFIXES))
     )
@@ -217,6 +295,18 @@ def is_relative_script_path(token: str) -> bool:
 def is_absolute_script_path(token: str) -> bool:
     return (
         (token.startswith("/") or WINDOWS_ABSOLUTE_PATH.match(token) is not None)
+        and "://" not in token
+        and ("/" in token or "\\" in token or token.endswith(SCRIPT_SUFFIXES))
+    )
+
+
+def is_home_relative_script_path(token: str) -> bool:
+    normalized = token.lower()
+    return (
+        (
+            HOME_RELATIVE_PATH.match(token) is not None
+            or normalized.startswith(HOME_ENV_PREFIXES)
+        )
         and "://" not in token
         and ("/" in token or "\\" in token or token.endswith(SCRIPT_SUFFIXES))
     )
@@ -290,13 +380,18 @@ def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[s
             continue
         executable, _ = normalize_hook_token(resolved[0])
         kind = interpreter_kind(executable)
+        tracked_wrapper = is_relative_script_path(executable) and executable in tracked
         mode = (
-            inline_interpreter_mode(
-                kind,
-                resolved[1:],
+            None
+            if tracked_wrapper
+            else (
+                inline_interpreter_mode(
+                    kind,
+                    resolved[1:],
+                )
+                if kind is not None
+                else opaque_inline_mode(executable, resolved[1:])
             )
-            if kind is not None
-            else None
         )
         if mode is not None:
             failures.append(
@@ -304,7 +399,9 @@ def validate_hook_targets(settings: dict[str, Any], tracked: set[str]) -> list[s
                 f"{resolved[0]} {mode}"
             )
     for target in hook_targets(settings):
-        if is_absolute_script_path(target):
+        if is_home_relative_script_path(target):
+            failures.append(f"shared hook target must not be home-relative: {target}")
+        elif is_absolute_script_path(target):
             failures.append(f"shared hook target must not be absolute: {target}")
         elif target.startswith(".ievo/hooks/"):
             failures.append(f"shared hook target must remain machine-local: {target}")

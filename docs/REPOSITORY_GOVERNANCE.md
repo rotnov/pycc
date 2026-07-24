@@ -7,7 +7,7 @@ enforce the normal delivery path.
 
 - Pull request required; direct pushes are rejected.
 - The branch must be current with `main` before merge.
-- Required status check: `build-test-coverage`.
+- Required status checks: `build-test-coverage` and the trusted `audit` context.
 - Zero approving reviews are required while this is a solo-maintainer repository.
   Requiring the author's own approval would deadlock every pull request. Enable one
   independent approval, stale-approval dismissal, and last-push approval when a
@@ -21,10 +21,13 @@ not-yet-emitted context, because that creates an unfulfillable merge gate.
 
 ## Direct-commit audit
 
-`.github/workflows/main-history-audit.yml` runs after every push to `main`. It queries
-GitHub's commit-to-pull-request association for every commit in the push and fails
-when no merged PR targeting `main` exists. This is an alert and forensic control; it
-does not replace preventive branch protection.
+`.github/workflows/main-history-audit.yml` runs
+`scripts/check_main_history.py` after every push to `main`. The script queries GitHub's
+commit-to-pull-request association for every commit in the push and fails when no
+merged PR targeting `main` exists. Its revision enumeration, API-failure, malformed
+response, associated-commit, and unassociated-commit paths are covered by
+`scripts/test_check_main_history.py`. This is an alert and forensic control; it does
+not replace preventive branch protection.
 
 Treat a failed audit as a release-blocking governance incident:
 
