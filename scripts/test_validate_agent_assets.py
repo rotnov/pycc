@@ -63,6 +63,80 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
         self.assertIsNone(validator.IMMUTABLE_SHA.fullmatch("v0.58.1"))
 
+    def claude_settings(
+        self,
+        *,
+        sha: str = "7d5f3e12d0556cb6c5df2974e2babe0433674186",
+    ) -> dict:
+        return {
+            "extraKnownMarketplaces": {
+                "ievo-skills": {
+                    "source": {
+                        "source": "settings",
+                        "name": "ievo-skills",
+                        "plugins": [
+                            {
+                                "name": "ievo",
+                                "source": {
+                                    "source": "git-subdir",
+                                    "url": validator.IEVO_REPOSITORY_URL,
+                                    "path": validator.IEVO_PLUGIN_PATH,
+                                    "sha": sha,
+                                },
+                            }
+                        ],
+                    },
+                    "autoUpdate": False,
+                }
+            }
+        }
+
+    def validate_claude_settings(
+        self,
+        settings: dict,
+        codex_ref: str = "7d5f3e12d0556cb6c5df2974e2babe0433674186",
+    ) -> list[str]:
+        failures: list[str] = []
+        validator.validate_claude_ievo_marketplace(
+            settings,
+            codex_ref,
+            failures,
+        )
+        return failures
+
+    def test_inline_claude_marketplace_with_exact_plugin_sha_is_accepted(
+        self,
+    ) -> None:
+        self.assertEqual(self.validate_claude_settings(self.claude_settings()), [])
+
+    def test_claude_marketplace_ref_is_rejected(self) -> None:
+        settings = self.claude_settings()
+        marketplace = settings["extraKnownMarketplaces"]["ievo-skills"]
+        marketplace["source"] = {
+            "source": "github",
+            "repo": "ievo-ai/skills",
+            "ref": "7d5f3e12d0556cb6c5df2974e2babe0433674186",
+        }
+        failures = self.validate_claude_settings(settings)
+        self.assertTrue(
+            any("inline settings marketplace" in failure for failure in failures)
+        )
+
+    def test_claude_plugin_pin_must_be_an_exact_sha(self) -> None:
+        failures = self.validate_claude_settings(
+            self.claude_settings(sha="v0.58.1"),
+        )
+        self.assertTrue(
+            any("full immutable commit SHA" in failure for failure in failures)
+        )
+
+    def test_claude_and_codex_pins_must_match(self) -> None:
+        failures = self.validate_claude_settings(
+            self.claude_settings(),
+            codex_ref="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
+        self.assertTrue(any("must match" in failure for failure in failures))
+
 
 if __name__ == "__main__":
     unittest.main()

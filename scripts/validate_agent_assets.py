@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / ".claude" / "skills"
 AUTHENTICATION_POLICIES = {"ON_INSTALL", "ON_USE"}
 IMMUTABLE_SHA = re.compile(r"^[0-9a-f]{40}$")
+IEVO_REPOSITORY_URL = "https://github.com/ievo-ai/skills.git"
+IEVO_PLUGIN_PATH = "./plugins/ievo"
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SLASH_SKILL = re.compile(r"`/([a-z][a-z0-9-]+)`")
 ABSOLUTE_OUTPUT = re.compile(
@@ -34,17 +36,90 @@ def load_json(relative_path: str, failures: list[str]) -> dict:
     return value
 
 
+def validate_claude_ievo_marketplace(
+    settings: dict,
+    codex_ievo_ref: str | None,
+    failures: list[str],
+    settings_path: str = ".claude/settings.json",
+) -> None:
+    marketplaces = settings.get("extraKnownMarketplaces")
+    if not isinstance(marketplaces, dict):
+        failures.append(f"{settings_path}: extraKnownMarketplaces must be an object")
+        return
+
+    ievo_marketplace = marketplaces.get("ievo-skills")
+    if not isinstance(ievo_marketplace, dict):
+        failures.append(f"{settings_path}: ievo-skills marketplace is required")
+        return
+    if ievo_marketplace.get("autoUpdate") is not False:
+        failures.append(f"{settings_path}: ievo-skills.autoUpdate must be false")
+
+    marketplace_source = ievo_marketplace.get("source")
+    if not isinstance(marketplace_source, dict):
+        failures.append(f"{settings_path}: ievo-skills.source must be an object")
+        return
+    if marketplace_source.get("source") != "settings":
+        failures.append(
+            f"{settings_path}: ievo-skills must use an inline settings marketplace"
+        )
+    if marketplace_source.get("name") != "ievo-skills":
+        failures.append(f"{settings_path}: inline marketplace name must be ievo-skills")
+
+    plugins = marketplace_source.get("plugins")
+    if not isinstance(plugins, list) or not plugins:
+        failures.append(
+            f"{settings_path}: inline marketplace plugins must be a non-empty array"
+        )
+        return
+    ievo_plugins = [
+        plugin
+        for plugin in plugins
+        if isinstance(plugin, dict) and plugin.get("name") == "ievo"
+    ]
+    if len(ievo_plugins) != 1:
+        failures.append(
+            f"{settings_path}: inline marketplace must contain exactly one ievo plugin"
+        )
+        return
+
+    plugin_source = ievo_plugins[0].get("source")
+    if not isinstance(plugin_source, dict):
+        failures.append(f"{settings_path}: ievo plugin source must be an object")
+        return
+    if plugin_source.get("source") != "git-subdir":
+        failures.append(f"{settings_path}: ievo plugin must use a git-subdir source")
+    if plugin_source.get("url") != IEVO_REPOSITORY_URL:
+        failures.append(
+            f"{settings_path}: ievo plugin URL must be {IEVO_REPOSITORY_URL}"
+        )
+    if plugin_source.get("path") != IEVO_PLUGIN_PATH:
+        failures.append(f"{settings_path}: ievo plugin path must be {IEVO_PLUGIN_PATH}")
+    if "ref" in plugin_source:
+        failures.append(
+            f"{settings_path}: ievo plugin must use sha, not ref, for an exact pin"
+        )
+    sha = plugin_source.get("sha")
+    if not isinstance(sha, str) or IMMUTABLE_SHA.fullmatch(sha) is None:
+        failures.append(
+            f"{settings_path}: ievo plugin sha must be a full immutable commit SHA"
+        )
+    elif codex_ievo_ref is not None and sha != codex_ievo_ref:
+        failures.append(
+            f"{settings_path}: ievo plugin sha must match the Codex iEvo commit"
+        )
+
+
 def validate_marketplaces(failures: list[str]) -> None:
-    marketplace_path = ".agents/plugins/marketplace.json"
-    marketplace = load_json(marketplace_path, failures)
+    codex_path = ".agents/plugins/marketplace.json"
+    marketplace = load_json(codex_path, failures)
     plugins = marketplace.get("plugins")
     if not isinstance(plugins, list) or not plugins:
-        failures.append(f"{marketplace_path}: plugins must be a non-empty array")
+        failures.append(f"{codex_path}: plugins must be a non-empty array")
         return
 
     codex_ievo_ref: str | None = None
     for index, plugin in enumerate(plugins):
-        label = f"{marketplace_path}: plugins[{index}]"
+        label = f"{codex_path}: plugins[{index}]"
         if not isinstance(plugin, dict):
             failures.append(f"{label} must be an object")
             continue
@@ -64,31 +139,16 @@ def validate_marketplaces(failures: list[str]) -> None:
             codex_ievo_ref = ref
 
     if codex_ievo_ref is None:
-        failures.append(f"{marketplace_path}: ievo plugin entry is required")
+        failures.append(f"{codex_path}: ievo plugin entry is required")
 
     claude_path = ".claude/settings.json"
     settings = load_json(claude_path, failures)
-    marketplaces = settings.get("extraKnownMarketplaces")
-    if not isinstance(marketplaces, dict):
-        failures.append(f"{claude_path}: extraKnownMarketplaces must be an object")
-        return
-
-    ievo = marketplaces.get("ievo-skills")
-    if not isinstance(ievo, dict):
-        failures.append(f"{claude_path}: ievo-skills marketplace is required")
-        return
-    if ievo.get("autoUpdate") is not False:
-        failures.append(f"{claude_path}: ievo-skills.autoUpdate must be false")
-    source = ievo.get("source")
-    ref = source.get("ref") if isinstance(source, dict) else None
-    if not isinstance(ref, str) or IMMUTABLE_SHA.fullmatch(ref) is None:
-        failures.append(
-            f"{claude_path}: ievo-skills source.ref must be a full immutable commit SHA"
-        )
-    elif codex_ievo_ref is not None and ref != codex_ievo_ref:
-        failures.append(
-            f"{claude_path}: ievo-skills source.ref must match the Codex iEvo commit"
-        )
+    validate_claude_ievo_marketplace(
+        settings,
+        codex_ievo_ref,
+        failures,
+        claude_path,
+    )
 
 
 def fence_error(path: Path) -> str | None:

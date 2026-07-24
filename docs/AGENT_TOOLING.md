@@ -10,9 +10,12 @@ They must be reproducible, reviewed, and rollbackable just like compiler depende
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
 | Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
 
-The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin lives
-in `.claude/settings.json`; both resolve the same immutable commit rather than
-trusting a movable release tag. A fresh Codex checkout is bootstrapped explicitly:
+The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin is the
+`sha` of the `git-subdir` plugin source inside the inline settings marketplace in
+`.claude/settings.json`. Marketplace `ref` values only support branches and tags, so
+the exact commit belongs on the plugin source instead. Both surfaces resolve the same
+immutable commit rather than trusting a movable release tag. A fresh Codex checkout
+is bootstrapped explicitly:
 
 ```sh
 ./scripts/bootstrap-agent-tools.sh
@@ -22,9 +25,11 @@ Codex does not implicitly register a repository-local marketplace. The bootstrap
 script registers this repository as a marketplace and installs the pinned iEvo plugin.
 Claude Code reads the project-scoped marketplace declaration after the repository is
 trusted and enables the configured plugin without enabling automatic updates.
-The `Agent assets` workflow repeats the validators and isolated Codex bootstrap on
-every pull request and push to `main`, so a developer's global plugin installation
-cannot mask a broken repository pin or bootstrap path.
+The `Agent assets` workflow repeats the validators plus isolated Codex and Claude Code
+checks on every pull request and push to `main`. Claude Code validates the project
+settings and the extracted inline marketplace with its strict manifest validator, so
+a developer's global plugin installation cannot mask a broken repository pin or
+marketplace declaration.
 
 ## Reviewed update process
 
@@ -40,6 +45,7 @@ cannot mask a broken repository pin or bootstrap path.
    ```sh
    python3 scripts/validate_agent_assets.py
    ./scripts/check-codex-marketplace.sh
+   ./scripts/check-claude-marketplace.sh
    ```
 
 5. Merge only through the normal reviewed pull-request and required-CI path.
