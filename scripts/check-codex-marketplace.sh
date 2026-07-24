@@ -16,20 +16,8 @@ if ! command -v codex >/dev/null 2>&1; then
 fi
 
 cp -R "$repo_root/.agents" "$stale_checkout/.agents"
-python3 -c '
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-path.write_text(
-    path.read_text(encoding="utf-8") + "\nSTALE_CHECKOUT_MARKER\n",
-    encoding="utf-8",
-)
-' "$stale_checkout/.agents/plugins/plugins/pycc-agent-skills/skills/tdd/SKILL.md"
 env CODEX_HOME="$test_codex_home" \
   codex plugin marketplace add "$stale_checkout" --json >/dev/null
-env CODEX_HOME="$test_codex_home" \
-  codex plugin add pycc-agent-skills@ievo-skills --json >/dev/null
 
 env CODEX_HOME="$test_codex_home" "$repo_root/scripts/bootstrap-agent-tools.sh"
 
@@ -58,33 +46,35 @@ python3 -c '
 import json, sys
 data = json.load(sys.stdin)
 entries = data.get("installed", [])
-for plugin_id in ("ievo@ievo-skills", "pycc-agent-skills@ievo-skills"):
-    matches = [entry for entry in entries if entry.get("pluginId") == plugin_id]
-    assert len(matches) == 1, f"{plugin_id} was not installed exactly once"
-    assert matches[0].get("installed") is True, f"{plugin_id} is not installed"
-    assert matches[0].get("enabled") is True, f"{plugin_id} is not enabled"
+matches = [entry for entry in entries if entry.get("pluginId") == "ievo@ievo-skills"]
+assert len(matches) == 1, "ievo@ievo-skills was not installed exactly once"
+assert matches[0].get("installed") is True, "ievo@ievo-skills is not installed"
+assert matches[0].get("enabled") is True, "ievo@ievo-skills is not enabled"
+assert not any(
+    entry.get("pluginId") == "pycc-agent-skills@ievo-skills"
+    for entry in entries
+), "repository skills must not be installed globally"
 ' <<EOF
 $plugins
 EOF
 
-project_plugin=$(env CODEX_HOME="$test_codex_home" \
-  codex plugin add pycc-agent-skills@ievo-skills --json)
 prompt_input="$test_codex_home/prompt-input.json"
 env CODEX_HOME="$test_codex_home" \
   codex -C "$repo_root" debug prompt-input >"$prompt_input"
+# The Python regex anchors use `$`; the single-quoted program must not shell-expand it.
+# shellcheck disable=SC2016
 python3 -c '
 import json
 import pathlib
 import re
 import sys
 
-installed = pathlib.Path(json.load(sys.stdin)["installedPath"])
-wrappers = sorted(path.parent.name for path in installed.glob("skills/*/SKILL.md"))
-assert "grill-with-docs" in wrappers, "Codex skill wrappers were not installed"
-assert len(wrappers) == 13, "Codex did not install every repository skill wrapper"
-assert "STALE_CHECKOUT_MARKER" not in (
-    installed / "skills" / "tdd" / "SKILL.md"
-).read_text(encoding="utf-8"), "stale plugin cache was not refreshed"
+repo_root = pathlib.Path(sys.argv[2]).resolve()
+wrappers = sorted(
+    path.parent.name for path in (repo_root / ".agents" / "skills").glob("*/SKILL.md")
+)
+assert "grill-with-docs" in wrappers, "Codex skill wrappers are missing"
+assert len(wrappers) == 13, "Codex did not retain every repository skill wrapper"
 prompt = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 model_input = "\n".join(
     content.get("text", "")
@@ -92,12 +82,30 @@ model_input = "\n".join(
     for content in item.get("content", [])
     if isinstance(content, dict)
 )
+skill_roots = {
+    pathlib.Path(root).resolve(): alias
+    for alias, root in re.findall(
+        r"^- `(r[0-9]+)` = `([^`]+)`$",
+        model_input,
+        re.MULTILINE,
+    )
+}
+expected_root = (repo_root / ".agents" / "skills").resolve()
+assert expected_root in skill_roots, "Codex did not register the project skill root"
+alias = skill_roots[expected_root]
 discovered = sorted(
-    re.findall(r"^- pycc-agent-skills:([^:]+):", model_input, flags=re.MULTILINE)
+    name
+    for name, directory in re.findall(
+        rf"^- ([a-z][a-z0-9-]+):.*\(file: {alias}/([^/]+)/SKILL\.md\)$",
+        model_input,
+        re.MULTILINE,
+    )
+    if name == directory
 )
 assert discovered == wrappers, "Codex did not discover every project skill wrapper"
-' "$prompt_input" <<EOF
-$project_plugin
-EOF
+assert "pycc-agent-skills:" not in model_input, (
+    "repository skills must not be discovered from a global plugin namespace"
+)
+' "$prompt_input" "$repo_root"
 
-echo "Codex marketplace and discovered skills: valid after replacing a stale checkout"
+echo "Codex pinned marketplace and project-scoped skills: valid"

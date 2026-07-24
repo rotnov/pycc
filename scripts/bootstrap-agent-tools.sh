@@ -44,6 +44,6 @@ if [ "$marketplace_state" != "current" ]; then
 fi
 
 codex plugin add ievo@ievo-skills
-codex plugin add pycc-agent-skills@ievo-skills
 
-echo "Codex marketplace, pinned iEvo, and repository skills are installed."
+echo "Codex marketplace and pinned iEvo are installed."
+echo "Repository skills are discovered project-locally from .agents/skills/."

@@ -8,7 +8,7 @@ They must be reproducible, reviewed, and rollbackable just like compiler depende
 | Surface | Dependency | Pin | Automatic updates |
 |---|---|---|---|
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
-| Codex | `pycc-agent-skills@ievo-skills` | current repository revision | refreshed explicitly by bootstrap |
+| Codex | repository skills under `.agents/skills/` | current repository revision | project-scoped; no global installation |
 | Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
 
 The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin is the
@@ -24,10 +24,12 @@ is bootstrapped explicitly:
 
 Codex does not implicitly register a repository-local marketplace. The bootstrap
 script replaces a same-named registration from another checkout, registers this
-repository as the marketplace, and installs the pinned iEvo plugin plus the
-repository-owned `pycc-agent-skills` plugin. The latter contains thin Codex entry
-points that always load the canonical workflow bodies from `.claude/skills/`; CI
-requires the two skill sets and their discovery metadata to stay in lockstep.
+repository as the marketplace, and installs only the pinned iEvo plugin.
+Repository-owned Codex entry points live under `.agents/skills/`, so Codex discovers
+them only while this checkout is active; they are never installed globally or made
+available to unrelated repositories. The entry points load the canonical workflow
+bodies from this checkout's `.claude/skills/`, and CI requires the two skill sets and
+their discovery metadata to stay in lockstep.
 Claude Code reads the project-scoped marketplace declaration after the repository is
 trusted and enables the configured plugin without enabling automatic updates.
 The `Agent assets` workflow repeats the validators plus isolated Codex and Claude Code

@@ -69,12 +69,15 @@ class AgentAssetValidationTests(unittest.TestCase):
         name: str,
         description: str,
         body: str,
+        *,
+        extra_frontmatter: str = "",
     ) -> Path:
         skill_root = root / name
         skill_root.mkdir(parents=True)
         path = skill_root / "SKILL.md"
         path.write_text(
-            f"---\nname: {name}\ndescription: {description}\n---\n\n{body}\n",
+            f"---\nname: {name}\ndescription: {description}\n"
+            f"{extra_frontmatter}---\n\n{body}\n",
             encoding="utf-8",
         )
         return path
@@ -145,6 +148,68 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
         self.assertTrue(any("missing canonical" in failure for failure in failures))
         self.assertTrue(any("without canonical" in failure for failure in failures))
+
+    def test_explicit_only_canonical_skill_requires_a_codex_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_root = root / "canonical"
+            codex_root = root / "codex"
+            self.write_skill(
+                canonical_root,
+                "example",
+                "Explicit invocation only; never select this skill implicitly. "
+                "Example workflow.",
+                "# Canonical",
+                extra_frontmatter="disable-model-invocation: true\n",
+            )
+            self.write_skill(
+                codex_root,
+                "example",
+                "Explicit invocation only; never select this skill implicitly. "
+                "Example workflow.",
+                "Read `.claude/skills/example/SKILL.md` completely as the "
+                "canonical workflow.",
+            )
+            failures: list[str] = []
+            validator.validate_skill_parity(
+                canonical_root,
+                codex_root,
+                failures,
+            )
+            self.assertTrue(
+                any("explicit-only invocation gate" in failure for failure in failures)
+            )
+
+    def test_explicit_only_codex_guard_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_root = root / "canonical"
+            codex_root = root / "codex"
+            self.write_skill(
+                canonical_root,
+                "example",
+                "Explicit invocation only; never select this skill implicitly. "
+                "Example workflow.",
+                "# Canonical",
+                extra_frontmatter="disable-model-invocation: true\n",
+            )
+            self.write_skill(
+                codex_root,
+                "example",
+                "Explicit invocation only; never select this skill implicitly. "
+                "Example workflow.",
+                "The canonical workflow is explicit-only. Continue only when "
+                "the user names `$example`. If selected implicitly, stop without "
+                "writing files. Read `.claude/skills/example/SKILL.md` completely "
+                "as the canonical workflow.",
+            )
+            failures: list[str] = []
+            validator.validate_skill_parity(
+                canonical_root,
+                codex_root,
+                failures,
+            )
+            self.assertEqual(failures, [])
 
     def claude_settings(
         self,
