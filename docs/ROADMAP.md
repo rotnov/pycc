@@ -4,7 +4,7 @@ Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone i
 
 ## Current delivery status
 
-Last reviewed against default-branch commit `fab1232` on 2026-07-24. This section counts only behavior merged to `main`; an open pull request is work in flight, not implemented behavior.
+Last reviewed against default-branch commit `6317382` on 2026-07-24. This section counts only behavior merged to `main`; an open pull request is work in flight, not implemented behavior.
 
 **Current milestone: v0.1 — in progress.** The first end-to-end vertical slice works on the primary macOS arm64 host, but v0.1 is not yet shippable.
 
@@ -27,6 +27,21 @@ Last reviewed against default-branch commit `fab1232` on 2026-07-24. This sectio
 - [x] The 100% line and region coverage gate is required and green for the current slice.
 
 The next delivery slices remain the sequence defined in [DELIVERY_PLAN.md](./DELIVERY_PLAN.md): Tier-1 CI and cross-compilation, frontend depth with real strict typing and the performance gate, full v0.1 codegen/runtime breadth, the conformance testkit and named demos, then the final v0.1 acceptance pass.
+
+## CPython release alignment
+
+Last reviewed **2026-07-24**. D-012 still fixes v1 to the Python 3.14 language
+level; patch releases advance the differential oracle without changing that
+language-level decision.
+
+| Track | Current upstream release | Roadmap action |
+|---|---|---|
+| v1 stable oracle | Python **3.14.6** final (2026-06-10) | Use 3.14.6 for new conformance recordings and the PR-6 CI oracle; keep all earlier 3.14 behavior green. |
+| Next language level | Python **3.15.0b4** (2026-07-18), final beta | Track feature-frozen Final/Accepted standards in `PYTHON_STANDARDS.md`; adoption starts only after v1.0 and Python 3.15.0 final. |
+
+Every newly observed Python release updates this table and
+`PYTHON_STANDARDS.md` together. Observable maintenance-release semantics also
+update the relevant runtime/stdlib spec and differential fixtures.
 
 ## v0.1 — "hello, binary"
 
@@ -84,9 +99,24 @@ Corpus Tier-3 (`mypy`, `httpx`, `rich`) tracked; corpus-bot auto-issues live; `s
 
 ## v1.0 — spec freeze
 
-PYTHON_STANDARDS matrix: every row ✅ or explicitly `rejected-by-design` with negative test; semantics deviations doc complete; benchmarks vs CPython/Nuitka/Codon/mypyc published; diagnostics/JSON formats frozen (semver).
+PYTHON_STANDARDS Python 3.0–3.14 matrix: every row ✅ or explicitly
+`rejected-by-design` with negative test; the Python 3.15 preview rows do not
+gate v1.0. Semantics deviations doc complete; benchmarks vs
+CPython/Nuitka/Codon/mypyc published; diagnostics/JSON formats frozen (semver).
 
 **Accept:** corpus Tier-1..3 green 3 releases in a row; fuzzer finds 0 mismatches for 30 consecutive days; docs site.
+
+## v1.x — Python 3.15 adoption
+
+Starts only after both pycc v1.0 and upstream Python 3.15.0 final. Add the 3.15
+grammar, typing rules, import behavior, builtins, and stdlib surface listed in
+the preview matrix while preserving Python 3.14 compatibility.
+
+**Accept:** every Python 3.15 matrix row is ✅ or explicitly
+`rejected-by-design` with a negative test; differential conformance runs
+against a pinned current Python 3.15 patch on all Tier-1 targets; the complete
+Python 3.14 suite remains green; a new ADR supersedes D-012 and records the
+supported-version policy.
 
 ## Post-1.0 (parking lot)
 
