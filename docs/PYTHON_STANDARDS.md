@@ -9,7 +9,13 @@ the exact diagnostic.
 
 **Conventions**
 
-- Test path: `tests/conformance/pyXY/pep_NNNN_slug.py` — compiled by pycc, executed, and compared with the pinned oracle for that language track. Python 3.0–3.14 rows use CPython 3.14.6; preview `py315/` rows use a pinned current Python 3.15 patch only after the v1.x adoption gate opens.
+- Test path: `tests/conformance/pyXY/pep_NNNN_slug.py`. Every supported
+  language level runs all fixture directories through that level and compares
+  them with its pinned oracle. The v1.0 Python 3.14 run therefore covers
+  `py30/` through `py314/` against CPython 3.14.6. After the v1.x gate opens,
+  the Python 3.15 run covers `py30/` through `py315/` against its pinned
+  current 3.15 patch, while the independent 3.14 compatibility run remains
+  required.
 - Negative tests: `tests/diagnostics/dNNNN_slug.py` — must *fail to compile* with the documented error code.
 - Category: `syntax` · `typing` · `sem` (semantics/data model) · `import` · `rt` (runtime) — `rt`-only PEPs may need design docs instead of codegen.
 - Status: ☐ planned · ⚙ in progress · ✅ passing.
@@ -34,9 +40,10 @@ ADR that supersedes D-012.
 The gate-opening change must also add a machine-readable supported-language
 registry consumed by project-configuration validation and `pycc_testkit`. For
 each accepted language level, the registry binds its configuration value,
-fixture directory, and pinned CPython oracle. CI must reject drift between that
-registry, this matrix, and the conformance jobs. Until then, preview rows are
-planning inventory only and do not make Python 3.15 a supported input level.
+cumulative fixture range, and pinned CPython oracle. CI must reject drift
+between that registry, this matrix, and the conformance jobs. Until then,
+preview rows are planning inventory only and do not make Python 3.15 a
+supported input level.
 
 For each newly observed upstream release:
 
