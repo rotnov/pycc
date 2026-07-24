@@ -42,6 +42,12 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pyc
 | `pycc_diag` | Diagnostics engine, error registry (see DIAGNOSTICS.md) |
 | `pycc_testkit` | Conformance/differential test harness (see TESTING.md) |
 
+The v0.1 HIR preserves Python's module execution order while resolving its
+current function-call subset. A top-level call can use only function
+definitions already reached in the source, including every function reachable
+from that call. A function body may refer to a later module function when
+top-level execution does not invoke that path until after the later definition.
+
 Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [DECISIONS.md](./DECISIONS.md) D-003).
 
 ## Performance requirements (compiler itself)

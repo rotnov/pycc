@@ -1,6 +1,6 @@
 use pycc_ast::{Expr, ExprCall, ModModule, Number, Ranged, Stmt, TextRange};
 use pycc_diag::{Diagnostic, Span};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, PartialEq)]
 pub enum HirStmt {
@@ -29,14 +29,22 @@ pub struct HirModule {
     pub items: Vec<HirItem>,
 }
 
+struct FunctionCall {
+    name: String,
+    range: TextRange,
+}
+
 /// Lowers a parsed module into the subset of HIR implemented by this pycc
 /// version.
 ///
 /// Syntactically valid Python outside that subset is returned as `C0001`
 /// instead of panicking, while calls to undefined functions are returned as
-/// `T0004`, so CLI callers can report ordinary frontend errors.
+/// `T0004`, so CLI callers can report ordinary frontend errors. Module-level
+/// calls observe Python's source-order name binding; function bodies may refer
+/// to later module functions only when top-level execution reaches the call
+/// after those definitions have run.
 pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
-    let defined_functions = module
+    let module_functions = module
         .body
         .iter()
         .filter_map(|stmt| match stmt {
@@ -44,30 +52,46 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
             _ => None,
         })
         .collect::<HashSet<_>>();
+    let mut available_functions = HashSet::new();
+    let mut function_calls = HashMap::<String, Vec<FunctionCall>>::new();
     let mut items = Vec::new();
     for stmt in &module.body {
         match stmt {
             Stmt::FunctionDef(f) => {
+                let mut calls = Vec::new();
                 let body = f
                     .body
                     .iter()
-                    .map(|stmt| lower_stmt(stmt, &defined_functions))
+                    .map(|stmt| lower_stmt(stmt, &module_functions, &mut calls))
                     .collect::<Result<Vec<_>, _>>()?;
-                items.push(HirItem::Function {
-                    name: f.name.id.as_str().to_string(),
-                    body,
-                });
+                let name = f.name.id.as_str().to_string();
+                function_calls.insert(name.clone(), calls);
+                available_functions.insert(name.clone());
+                items.push(HirItem::Function { name, body });
             }
-            other => items.push(HirItem::TopLevelStmt(lower_stmt(
-                other,
-                &defined_functions,
-            )?)),
+            other => {
+                let mut calls = Vec::new();
+                let stmt = lower_stmt(other, &module_functions, &mut calls)?;
+                for call in &calls {
+                    validate_available_call(
+                        call,
+                        &available_functions,
+                        &function_calls,
+                        &mut HashSet::new(),
+                    )?;
+                }
+                items.push(HirItem::TopLevelStmt(stmt));
+            }
         }
     }
     Ok(HirModule { items })
 }
 
-fn lower_stmt(stmt: &Stmt, defined_functions: &HashSet<String>) -> Result<HirStmt, Diagnostic> {
+fn lower_stmt(
+    stmt: &Stmt,
+    module_functions: &HashSet<String>,
+    calls: &mut Vec<FunctionCall>,
+) -> Result<HirStmt, Diagnostic> {
     let Stmt::Expr(expr_stmt) = stmt else {
         return Err(unsupported(
             "only a bare call expression statement is supported so far",
@@ -127,13 +151,41 @@ fn lower_stmt(stmt: &Stmt, defined_functions: &HashSet<String>) -> Result<HirStm
                 stmt.range(),
             ));
         };
-        if !defined_functions.contains(name.id.as_str()) {
+        if !module_functions.contains(name.id.as_str()) {
             return Err(undefined_function(name.id.as_str(), name.range()));
         }
+        calls.push(FunctionCall {
+            name: name.id.as_str().to_string(),
+            range: name.range(),
+        });
         Ok(HirStmt::CallUserFunction {
             name: name.id.as_str().to_string(),
         })
     }
+}
+
+fn validate_available_call(
+    call: &FunctionCall,
+    available_functions: &HashSet<String>,
+    function_calls: &HashMap<String, Vec<FunctionCall>>,
+    active_calls: &mut HashSet<String>,
+) -> Result<(), Diagnostic> {
+    if !available_functions.contains(call.name.as_str()) {
+        return Err(undefined_function(&call.name, call.range));
+    }
+    if !active_calls.insert(call.name.clone()) {
+        return Ok(());
+    }
+    for nested_call in &function_calls[call.name.as_str()] {
+        validate_available_call(
+            nested_call,
+            available_functions,
+            function_calls,
+            active_calls,
+        )?;
+    }
+    active_calls.remove(call.name.as_str());
+    Ok(())
 }
 
 fn undefined_function(name: &str, range: TextRange) -> Diagnostic {
@@ -301,6 +353,50 @@ mod tests {
                 start + u32::try_from("does_not_exist".len()).unwrap()
             ))
         );
+    }
+
+    #[test]
+    fn calling_a_function_before_its_definition_is_rejected() {
+        let source = "helper()\n\ndef helper() -> None:\n    print(1)\n";
+        let module = pycc_parser_test_helper::parse(source);
+        let error = lower(&module).unwrap_err();
+        assert_eq!(error.code, "T0004");
+        assert_eq!(error.span, Some(Span::new(0, 6)));
+        assert_eq!(error.label.as_deref(), Some("not defined in this module"));
+    }
+
+    #[test]
+    fn calling_a_function_that_reaches_a_later_definition_is_rejected() {
+        let source = "\
+def first() -> None:
+    second()
+
+first()
+
+def second() -> None:
+    print(2)
+";
+        let module = pycc_parser_test_helper::parse(source);
+        let error = lower(&module).unwrap_err();
+        let start = u32::try_from(source.find("second()").unwrap()).unwrap();
+        assert_eq!(error.code, "T0004");
+        assert_eq!(error.span, Some(Span::new(start, start + 6)));
+    }
+
+    #[test]
+    fn mutually_recursive_functions_are_resolved_after_both_definitions() {
+        let source = "\
+def first() -> None:
+    second()
+
+def second() -> None:
+    first()
+
+first()
+";
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower(&module).unwrap();
+        assert_eq!(hir.items.len(), 3);
     }
 
     #[test]

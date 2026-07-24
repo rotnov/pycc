@@ -218,6 +218,31 @@ fn check_rejects_an_undefined_function_before_codegen() {
 }
 
 #[test]
+fn check_rejects_a_call_before_its_definition_to_match_python_module_order() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_definition_order_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "definition_order.py",
+        "helper()\n\ndef helper() -> None:\n    print(1)\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("error[T0004]: call to undefined function `helper`"));
+    assert!(stderr.contains("definition_order.py:1:1"));
+}
+
+#[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
