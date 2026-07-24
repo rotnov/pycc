@@ -2,6 +2,32 @@
 
 Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone isn't done until they're green on **all Tier-1 platforms** (Linux x64/arm64, macOS x64/arm64, Windows x64).
 
+## Current delivery status
+
+Last reviewed on 2026-07-24. This section describes the repository tree in the commit that contains it: behavior and evidence from that same commit count, while work that exists only in another open pull request or unmerged branch remains work in flight.
+
+**Current milestone: v0.1 — in progress.** The first end-to-end vertical slice works on the primary macOS arm64 host, but v0.1 is not yet shippable.
+
+| Area | Status on `main` | Evidence and remaining gap |
+|---|---|---|
+| Compiler pipeline | Partial | The workspace contains the driver plus `pycc_ast`, `pycc_parser`, `pycc_hir`, `pycc_types`, `pycc_mir`, `pycc_codegen`, `pycc_rt`, and `pycc_diag`. [`tests/slice0.rs`](../tests/slice0.rs) proves source → parser → HIR → type-check passthrough → MIR → LLVM object → host linker → native executable. |
+| Language surface | Slice only | Module-level `print(<i64 literal>)`, zero-argument function definitions, and explicit zero-argument calls work. Arithmetic, variables, arguments and return values, control flow, recursion with values, floats/strings/bools, `range`, and f-strings remain v0.1 work. Unsupported valid Python can still reach explicit slice-limit panics in [`pycc_hir`](../crates/pycc_hir/src/lib.rs). |
+| Type system | Stub | The parser preserves annotations, but [`pycc_types::check`](../crates/pycc_types/src/lib.rs) is still a no-op passthrough. `T0001` strictness and local inference have not landed. |
+| CLI | Partial | `build`, `run`, and `version` have working slice-level paths. `check`, `test`, `explain`, `init`, and `clean` report “not yet implemented”; the broader flags and project-mode contracts in [CLI_SPEC.md](./CLI_SPEC.md) remain planned. |
+| Diagnostics | Partial | Parser failures become `L0001` compile diagnostics and the diagnostic data types exist. Stable spans, the shipped-feature registry, screenshot parity, JSON output, and diagnostics for unsupported valid programs remain open. |
+| Portability | Primary host only | The active compiler [CI run](https://github.com/rotnov/pycc/actions/runs/30132574213) reports the `macos-14-arm64` image and `aarch64-apple-darwin` host. The five-target Tier-1 matrix, bundled-linker cross-compilation, and cross-host execution evidence required by v0.1 are not yet present in this commit. |
+| Quality gates | Partial but enforced | Unit and slice-level end-to-end tests pass, and CI enforces 100% Rust line and region coverage on every PR. The conformance harness, diagnostic snapshots, frontend performance gate, five-target conformance, fuzzing, and corpus layers remain planned according to [TESTING.md](./TESTING.md). |
+
+### v0.1 acceptance checklist
+
+- [ ] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets.
+- [ ] `pycc check` processes 1k LOC in under 50 ms.
+- [ ] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.
+- [ ] The five-target native CI matrix and one cross-host compilation path are live on `main`.
+- [x] The 100% line and region coverage gate is required and green for the current slice.
+
+The next delivery slices remain the sequence defined in [DELIVERY_PLAN.md](./DELIVERY_PLAN.md): Tier-1 CI and cross-compilation, frontend depth with real strict typing and the performance gate, full v0.1 codegen/runtime breadth, the conformance testkit and named demos, then the final v0.1 acceptance pass.
+
 ## CPython release alignment
 
 Last reviewed **2026-07-24**. D-012 still fixes v1 to the Python 3.14 language
