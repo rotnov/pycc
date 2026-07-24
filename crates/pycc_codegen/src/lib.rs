@@ -93,13 +93,11 @@ pub fn compile_to_object(
     }
 
     verify_module(&module);
-    eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 6: verify_module done (real verify skipped on Windows, D-024)");
 
     // initialize_all (not initialize_native): a requested target_triple may
     // not match the host's own architecture, and LLVM only has codegen
     // support for a target's backend if that backend was initialized.
     Target::initialize_all(&InitializationConfig::default());
-    eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 7: Target::initialize_all done");
     // ManuallyDrop, not a plain value: see D-024. TargetTriple wraps an
     // LLVMString (inkwell's own message wrapper around LLVMCreateMessage /
     // LLVMGetDefaultTargetTriple), whose Drop calls LLVMDisposeMessage --
@@ -113,7 +111,6 @@ pub fn compile_to_object(
         Some(t) => TargetTriple::create(t),
         None => TargetMachine::get_default_triple(),
     });
-    eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 8: triple resolved to {}", triple.as_str().to_string_lossy());
     let target = Target::from_triple(&triple).map_err(|e| {
         format!(
             "pycc_codegen: `{}` is not a target LLVM knows how to generate code for: {}",
@@ -121,7 +118,6 @@ pub fn compile_to_object(
             llvm_string_to_owned(e)
         )
     })?;
-    eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 9: Target::from_triple done");
     let target_machine = target
         .create_target_machine(
             &triple,
@@ -132,10 +128,7 @@ pub fn compile_to_object(
             CodeModel::Default,
         )
         .expect("creating a target machine for the native host with generic CPU/features should never fail");
-    eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 10: create_target_machine done");
-    let result = target_machine.write_to_file(&module, FileType::Object, output_path).map_err(llvm_string_to_owned);
-    eprintln!("PYCC_DEBUG_WINDOWS: checkpoint 11: write_to_file done, ok={}", result.is_ok());
-    result
+    target_machine.write_to_file(&module, FileType::Object, output_path).map_err(llvm_string_to_owned)
 }
 
 /// See D-024: every message inkwell hands back as an `LLVMString` --
