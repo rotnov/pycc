@@ -1,5 +1,6 @@
 use pycc_ast::{Expr, ExprCall, ModModule, Number, Ranged, Stmt, TextRange};
 use pycc_diag::{Diagnostic, Span};
+use std::collections::HashSet;
 
 #[derive(Debug, PartialEq)]
 pub enum HirStmt {
@@ -32,8 +33,17 @@ pub struct HirModule {
 /// version.
 ///
 /// Syntactically valid Python outside that subset is returned as `C0001`
-/// instead of panicking, so CLI callers can report an ordinary compile error.
+/// instead of panicking, while calls to undefined functions are returned as
+/// `T0004`, so CLI callers can report ordinary frontend errors.
 pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
+    let defined_functions = module
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(function) => Some(function.name.id.as_str().to_string()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
     let mut items = Vec::new();
     for stmt in &module.body {
         match stmt {
@@ -41,20 +51,23 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
                 let body = f
                     .body
                     .iter()
-                    .map(lower_stmt)
+                    .map(|stmt| lower_stmt(stmt, &defined_functions))
                     .collect::<Result<Vec<_>, _>>()?;
                 items.push(HirItem::Function {
                     name: f.name.id.as_str().to_string(),
                     body,
                 });
             }
-            other => items.push(HirItem::TopLevelStmt(lower_stmt(other)?)),
+            other => items.push(HirItem::TopLevelStmt(lower_stmt(
+                other,
+                &defined_functions,
+            )?)),
         }
     }
     Ok(HirModule { items })
 }
 
-fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
+fn lower_stmt(stmt: &Stmt, defined_functions: &HashSet<String>) -> Result<HirStmt, Diagnostic> {
     let Stmt::Expr(expr_stmt) = stmt else {
         return Err(unsupported(
             "only a bare call expression statement is supported so far",
@@ -114,10 +127,22 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                 stmt.range(),
             ));
         };
+        if !defined_functions.contains(name.id.as_str()) {
+            return Err(undefined_function(name.id.as_str(), name.range()));
+        }
         Ok(HirStmt::CallUserFunction {
             name: name.id.as_str().to_string(),
         })
     }
+}
+
+fn undefined_function(name: &str, range: TextRange) -> Diagnostic {
+    Diagnostic::error(
+        "T0004",
+        format!("call to undefined function `{name}`"),
+        Span::new(range.start().into(), range.end().into()),
+        "not defined in this module",
+    )
 }
 
 fn unsupported(message: impl Into<String>, range: TextRange) -> Diagnostic {
@@ -232,13 +257,49 @@ mod tests {
 
     #[test]
     fn calling_a_zero_arg_function_other_than_print_is_supported() {
-        let module = pycc_parser_test_helper::parse("foo()\n");
+        let module = pycc_parser_test_helper::parse("def foo() -> None:\n    print(1)\n\nfoo()\n");
         let hir = lower(&module).unwrap();
         assert_eq!(
             hir.items,
-            vec![HirItem::TopLevelStmt(HirStmt::CallUserFunction {
-                name: "foo".to_string()
-            })]
+            vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    body: vec![HirStmt::CallPrint { arg: 1 }],
+                },
+                HirItem::TopLevelStmt(HirStmt::CallUserFunction {
+                    name: "foo".to_string()
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn calling_an_undefined_function_at_top_level_is_rejected() {
+        let source = "does_not_exist()\n";
+        let module = pycc_parser_test_helper::parse(source);
+        let error = lower(&module).unwrap_err();
+        assert_eq!(error.code, "T0004");
+        assert_eq!(
+            error.span,
+            Some(Span::new(0, u32::try_from("does_not_exist".len()).unwrap()))
+        );
+        assert_eq!(error.label.as_deref(), Some("not defined in this module"));
+        assert!(error.message.contains("does_not_exist"));
+    }
+
+    #[test]
+    fn calling_an_undefined_function_inside_a_function_is_rejected() {
+        let source = "def main() -> None:\n    does_not_exist()\n";
+        let module = pycc_parser_test_helper::parse(source);
+        let error = lower(&module).unwrap_err();
+        let start = u32::try_from(source.find("does_not_exist").unwrap()).unwrap();
+        assert_eq!(error.code, "T0004");
+        assert_eq!(
+            error.span,
+            Some(Span::new(
+                start,
+                start + u32::try_from("does_not_exist".len()).unwrap()
+            ))
         );
     }
 

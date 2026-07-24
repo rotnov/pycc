@@ -1,4 +1,3 @@
-use encoding_rs::Encoding;
 use regex::bytes::Regex;
 use std::sync::OnceLock;
 
@@ -9,7 +8,6 @@ enum SourceEncoding {
     Utf8,
     Latin1,
     Ascii,
-    Other(&'static Encoding),
 }
 
 impl SourceEncoding {
@@ -23,10 +21,6 @@ impl SourceEncoding {
                 .expect("ASCII is valid UTF-8")
                 .to_owned()),
             Self::Ascii => Err(format!("source is not valid {label}")),
-            Self::Other(encoding) => encoding
-                .decode_without_bom_handling_and_without_replacement(bytes)
-                .map(|decoded| decoded.into_owned())
-                .ok_or_else(|| format!("source is not valid {label}")),
         }
     }
 }
@@ -120,7 +114,7 @@ fn resolve_encoding(label: &str) -> Option<SourceEncoding> {
         | "cp367" | "csascii" | "ibm367" | "iso646-us" | "iso-646.irv-1991" | "iso-ir-6" | "us" => {
             Some(SourceEncoding::Ascii)
         }
-        _ => Encoding::for_label_no_replacement(normalized.as_bytes()).map(SourceEncoding::Other),
+        _ => None,
     }
 }
 
@@ -150,7 +144,6 @@ mod tests {
             SourceEncoding::Utf8 => "utf8",
             SourceEncoding::Latin1 => "latin1",
             SourceEncoding::Ascii => "ascii",
-            SourceEncoding::Other(_) => "other",
         }
     }
 
@@ -194,12 +187,8 @@ mod tests {
     }
 
     #[test]
-    fn decodes_an_encoding_rs_legacy_encoding_strictly() {
-        assert_eq!(
-            decode_python_source(b"# coding: shift_jis\n# \x82\xa0\nprint(42)\n").unwrap(),
-            "# coding: shift_jis\n# \u{3042}\nprint(42)\n"
-        );
-        assert!(decode_python_source(b"# coding: shift_jis\n# \x82\n").is_err());
+    fn rejects_a_codec_without_a_python_compatible_decoder() {
+        assert!(decode_python_source(b"# coding: gbk\n# \x80\nprint(42)\n").is_err());
     }
 
     #[test]
@@ -253,6 +242,5 @@ mod tests {
         assert_eq!(resolved_kind("iso-latin-1"), "latin1");
         assert_eq!(resolved_kind("646"), "ascii");
         assert_eq!(resolved_kind("iso_646.irv_1991"), "ascii");
-        assert_eq!(resolved_kind("shift_jis"), "other");
     }
 }

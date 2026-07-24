@@ -187,7 +187,7 @@ fn defining_a_function_under_any_name_without_calling_it_succeeds() {
 }
 
 #[test]
-fn calling_an_undefined_function_is_a_codegen_error() {
+fn build_rejects_an_undefined_function_during_frontend_checking() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_undefined_fn_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "undefined_fn.py", "does_not_exist()\n");
@@ -197,6 +197,22 @@ fn calling_an_undefined_function_is_a_codegen_error() {
         .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
         .output()
         .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("does_not_exist"));
+}
+
+#[test]
+fn check_rejects_an_undefined_function_before_codegen() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_undefined_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "undefined.py", "does_not_exist()\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("does_not_exist"));
 }
@@ -218,6 +234,26 @@ fn a_bad_output_path_is_a_link_error_exit_code_1() {
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(1));
+}
+
+#[test]
+fn a_bad_temporary_directory_is_a_codegen_error_exit_code_1() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_badtmp_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "hello_badtmp.py", "print(42)\n");
+    let out = dir.join("hello");
+    let missing_tmp = dir.join("does_not_exist");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .env("TMPDIR", &missing_tmp)
+        .env("TMP", &missing_tmp)
+        .env("TEMP", &missing_tmp)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("codegen failed"));
 }
 
 #[test]
@@ -287,8 +323,10 @@ fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
 
 #[test]
 fn check_reports_a_malformed_encoded_source_as_an_input_error() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_e2e_check_bad_encoding_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_bad_encoding_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let src = dir.join("invalid_utf8.py");
     std::fs::write(&src, b"print(42)\n# \xff\n").unwrap();
@@ -303,6 +341,24 @@ fn check_reports_a_malformed_encoded_source_as_an_input_error() {
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr.contains("could not read"));
     assert!(stderr.contains("source is not valid utf-8"));
+}
+
+#[test]
+fn check_rejects_a_codec_without_python_compatible_mappings() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_gbk_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("invalid_gbk.py");
+    std::fs::write(&src, b"# coding: gbk\n# \x80\nprint(42)\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr.contains("unknown source encoding `gbk`"));
 }
 
 #[test]

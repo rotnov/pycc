@@ -24,6 +24,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0001` | error | public function missing annotation |
 | `T0002` | error | `Any` outside interop boundary |
 | `T0003` | error | untyped empty container needs annotation |
+| `T0004` | error | call to an undefined function |
 | `T0021` | error | argument type mismatch |
 | `T0022` | error | return type mismatch |
 | `T0023` | error | incompatible assignment |

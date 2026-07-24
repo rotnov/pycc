@@ -25,11 +25,12 @@ arrive with multi-file projects in v0.4. The ownership pass joins `check` when
 Before any frontend command parses a file, pycc decodes its bytes using
 Python's source-encoding rules: UTF-8 by default, an optional UTF-8 BOM, and an
 encoding declaration on the first or eligible second line. The v0.1 decoder
-supports strict ASCII, true ISO-8859-1/Latin-1, and the ASCII-compatible legacy
-encodings recognized by its bundled decoder. An unknown encoding, a BOM/cookie
-conflict, or malformed encoded input is an unreadable-input error. After
-decoding, LF, CRLF, and CR physical line endings are normalized to LF before
-parsing and diagnostic span calculation.
+supports UTF-8, strict ASCII, and true ISO-8859-1/Latin-1. Other declared
+encodings are unreadable-input errors until pycc has a decoder with mappings
+that exactly match Python's codec. A BOM/cookie conflict or malformed encoded
+input is also an unreadable-input error. After decoding, LF, CRLF, and CR
+physical line endings are normalized to LF before parsing and diagnostic span
+calculation.
 
 For the other commands, the target contract remains `PATH` = file or project
 directory (using `pycc.toml`), with an omitted path meaning the current
