@@ -12,10 +12,16 @@ from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / ".claude" / "skills"
+CODEX_PROJECT_PLUGIN_NAME = "pycc-agent-skills"
+CODEX_PROJECT_PLUGIN_PATH = "./.agents/plugins/plugins/pycc-agent-skills"
+CODEX_PROJECT_PLUGIN_ROOT = (
+    ROOT / ".agents" / "plugins" / "plugins" / CODEX_PROJECT_PLUGIN_NAME
+)
 AUTHENTICATION_POLICIES = {"ON_INSTALL", "ON_USE"}
 IMMUTABLE_SHA = re.compile(r"^[0-9a-f]{40}$")
 IEVO_REPOSITORY_URL = "https://github.com/ievo-ai/skills.git"
 IEVO_PLUGIN_PATH = "./plugins/ievo"
+CANONICAL_SKILL_PATH = re.compile(r"`(\.claude/skills/([a-z][a-z0-9-]*)/SKILL\.md)`")
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SLASH_SKILL = re.compile(r"`/([a-z][a-z0-9-]+)`")
 ABSOLUTE_OUTPUT = re.compile(
@@ -118,6 +124,8 @@ def validate_marketplaces(failures: list[str]) -> None:
         return
 
     codex_ievo_ref: str | None = None
+    ievo_entries = 0
+    project_entries = 0
     for index, plugin in enumerate(plugins):
         label = f"{codex_path}: plugins[{index}]"
         if not isinstance(plugin, dict):
@@ -132,14 +140,52 @@ def validate_marketplaces(failures: list[str]) -> None:
                 f"{label}.policy.authentication must be ON_INSTALL or ON_USE"
             )
         source = plugin.get("source")
-        ref = source.get("ref") if isinstance(source, dict) else None
-        if not isinstance(ref, str) or IMMUTABLE_SHA.fullmatch(ref) is None:
-            failures.append(f"{label}.source.ref must be a full immutable commit SHA")
-        if plugin.get("name") == "ievo" and isinstance(ref, str):
-            codex_ievo_ref = ref
+        if not isinstance(source, dict):
+            failures.append(f"{label}.source must be an object")
+            continue
 
-    if codex_ievo_ref is None:
-        failures.append(f"{codex_path}: ievo plugin entry is required")
+        name = plugin.get("name")
+        if name == "ievo":
+            ievo_entries += 1
+            if source.get("source") != "git-subdir":
+                failures.append(f"{label}.source.source must be git-subdir")
+            if source.get("url") != IEVO_REPOSITORY_URL:
+                failures.append(f"{label}.source.url must be {IEVO_REPOSITORY_URL}")
+            if source.get("path") != IEVO_PLUGIN_PATH:
+                failures.append(f"{label}.source.path must be {IEVO_PLUGIN_PATH}")
+            ref = source.get("ref")
+            if not isinstance(ref, str) or IMMUTABLE_SHA.fullmatch(ref) is None:
+                failures.append(
+                    f"{label}.source.ref must be a full immutable commit SHA"
+                )
+            else:
+                codex_ievo_ref = ref
+        elif name == CODEX_PROJECT_PLUGIN_NAME:
+            project_entries += 1
+            if source != {
+                "source": "local",
+                "path": CODEX_PROJECT_PLUGIN_PATH,
+            }:
+                failures.append(
+                    f"{label}.source must be the repository-local "
+                    f"{CODEX_PROJECT_PLUGIN_PATH}"
+                )
+            if (
+                not isinstance(policy, dict)
+                or policy.get("installation") != "INSTALLED_BY_DEFAULT"
+            ):
+                failures.append(
+                    f"{label}.policy.installation must be INSTALLED_BY_DEFAULT"
+                )
+        else:
+            failures.append(f"{label}: unsupported plugin entry {name!r}")
+
+    if ievo_entries != 1 or codex_ievo_ref is None:
+        failures.append(f"{codex_path}: exactly one pinned ievo plugin is required")
+    if project_entries != 1:
+        failures.append(
+            f"{codex_path}: exactly one {CODEX_PROJECT_PLUGIN_NAME} plugin is required"
+        )
 
     claude_path = ".claude/settings.json"
     settings = load_json(claude_path, failures)
@@ -148,6 +194,103 @@ def validate_marketplaces(failures: list[str]) -> None:
         codex_ievo_ref,
         failures,
         claude_path,
+    )
+    validate_codex_project_plugin(failures)
+
+
+def frontmatter_scalar(path: Path, key: str) -> str | None:
+    """Return a single-line frontmatter value without interpreting YAML."""
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        return None
+    end = text.find("\n---", 4)
+    if end == -1:
+        return None
+    prefix = f"{key}:"
+    for line in text[4:end].splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+    return None
+
+
+def validate_skill_parity(
+    canonical_root: Path,
+    codex_root: Path,
+    failures: list[str],
+) -> None:
+    canonical = {path.parent.name: path for path in canonical_root.glob("*/SKILL.md")}
+    wrappers = {path.parent.name: path for path in codex_root.glob("*/SKILL.md")}
+
+    missing = sorted(canonical.keys() - wrappers.keys())
+    extra = sorted(wrappers.keys() - canonical.keys())
+    if missing:
+        failures.append(
+            ".agents Codex plugin: missing canonical skill wrappers: "
+            + ", ".join(missing)
+        )
+    if extra:
+        failures.append(
+            ".agents Codex plugin: wrappers without canonical Claude skills: "
+            + ", ".join(extra)
+        )
+
+    for name in sorted(canonical.keys() & wrappers.keys()):
+        canonical_path = canonical[name]
+        wrapper_path = wrappers[name]
+        relative = (
+            wrapper_path.relative_to(ROOT)
+            if wrapper_path.is_relative_to(ROOT)
+            else wrapper_path
+        )
+        if frontmatter_scalar(canonical_path, "name") != name:
+            failures.append(
+                f"{canonical_path}: frontmatter name must match directory {name}"
+            )
+        if frontmatter_scalar(wrapper_path, "name") != name:
+            failures.append(f"{relative}: frontmatter name must be {name}")
+        if frontmatter_scalar(wrapper_path, "description") != frontmatter_scalar(
+            canonical_path, "description"
+        ):
+            failures.append(
+                f"{relative}: description must match the canonical Claude skill"
+            )
+
+        text = wrapper_path.read_text(encoding="utf-8")
+        references = CANONICAL_SKILL_PATH.findall(text)
+        expected = f".claude/skills/{name}/SKILL.md"
+        if references != [(expected, name)]:
+            failures.append(
+                f"{relative}: must reference exactly the canonical {expected}"
+            )
+        if "completely" not in text or "canonical workflow" not in text:
+            failures.append(
+                f"{relative}: must require complete canonical workflow loading"
+            )
+
+
+def validate_codex_project_plugin(failures: list[str]) -> None:
+    manifest_path = (
+        ".agents/plugins/plugins/pycc-agent-skills/.codex-plugin/plugin.json"
+    )
+    manifest = load_json(manifest_path, failures)
+    if manifest.get("name") != CODEX_PROJECT_PLUGIN_NAME:
+        failures.append(f"{manifest_path}: name must be {CODEX_PROJECT_PLUGIN_NAME}")
+    if manifest.get("skills") != "./skills/":
+        failures.append(f"{manifest_path}: skills must be ./skills/")
+    interface = manifest.get("interface")
+    prompts = interface.get("defaultPrompt") if isinstance(interface, dict) else None
+    if (
+        not isinstance(prompts, list)
+        or not 1 <= len(prompts) <= 3
+        or not all(isinstance(prompt, str) and prompt.strip() for prompt in prompts)
+    ):
+        failures.append(
+            f"{manifest_path}: interface.defaultPrompt must contain 1-3 strings"
+        )
+    validate_skill_parity(
+        SKILLS_ROOT,
+        CODEX_PROJECT_PLUGIN_ROOT / "skills",
+        failures,
     )
 
 
@@ -243,6 +386,19 @@ def validate_skill_documents(failures: list[str]) -> None:
                 continue
             if not resolved.exists():
                 failures.append(f"{relative}: broken relative link: {raw_target}")
+
+    grill_path = SKILLS_ROOT / "grill-with-docs" / "SKILL.md"
+    grill = grill_path.read_text(encoding="utf-8")
+    if "docs/DECISIONS.md" not in grill:
+        failures.append(
+            ".claude/skills/grill-with-docs/SKILL.md: project-wide decisions "
+            "must route to docs/DECISIONS.md"
+        )
+    if "never replaces it" not in grill:
+        failures.append(
+            ".claude/skills/grill-with-docs/SKILL.md: ADRs must not replace "
+            "the canonical decision log"
+        )
 
 
 def main() -> int:

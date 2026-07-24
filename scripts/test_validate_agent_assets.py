@@ -63,6 +63,89 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
         self.assertIsNone(validator.IMMUTABLE_SHA.fullmatch("v0.58.1"))
 
+    def write_skill(
+        self,
+        root: Path,
+        name: str,
+        description: str,
+        body: str,
+    ) -> Path:
+        skill_root = root / name
+        skill_root.mkdir(parents=True)
+        path = skill_root / "SKILL.md"
+        path.write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\n\n{body}\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def parity_failures(
+        self,
+        wrapper_body: str,
+        *,
+        wrapper_name: str = "example",
+        wrapper_description: str = "Example workflow.",
+    ) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_root = root / "canonical"
+            codex_root = root / "codex"
+            self.write_skill(
+                canonical_root,
+                "example",
+                "Example workflow.",
+                "# Canonical",
+            )
+            self.write_skill(
+                codex_root,
+                wrapper_name,
+                wrapper_description,
+                wrapper_body,
+            )
+            failures: list[str] = []
+            validator.validate_skill_parity(
+                canonical_root,
+                codex_root,
+                failures,
+            )
+            return failures
+
+    def test_codex_wrapper_loads_the_complete_canonical_skill(self) -> None:
+        self.assertEqual(
+            self.parity_failures(
+                "Read `.claude/skills/example/SKILL.md` completely as the "
+                "canonical workflow."
+            ),
+            [],
+        )
+
+    def test_codex_wrapper_with_wrong_canonical_target_is_rejected(self) -> None:
+        failures = self.parity_failures(
+            "Read `.claude/skills/other/SKILL.md` completely as the canonical workflow."
+        )
+        self.assertTrue(
+            any("must reference exactly" in failure for failure in failures)
+        )
+
+    def test_codex_and_claude_skill_descriptions_must_match(self) -> None:
+        failures = self.parity_failures(
+            "Read `.claude/skills/example/SKILL.md` completely as the "
+            "canonical workflow.",
+            wrapper_description="Different triggers.",
+        )
+        self.assertTrue(
+            any("description must match" in failure for failure in failures)
+        )
+
+    def test_codex_wrapper_set_must_match_canonical_skill_set(self) -> None:
+        failures = self.parity_failures(
+            "Read `.claude/skills/other/SKILL.md` completely as the "
+            "canonical workflow.",
+            wrapper_name="other",
+        )
+        self.assertTrue(any("missing canonical" in failure for failure in failures))
+        self.assertTrue(any("without canonical" in failure for failure in failures))
+
     def claude_settings(
         self,
         *,

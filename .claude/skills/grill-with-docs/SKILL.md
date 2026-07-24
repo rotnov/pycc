@@ -16,8 +16,9 @@ keeping the repository's durable documentation current.
 
 ## Workflow
 
-1. Read the relevant repository documentation, `CONTEXT.md` when present, and any
-   records under `docs/adr/`.
+1. Read the relevant repository documentation, `CONTEXT.md` when present, the
+   canonical project decision log at `docs/DECISIONS.md`, and any supporting records
+   under `docs/adr/`.
 2. State the decision currently being tested, its known constraints, and the largest
    unresolved risk.
 3. Ask one focused question at a time. Challenge assumptions, ambiguous terminology,
@@ -27,9 +28,12 @@ keeping the repository's durable documentation current.
    not treat an untested assumption as a decision.
 5. Maintain the domain glossary directly in repository-root `CONTEXT.md`. Create it
    lazily when a new durable term, relationship, or invariant first needs recording.
-6. When a load-bearing choice becomes stable, follow the
-   [ADR creation workflow](../create-architectural-decision-record/SKILL.md) and save
-   the record under repository-relative `docs/adr/`.
+6. When a load-bearing choice becomes stable and is project-wide or difficult to
+   reverse, record it as the next `D-NNN` entry in the canonical
+   `docs/DECISIONS.md` log. Use the
+   [ADR creation workflow](../create-architectural-decision-record/SKILL.md) only
+   when a longer supporting analysis is useful, and link that ADR from the canonical
+   decision entry. The ADR supplements the decision log; it never replaces it.
 7. Finish with the accepted decisions, rejected alternatives and reasons, remaining
    risks, and the next mechanically verifiable step.
 
