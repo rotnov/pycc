@@ -15,6 +15,7 @@ pub fn parse(source: &str) -> Result<ModModule, Diagnostic> {
                 "L0001",
                 error.to_string(),
                 Span::new(range.start().into(), range.end().into()),
+                "invalid syntax",
             )
         })
 }
@@ -40,5 +41,6 @@ mod tests {
         let err = parse("print(1)\n$\n").unwrap_err();
         assert_eq!(err.code, "L0001");
         assert_eq!(err.span, Some(Span::new(9, 10)));
+        assert_eq!(err.label.as_deref(), Some("invalid syntax"));
     }
 }

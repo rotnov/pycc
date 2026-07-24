@@ -125,6 +125,7 @@ fn unsupported(message: impl Into<String>, range: TextRange) -> Diagnostic {
         "C0001",
         message,
         Span::new(range.start().into(), range.end().into()),
+        "unsupported by this pycc version",
     )
 }
 

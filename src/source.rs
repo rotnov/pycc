@@ -1,5 +1,5 @@
 use encoding_rs::Encoding;
-use regex::Regex;
+use regex::bytes::Regex;
 use std::sync::OnceLock;
 
 const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
@@ -36,7 +36,7 @@ pub fn decode_python_source(bytes: &[u8]) -> Result<String, String> {
         Some(without_bom) => (without_bom, true),
         None => (bytes, false),
     };
-    let declared = detect_encoding_cookie(bytes)?;
+    let declared = detect_encoding_cookie(bytes);
     let label = declared.as_deref().unwrap_or("utf-8");
     let encoding =
         resolve_encoding(label).ok_or_else(|| format!("unknown source encoding `{label}`"))?;
@@ -45,16 +45,18 @@ pub fn decode_python_source(bytes: &[u8]) -> Result<String, String> {
         return Err("UTF-8 BOM conflicts with the declared source encoding".to_string());
     }
 
-    encoding.decode(bytes, label)
+    encoding
+        .decode(bytes, label)
+        .map(|source| source.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-fn detect_encoding_cookie(bytes: &[u8]) -> Result<Option<String>, String> {
+fn detect_encoding_cookie(bytes: &[u8]) -> Option<String> {
     let (first_line, rest) = take_line(bytes);
-    if let Some(encoding) = find_cookie(first_line)? {
-        return Ok(Some(encoding));
+    if let Some(encoding) = find_cookie(first_line) {
+        return Some(encoding);
     }
     if !is_comment_or_blank(first_line) {
-        return Ok(None);
+        return None;
     }
 
     let (second_line, _) = take_line(rest);
@@ -62,18 +64,24 @@ fn detect_encoding_cookie(bytes: &[u8]) -> Result<Option<String>, String> {
 }
 
 fn take_line(bytes: &[u8]) -> (&[u8], &[u8]) {
-    match bytes.iter().position(|byte| *byte == b'\n') {
-        Some(newline) => bytes.split_at(newline + 1),
+    match bytes.iter().position(|byte| matches!(byte, b'\r' | b'\n')) {
+        Some(newline) => {
+            let mut end = newline + 1;
+            if bytes[newline] == b'\r' && bytes.get(end) == Some(&b'\n') {
+                end += 1;
+            }
+            bytes.split_at(end)
+        }
         None => (bytes, &[]),
     }
 }
 
-fn find_cookie(line: &[u8]) -> Result<Option<String>, String> {
-    let line = std::str::from_utf8(line)
-        .map_err(|_| "invalid or missing source encoding declaration".to_string())?;
-    Ok(cookie_regex()
-        .captures(line)
-        .map(|captures| captures[1].to_string()))
+fn find_cookie(line: &[u8]) -> Option<String> {
+    cookie_regex().captures(line).map(|captures| {
+        std::str::from_utf8(&captures[1])
+            .expect("the encoding-cookie capture only permits ASCII")
+            .to_string()
+    })
 }
 
 fn cookie_regex() -> &'static Regex {
@@ -162,8 +170,8 @@ mod tests {
     #[test]
     fn decodes_a_first_line_latin1_cookie_without_windows_1252_substitution() {
         assert_eq!(
-            decode_python_source(b"# coding: latin-1\n# \x80\xe9\nprint(42)\n").unwrap(),
-            "# coding: latin-1\n# \u{80}\u{e9}\nprint(42)\n"
+            decode_python_source(b"# coding: latin-1 # Andr\xe9\n# \x80\xe9\nprint(42)\n").unwrap(),
+            "# coding: latin-1 # Andr\u{e9}\n# \u{80}\u{e9}\nprint(42)\n"
         );
     }
 
@@ -171,10 +179,10 @@ mod tests {
     fn decodes_a_second_line_cookie_after_a_shebang() {
         assert_eq!(
             decode_python_source(
-                b"#!/usr/bin/env python\n# coding: iso-latin-1-unix\n# caf\xe9\nprint(42)\n"
+                b"#!/usr/bin/env python Andr\xe9\r# coding: iso-latin-1-unix\r# caf\xe9\rprint(42)\r"
             )
             .unwrap(),
-            "#!/usr/bin/env python\n# coding: iso-latin-1-unix\n# caf\u{e9}\nprint(42)\n"
+            "#!/usr/bin/env python Andr\u{e9}\n# coding: iso-latin-1-unix\n# caf\u{e9}\nprint(42)\n"
         );
     }
 
@@ -197,9 +205,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_default_utf8_and_invalid_cookie_preambles() {
+    fn rejects_invalid_default_utf8() {
         assert!(decode_python_source(b"print(42)\n# \xff\n").is_err());
-        assert!(decode_python_source(b"# \xff\n# coding: latin-1\n").is_err());
     }
 
     #[test]
@@ -220,7 +227,8 @@ mod tests {
     fn accepts_empty_and_single_line_sources() {
         assert_eq!(decode_python_source(b"").unwrap(), "");
         assert_eq!(decode_python_source(b"\n").unwrap(), "\n");
-        assert_eq!(decode_python_source(b"\r").unwrap(), "\r");
+        assert_eq!(decode_python_source(b"\r").unwrap(), "\n");
+        assert_eq!(decode_python_source(b"\r\n").unwrap(), "\n");
     }
 
     #[test]

@@ -246,7 +246,7 @@ fn check_accepts_a_pep_263_latin_1_source_file() {
     let src = dir.join("latin1.py");
     std::fs::write(
         &src,
-        b"# -*- coding: latin-1 -*-\n# caf\xe9\nprint(42)\n",
+        b"# -*- coding: latin-1 -*- # Andr\xe9\n# caf\xe9\nprint(42)\n",
     )
     .unwrap();
 
@@ -258,6 +258,31 @@ fn check_accepts_a_pep_263_latin_1_source_file() {
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_newlines_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (name, source) in [
+        ("cr.py", b"print(1)\rx = 1\r".as_slice()),
+        ("crlf.py", b"print(1)\r\nx = 1\r\n".as_slice()),
+    ] {
+        let src = dir.join(name);
+        std::fs::write(&src, source).unwrap();
+        let output = Command::new(pycc_bin())
+            .arg("check")
+            .arg(&src)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stderr.contains(&format!("{}:2:1", src.display())));
+        assert!(stderr.contains("2 | x = 1\n"));
+        assert!(!stderr.contains("x = 1\r"));
+    }
 }
 
 #[test]
@@ -339,7 +364,7 @@ fn check_rejects_a_currently_unsupported_construct_without_panicking() {
     assert!(stderr.contains("C0001"));
     assert!(stderr.contains(&format!("{}:2:5", src.display())));
     assert!(stderr.contains("2 |     x = 1"));
-    assert!(stderr.contains("  |     ^^^^^"));
+    assert!(stderr.contains("  |     ^^^^^ unsupported by this pycc version"));
     assert!(!stderr.contains("panicked"));
 }
 

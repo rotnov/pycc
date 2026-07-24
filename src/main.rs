@@ -105,18 +105,22 @@ fn report_frontend_failure(path: &str, failure: FrontendFailure) -> u8 {
             let span = diagnostic
                 .span
                 .expect("compile errors must carry a primary source span");
+            let label = diagnostic
+                .label
+                .as_deref()
+                .expect("compile errors must carry a primary source label");
             eprintln!(
                 "error[{}]: {}\n{}",
                 diagnostic.code,
                 diagnostic.message,
-                render_source_span(path, &source, span),
+                render_source_span(path, &source, span, label),
             );
             1
         }
     }
 }
 
-fn render_source_span(path: &str, source: &str, span: Span) -> String {
+fn render_source_span(path: &str, source: &str, span: Span, label: &str) -> String {
     let start = usize::try_from(span.start).expect("source offsets must fit usize");
     let end = usize::try_from(span.end).expect("source offsets must fit usize");
     let prefix = &source[..start];
@@ -144,7 +148,7 @@ fn render_source_span(path: &str, source: &str, span: Span) -> String {
     format!(
         " --> {path}:{line_number}:{column}\n{empty_gutter} |\n\
          {line_number:>gutter_width$} | {source_line}\n\
-         {empty_gutter} | {caret_padding}{}",
+         {empty_gutter} | {caret_padding}{} {label}",
         "^".repeat(highlight_width),
     )
 }
