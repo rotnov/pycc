@@ -432,9 +432,7 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     {
                         "hooks": [
                             {
-                                "command": (
-                                    "tools/tracked.sh && tools/untracked.sh"
-                                ),
+                                "command": ("tools/tracked.sh && tools/untracked.sh"),
                                 "args": [],
                             }
                         ]

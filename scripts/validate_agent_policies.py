@@ -32,9 +32,7 @@ POWERSHELL_INTERPRETERS = ("powershell", "powershell.exe", "pwsh", "pwsh.exe")
 COMMAND_LAUNCHERS = ("command", "env", "exec")
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
-WINDOWS_ABSOLUTE_IN_COMMAND = re.compile(
-    r"(?:^|[\s\"'])[A-Za-z]:[\\/]"
-)
+WINDOWS_ABSOLUTE_IN_COMMAND = re.compile(r"(?:^|[\s\"'])[A-Za-z]:[\\/]")
 SHELL_CONTROL = re.compile(r"&&|\|\||[;&|]")
 
 
@@ -120,8 +118,7 @@ def inline_interpreter_mode(kind: str, tokens: list[str]) -> str | None:
         if kind == "powershell" and token.startswith("-"):
             option = token.lstrip("-").split(":", 1)[0].lower()
             if option and (
-                "command".startswith(option)
-                or "encodedcommand".startswith(option)
+                "command".startswith(option) or "encodedcommand".startswith(option)
             ):
                 return token
     return None
