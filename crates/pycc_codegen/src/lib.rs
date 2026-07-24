@@ -1,14 +1,29 @@
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
-use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine};
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
+};
 use inkwell::types::IntType;
 use inkwell::values::FunctionValue;
 use pycc_mir::{MirInstr, MirItem, MirModule};
 use std::collections::HashMap;
 use std::path::Path;
 
-pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), String> {
+/// `target_triple`: `None` compiles for the host's own default target (the
+/// common case). `Some(triple)` cross-compiles for a different Tier-1
+/// target -- LLVM's codegen backend is inherently multi-target, so this
+/// only requires `Target::initialize_all` (rather than
+/// `Target::initialize_native`) plus the requested `TargetTriple` instead
+/// of the host's default; producing an actual *linked binary* for a
+/// foreign target is a separate concern the caller handles (see
+/// `src/main.rs`'s `--target` handling and its doc comment on what's
+/// actually achievable without bundling a full foreign sysroot).
+pub fn compile_to_object(
+    mir: &MirModule,
+    output_path: &Path,
+    target_triple: Option<&str>,
+) -> Result<(), String> {
     let context = Context::create();
     let module = context.create_module("pycc_module");
     let builder = context.create_builder();
@@ -82,11 +97,17 @@ pub fn compile_to_object(mir: &MirModule, output_path: &Path) -> Result<(), Stri
          a verify() failure here means a bug in pycc_codegen itself, not bad user input",
     );
 
-    Target::initialize_native(&InitializationConfig::default())
-        .expect("initializing codegen for the native host should never fail on a supported Tier-1 target");
-    let triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&triple)
-        .expect("the host's own default target triple should always be a valid target");
+    // initialize_all (not initialize_native): a requested target_triple may
+    // not match the host's own architecture, and LLVM only has codegen
+    // support for a target's backend if that backend was initialized.
+    Target::initialize_all(&InitializationConfig::default());
+    let triple = match target_triple {
+        Some(t) => TargetTriple::create(t),
+        None => TargetMachine::get_default_triple(),
+    };
+    let target = Target::from_triple(&triple).map_err(|e| {
+        format!("pycc_codegen: `{}` is not a target LLVM knows how to generate code for: {e}", triple.as_str().to_string_lossy())
+    })?;
     let target_machine = target
         .create_target_machine(
             &triple,
@@ -149,7 +170,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_uncalled_main");
         let obj_path = dir.join("slice0_uncalled_main.o");
-        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
         let bin_path = dir.join("slice0_uncalled_main");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -169,7 +190,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0");
         let obj_path = dir.join("slice0.o");
-        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
         let bin_path = dir.join("slice0");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -183,7 +204,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_toplevel");
         let obj_path = dir.join("slice0_toplevel.o");
-        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
         let bin_path = dir.join("slice0_toplevel");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -209,7 +230,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_combined");
         let obj_path = dir.join("slice0_combined.o");
-        compile_to_object(&mir, &obj_path).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
         let bin_path = dir.join("slice0_combined");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -225,7 +246,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_undefined_fn");
         let obj_path = dir.join("slice0_undefined_fn.o");
-        let err = compile_to_object(&mir, &obj_path).expect_err("should be rejected");
+        let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
         assert!(err.contains("does_not_exist"), "error should name the offending function: {err}");
     }
 
@@ -239,7 +260,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_undefined_fn_nested");
         let obj_path = dir.join("slice0_undefined_fn_nested.o");
-        let err = compile_to_object(&mir, &obj_path).expect_err("should be rejected");
+        let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
         assert!(err.contains("also_does_not_exist"), "error should name the offending function: {err}");
     }
 
@@ -252,7 +273,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_any_fn_name");
         let obj_path = dir.join("slice0_any_fn_name.o");
-        compile_to_object(&mir, &obj_path).expect("defining a function under any name should succeed");
+        compile_to_object(&mir, &obj_path, None).expect("defining a function under any name should succeed");
     }
 
     #[test]
@@ -267,7 +288,43 @@ mod tests {
             .join(format!("pycc_codegen_test_nonexistent_dir_{}", std::process::id()))
             .join("does_not_exist")
             .join("out.o");
-        let err = compile_to_object(&mir, &bad_path).expect_err("should fail: parent dir doesn't exist");
+        let err = compile_to_object(&mir, &bad_path, None).expect_err("should fail: parent dir doesn't exist");
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn cross_compiles_object_code_for_a_different_target_triple() {
+        // This host is aarch64-apple-darwin; request the other macOS Tier-1
+        // architecture. LLVM's codegen backend is inherently multi-target,
+        // so this only needs Target::initialize_all (see compile_to_object)
+        // plus the requested triple -- verified by checking the emitted
+        // object file's actual architecture, not just that codegen didn't
+        // error.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+        };
+        let dir = tempfile_dir("cross_x64");
+        let obj_path = dir.join("cross_x64.o");
+        compile_to_object(&mir, &obj_path, Some("x86_64-apple-darwin"))
+            .expect("cross-compiling to a different Tier-1 target should succeed");
+
+        let output = Command::new("file").arg(&obj_path).output().expect("`file` should run");
+        let description = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            description.contains("x86_64"),
+            "expected an x86_64 object file, got: {description}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_target_triple_is_a_clean_error() {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+        };
+        let dir = tempfile_dir("bad_triple");
+        let obj_path = dir.join("bad_triple.o");
+        let err = compile_to_object(&mir, &obj_path, Some("not-a-real-target-triple"))
+            .expect_err("an unrecognized target triple should be rejected");
         assert!(!err.is_empty());
     }
 
