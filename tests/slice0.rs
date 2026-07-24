@@ -13,6 +13,24 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
 }
 
 #[test]
+fn a_missing_input_file_is_a_clean_error_not_a_panic() {
+    // Regression test (found in PR review): an earlier version used
+    // .expect() on read_to_string, so a typo'd path panicked (exit 101,
+    // raw backtrace) instead of a clean CLI error.
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_missing_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing_path = dir.join("does_not_exist.py");
+    let out = dir.join("out");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", missing_path.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not read"));
+}
+
+#[test]
 fn build_and_run_explicit_call_to_main() {
     // Python never auto-invokes a function merely because it's named
     // `main` -- the source has to call it, same as any other function.

@@ -28,12 +28,13 @@ fn main() -> ExitCode {
 }
 
 /// `Ok(())` on success, `Err(code)` carrying the exit code to use on
-/// failure -- `ExitCode` itself isn't comparable, so `run` (which needs to
-/// know whether the build step succeeded before executing the result)
-/// can't branch on a returned `ExitCode` directly.
+/// failure. `?` inside this function needs a `Result`, not an `ExitCode`
+/// directly -- `run` then just propagates whatever `Err` it gets.
 fn try_build(path: &str, out: &str) -> Result<(), ExitCode> {
-    let source =
-        std::fs::read_to_string(path).expect("reading the source file should not fail for this slice");
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        eprintln!("error: could not read `{path}`: {e}");
+        ExitCode::from(2)
+    })?;
     let module = pycc_parser::parse(&source).map_err(|diag| {
         eprintln!("error[{}]: {}", diag.code, diag.message);
         ExitCode::from(1)

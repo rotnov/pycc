@@ -1,3 +1,30 @@
+//! # Build order: this crate's staticlib is not a normal Cargo dependency
+//!
+//! This crate's real consumer is not Rust code but pycc-generated object
+//! files, which reference `pycc_rt_print_i64` by symbol name and are
+//! linked against `libpycc_rt.a` (this crate's `staticlib` output) via a
+//! raw `cc` invocation -- in `pycc_codegen`'s own tests
+//! (`link_object_with_runtime`) and in `pycc`'s real `build`/`run`
+//! (`src/main.rs`). Nothing in Cargo's normal dependency graph expresses
+//! that relationship, so `libpycc_rt.a` only exists once this crate has
+//! actually been built.
+//!
+//! **Practical consequence:** commands scoped to a single other crate --
+//! `cargo test -p pycc_codegen`, `cargo run --bin pycc -- build ...` run in
+//! isolation -- need this crate built first: `cargo build -p pycc_rt`.
+//! `cargo build --workspace` / `cargo test --workspace` (what CI always
+//! runs) builds every workspace member including this one, so the ordering
+//! issue never surfaces there.
+//!
+//! A `build.rs` in the consuming crates that shells out to `cargo build -p
+//! pycc_rt` was tried and reverted: pointed at the same `target-dir` as the
+//! outer build, it deadlocks on Cargo's own build lock (the outer build
+//! holds it for the whole build-script execution; the nested `cargo build`
+//! blocks forever waiting for it). Fixing this for real needs either a
+//! separate target-dir for the nested build or embedding `pycc_rt` into the
+//! `pycc` binary directly instead of linking a sibling staticlib -- both
+//! bigger changes than this sharp edge currently justifies.
+
 fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
 }
