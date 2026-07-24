@@ -51,7 +51,8 @@
 
 ## Protect main ([D-022](docs/DECISIONS.md#d-022-protected-main-and-audited-emergency-bypass))
 
-- `main` accepts changes only through pull requests. Branch protection requires the current CI check, an approving review from someone other than the last pusher, resolved conversations, and an up-to-date branch.
+- `main` accepts changes only through pull requests. Branch protection requires the current CI check, resolved conversations, and an up-to-date branch.
+- While the repository has only one maintainer, require zero approving reviews so the PR path remains usable; enable an independent approving review when a second human maintainer is available.
 - Administrators and automation credentials do not bypass the rule for ordinary work. The emergency procedure, audit expectations, and recovery steps live in [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md).
 - A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
 
@@ -64,6 +65,11 @@
 - The only permitted exemption is a whole-file `--ignore-filename-regex` entry justified by an accepted design constraint and recorded in the exemption table in `docs/TESTING.md`. An undocumented exemption is a review-blocking defect.
 
 ## Code Review Rules
+
+### Solo-maintainer branch protection
+
+- This repository currently has one maintainer. Do not require an approving pull-request review in branch protection: GitHub does not count an author's approval of their own pull request, so that setting deadlocks solo-maintainer work.
+- Keep required status checks, including the 100% coverage gate, and required conversation resolution enabled. Revisit the approving-review requirement when a second human maintainer is available.
 
 ### GitHub Codex review loop
 

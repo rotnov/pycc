@@ -25,7 +25,7 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-019 | Every agent task starts from refreshed repository/spec/API evidence and never mutates a stale or dirty base implicitly | accepted |
 | D-020 | Confirmed iEvo defects may be reported publicly without per-report permission, within strict scope and privacy limits | accepted |
 | D-021 | Auto-evolution intent is shared, but executable hooks and generated scripts remain machine-local | accepted |
-| D-022 | `main` is protected by PR, CI, independent review, and an audited emergency path | accepted |
+| D-022 | `main` is protected by PR, CI, resolved conversations, and an audited emergency path; independent approval starts when a second maintainer is available | accepted |
 
 ## Template
 
@@ -110,8 +110,8 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 ## D-022: Protected main and audited emergency bypass
 
 - Status: accepted
-- Context: commit `0ac9b1d` reached `main` while PR #3 remained open after a timed-out merge request, proving that commit messages and monitoring conventions do not create a review boundary. An AI-authored compiler needs the repository host—not agent intent—to enforce the PR/CI/review path.
-- Decision: protect `main` for administrators and automation alike. Require an up-to-date pull request, the current `build-test-coverage` status, one approving review from someone other than the last pusher, stale-review dismissal, resolved conversations, and disallow force pushes/deletion. A push-triggered audit verifies every resulting main commit is associated with a merged PR. New required checks are added to protection only after they have run successfully on `main`.
+- Context: commit `0ac9b1d` reached `main` while PR #3 remained open after a timed-out merge request, proving that commit messages and monitoring conventions do not create a review boundary. An AI-authored compiler needs the repository host—not agent intent—to enforce the PR/CI/review path. The repository currently has one maintainer, and GitHub does not count an author's approval of their own pull request.
+- Decision: protect `main` for administrators and automation alike. Require an up-to-date pull request, the current `build-test-coverage` status, and resolved conversations, and disallow force pushes/deletion. Set required approving reviews to zero while there is only one maintainer; enable one independent approval, stale-review dismissal, and last-push approval when a second human maintainer is available. A push-triggered audit verifies every resulting main commit is associated with a merged PR. New required checks are added to protection only after they have run successfully on `main`.
 - Authority and scope: normal agent/bot credentials may open/update PRs but cannot bypass protection. Repository administrators retain the platform ability to edit protection only for the documented emergency procedure; that authority is not delegated to routine tasks.
 - Privacy and failure behavior: the audit publishes only repository-native commit/PR identifiers. A direct or unassociated commit fails the audit, requires a governance incident, and blocks releases until history/protection are reconciled. CI/provider outages delay merge rather than weakening requirements.
 - Rollback: emergency relaxation is time-bounded, linked to an incident, records before/after settings, and restores protection immediately after recovery. Permanently weakening the rule requires a superseding decision and explicit review.

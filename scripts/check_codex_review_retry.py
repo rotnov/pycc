@@ -37,12 +37,6 @@ def is_codex_login(login: str | None) -> bool:
 
 def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
     head = payload["headRefOid"]
-    commits = payload.get("commits", [])
-    head_time = (
-        max(timestamp(commit["committedDate"]) for commit in commits)
-        if commits
-        else dt.datetime.min.replace(tzinfo=dt.UTC)
-    )
 
     reviews = [
         review
@@ -74,7 +68,7 @@ def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
         comment
         for comment in comments
         if comment.get("body", "").strip() == "@codex review"
-        and timestamp(comment["createdAt"]) >= head_time
+        and comment.get("headRefOid") == head
     ]
     if not requests:
         return "REQUEST_ALLOWED", f"no request exists for {head}"
@@ -90,6 +84,7 @@ def classify(payload: dict[str, Any], now: dt.datetime) -> tuple[str, str]:
         comment
         for comment in comments
         if timestamp(comment["createdAt"]) > request_time
+        and comment.get("headRefOid") == head
         and is_codex_login(comment.get("author", {}).get("login"))
     ]
     for response in codex_responses:
@@ -129,10 +124,42 @@ def flatten_pages(pages: list[Any], object_key: str | None = None) -> list[Any]:
 
 
 def paginated_rest(endpoint: str, object_key: str | None = None) -> list[Any]:
-    pages = run_gh_json(["api", "--paginate", "--slurp", endpoint])
+    pages = run_gh_json(
+        [
+            "api",
+            "--paginate",
+            "--slurp",
+            "-H",
+            "Accept: application/vnd.github+json",
+            endpoint,
+        ]
+    )
     if not isinstance(pages, list):
         raise ValueError("paginated GitHub response must be a list")
     return flatten_pages(pages, object_key)
+
+
+def timeline_comments(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach each issue comment to the PR head current at that event."""
+    current_head: str | None = None
+    comments: list[dict[str, Any]] = []
+    for event in events:
+        event_type = event.get("event")
+        if event_type == "committed":
+            current_head = event.get("sha")
+        elif event_type == "head_ref_force_pushed":
+            current_head = event.get("after_commit", {}).get("sha")
+        elif event_type == "commented":
+            comments.append(
+                {
+                    "author": {"login": event.get("user", {}).get("login")},
+                    "body": event.get("body", ""),
+                    "createdAt": event["created_at"],
+                    "url": event.get("html_url"),
+                    "headRefOid": current_head,
+                }
+            )
+    return comments
 
 
 def load_pr(repository: str, number: int) -> dict[str, Any]:
@@ -144,21 +171,13 @@ def load_pr(repository: str, number: int) -> dict[str, Any]:
             "--repo",
             repository,
             "--json",
-            "headRefOid,commits,statusCheckRollup",
+            "headRefOid,statusCheckRollup",
         ],
     )
-    comments = paginated_rest(
-        f"repos/{repository}/issues/{number}/comments?per_page=100"
+    timeline = paginated_rest(
+        f"repos/{repository}/issues/{number}/timeline?per_page=100"
     )
-    payload["comments"] = [
-        {
-            "author": {"login": comment.get("user", {}).get("login")},
-            "body": comment.get("body", ""),
-            "createdAt": comment["created_at"],
-            "url": comment.get("html_url"),
-        }
-        for comment in comments
-    ]
+    payload["comments"] = timeline_comments(timeline)
     reviews = paginated_rest(f"repos/{repository}/pulls/{number}/reviews?per_page=100")
     payload["reviews"] = [
         {

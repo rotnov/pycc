@@ -8,8 +8,10 @@ enforce the normal delivery path.
 - Pull request required; direct pushes are rejected.
 - The branch must be current with `main` before merge.
 - Required status check: `build-test-coverage`.
-- One approving review is required, stale approvals are dismissed, and someone other
-  than the last pusher must approve.
+- Zero approving reviews are required while this is a solo-maintainer repository.
+  Requiring the author's own approval would deadlock every pull request. Enable one
+  independent approval, stale-approval dismissal, and last-push approval when a
+  second human maintainer is available.
 - All review conversations must be resolved.
 - Administrators are included; force pushes and branch deletion are disabled.
 

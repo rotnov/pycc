@@ -16,11 +16,29 @@ HEAD = "a" * 40
 def payload() -> dict:
     return {
         "headRefOid": HEAD,
-        "commits": [{"committedDate": "2026-07-24T20:00:00Z"}],
         "comments": [],
         "reviews": [],
         "statusCheckRollup": [],
     }
+
+
+def comment(
+    body: str,
+    created_at: str,
+    *,
+    author: str = "owner",
+    head: str = HEAD,
+    url: str | None = None,
+) -> dict:
+    value = {
+        "author": {"login": author},
+        "body": body,
+        "createdAt": created_at,
+        "headRefOid": head,
+    }
+    if url is not None:
+        value["url"] = url
+    return value
 
 
 class CodexReviewRetryTests(unittest.TestCase):
@@ -45,37 +63,67 @@ class CodexReviewRetryTests(unittest.TestCase):
     def test_first_request_is_allowed(self) -> None:
         self.assertEqual(gate.classify(payload(), NOW)[0], "REQUEST_ALLOWED")
 
+    def test_timeline_comments_follow_commit_and_force_push_order(self) -> None:
+        old_head = "b" * 40
+        events = [
+            {"event": "committed", "sha": old_head},
+            {
+                "event": "commented",
+                "user": {"login": "owner"},
+                "body": "@codex review",
+                "created_at": "2026-07-24T20:05:00Z",
+                "html_url": "https://example.test/old",
+            },
+            {
+                "event": "head_ref_force_pushed",
+                "after_commit": {"sha": HEAD},
+            },
+            {
+                "event": "commented",
+                "user": {"login": gate.CODEX_LOGIN},
+                "body": "Unable to start the review.",
+                "created_at": "2026-07-24T20:06:00Z",
+                "html_url": "https://example.test/new",
+            },
+        ]
+        comments = gate.timeline_comments(events)
+        self.assertEqual(comments[0]["headRefOid"], old_head)
+        self.assertEqual(comments[1]["headRefOid"], HEAD)
+        self.assertEqual(comments[1]["author"]["login"], gate.CODEX_LOGIN)
+
+    def test_old_request_does_not_consume_new_head_budget(self) -> None:
+        data = payload()
+        data["comments"] = [
+            comment(
+                "@codex review",
+                "2026-07-24T20:05:00Z",
+                head="b" * 40,
+            )
+        ]
+        self.assertEqual(gate.classify(data, NOW)[0], "REQUEST_ALLOWED")
+
     def test_explicit_failed_request_allows_one_retry(self) -> None:
         data = payload()
         data["comments"] = [
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:05:00Z",
-                "url": "https://example.test/request",
-            },
-            {
-                "author": {"login": gate.CODEX_LOGIN},
-                "body": ("To use Codex here, create an environment for this repo."),
-                "createdAt": "2026-07-24T20:06:00Z",
-                "url": "https://example.test/failure",
-            },
+            comment(
+                "@codex review",
+                "2026-07-24T20:05:00Z",
+                url="https://example.test/request",
+            ),
+            comment(
+                "To use Codex here, create an environment for this repo.",
+                "2026-07-24T20:06:00Z",
+                author=gate.CODEX_LOGIN,
+                url="https://example.test/failure",
+            ),
         ]
         self.assertEqual(gate.classify(data, NOW)[0], "RETRY_ALLOWED")
 
     def test_second_attempt_reaches_retry_limit(self) -> None:
         data = payload()
         data["comments"] = [
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:05:00Z",
-            },
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:10:00Z",
-            },
+            comment("@codex review", "2026-07-24T20:05:00Z"),
+            comment("@codex review", "2026-07-24T20:10:00Z"),
         ]
         self.assertEqual(
             gate.classify(data, NOW)[0],
@@ -119,17 +167,13 @@ class CodexReviewRetryTests(unittest.TestCase):
     def test_codex_success_comment_blocks_duplicate(self) -> None:
         data = payload()
         data["comments"] = [
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:05:00Z",
-            },
-            {
-                "author": {"login": gate.CODEX_LOGIN},
-                "body": "Codex Review: no major issues.",
-                "createdAt": "2026-07-24T20:06:00Z",
-                "url": "https://example.test/review",
-            },
+            comment("@codex review", "2026-07-24T20:05:00Z"),
+            comment(
+                "Codex Review: no major issues.",
+                "2026-07-24T20:06:00Z",
+                author=gate.CODEX_LOGIN,
+                url="https://example.test/review",
+            ),
         ]
         self.assertEqual(
             gate.classify(data, NOW)[0],
@@ -139,17 +183,13 @@ class CodexReviewRetryTests(unittest.TestCase):
     def test_success_comment_that_mentions_no_errors_is_not_a_failure(self) -> None:
         data = payload()
         data["comments"] = [
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:05:00Z",
-            },
-            {
-                "author": {"login": gate.CODEX_LOGIN},
-                "body": "Codex Review: no errors found.",
-                "createdAt": "2026-07-24T20:06:00Z",
-                "url": "https://example.test/review",
-            },
+            comment("@codex review", "2026-07-24T20:05:00Z"),
+            comment(
+                "Codex Review: no errors found.",
+                "2026-07-24T20:06:00Z",
+                author=gate.CODEX_LOGIN,
+                url="https://example.test/review",
+            ),
         ]
         self.assertEqual(
             gate.classify(data, NOW)[0],
@@ -159,57 +199,45 @@ class CodexReviewRetryTests(unittest.TestCase):
     def test_bot_suffixed_failure_comment_allows_retry(self) -> None:
         data = payload()
         data["comments"] = [
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:05:00Z",
-            },
-            {
-                "author": {"login": f"{gate.CODEX_LOGIN}[bot]"},
-                "body": "Unable to start the review.",
-                "createdAt": "2026-07-24T20:06:00Z",
-                "url": "https://example.test/failure",
-            },
+            comment("@codex review", "2026-07-24T20:05:00Z"),
+            comment(
+                "Unable to start the review.",
+                "2026-07-24T20:06:00Z",
+                author=f"{gate.CODEX_LOGIN}[bot]",
+                url="https://example.test/failure",
+            ),
         ]
         self.assertEqual(gate.classify(data, NOW)[0], "RETRY_ALLOWED")
 
     def test_timeout_without_artifact_allows_retry(self) -> None:
         data = payload()
         data["comments"] = [
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:05:00Z",
-                "url": "https://example.test/request",
-            }
+            comment(
+                "@codex review",
+                "2026-07-24T20:05:00Z",
+                url="https://example.test/request",
+            )
         ]
         self.assertEqual(gate.classify(data, NOW)[0], "RETRY_ALLOWED")
 
     def test_recent_request_waits(self) -> None:
         data = payload()
-        data["comments"] = [
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:55:00Z",
-            }
-        ]
+        data["comments"] = [comment("@codex review", "2026-07-24T20:55:00Z")]
         self.assertEqual(gate.classify(data, NOW)[0], "WAIT")
 
     def test_human_failure_comment_does_not_block_timeout(self) -> None:
         data = payload()
         data["comments"] = [
-            {
-                "author": {"login": "owner"},
-                "body": "@codex review",
-                "createdAt": "2026-07-24T20:05:00Z",
-                "url": "https://example.test/request",
-            },
-            {
-                "author": {"login": "reviewer"},
-                "body": "The build failed.",
-                "createdAt": "2026-07-24T20:06:00Z",
-            },
+            comment(
+                "@codex review",
+                "2026-07-24T20:05:00Z",
+                url="https://example.test/request",
+            ),
+            comment(
+                "The build failed.",
+                "2026-07-24T20:06:00Z",
+                author="reviewer",
+            ),
         ]
         self.assertEqual(gate.classify(data, NOW)[0], "RETRY_ALLOWED")
 
