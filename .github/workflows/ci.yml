@@ -85,6 +85,15 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show
 
+      # rustc/link.exe already discover the MSVC toolset on their own, but
+      # pycc's own linking step (src/main.rs's linker_command(), D-021) shells
+      # out to clang.exe directly -- outside any Developer Command Prompt,
+      # its bundled lld-link.exe can't find libcmt.lib/oldnames.lib (D-024).
+      # This sets up the same environment vcvarsall.bat would.
+      - name: Set up MSVC Developer Command Prompt (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Install LLVM 22 (Linux, via apt.llvm.org)
         if: runner.os == 'Linux'
         run: |
