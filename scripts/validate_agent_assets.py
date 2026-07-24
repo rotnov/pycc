@@ -63,8 +63,9 @@ PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
 REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
 PINNED_CLAUDE_PLUGINS = {"ievo@ievo-skills"}
-REQUIRED_AGENT_FILES = ("AGENTS.md", "CLAUDE.md")
 REQUIRED_AGENT_GLOBS = (
+    "**/AGENTS.md",
+    "**/CLAUDE.md",
     ".agents/skills/**/*.md",
     ".claude/skills/**/*.md",
     ".github/workflows/*.yml",
@@ -209,6 +210,15 @@ def validate_claude_ievo_marketplace(
     failures: list[str],
     settings_path: str = ".claude/settings.json",
 ) -> None:
+    enabled_plugins = settings.get("enabledPlugins")
+    if (
+        not isinstance(enabled_plugins, dict)
+        or enabled_plugins.get("ievo@ievo-skills") is not True
+    ):
+        failures.append(
+            f"{settings_path}: enabledPlugins must enable ievo@ievo-skills"
+        )
+
     marketplaces = settings.get("extraKnownMarketplaces")
     if not isinstance(marketplaces, dict):
         failures.append(f"{settings_path}: extraKnownMarketplaces must be an object")
@@ -340,7 +350,7 @@ def validate_marketplaces(failures: list[str]) -> None:
 def optional_claude_plugins(settings: dict) -> dict[str, str]:
     enabled_plugins = settings.get("enabledPlugins")
     if not isinstance(enabled_plugins, dict):
-        return {}
+        enabled_plugins = {}
 
     optional: dict[str, str] = {}
     for identity in enabled_plugins:
@@ -354,11 +364,17 @@ def optional_claude_plugins(settings: dict) -> dict[str, str]:
             and identity not in PINNED_CLAUDE_PLUGINS
         ):
             optional[identity] = marketplace
+    for identity in PINNED_CLAUDE_PLUGINS:
+        if enabled_plugins.get(identity) is True:
+            continue
+        name, separator, marketplace = identity.rpartition("@")
+        if separator and name and marketplace:
+            optional[identity] = marketplace
     return optional
 
 
 def required_agent_files(root: Path) -> list[Path]:
-    paths = [root / relative for relative in REQUIRED_AGENT_FILES]
+    paths: list[Path] = []
     for pattern in REQUIRED_AGENT_GLOBS:
         paths.extend(root.glob(pattern))
     return sorted({path for path in paths if path.is_file()})
@@ -401,7 +417,7 @@ def validate_optional_plugin_boundary(
 
     for path in required_agent_files(root):
         text = path.read_text(encoding="utf-8")
-        relative = path.relative_to(root)
+        relative = path.relative_to(root).as_posix()
         for identity in sorted(optional, key=lambda value: (-len(value), value)):
             if has_token(text, identity):
                 failures.append(
@@ -411,7 +427,8 @@ def validate_optional_plugin_boundary(
                 break
         else:
             fallback_text = text
-            for identity in PINNED_CLAUDE_PLUGINS:
+            enabled_pinned = PINNED_CLAUDE_PLUGINS.difference(optional)
+            for identity in enabled_pinned:
                 fallback_text = mask_token(fallback_text, identity)
             for name in sorted(names, key=lambda value: (-len(value), value)):
                 if has_token(fallback_text, name):

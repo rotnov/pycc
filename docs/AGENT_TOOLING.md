@@ -120,8 +120,10 @@ not part of the reproducible cross-platform baseline above. The exemption is the
 exact validated `ievo@ievo-skills` identity, not every plugin that happens to share
 that marketplace name. Repository instructions, tests, and required workflows must
 not depend on optional plugins. The agent-asset validator scans the shared
-instructions, both skill trees, and required workflows and rejects references to an
-optional plugin or its marketplace.
+instructions (including scoped `AGENTS.md` and `CLAUDE.md` files), both skill trees,
+and required workflows and rejects references to an optional plugin or its
+marketplace. The exact iEvo exemption applies only while
+`enabledPlugins["ievo@ievo-skills"]` is `true`.
 
 Treat bytes resolved from those marketplaces as mutable and review them before use.
 If an optional plugin becomes a repository dependency, pin a reviewed immutable

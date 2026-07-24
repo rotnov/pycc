@@ -382,6 +382,9 @@ class AgentAssetValidationTests(unittest.TestCase):
         sha: str = "7d5f3e12d0556cb6c5df2974e2babe0433674186",
     ) -> dict:
         return {
+            "enabledPlugins": {
+                "ievo@ievo-skills": True,
+            },
             "extraKnownMarketplaces": {
                 "ievo-skills": {
                     "source": {
@@ -449,6 +452,12 @@ class AgentAssetValidationTests(unittest.TestCase):
             codex_ref="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         self.assertTrue(any("must match" in failure for failure in failures))
+
+    def test_claude_ievo_plugin_must_be_enabled(self) -> None:
+        settings = self.claude_settings()
+        settings["enabledPlugins"]["ievo@ievo-skills"] = False
+        failures = self.validate_claude_settings(settings)
+        self.assertTrue(any("must enable ievo@ievo-skills" in failure for failure in failures))
 
     def test_required_asset_cannot_reference_an_optional_claude_plugin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -532,6 +541,34 @@ class AgentAssetValidationTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn("mutable-helper@ievo-skills", failures[0])
 
+    def test_scoped_instruction_files_reject_optional_plugin_references(self) -> None:
+        for filename in ("AGENTS.md", "CLAUDE.md"):
+            with self.subTest(filename=filename):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    instructions = root / "nested" / "subdir" / filename
+                    instructions.parent.mkdir(parents=True)
+                    instructions.write_text(
+                        "Use `/feature-dev` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    settings = {
+                        "enabledPlugins": {
+                            "feature-dev@claude-plugins-official": True,
+                            "ievo@ievo-skills": True,
+                        }
+                    }
+                    failures: list[str] = []
+
+                    validator.validate_optional_plugin_boundary(
+                        settings,
+                        failures,
+                        root,
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(f"nested/subdir/{filename}", failures[0])
+
     def test_exact_identity_reports_the_matching_shared_marketplace_plugin(
         self,
     ) -> None:
@@ -603,6 +640,30 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
 
             self.assertEqual(failures, [])
+
+    def test_disabled_or_missing_pinned_identity_is_not_exempt(self) -> None:
+        for enabled_plugins in (
+            {"ievo@ievo-skills": False},
+            {},
+        ):
+            with self.subTest(enabled_plugins=enabled_plugins):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        "Use `ievo@ievo-skills`.\n",
+                        encoding="utf-8",
+                    )
+                    failures: list[str] = []
+
+                    validator.validate_optional_plugin_boundary(
+                        {"enabledPlugins": enabled_plugins},
+                        failures,
+                        root,
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn("ievo@ievo-skills", failures[0])
 
 
 if __name__ == "__main__":
