@@ -6,11 +6,21 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 import validate_agent_assets as validator
+
+
+FEATURE_DEV = "feature" + "-dev"
+CLAUDE_PLUGIN_MARKETPLACE = "claude-plugins" + "-official"
+TDD_WORKFLOWS = "tdd" + "-workflows"
+CLAUDE_WORKFLOW_MARKETPLACE = "claude-code" + "-workflows"
+MUTABLE_HELPER = "mutable" + "-helper"
+CODE_REVIEW = "code" + "-review"
+PR_REVIEW_TOOLKIT = "pr-review" + "-toolkit"
 
 
 class AgentAssetValidationTests(unittest.TestCase):
@@ -420,6 +430,27 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
         return failures
 
+    def optional_boundary_failures(
+        self,
+        settings: dict,
+        root: Path,
+        repository_files: list[tuple[Path, str]] | None = None,
+    ) -> list[str]:
+        if repository_files is None:
+            repository_files = [
+                (path, "100644")
+                for path in root.rglob("*")
+                if path.is_file()
+            ]
+        failures: list[str] = []
+        validator.validate_optional_plugin_boundary(
+            settings,
+            failures,
+            root,
+            repository_files,
+        )
+        return failures
+
     def test_inline_claude_marketplace_with_exact_plugin_sha_is_accepted(
         self,
     ) -> None:
@@ -465,26 +496,24 @@ class AgentAssetValidationTests(unittest.TestCase):
             skill = root / ".claude" / "skills" / "example" / "SKILL.md"
             skill.parent.mkdir(parents=True)
             skill.write_text(
-                "Run `/feature-dev` before implementing the task.\n",
+                f"Run `/{FEATURE_DEV}` before implementing the task.\n",
                 encoding="utf-8",
             )
             settings = {
                 "enabledPlugins": {
-                    "feature-dev@claude-plugins-official": True,
+                    f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
                     "ievo@ievo-skills": True,
                 }
             }
-            failures: list[str] = []
 
-            validator.validate_optional_plugin_boundary(
+            failures = self.optional_boundary_failures(
                 settings,
-                failures,
                 root,
             )
 
             self.assertEqual(len(failures), 1)
             self.assertIn(
-                "feature-dev@claude-plugins-official",
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}",
                 failures[0],
             )
 
@@ -494,25 +523,23 @@ class AgentAssetValidationTests(unittest.TestCase):
             workflow = root / ".github" / "workflows" / "required.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text(
-                "# Requires claude-code-workflows at runtime.\n",
+                f"# Requires {CLAUDE_WORKFLOW_MARKETPLACE} at runtime.\n",
                 encoding="utf-8",
             )
             settings = {
                 "enabledPlugins": {
-                    "tdd-workflows@claude-code-workflows": True,
+                    f"{TDD_WORKFLOWS}@{CLAUDE_WORKFLOW_MARKETPLACE}": True,
                 }
             }
-            failures: list[str] = []
 
-            validator.validate_optional_plugin_boundary(
+            failures = self.optional_boundary_failures(
                 settings,
-                failures,
                 root,
             )
 
             self.assertEqual(len(failures), 1)
             self.assertIn(
-                "marketplace claude-code-workflows",
+                f"marketplace {CLAUDE_WORKFLOW_MARKETPLACE}",
                 failures[0],
             )
 
@@ -521,25 +548,23 @@ class AgentAssetValidationTests(unittest.TestCase):
             root = Path(directory)
             agents = root / "AGENTS.md"
             agents.write_text(
-                "Use `mutable-helper@ievo-skills` for every change.\n",
+                f"Use `{MUTABLE_HELPER}@ievo-skills` for every change.\n",
                 encoding="utf-8",
             )
             settings = {
                 "enabledPlugins": {
                     "ievo@ievo-skills": True,
-                    "mutable-helper@ievo-skills": True,
+                    f"{MUTABLE_HELPER}@ievo-skills": True,
                 }
             }
-            failures: list[str] = []
 
-            validator.validate_optional_plugin_boundary(
+            failures = self.optional_boundary_failures(
                 settings,
-                failures,
                 root,
             )
 
             self.assertEqual(len(failures), 1)
-            self.assertIn("mutable-helper@ievo-skills", failures[0])
+            self.assertIn(f"{MUTABLE_HELPER}@ievo-skills", failures[0])
 
     def test_scoped_instruction_files_reject_optional_plugin_references(self) -> None:
         for filename in ("AGENTS.md", "CLAUDE.md"):
@@ -549,25 +574,203 @@ class AgentAssetValidationTests(unittest.TestCase):
                     instructions = root / "nested" / "subdir" / filename
                     instructions.parent.mkdir(parents=True)
                     instructions.write_text(
-                        "Use `/feature-dev` for every task.\n",
+                        f"Use `/{FEATURE_DEV}` for every task.\n",
                         encoding="utf-8",
                     )
                     settings = {
                         "enabledPlugins": {
-                            "feature-dev@claude-plugins-official": True,
+                            f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
                             "ievo@ievo-skills": True,
                         }
                     }
-                    failures: list[str] = []
 
-                    validator.validate_optional_plugin_boundary(
+                    failures = self.optional_boundary_failures(
                         settings,
-                        failures,
                         root,
                     )
 
                     self.assertEqual(len(failures), 1)
                     self.assertIn(f"nested/subdir/{filename}", failures[0])
+
+    def test_all_tracked_agent_asset_formats_are_scanned(self) -> None:
+        settings = {
+            "enabledPlugins": {
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                "ievo@ievo-skills": True,
+            }
+        }
+        fixtures = (
+            (".claude/skills/demo/scripts/run.sh", "100644"),
+            (".claude/skills/demo/agents/openai.yaml", "100644"),
+            (".ievo/evolution/project.md", "100644"),
+            ("tests/agent_smoke.py", "100644"),
+            ("scripts/check_ci_permissions.rb", "100644"),
+            ("crates/demo/src/lib.rs", "100644"),
+            ("tools/agent-adapter", "100755"),
+        )
+
+        for relative, mode in fixtures:
+            with self.subTest(relative=relative):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    asset = root / relative
+                    asset.parent.mkdir(parents=True)
+                    asset.write_text(
+                        f"Run /{FEATURE_DEV} before continuing.\n",
+                        encoding="utf-8",
+                    )
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                        [(asset, mode)],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(relative, failures[0])
+
+    def test_ignored_instruction_file_is_not_a_repository_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tracked = root / "AGENTS.md"
+            tracked.write_text("Use repository-owned tools.\n", encoding="utf-8")
+            ignored = root / "cache" / "AGENTS.md"
+            ignored.parent.mkdir()
+            ignored.write_text(
+                f"Use /{FEATURE_DEV}.\n",
+                encoding="utf-8",
+            )
+            (root / ".gitignore").write_text("cache/\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "init", "--quiet", str(root)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "add", ".gitignore", "AGENTS.md"],
+                check=True,
+            )
+
+            repository_files = validator.tracked_repository_files(root)
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                repository_files,
+            )
+
+            self.assertEqual(failures, [])
+            self.assertNotIn(
+                ignored,
+                [path for path, _ in repository_files],
+            )
+
+    def test_ievo_overlay_provenance_is_not_a_required_dependency(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            overlay = root / ".ievo" / "evolution" / "skills" / "demo.md"
+            overlay.parent.mkdir(parents=True)
+            overlay.write_text(
+                "---\n"
+                "source:\n"
+                f"  path: plugins/{FEATURE_DEV}/skills/demo\n"
+                "---\n\n"
+                "# Local vendored overlay\n",
+                encoding="utf-8",
+            )
+            settings = {
+                "enabledPlugins": {
+                    f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                    "ievo@ievo-skills": True,
+                }
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+                [(overlay, "100644")],
+            )
+
+            self.assertEqual(failures, [])
+            overlay.write_text(
+                "---\n"
+                "source:\n"
+                f"  path: plugins/{FEATURE_DEV}/skills/demo\n"
+                "---\n\n"
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+                [(overlay, "100644")],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(overlay.relative_to(root).as_posix(), failures[0])
+
+    def test_required_agent_asset_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(
+                ["git", "init", "--quiet", str(root)],
+                check=True,
+            )
+            object_id = subprocess.run(
+                ["git", "-C", str(root), "hash-object", "-w", "--stdin"],
+                check=True,
+                input=b"target.md",
+                stdout=subprocess.PIPE,
+            ).stdout.decode("ascii").strip()
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    f"120000,{object_id},AGENTS.md",
+                ],
+                check=True,
+            )
+            failures: list[str] = []
+            validator.validate_optional_plugin_boundary(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                failures,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("must not be symlinks", failures[0])
+
+    def test_unreadable_required_asset_reports_a_controlled_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "AGENTS.md"
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [(missing, "100644")],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("unable to read tracked required agent asset", failures[0])
 
     def test_exact_identity_reports_the_matching_shared_marketplace_plugin(
         self,
@@ -576,27 +779,28 @@ class AgentAssetValidationTests(unittest.TestCase):
             root = Path(directory)
             agents = root / "AGENTS.md"
             agents.write_text(
-                "Use `code-review@claude-plugins-official`.\n",
+                f"Use `{CODE_REVIEW}@{CLAUDE_PLUGIN_MARKETPLACE}`.\n",
                 encoding="utf-8",
             )
             settings = {
                 "enabledPlugins": {
-                    "feature-dev@claude-plugins-official": True,
-                    "code-review@claude-plugins-official": True,
-                    "pr-review-toolkit@claude-plugins-official": True,
+                    f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                    f"{CODE_REVIEW}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                    f"{PR_REVIEW_TOOLKIT}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
                 }
             }
-            failures: list[str] = []
 
-            validator.validate_optional_plugin_boundary(
+            failures = self.optional_boundary_failures(
                 settings,
-                failures,
                 root,
             )
 
             self.assertEqual(len(failures), 1)
-            self.assertIn("code-review@claude-plugins-official", failures[0])
-            self.assertNotIn("pr-review-toolkit", failures[0])
+            self.assertIn(
+                f"{CODE_REVIEW}@{CLAUDE_PLUGIN_MARKETPLACE}",
+                failures[0],
+            )
+            self.assertNotIn(PR_REVIEW_TOOLKIT, failures[0])
 
     def test_pinned_baseline_plugin_is_not_treated_as_optional(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -608,11 +812,9 @@ class AgentAssetValidationTests(unittest.TestCase):
                     "ievo@ievo-skills": True,
                 }
             }
-            failures: list[str] = []
 
-            validator.validate_optional_plugin_boundary(
+            failures = self.optional_boundary_failures(
                 settings,
-                failures,
                 root,
             )
 
@@ -628,14 +830,12 @@ class AgentAssetValidationTests(unittest.TestCase):
             settings = {
                 "enabledPlugins": {
                     "ievo@ievo-skills": True,
-                    "mutable-helper@ievo-skills": True,
+                    f"{MUTABLE_HELPER}@ievo-skills": True,
                 }
             }
-            failures: list[str] = []
 
-            validator.validate_optional_plugin_boundary(
+            failures = self.optional_boundary_failures(
                 settings,
-                failures,
                 root,
             )
 
@@ -654,11 +854,9 @@ class AgentAssetValidationTests(unittest.TestCase):
                         "Use `ievo@ievo-skills`.\n",
                         encoding="utf-8",
                     )
-                    failures: list[str] = []
 
-                    validator.validate_optional_plugin_boundary(
+                    failures = self.optional_boundary_failures(
                         {"enabledPlugins": enabled_plugins},
-                        failures,
                         root,
                     )
 

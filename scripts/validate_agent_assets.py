@@ -6,8 +6,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
+from typing import Iterable
 from urllib.parse import unquote
 
 
@@ -63,14 +65,25 @@ PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
 REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
 PINNED_CLAUDE_PLUGINS = {"ievo@ievo-skills"}
-REQUIRED_AGENT_GLOBS = (
-    "**/AGENTS.md",
-    "**/CLAUDE.md",
-    ".agents/skills/**/*.md",
-    ".claude/skills/**/*.md",
-    ".github/workflows/*.yml",
-    ".github/workflows/*.yaml",
-)
+INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md"}
+DECLARATION_ONLY_FILES = {Path(".claude/settings.json")}
+SCRIPT_SUFFIXES = {
+    ".bash",
+    ".bat",
+    ".cmd",
+    ".cjs",
+    ".fish",
+    ".js",
+    ".mjs",
+    ".pl",
+    ".ps1",
+    ".py",
+    ".rb",
+    ".sh",
+    ".ts",
+    ".zsh",
+}
+SOURCE_SUFFIXES_WITH_INLINE_TESTS = {".c", ".cc", ".cpp", ".h", ".hpp", ".rs"}
 
 
 def load_json(
@@ -373,11 +386,78 @@ def optional_claude_plugins(settings: dict) -> dict[str, str]:
     return optional
 
 
-def required_agent_files(root: Path) -> list[Path]:
-    paths: list[Path] = []
-    for pattern in REQUIRED_AGENT_GLOBS:
-        paths.extend(root.glob(pattern))
-    return sorted({path for path in paths if path.is_file()})
+def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--stage", "-z"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or "git ls-files failed")
+
+    files: list[tuple[Path, str]] = []
+    for record in result.stdout.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, encoded_path = record.partition(b"\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3:
+            raise RuntimeError("git ls-files returned an invalid staged record")
+        mode = fields[0]
+        if mode not in {b"100644", b"100755", b"120000"}:
+            continue
+        relative = Path(encoded_path.decode("utf-8", errors="surrogateescape"))
+        files.append((root / relative, mode.decode("ascii")))
+    return files
+
+
+def is_test_asset(relative: Path) -> bool:
+    name = relative.name
+    return (
+        "tests" in relative.parts
+        or name.startswith("test_")
+        or name.startswith("test-")
+        or name.endswith("_test.py")
+        or name.endswith("-test.sh")
+    )
+
+
+def is_required_agent_asset(relative: Path, executable: bool) -> bool:
+    if relative in DECLARATION_ONLY_FILES:
+        return False
+    parts = relative.parts
+    return (
+        relative.name in INSTRUCTION_FILES
+        or (parts and parts[0] in {".agents", ".claude", "agents"})
+        or parts[:2] == (".ievo", "evolution")
+        or parts[:2] == (".github", "workflows")
+        or (parts and parts[0] == "scripts")
+        or is_test_asset(relative)
+        or relative.suffix.lower() in SCRIPT_SUFFIXES
+        or relative.suffix.lower() in SOURCE_SUFFIXES_WITH_INLINE_TESTS
+        or executable
+    )
+
+
+def required_agent_files(
+    root: Path,
+    repository_files: Iterable[tuple[Path, str]] | None = None,
+) -> list[Path]:
+    if repository_files is None:
+        repository_files = tracked_repository_files(root)
+    paths: set[Path] = set()
+    for path, mode in repository_files:
+        relative = path.relative_to(root)
+        if not is_required_agent_asset(relative, mode == "100755"):
+            continue
+        if mode == "120000":
+            raise RuntimeError(
+                f"{relative.as_posix()}: required agent assets must not be symlinks"
+            )
+        paths.add(path)
+    return sorted(paths)
 
 
 def has_token(text: str, token: str) -> bool:
@@ -400,10 +480,20 @@ def mask_token(text: str, token: str) -> str:
     )
 
 
+def required_asset_body(relative: Path, text: str) -> str:
+    if relative.parts[:2] != (".ievo", "evolution") or not text.startswith("---\n"):
+        return text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return text
+    return text[end + len("\n---\n") :]
+
+
 def validate_optional_plugin_boundary(
     settings: dict,
     failures: list[str],
     root: Path = ROOT,
+    repository_files: Iterable[tuple[Path, str]] | None = None,
 ) -> None:
     optional = optional_claude_plugins(settings)
     if not optional:
@@ -415,9 +505,22 @@ def validate_optional_plugin_boundary(
         names.setdefault(name, []).append(identity)
     marketplaces = set(optional.values())
 
-    for path in required_agent_files(root):
-        text = path.read_text(encoding="utf-8")
+    try:
+        paths = required_agent_files(root, repository_files)
+    except (OSError, RuntimeError, ValueError) as error:
+        failures.append(f"agent asset discovery failed: {error}")
+        return
+
+    for path in paths:
         relative = path.relative_to(root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as error:
+            failures.append(
+                f"{relative}: unable to read tracked required agent asset: {error}"
+            )
+            continue
+        text = required_asset_body(Path(relative), text)
         for identity in sorted(optional, key=lambda value: (-len(value), value)):
             if has_token(text, identity):
                 failures.append(

@@ -120,9 +120,19 @@ not part of the reproducible cross-platform baseline above. The exemption is the
 exact validated `ievo@ievo-skills` identity, not every plugin that happens to share
 that marketplace name. Repository instructions, tests, and required workflows must
 not depend on optional plugins. The agent-asset validator scans the shared
-instructions (including scoped `AGENTS.md` and `CLAUDE.md` files), both skill trees,
-and required workflows and rejects references to an optional plugin or its
-marketplace. The exact iEvo exemption applies only while
+instructions (including scoped `AGENTS.md` and `CLAUDE.md` files), every tracked file
+under the Codex, Claude, and iEvo evolution trees, tracked tests (including source
+formats that can contain inline tests), required workflows, the repository `scripts/`
+tree, interpreter-recognized script formats, and tracked executables. Discovery comes
+from `git ls-files`, so ignored caches and dependency checkouts cannot make local
+validation disagree with a clean CI checkout. Required agent assets stored as Git
+symlinks are rejected rather than followed outside the reviewed tree.
+`.claude/settings.json` is the declaration of optional capabilities rather than a
+required consumer and is excluded from the reference scan. The provenance frontmatter
+of a vendored `.ievo/evolution` overlay is likewise metadata; the overlay body remains
+required and scanned. Every selected asset is checked regardless of file extension,
+and references to an optional plugin or its marketplace are rejected. The exact iEvo
+exemption applies only while
 `enabledPlugins["ievo@ievo-skills"]` is `true`.
 
 Treat bytes resolved from those marketplaces as mutable and review them before use.
