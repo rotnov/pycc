@@ -100,4 +100,15 @@ if missing:
     raise SystemExit("enabled plugins were not installed: " + ", ".join(missing))
 PY
 
+rust_analyzer_details=$(
+  env CLAUDE_CONFIG_DIR="$test_claude_config" \
+    claude plugin details "rust-analyzer-lsp@pycc-official-pinned"
+)
+printf '%s\n' "$rust_analyzer_details"
+if ! printf '%s\n' "$rust_analyzer_details" |
+  grep -Fq "LSP servers (1)  rust-analyzer"; then
+  echo "error: rust-analyzer-lsp lost its reviewed LSP component metadata" >&2
+  exit 1
+fi
+
 echo "Claude marketplaces: manifests and pinned plugin installs are valid"

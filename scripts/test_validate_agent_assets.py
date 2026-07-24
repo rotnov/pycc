@@ -303,19 +303,107 @@ class AgentAssetValidationTests(unittest.TestCase):
         settings: dict,
         coordinate: str = "feature-dev@pycc-official-pinned",
     ) -> dict:
+        return self.production_plugin_entry(settings, coordinate)["source"]
+
+    def production_plugin_entry(
+        self,
+        settings: dict,
+        coordinate: str = "feature-dev@pycc-official-pinned",
+    ) -> dict:
         plugin_name, marketplace_name = coordinate.split("@")
         plugins = settings["extraKnownMarketplaces"][marketplace_name]["source"][
             "plugins"
         ]
-        return next(
-            plugin["source"] for plugin in plugins if plugin["name"] == plugin_name
-        )
+        return next(plugin for plugin in plugins if plugin["name"] == plugin_name)
 
     def test_every_production_enabled_claude_plugin_is_exactly_pinned(self) -> None:
         settings = self.production_claude_settings()
         self.assertEqual(len(settings["extraKnownMarketplaces"]), 3)
-        self.assertEqual(len(settings["enabledPlugins"]), 12)
+        self.assertEqual(
+            set(settings["enabledPlugins"]),
+            validator.EXPECTED_CLAUDE_PLUGIN_COORDINATES,
+        )
+        self.assertTrue(all(settings["enabledPlugins"].values()))
         self.assertEqual(self.validate_enabled_pins(settings), [])
+
+    def test_rust_analyzer_entry_preserves_its_reviewed_lsp_contract(self) -> None:
+        settings = self.production_claude_settings()
+        entry = self.production_plugin_entry(
+            settings,
+            "rust-analyzer-lsp@pycc-official-pinned",
+        )
+        self.assertFalse(entry["strict"])
+        self.assertEqual(
+            entry["lspServers"],
+            validator.CLAUDE_PLUGIN_ENTRY_CONTRACTS[
+                ("pycc-official-pinned", "rust-analyzer-lsp")
+            ]["lspServers"],
+        )
+        self.assertEqual(self.validate_enabled_pins(settings), [])
+
+    def test_rust_analyzer_entry_rejects_missing_lsp_metadata(self) -> None:
+        settings = self.production_claude_settings()
+        entry = self.production_plugin_entry(
+            settings,
+            "rust-analyzer-lsp@pycc-official-pinned",
+        )
+        del entry["lspServers"]
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any(
+                "lspServers must match the reviewed contract" in failure
+                for failure in failures
+            )
+        )
+
+    def test_security_guidance_cannot_return_as_a_disabled_entry(self) -> None:
+        settings = self.production_claude_settings()
+        marketplace = settings["extraKnownMarketplaces"]["pycc-official-pinned"]
+        marketplace["source"]["plugins"].append(
+            {
+                "name": "security-guidance",
+                "source": {
+                    "source": "git-subdir",
+                    "url": validator.CLAUDE_MARKETPLACE_REPOSITORIES[
+                        "pycc-official-pinned"
+                    ],
+                    "path": "./plugins/security-guidance",
+                    "sha": "a" * 40,
+                },
+            }
+        )
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(any("must not be declared" in failure for failure in failures))
+
+    def test_exact_enabled_set_rejects_a_security_guidance_swap(self) -> None:
+        settings = self.production_claude_settings()
+        settings["enabledPlugins"].pop("feature-dev@pycc-official-pinned")
+        settings["enabledPlugins"]["security-guidance@pycc-official-pinned"] = True
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any(
+                "required enabled plugins are missing" in failure
+                for failure in failures
+            )
+        )
+        self.assertTrue(
+            any("unexpected enabled plugins" in failure for failure in failures)
+        )
+
+    def test_disabled_security_guidance_coordinate_is_still_rejected(self) -> None:
+        settings = self.production_claude_settings()
+        coordinate = "security-guidance@pycc-official-pinned"
+        settings["enabledPlugins"][coordinate] = False
+        failures = self.validate_enabled_pins(settings)
+        self.assertTrue(
+            any("unexpected enabled plugins" in failure for failure in failures)
+        )
+        self.assertTrue(
+            any(
+                f"enabled plugin {coordinate!r} must be true" in failure
+                for failure in failures
+            )
+        )
 
     def test_enabled_claude_plugin_rejects_a_movable_marketplace(self) -> None:
         settings = self.claude_settings()

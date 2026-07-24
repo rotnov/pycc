@@ -40,6 +40,15 @@
           },
           {
             "name": "rust-analyzer-lsp",
+            "strict": false,
+            "lspServers": {
+              "rust-analyzer": {
+                "command": "rust-analyzer",
+                "extensionToLanguage": {
+                  ".rs": "rust"
+                }
+              }
+            },
             "source": {
               "source": "git-subdir",
               "url": "https://github.com/anthropics/claude-plugins-official.git",
@@ -53,15 +62,6 @@
               "source": "git-subdir",
               "url": "https://github.com/anthropics/claude-plugins-official.git",
               "path": "./plugins/claude-security",
-              "sha": "15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f"
-            }
-          },
-          {
-            "name": "security-guidance",
-            "source": {
-              "source": "git-subdir",
-              "url": "https://github.com/anthropics/claude-plugins-official.git",
-              "path": "./plugins/security-guidance",
               "sha": "15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f"
             }
           }
@@ -149,7 +149,6 @@
     "pr-review-toolkit@pycc-official-pinned": true,
     "rust-analyzer-lsp@pycc-official-pinned": true,
     "claude-security@pycc-official-pinned": true,
-    "security-guidance@pycc-official-pinned": true,
     "systems-programming@pycc-workflows-pinned": true,
     "security-scanning@pycc-workflows-pinned": true,
     "dependency-management@pycc-workflows-pinned": true,

@@ -24,6 +24,31 @@ CLAUDE_MARKETPLACE_REPOSITORIES = {
     ),
     "pycc-workflows-pinned": "https://github.com/wshobson/agents.git",
 }
+EXPECTED_CLAUDE_PLUGIN_COORDINATES = {
+    "ievo@ievo-skills",
+    "feature-dev@pycc-official-pinned",
+    "code-review@pycc-official-pinned",
+    "pr-review-toolkit@pycc-official-pinned",
+    "rust-analyzer-lsp@pycc-official-pinned",
+    "claude-security@pycc-official-pinned",
+    "systems-programming@pycc-workflows-pinned",
+    "security-scanning@pycc-workflows-pinned",
+    "dependency-management@pycc-workflows-pinned",
+    "tdd-workflows@pycc-workflows-pinned",
+    "performance-testing-review@pycc-workflows-pinned",
+}
+FORBIDDEN_CLAUDE_PLUGINS = {"security-guidance"}
+CLAUDE_PLUGIN_ENTRY_CONTRACTS = {
+    ("pycc-official-pinned", "rust-analyzer-lsp"): {
+        "strict": False,
+        "lspServers": {
+            "rust-analyzer": {
+                "command": "rust-analyzer",
+                "extensionToLanguage": {".rs": "rust"},
+            }
+        },
+    }
+}
 CANONICAL_SKILL_PATH = re.compile(r"`(\.claude/skills/([a-z][a-z0-9-]*)/SKILL\.md)`")
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]+)\)")
 SLASH_SKILL = re.compile(r"`/([a-z][a-z0-9-]+)`")
@@ -131,6 +156,42 @@ def validate_enabled_claude_plugin_pins(
     if not isinstance(enabled_plugins, dict):
         failures.append(f"{settings_path}: enabledPlugins must be an object")
         return
+    enabled_coordinates = {
+        coordinate for coordinate in enabled_plugins if isinstance(coordinate, str)
+    }
+    missing_coordinates = sorted(
+        EXPECTED_CLAUDE_PLUGIN_COORDINATES - enabled_coordinates
+    )
+    unexpected_coordinates = sorted(
+        enabled_coordinates - EXPECTED_CLAUDE_PLUGIN_COORDINATES
+    )
+    if missing_coordinates:
+        failures.append(
+            f"{settings_path}: required enabled plugins are missing: "
+            + ", ".join(missing_coordinates)
+        )
+    if unexpected_coordinates:
+        failures.append(
+            f"{settings_path}: unexpected enabled plugins: "
+            + ", ".join(unexpected_coordinates)
+        )
+    for coordinate, enabled in enabled_plugins.items():
+        if enabled is not True:
+            failures.append(
+                f"{settings_path}: enabled plugin {coordinate!r} must be true"
+            )
+
+    for marketplace_name, marketplace in sorted(marketplaces.items()):
+        source = marketplace.get("source") if isinstance(marketplace, dict) else None
+        plugins = source.get("plugins") if isinstance(source, dict) else None
+        if not isinstance(plugins, list):
+            continue
+        for plugin in plugins:
+            name = plugin.get("name") if isinstance(plugin, dict) else None
+            if name in FORBIDDEN_CLAUDE_PLUGINS:
+                failures.append(
+                    f"{settings_path}: {name}@{marketplace_name} must not be declared"
+                )
 
     for coordinate, enabled in sorted(enabled_plugins.items()):
         if enabled is not True:
@@ -171,6 +232,13 @@ def validate_enabled_claude_plugin_pins(
         if len(matches) != 1:
             failures.append(f"{label} must have exactly one inline marketplace entry")
             continue
+        entry_contract = CLAUDE_PLUGIN_ENTRY_CONTRACTS.get(
+            (marketplace_name, plugin_name)
+        )
+        if entry_contract is not None:
+            for key, expected in entry_contract.items():
+                if matches[0].get(key) != expected:
+                    failures.append(f"{label} {key} must match the reviewed contract")
         plugin_source = matches[0].get("source")
         if not isinstance(plugin_source, dict):
             failures.append(f"{label} source must be an object")

@@ -11,7 +11,7 @@ rollbackable just like compiler dependencies.
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
 | Codex | repository skills under `.agents/skills/` | current repository revision | project-scoped; no global installation |
 | Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
-| Claude Code | six enabled `claude-plugins-official` plugins | commit `15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f` | `autoUpdate: false` |
+| Claude Code | five enabled `claude-plugins-official` plugins | commit `15ba5db4a9cfa1a1ec217c60c6fbb66f0f2dd66f` | `autoUpdate: false` |
 | Claude Code | five enabled `claude-code-workflows` plugins | commit `c4b82b0ad771190355eb8e204b1329732a18449a` | `autoUpdate: false` |
 
 The Codex pin lives in `.agents/plugins/marketplace.json`. Every enabled Claude Code
@@ -44,19 +44,19 @@ actually resolves without help from global state. The repository validator also
 requires every enabled plugin to resolve to exactly one approved HTTPS Git repository,
 the matching `./plugins/<name>` subdirectory, and a full-SHA `git-subdir` source, so a
 developer's global installation cannot mask a movable or broken repository declaration.
+It binds the exact reviewed coordinate set, forbids the excluded security plugin even
+as a disabled marketplace entry, and preserves the upstream marketplace-only
+`rust-analyzer-lsp` component metadata (`strict: false` plus its LSP server command).
 
-## Optional Claude Code plugins
+## Excluded automatic hooks
 
-`.claude/settings.json` also enables optional third-party capability plugins from the
-`anthropics/claude-plugins-official` and `wshobson/agents` marketplaces. Those
-marketplace sources are not pinned, are not installed by the Codex bootstrap, and are
-not part of the reproducible cross-platform baseline above. Repository instructions,
-tests, and required workflows must not depend on them.
-
-Treat bytes resolved from those marketplaces as mutable and review them before use.
-If an optional plugin becomes a repository dependency, pin a reviewed immutable
-revision, provide the equivalent Codex capability or a safe documented fallback, and
-extend the agent-asset checks in the same pull request.
+`security-guidance` is intentionally absent from both the inline marketplace and
+`enabledPlugins`. At the reviewed plugin commit, its `SessionStart` hook creates a
+persistent environment under `~/.claude/security/` and installs an unpinned
+`claude-agent-sdk` from the ambient package index. Trusting the project would therefore
+execute mutable third-party bytes before an explicit workflow invocation. Pinning the
+plugin repository alone cannot make that transitive bootstrap reproducible; enabling
+it requires a separately pinned and verified SDK installation path.
 
 ## Reviewed update process
 
