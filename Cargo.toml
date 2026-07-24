@@ -1,0 +1,14 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/pycc_diag",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97.1"
+
+# The `pycc` binary package (root `src/main.rs`, clap CLI) is added in Task 8
+# of docs/superpowers/plans/2026-07-24-v0-1-pr1-pr2.md, together with the
+# integration test that exercises it -- not before, so the D-014 coverage
+# gate never has to carry an unexercised binary stub across several tasks.
