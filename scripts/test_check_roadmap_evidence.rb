@@ -13,6 +13,12 @@ require_relative "check_roadmap_evidence"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
+  D48_ACTIVATION_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d48-activation-ci.yml"
+  D48_STEADY_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d48-steady-ci.yml"
+  ACTIVATION_HEAD_SHA = "a" * 40
+  DIFFERENT_HEAD_SHA = "b" * 40
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -94,46 +100,165 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
-  def perf_gate_workflow(
-    promote_if: nil,
-    save_if: nil,
-    restore_action: PINNED_CACHE_RESTORE_ACTION,
-    missing_step: nil,
-    swap_comparison_and_promotion: false,
-    comparison_continue_on_error: nil,
-    job_continue_on_error: nil
-  )
-    steps = [
-      {
-        "uses" => PINNED_CHECKOUT_ACTION,
-        "with" => { "persist-credentials" => false }
-      },
-      *TRUSTED_PERF_LIFECYCLE_STEPS.map(&:dup)
-    ]
-    restore = steps.find do |step|
-      step["name"] == "Restore previous frontend-perf baseline"
-    end
-    restore["uses"] = restore_action
-    comparison = steps.find do |step|
-      step["name"] == "Compare against previous baseline (if one was restored)"
-    end
-    comparison["continue-on-error"] = comparison_continue_on_error unless comparison_continue_on_error.nil?
-    promote = steps.find do |step|
-      step["name"] == "Save this run's timing as the next run's baseline"
-    end
-    promote["if"] = promote_if if promote_if
-    save = steps.find { |step| step["name"] == "Cache this run's baseline" }
-    save["if"] = save_if if save_if
-    steps.reject! { |step| step["name"] == missing_step } if missing_step
-    if swap_comparison_and_promotion
-      comparison_index = steps.index(comparison)
-      promote_index = steps.index(promote)
-      steps[comparison_index], steps[promote_index] = steps[promote_index], steps[comparison_index]
-    end
+  def split_perf_workflow(steady: false)
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(SPLIT_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(
+          Marshal.dump(
+            steady ? STEADY_SPLIT_PERF_GATE_JOB : SPLIT_PERF_GATE_JOB
+          )
+        ),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(SPLIT_PERF_CI_GATE_JOB))
+    }
+    yield jobs if block_given?
+    { "jobs" => jobs }.to_yaml
+  end
 
-    perf_job = { "steps" => steps }
-    perf_job["continue-on-error"] = job_continue_on_error unless job_continue_on_error.nil?
-    { "jobs" => { "frontend-perf-gate" => perf_job } }.to_yaml
+  def run_perf_baseline_validation(
+    event_name:,
+    github_ref:,
+    base_ref: "main",
+    base_sha: "current-main-sha",
+    current_main_sha: "current-main-sha",
+    pr_head_sha: ACTIVATION_HEAD_SHA,
+    trusted_activation_head: ACTIVATION_HEAD_SHA,
+    push_after_sha: "activation-sha",
+    push_before_sha: "pre-split-sha",
+    github_sha: "activation-sha",
+    run_attempt: "1",
+    workflow_path: Pathname(__dir__).parent / ".github/workflows/ci.yml",
+    api_failure: false,
+    baseline_present: false
+  )
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      bin = root / "bin"
+      FileUtils.mkdir_p(bin)
+      gh = bin / "gh"
+      gh.write(<<~'SHELL')
+        #!/bin/sh
+        if [ "${STUB_GH_FAIL:-0}" = "1" ]; then
+          exit 42
+        fi
+        case "$*" in
+          *"/git/ref/heads/main"*)
+            printf '%s\n' "$STUB_CURRENT_MAIN_SHA"
+            ;;
+          *"/contents/.github/workflows/ci.yml"*)
+            /bin/cat "$STUB_WORKFLOW"
+            ;;
+          *)
+            echo "unexpected gh invocation: $*" >&2
+            exit 43
+            ;;
+        esac
+      SHELL
+      FileUtils.chmod(0o755, gh)
+
+      output = root / "github-output"
+      output.write("")
+      if baseline_present
+        baseline = root / PERF_BASELINE_PATH / "estimates.json"
+        FileUtils.mkdir_p(baseline.dirname)
+        baseline.write("{}")
+      end
+      env = {
+        "PATH" => "#{bin}:#{ENV.fetch('PATH')}",
+        "GITHUB_OUTPUT" => output.to_s,
+        "RUNNER_TEMP" => root.to_s,
+        "GITHUB_EVENT_NAME" => event_name,
+        "GITHUB_REF" => github_ref,
+        "GITHUB_RUN_ATTEMPT" => run_attempt,
+        "GITHUB_SHA" => github_sha,
+        "GITHUB_REPOSITORY" => "rotnov/pycc",
+        "PR_BASE_REF" => base_ref,
+        "PR_BASE_SHA" => base_sha,
+        "PR_HEAD_SHA" => pr_head_sha,
+        "TRUSTED_ACTIVATION_HEAD" => trusted_activation_head,
+        "PUSH_AFTER_SHA" => push_after_sha,
+        "PUSH_BEFORE_SHA" => push_before_sha,
+        "STUB_CURRENT_MAIN_SHA" => current_main_sha,
+        "STUB_WORKFLOW" => workflow_path.to_s,
+        "STUB_GH_FAIL" => api_failure ? "1" : "0"
+      }
+      stdout, stderr, status = Open3.capture3(
+        env,
+        "bash",
+        "-s",
+        stdin_data: PERF_BASELINE_VALIDATION_SCRIPT,
+        chdir: root.to_s
+      )
+      return [stdout, stderr, status, output.read]
+    end
+  end
+
+  def run_perf_baseline_lookup(
+    run_rows: "",
+    artifact_run_id: "",
+    api_failure: false,
+    event_name: "pull_request",
+    pr_base_sha: "exact-base-sha",
+    push_before_sha: "exact-before-sha"
+  )
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      gh = root / "gh"
+      gh.write(<<~'SHELL')
+        #!/bin/sh
+        if [ "${STUB_GH_FAIL:-0}" = "1" ]; then
+          exit 42
+        fi
+        case "$*" in
+          *"/actions/workflows/ci.yml/runs"*)
+            case "$*" in
+              *"head_sha=${STUB_EXPECTED_BASE_SHA}"*)
+                printf '%b' "$STUB_RUN_ROWS"
+                ;;
+              *)
+                echo "workflow-run query omitted the exact predecessor SHA" >&2
+                exit 44
+                ;;
+            esac
+            ;;
+          *"/actions/runs/${STUB_ARTIFACT_RUN_ID}/artifacts"*)
+            printf 'artifact-id\n'
+            ;;
+          *"/actions/runs/"*"/artifacts"*)
+            ;;
+          *)
+            echo "unexpected gh invocation: $*" >&2
+            exit 43
+            ;;
+        esac
+      SHELL
+      FileUtils.chmod(0o755, gh)
+      output = root / "github-output"
+      output.write("")
+      env = {
+        "PATH" => "#{root}:#{ENV.fetch('PATH')}",
+        "GITHUB_OUTPUT" => output.to_s,
+        "GITHUB_EVENT_NAME" => event_name,
+        "GITHUB_REPOSITORY" => "rotnov/pycc",
+        "PR_BASE_SHA" => pr_base_sha,
+        "PUSH_BEFORE_SHA" => push_before_sha,
+        "STUB_GH_FAIL" => api_failure ? "1" : "0",
+        "STUB_EXPECTED_BASE_SHA" =>
+          event_name == "pull_request" ? pr_base_sha : push_before_sha,
+        "STUB_RUN_ROWS" => run_rows,
+        "STUB_ARTIFACT_RUN_ID" => artifact_run_id
+      }
+      stdout, stderr, status = Open3.capture3(
+        env,
+        "bash",
+        "-s",
+        stdin_data: PERF_BASELINE_LOOKUP_SCRIPT,
+        chdir: root.to_s
+      )
+      return [stdout, stderr, status, output.read]
+    end
   end
 
   def test_rejects_false_completed_item_without_evidence
@@ -562,96 +687,499 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_allowlist_stages_the_frontend_perf_gate_digest
+  def test_tier1_workflow_allowlist_stages_the_split_frontend_perf_gate_digest
     # Per docs/TESTING.md's staged-update procedure: the reviewed prospective
-    # digest for the pending frontend-perf-gate ci.yml revision (adding the
-    # frontend-perf-gate job and requiring it in ci-gate) is appended here
-    # while the current digest remains active, ahead of the pull request that
-    # actually activates that workflow and retires this repository's current
-    # digest.
+    # digests for activation and bootstrap-free steady state are appended while
+    # the current digest remains active, ahead of the two pull requests that
+    # activate the workflow and then retire the transition.
     assert_includes(
       TIER1_CI_WORKFLOW_SHA256S,
-      PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256
+      D48_SPLIT_PERF_CI_WORKFLOW_SHA256
+    )
+    assert_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      D48_STEADY_PERF_CI_WORKFLOW_SHA256
     )
   end
 
-  def test_accepts_a_perf_baseline_published_only_after_success
+  def test_d48_workflow_digests_match_the_reviewed_inert_fixtures
+    assert_equal(
+      D48_SPLIT_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D48_ACTIVATION_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_equal(
+      D48_STEADY_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D48_STEADY_WORKFLOW_FIXTURE).hexdigest
+    )
     assert validate_perf_gate_baseline_lifecycle(
-      perf_gate_workflow,
+      D48_ACTIVATION_WORKFLOW_FIXTURE.read,
+      D48_ACTIVATION_WORKFLOW_FIXTURE.to_s
+    )
+    assert validate_perf_gate_baseline_lifecycle(
+      D48_STEADY_WORKFLOW_FIXTURE.read,
+      D48_STEADY_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_tier1_workflow_allowlist_retires_the_superseded_single_job_digest
+    refute_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
+    )
+  end
+
+  def test_accepts_the_reviewed_split_perf_trust_boundary
+    assert validate_perf_gate_baseline_lifecycle(
+      split_perf_workflow,
       "ci.yml"
     )
   end
 
-  def test_rejects_promoting_a_perf_baseline_after_a_failed_comparison
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(promote_if: "always()"),
-        "ci.yml"
-      )
-    end
-    assert_includes error.message, "fail-closed sequence"
+  def test_accepts_the_reviewed_steady_state_perf_trust_boundary
+    assert validate_perf_gate_baseline_lifecycle(
+      split_perf_workflow(steady: true),
+      "ci.yml"
+    )
   end
 
-  def test_rejects_caching_a_perf_baseline_after_a_failed_comparison
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(save_if: "always()"),
-        "ci.yml"
-      )
+  def test_rejects_steady_state_gate_without_a_canonical_baseline_requirement
+    workflow = split_perf_workflow(steady: true) do |jobs|
+      require_baseline = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Require canonical main frontend timing"
+      end
+      require_baseline["run"] = "true"
     end
-    assert_includes error.message, "fail-closed sequence"
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
   end
 
-  def test_rejects_a_mutable_perf_cache_action
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(restore_action: "actions/cache/restore@v4"),
-        "ci.yml"
-      )
+  def test_rejects_split_measurement_with_a_mutable_upload_action
+    workflow = split_perf_workflow do |jobs|
+      upload = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+        step["name"] == "Upload current frontend timing"
+      end
+      upload["uses"] = "actions/upload-artifact@v4"
     end
-    assert_includes error.message, "reviewed immutable pins"
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed untrusted measurement job"
   end
 
-  def test_rejects_a_missing_perf_comparison
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(
-          missing_step: "Compare against previous baseline (if one was restored)"
-        ),
-        "ci.yml"
-      )
+  def test_rejects_split_gate_without_checker_hash_verification
+    workflow = split_perf_workflow do |jobs|
+      verify = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Verify reviewed performance checker"
+      end
+      verify["run"] = "true"
     end
-    assert_includes error.message, "ordered baseline lifecycle"
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
   end
 
-  def test_rejects_a_reordered_perf_comparison
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(swap_comparison_and_promotion: true),
-        "ci.yml"
-      )
+  def test_rejects_split_gate_with_a_mutable_download_action
+    workflow = split_perf_workflow do |jobs|
+      download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Download current frontend timing"
+      end
+      download["uses"] = "actions/download-artifact@v4"
     end
-    assert_includes error.message, "ordered baseline lifecycle"
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
   end
 
-  def test_rejects_a_perf_comparison_that_can_hide_failure
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(comparison_continue_on_error: true),
-        "ci.yml"
-      )
+  def test_rejects_split_gate_that_can_ignore_a_download_failure
+    workflow = split_perf_workflow do |jobs|
+      download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Download canonical main frontend timing"
+      end
+      download["continue-on-error"] = true
     end
-    assert_includes error.message, "fail-closed sequence"
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
   end
 
-  def test_rejects_a_perf_job_that_can_hide_failure
+  def test_split_gate_never_uses_a_ref_ambiguous_actions_cache
+    refute_match(
+      %r{actions/cache},
+      SPLIT_PERF_GATE_JOB.to_s
+    )
+  end
+
+  def test_rejects_split_gate_that_queries_pull_request_runs_for_a_baseline
+    workflow = split_perf_workflow do |jobs|
+      locate = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Locate latest successful main baseline"
+      end
+      locate["run"] = locate.fetch("run").sub("-f event=push", "-f event=pull_request")
+    end
+
     error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(job_continue_on_error: true),
-        "ci.yml"
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_rejects_split_gate_that_accepts_an_expired_main_artifact
+    workflow = split_perf_workflow do |jobs|
+      locate = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Locate latest successful main baseline"
+      end
+      locate["run"] = locate.fetch("run").sub(
+        "select(.expired == false)",
+        "select(.expired == true)"
       )
     end
-    assert_includes error.message, "must propagate failures"
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_rejects_split_gate_without_explicit_successful_main_run_provenance
+    workflow = split_perf_workflow do |jobs|
+      download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Download canonical main frontend timing"
+      end
+      download.fetch("with").delete("run-id")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_rejects_split_gate_with_a_reusable_missing_baseline_bootstrap
+    workflow = split_perf_workflow do |jobs|
+      validate = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Require a main-owned baseline or reviewed activation"
+      end
+      validate["run"] = validate.fetch("run").sub(
+        PRE_SPLIT_PERF_CI_WORKFLOW_SHA256,
+        D48_SPLIT_PERF_CI_WORKFLOW_SHA256
+      )
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_baseline_validation_accepts_the_bound_activation_pull_request
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge"
+    )
+
+    assert status.success?, stderr
+    assert_empty stderr
+    assert_equal "bootstrap=true\n", output
+  end
+
+  def test_baseline_validation_rejects_a_stale_activation_pull_request
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      current_main_sha: "new-main-sha"
+    )
+
+    refute status.success?
+    assert_includes stderr, "base is stale"
+    assert_empty output
+  end
+
+  def test_baseline_validation_rejects_a_replayed_activation_pull_request
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      run_attempt: "2"
+    )
+
+    refute status.success?
+    assert_includes stderr, "pull request cannot be replayed"
+    assert_empty output
+  end
+
+  def test_baseline_validation_rejects_a_non_main_pull_request
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      base_ref: "release"
+    )
+
+    refute status.success?
+    assert_includes stderr, "only for a pull request targeting main"
+    assert_empty output
+  end
+
+  def test_baseline_validation_rejects_a_fresh_run_for_a_new_pull_request_head
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      pr_head_sha: DIFFERENT_HEAD_SHA
+    )
+
+    refute status.success?
+    assert_includes stderr, "bound to one exact pull request head"
+    assert_empty output
+  end
+
+  def test_baseline_validation_rejects_an_invalid_trusted_activation_head
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      trusted_activation_head: "#{ACTIVATION_HEAD_SHA}\n#{DIFFERENT_HEAD_SHA}"
+    )
+
+    refute status.success?
+    assert_includes stderr, "not one lowercase 40-hex commit SHA"
+    assert_empty output
+  end
+
+  def test_baseline_validation_accepts_the_first_main_push
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "push",
+      github_ref: "refs/heads/main",
+      current_main_sha: "activation-sha"
+    )
+
+    assert status.success?, stderr
+    assert_equal "bootstrap=true\n", output
+  end
+
+  def test_baseline_validation_accepts_a_retry_of_the_same_activation_push
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "push",
+      github_ref: "refs/heads/main",
+      current_main_sha: "activation-sha",
+      run_attempt: "2"
+    )
+
+    assert status.success?, stderr
+    assert_empty stderr
+    assert_equal "bootstrap=true\n", output
+  end
+
+  def test_baseline_validation_rejects_a_push_that_is_not_the_live_main_head
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "push",
+      github_ref: "refs/heads/main",
+      current_main_sha: "newer-main-sha"
+    )
+
+    refute status.success?
+    assert_includes stderr, "not the live main head"
+    assert_empty output
+  end
+
+  def test_baseline_validation_rejects_a_push_event_sha_mismatch
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "push",
+      github_ref: "refs/heads/main",
+      push_after_sha: "different-after-sha"
+    )
+
+    refute status.success?
+    assert_includes stderr, "does not match the checked-out main commit"
+    assert_empty output
+  end
+
+  def test_baseline_validation_rejects_an_activation_push_to_another_ref
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "push",
+      github_ref: "refs/heads/release"
+    )
+
+    refute status.success?
+    assert_includes stderr, "must target refs/heads/main"
+    assert_empty output
+  end
+
+  def test_baseline_validation_fails_closed_after_activation
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      workflow_path: CHECKER
+    )
+
+    refute status.success?
+    assert_includes stderr, "not the reviewed one-time activation"
+    assert_empty output
+  end
+
+  def test_baseline_validation_propagates_api_failure
+    _stdout, _stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      api_failure: true
+    )
+
+    assert_equal 42, status.exitstatus
+    assert_empty output
+  end
+
+  def test_baseline_validation_accepts_a_downloaded_main_baseline_without_bootstrap
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/999/merge",
+      base_ref: "release",
+      baseline_present: true
+    )
+
+    assert status.success?, stderr
+    assert_equal "bootstrap=false\n", output
+  end
+
+  def test_baseline_lookup_propagates_api_failure
+    _stdout, _stderr, status, output = run_perf_baseline_lookup(
+      api_failure: true
+    )
+
+    assert_equal 42, status.exitstatus
+    assert_empty output
+  end
+
+  def test_baseline_lookup_selects_the_newest_non_expired_main_artifact
+    _stdout, stderr, status, output = run_perf_baseline_lookup(
+      run_rows: "300\\texact-base-sha\\n200\\texact-base-sha\\n",
+      artifact_run_id: "300"
+    )
+
+    assert status.success?, stderr
+    assert_equal "found=true\nrun_id=300\n", output
+  end
+
+  def test_baseline_lookup_skips_a_run_without_a_non_expired_artifact
+    _stdout, stderr, status, output = run_perf_baseline_lookup(
+      run_rows: "300\\texact-base-sha\\n200\\texact-base-sha\\n",
+      artifact_run_id: "200"
+    )
+
+    assert status.success?, stderr
+    assert_equal "found=true\nrun_id=200\n", output
+  end
+
+  def test_baseline_lookup_reports_no_artifact
+    _stdout, stderr, status, output = run_perf_baseline_lookup(
+      run_rows: "300\\texact-base-sha\\n200\\texact-base-sha\\n"
+    )
+
+    assert status.success?, stderr
+    assert_equal "found=false\n", output
+  end
+
+  def test_baseline_lookup_rejects_a_successful_run_for_an_older_main_sha
+    _stdout, stderr, status, output = run_perf_baseline_lookup(
+      run_rows: "300\\tolder-main-sha\\n200\\texact-base-sha\\n",
+      artifact_run_id: "300"
+    )
+
+    assert status.success?, stderr
+    assert_equal "found=false\n", output
+  end
+
+  def test_baseline_lookup_uses_the_push_predecessor_sha
+    _stdout, stderr, status, output = run_perf_baseline_lookup(
+      event_name: "push",
+      run_rows: "300\\texact-before-sha\\n",
+      artifact_run_id: "300"
+    )
+
+    assert status.success?, stderr
+    assert_equal "found=true\nrun_id=300\n", output
+  end
+
+  def test_rejects_split_gate_without_a_measurement_dependency
+    workflow = split_perf_workflow do |jobs|
+      jobs.fetch("frontend-perf-gate").delete("needs")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_rejects_a_split_gate_without_a_measurement_job
+    workflow = split_perf_workflow do |jobs|
+      jobs.delete("frontend-perf-measure")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "requires frontend-perf-measure"
+  end
+
+  def test_rejects_split_perf_jobs_not_required_by_ci_gate
+    workflow = split_perf_workflow do |jobs|
+      jobs.fetch("ci-gate").fetch("needs").delete("frontend-perf-measure")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
+  end
+
+  def test_rejects_a_noop_split_perf_ci_gate
+    workflow = split_perf_workflow do |jobs|
+      jobs.fetch("ci-gate")["steps"] = [{ "run" => "true" }]
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
+  end
+
+  def test_rejects_a_split_perf_ci_gate_that_can_be_skipped
+    workflow = split_perf_workflow do |jobs|
+      jobs.fetch("ci-gate").delete("if")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
+  end
+
+  def test_rejects_each_missing_split_perf_ci_gate_result_check
+    SPLIT_PERF_CI_GATE_NEEDS.each do |job_name|
+      workflow = split_perf_workflow do |jobs|
+        gate_step = jobs.fetch("ci-gate").fetch("steps").first
+        predicate = "needs.#{job_name}.result != 'success'"
+        gate_step["if"] = gate_step.fetch("if").sub(
+          /(?: \|\| )?#{Regexp.escape(predicate)}/,
+          ""
+        )
+      end
+
+      error = assert_raises(RoadmapEvidenceError, job_name) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes(
+        error.message,
+        "reviewed fail-closed aggregate job",
+        job_name
+      )
+    end
   end
 
   def test_rejects_changed_tier1_matrix_workflow
