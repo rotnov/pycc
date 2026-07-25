@@ -278,8 +278,9 @@
               exact-predecessor transport. The D-048 digest requires the
               non-expired <code>frontend-perf-current</code> artifact from the
               exact successful <code>main</code> predecessor. The D-051 digest
-              seals the exact-predecessor measurement before current source
-              executes and compares both measurements from the same runner.
+              seals the exact-predecessor artifact ID and content digests before
+              current source executes, downloads only that identity, and compares
+              both measurements from the same runner.
               Both modes fail closed when exact predecessor evidence is
               unavailable.
               The conformance testkit, named demos, and final v0.1 acceptance pass

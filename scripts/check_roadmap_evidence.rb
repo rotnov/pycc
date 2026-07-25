@@ -36,7 +36,7 @@ EVIDENCE_SECTIONS = {
 D48_STEADY_PERF_CI_WORKFLOW_SHA256 =
   "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
 D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
-  "c58aa22fea19d1d7c6483826e17d8e153196bc803dc81a281d2b1168603bbb10"
+  "c1dd0546ea1a216833c5a95f22b0a13cb368e75189d776763c8d50f40b33b321"
 TIER1_CI_WORKFLOW_SHA256S = [
   D48_STEADY_PERF_CI_WORKFLOW_SHA256,
   D51_PAIRED_PERF_CI_WORKFLOW_SHA256
@@ -253,12 +253,48 @@ PAIRED_PERF_PREDECESSOR_RESOLVE_SCRIPT = <<~'SHELL'.strip
   fi
   printf 'sha=%s\n' "$predecessor_sha" >> "$GITHUB_OUTPUT"
 SHELL
-PAIRED_PERF_PREDECESSOR_REQUIRE_SCRIPT = <<~'SHELL'.strip
+PAIRED_PERF_SEAL_SCRIPT = <<~'SHELL'.strip
   set -euo pipefail
-  if [ ! -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
-    echo "the same-run exact predecessor timing is unavailable" >&2
+  estimates=target/criterion/pycc_check_frontend_fixture/previous/estimates.json
+  if [ ! -f "$estimates" ]; then
+    echo "the exact predecessor benchmark did not produce estimates.json" >&2
     exit 1
   fi
+  sha256="$(shasum -a 256 "$estimates" | awk '{print $1}')"
+  printf 'sha256=%s\n' "$sha256" >> "$GITHUB_OUTPUT"
+SHELL
+PAIRED_PERF_ARTIFACT_IDENTITY_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  if ! printf '%s' "$PREDECESSOR_ARTIFACT_ID" | grep -Eq '^[0-9]+$'; then
+    echo "the sealed predecessor artifact ID is invalid" >&2
+    exit 1
+  fi
+  if ! printf '%s' "$EXPECTED_ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{64}$'; then
+    echo "the sealed predecessor artifact digest is invalid" >&2
+    exit 1
+  fi
+  actual_digest="$(
+    gh api \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "repos/${GITHUB_REPOSITORY}/actions/artifacts/${PREDECESSOR_ARTIFACT_ID}" \
+      --jq '.digest // ""'
+  )"
+  if [ "$actual_digest" != "sha256:$EXPECTED_ARTIFACT_DIGEST" ]; then
+    echo "the sealed predecessor artifact identity changed or disappeared" >&2
+    exit 1
+  fi
+SHELL
+PAIRED_PERF_ESTIMATES_VERIFY_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  if ! printf '%s' "$EXPECTED_ESTIMATES_SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+    echo "the sealed predecessor estimates digest is invalid" >&2
+    exit 1
+  fi
+  printf '%s  %s\n' \
+    "$EXPECTED_ESTIMATES_SHA256" \
+    target/criterion/pycc_check_frontend_fixture/previous/estimates.json |
+    shasum -a 256 --check
 SHELL
 PAIRED_PERF_MEASURE_STEPS = [
   {
@@ -297,7 +333,14 @@ PAIRED_PERF_MEASURE_STEPS = [
     "run" => "cargo bench --bench check_bench -- --save-baseline previous"
   },
   {
+    "name" => "Seal exact predecessor timing digest",
+    "id" => "seal_predecessor",
+    "working-directory" => "predecessor",
+    "run" => PAIRED_PERF_SEAL_SCRIPT
+  },
+  {
     "name" => "Upload sealed predecessor frontend timing",
+    "id" => "upload_predecessor",
     "uses" => PINNED_ARTIFACT_UPLOAD_ACTION,
     "with" => {
       "name" => "frontend-perf-previous",
@@ -354,16 +397,32 @@ PAIRED_PERF_GATE_STEPS = [
     "run" => "ruby scripts/test_check_perf_regression.rb"
   },
   {
+    "name" => "Verify sealed predecessor artifact identity",
+    "env" => {
+      "GH_TOKEN" => "${{ github.token }}",
+      "PREDECESSOR_ARTIFACT_ID" =>
+        "${{ needs.frontend-perf-measure.outputs.predecessor_artifact_id }}",
+      "EXPECTED_ARTIFACT_DIGEST" =>
+        "${{ needs.frontend-perf-measure.outputs.predecessor_artifact_digest }}"
+    },
+    "run" => PAIRED_PERF_ARTIFACT_IDENTITY_SCRIPT
+  },
+  {
     "name" => "Download sealed predecessor frontend timing",
     "uses" => PINNED_ARTIFACT_DOWNLOAD_ACTION,
     "with" => {
-      "name" => "frontend-perf-previous",
+      "artifact-ids" =>
+        "${{ needs.frontend-perf-measure.outputs.predecessor_artifact_id }}",
       "path" => PERF_BASELINE_PATH
     }
   },
   {
-    "name" => "Require sealed predecessor frontend timing",
-    "run" => PAIRED_PERF_PREDECESSOR_REQUIRE_SCRIPT
+    "name" => "Verify sealed predecessor frontend timing",
+    "env" => {
+      "EXPECTED_ESTIMATES_SHA256" =>
+        "${{ needs.frontend-perf-measure.outputs.predecessor_estimates_sha256 }}"
+    },
+    "run" => PAIRED_PERF_ESTIMATES_VERIFY_SCRIPT
   },
   {
     "name" => "Download current frontend timing",
@@ -382,7 +441,13 @@ PAIRED_PERF_MEASURE_JOB = {
   "runs-on" => "macos-14",
   "permissions" => { "contents" => "read" },
   "outputs" => {
-    "predecessor_sha" => "${{ steps.predecessor.outputs.sha }}"
+    "predecessor_sha" => "${{ steps.predecessor.outputs.sha }}",
+    "predecessor_artifact_id" =>
+      "${{ steps.upload_predecessor.outputs.artifact-id }}",
+    "predecessor_artifact_digest" =>
+      "${{ steps.upload_predecessor.outputs.artifact-digest }}",
+    "predecessor_estimates_sha256" =>
+      "${{ steps.seal_predecessor.outputs.sha256 }}"
   },
   "steps" => PAIRED_PERF_MEASURE_STEPS
 }.freeze

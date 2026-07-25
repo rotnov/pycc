@@ -149,6 +149,90 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def run_paired_artifact_identity(
+    artifact_id: "12345",
+    expected_digest: "a" * 64,
+    actual_digest: nil,
+    api_failure: false
+  )
+    actual_digest ||= "sha256:#{expected_digest}"
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      gh = root / "gh"
+      gh.write(<<~'SHELL')
+        #!/bin/sh
+        if [ "${STUB_GH_FAIL:-0}" = "1" ]; then
+          exit 42
+        fi
+        case "$*" in
+          *"repos/rotnov/pycc/actions/artifacts/${STUB_EXPECTED_ARTIFACT_ID}"*)
+            printf '%s\n' "$STUB_ACTUAL_DIGEST"
+            ;;
+          *)
+            echo "unexpected gh invocation: $*" >&2
+            exit 43
+            ;;
+        esac
+      SHELL
+      FileUtils.chmod(0o755, gh)
+      return Open3.capture3(
+        {
+          "PATH" => "#{root}:#{ENV.fetch('PATH')}",
+          "GH_TOKEN" => "test-token",
+          "GITHUB_REPOSITORY" => "rotnov/pycc",
+          "PREDECESSOR_ARTIFACT_ID" => artifact_id,
+          "EXPECTED_ARTIFACT_DIGEST" => expected_digest,
+          "STUB_EXPECTED_ARTIFACT_ID" => artifact_id,
+          "STUB_ACTUAL_DIGEST" => actual_digest,
+          "STUB_GH_FAIL" => api_failure ? "1" : "0"
+        },
+        "bash",
+        "-s",
+        stdin_data: PAIRED_PERF_ARTIFACT_IDENTITY_SCRIPT,
+        chdir: root.to_s
+      )
+    end
+  end
+
+  def run_paired_estimates_verification(content:, expected_digest:)
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      estimates =
+        root / "target/criterion/pycc_check_frontend_fixture/previous/estimates.json"
+      FileUtils.mkdir_p(estimates.dirname)
+      estimates.write(content)
+      return Open3.capture3(
+        { "EXPECTED_ESTIMATES_SHA256" => expected_digest },
+        "bash",
+        "-s",
+        stdin_data: PAIRED_PERF_ESTIMATES_VERIFY_SCRIPT,
+        chdir: root.to_s
+      )
+    end
+  end
+
+  def run_paired_seal(content: nil)
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      output = root / "github-output"
+      unless content.nil?
+        estimates =
+          root / "target/criterion/pycc_check_frontend_fixture/previous/estimates.json"
+        FileUtils.mkdir_p(estimates.dirname)
+        estimates.write(content)
+      end
+      stdout, stderr, status = Open3.capture3(
+        { "GITHUB_OUTPUT" => output.to_s },
+        "bash",
+        "-s",
+        stdin_data: PAIRED_PERF_SEAL_SCRIPT,
+        chdir: root.to_s
+      )
+      recorded_output = output.exist? ? output.read : ""
+      return stdout, stderr, status, recorded_output
+    end
+  end
+
   def run_perf_baseline_lookup(
     run_rows: "",
     artifact_run_id: "",
@@ -784,6 +868,49 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes error.message, "reviewed isolated comparison job"
   end
 
+  def test_rejects_paired_gate_that_downloads_predecessor_by_name
+    workflow = paired_perf_workflow do |jobs|
+      download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Download sealed predecessor frontend timing"
+      end
+      download.fetch("with").delete("artifact-ids")
+      download.fetch("with")["name"] = "frontend-perf-previous"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_rejects_paired_gate_without_artifact_identity_verification
+    workflow = paired_perf_workflow do |jobs|
+      identity = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Verify sealed predecessor artifact identity"
+      end
+      identity["run"] = "true"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_rejects_paired_gate_without_estimates_digest_verification
+    workflow = paired_perf_workflow do |jobs|
+      verify = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Verify sealed predecessor frontend timing"
+      end
+      verify["run"] = "true"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
   def test_rejects_mixed_reviewed_perf_job_generations
     jobs = {
       "frontend-perf-measure" =>
@@ -802,9 +929,13 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_paired_gate_has_no_cross_run_baseline_lookup_or_cache
     serialized_gate = PAIRED_PERF_GATE_JOB.to_s
-    refute_match(/gh api/, serialized_gate)
+    refute_match(%r{/actions/workflows/ci\.yml/runs}, serialized_gate)
     refute_match(/run-id/, serialized_gate)
     refute_match(%r{actions/cache}, serialized_gate)
+    assert_match(
+      %r{/actions/artifacts/\$\{PREDECESSOR_ARTIFACT_ID\}},
+      serialized_gate
+    )
   end
 
   def test_paired_predecessor_resolution_uses_pull_request_base
@@ -843,6 +974,69 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     refute status.success?
     assert_includes stderr, "cannot resolve the exact performance predecessor SHA"
+    assert_empty output
+  end
+
+  def test_paired_artifact_identity_accepts_the_original_id_and_digest
+    _stdout, stderr, status = run_paired_artifact_identity
+
+    assert status.success?, stderr
+  end
+
+  def test_paired_artifact_identity_rejects_a_replacement_digest
+    _stdout, stderr, status = run_paired_artifact_identity(
+      actual_digest: "sha256:#{'b' * 64}"
+    )
+
+    refute status.success?
+    assert_includes stderr, "identity changed or disappeared"
+  end
+
+  def test_paired_artifact_identity_rejects_a_deleted_artifact
+    _stdout, _stderr, status = run_paired_artifact_identity(api_failure: true)
+
+    assert_equal 42, status.exitstatus
+  end
+
+  def test_paired_artifact_identity_rejects_an_invalid_id
+    _stdout, stderr, status = run_paired_artifact_identity(artifact_id: "latest")
+
+    refute status.success?
+    assert_includes stderr, "artifact ID is invalid"
+  end
+
+  def test_paired_estimates_verification_accepts_the_sealed_file
+    content = "{\"mean\":{\"point_estimate\":7000}}\n"
+    _stdout, stderr, status = run_paired_estimates_verification(
+      content: content,
+      expected_digest: Digest::SHA256.hexdigest(content)
+    )
+
+    assert status.success?, stderr
+  end
+
+  def test_paired_estimates_verification_rejects_tampered_content
+    _stdout, _stderr, status = run_paired_estimates_verification(
+      content: "tampered\n",
+      expected_digest: Digest::SHA256.hexdigest("sealed\n")
+    )
+
+    refute status.success?
+  end
+
+  def test_paired_seal_records_the_exact_estimates_digest
+    content = "{\"mean\":{\"point_estimate\":7000}}\n"
+    _stdout, stderr, status, output = run_paired_seal(content: content)
+
+    assert status.success?, stderr
+    assert_equal "sha256=#{Digest::SHA256.hexdigest(content)}\n", output
+  end
+
+  def test_paired_seal_rejects_a_missing_estimates_file
+    _stdout, stderr, status, output = run_paired_seal
+
+    refute status.success?
+    assert_includes stderr, "did not produce estimates.json"
     assert_empty output
   end
 

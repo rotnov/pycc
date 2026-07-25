@@ -19,9 +19,9 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > During the staged D-051 migration, the tracked workflow's reviewed whole-file
 > digest selects the transport: the D-048 digest requires the non-expired
 > artifact from the exact successful `main` predecessor, while the D-051 digest
-> seals an exact-predecessor measurement before current source runs and compares
-> the two measurements from the same runner. Both modes fail closed when exact
-> predecessor evidence is unavailable.
+> seals an exact-predecessor artifact ID and content digests before current
+> source runs, then compares the two measurements from the same runner. Both
+> modes fail closed when exact predecessor evidence is unavailable.
 > See the [current status](https://rotnov.github.io/pycc/status/) and
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 

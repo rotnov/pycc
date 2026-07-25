@@ -137,16 +137,23 @@ older successful run or an Actions cache. The artifact is retained for 90 days
 and each successful main run refreshes it.
 
 In D-051 mode, the measurement job resolves the same exact predecessor SHA,
-checks out and benchmarks it first on one `macos-14` runner, and uploads
-`frontend-perf-previous` before checking out or executing `github.sha`. It then
-benchmarks current source on that same runner and uploads
-`frontend-perf-current`. The isolated gate checks the comparator out from the
-resolved predecessor job output, verifies its digests, downloads both same-run
-artifacts, requires the predecessor JSON, and applies the unchanged 2%
-comparison. It has no Actions-run API lookup, run ID, or cache. Focused tests
-reject a mutable action, wrong predecessor/current ref, missing job output,
-reordered sealing step, mixed job generations, unsupported event, empty/zero
-predecessor, or comparator checkout from current source.
+checks out and benchmarks it first on one `macos-14` runner, hashes its
+`estimates.json`, and uploads `frontend-perf-previous` before checking out or
+executing `github.sha`. The job exports the immutable upload ID, upload archive
+digest, and source-file SHA-256 before it benchmarks current source on that same
+runner and uploads `frontend-perf-current`. The isolated gate checks the
+comparator out from the resolved predecessor job output, verifies its digests,
+queries only the exact same-run artifact ID to require the original archive
+digest, downloads by that ID rather than name, verifies the extracted file
+SHA-256, and applies the unchanged 2% comparison. If current code uses inherited
+artifact-service credentials to delete and recreate the predecessor name, the
+original ID disappears and the gate fails closed. It performs no Actions-run
+search, accepts no cross-run run ID, and uses no cache. Focused tests reject a
+mutable action, name-based predecessor download, wrong predecessor/current ref,
+missing job output, altered identity/content verification, reordered sealing
+step, mixed job generations, unsupported event, empty/zero predecessor, API
+failure or replacement digest, tampered estimates, or comparator checkout from
+current source.
 
 There is no missing-baseline exception in either mode. Missing, expired,
 cancelled, non-exact, or malformed predecessor evidence fails the pull request

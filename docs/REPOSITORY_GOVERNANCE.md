@@ -20,8 +20,8 @@ enforce the normal delivery path.
   this fan-in. D-048 supersedes D-047's temporary PR-6 deferral and replaces
   D-046's ref-scoped cache transport with exact-predecessor artifacts from
   successful `main` runs. D-051 stages a same-run replacement that benchmarks
-  and seals the exact predecessor before current source executes on the same
-  runner. During migration, the tracked whole-workflow digest selects the
+  and seals the exact predecessor artifact ID plus archive/file digests before
+  current source executes on the same runner. During migration, the tracked whole-workflow digest selects the
   reviewed D-048 cross-run pair or D-051 paired-run pair; mixed generations are
   rejected. Both compare untrusted timing through the predecessor-owned,
   hash-verified checker and fail closed when exact predecessor evidence is
@@ -57,11 +57,14 @@ historical activation lifecycle and the reason it was bounded.
 D-051 is staged without changing the active workflow in the staging commit.
 `tests/fixtures/d051-paired-ci.yml` and its reviewed digest define the later
 workflow-only replacement: one unprivileged runner benchmarks the exact PR base
-or push predecessor, uploads and seals that JSON before current source is
-checked out, then measures current source. The isolated gate checks its
-hash-verified comparator out from that predecessor and consumes both same-run
-artifacts. It performs no cross-run Actions lookup and needs no bootstrap
-variable. Until the byte-exact replacement lands, the D-048 paragraph above is
+or push predecessor, hashes the JSON, and seals its immutable upload ID and
+archive digest before current source is checked out, then measures current
+source. The isolated gate checks its hash-verified comparator out from that
+predecessor, verifies the original artifact metadata by ID, downloads only that
+ID, checks the extracted JSON digest, and consumes both same-run artifacts. A
+name-based overwrite therefore deletes the expected ID and fails closed. It
+performs no cross-run Actions-run lookup and needs no bootstrap variable. Until
+the byte-exact replacement lands, the D-048 paragraph above is
 the active transport; after replacement, the D-051 paragraph is the active
 transport. A final cleanup retires the inactive D-048 fixture and digest.
 
