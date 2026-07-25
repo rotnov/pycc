@@ -23,7 +23,12 @@ fn a_missing_input_file_is_a_clean_error_not_a_panic() {
     let out = dir.join("out");
 
     let output = Command::new(pycc_bin())
-        .args(["build", missing_path.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .args([
+            "build",
+            missing_path.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -36,7 +41,11 @@ fn build_and_run_explicit_call_to_main() {
     // `main` -- the source has to call it, same as any other function.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "hello.py", "def main() -> None:\n    print(42)\n\nmain()\n");
+    let src = write_fixture(
+        &dir,
+        "hello.py",
+        "def main() -> None:\n    print(42)\n\nmain()\n",
+    );
     let out = dir.join("hello");
 
     let status = Command::new(pycc_bin())
@@ -62,7 +71,11 @@ fn defining_main_without_calling_it_produces_no_output() {
     // pycc_testkit, deferred per DECISIONS.md): zero bytes of stdout.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_uncalled_main_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "hello_uncalled.py", "def main() -> None:\n    print(42)\n");
+    let src = write_fixture(
+        &dir,
+        "hello_uncalled.py",
+        "def main() -> None:\n    print(42)\n",
+    );
     let out = dir.join("hello_uncalled");
 
     let status = Command::new(pycc_bin())
@@ -72,7 +85,10 @@ fn defining_main_without_calling_it_produces_no_output() {
     assert!(status.success());
 
     let output = Command::new(&out).output().unwrap();
-    assert_eq!(output.stdout, b"", "must match CPython's actual output for this source");
+    assert_eq!(
+        output.stdout, b"",
+        "must match CPython's actual output for this source"
+    );
 }
 
 #[test]
@@ -98,7 +114,10 @@ fn run_subcommand_builds_and_executes_in_one_step() {
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "hello_run.py", "print(42)\n");
 
-    let output = Command::new(pycc_bin()).args(["run", src.to_str().unwrap()]).output().unwrap();
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"42\n");
 }
@@ -109,14 +128,20 @@ fn run_subcommand_propagates_a_build_failure() {
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "bad_run.py", "def main(:\n");
 
-    let output = Command::new(pycc_bin()).args(["run", src.to_str().unwrap()]).output().unwrap();
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("L0001"));
 }
 
 #[test]
 fn version_flag_prints_something() {
-    let output = Command::new(pycc_bin()).args(["version", "--verbose"]).output().unwrap();
+    let output = Command::new(pycc_bin())
+        .args(["version", "--verbose"])
+        .output()
+        .unwrap();
     assert!(output.status.success());
     assert!(!output.stdout.is_empty());
 }
@@ -143,6 +168,36 @@ fn a_syntax_error_is_a_compile_error_exit_code_1() {
 }
 
 #[test]
+fn a_type_error_is_a_compile_error_exit_code_1() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_typeerr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "typeerr.py", "x = undefined\n");
+    let out = dir.join("typeerr");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("T0021"));
+}
+
+#[test]
+fn an_unannotated_public_function_is_a_compile_error_exit_code_1() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_t0001_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "t0001.py", "def add(a, b):\n    return a + b\n");
+    let out = dir.join("t0001");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("T0001"));
+}
+
+#[test]
 fn defining_a_function_under_any_name_without_calling_it_succeeds() {
     // There's no "must be named main" restriction: any function name is
     // legal to define; only calling one runs it (matches CPython, which
@@ -162,7 +217,9 @@ fn defining_a_function_under_any_name_without_calling_it_succeeds() {
 }
 
 #[test]
-fn calling_an_undefined_function_is_a_codegen_error() {
+fn calling_an_undefined_function_is_a_compile_error() {
+    // Caught by pycc_types (T0021) since Task 9 added real function-call
+    // signature checking; previously this only failed later, at codegen.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_undefined_fn_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "undefined_fn.py", "does_not_exist()\n");
@@ -214,7 +271,10 @@ fn build_and_run_cross_compiled_to_a_different_tier_1_target() {
 
     let file_output = Command::new("file").arg(&out).output().unwrap();
     let description = String::from_utf8_lossy(&file_output.stdout);
-    assert!(description.contains("x86_64"), "expected an x86_64 binary, got: {description}");
+    assert!(
+        description.contains("x86_64"),
+        "expected an x86_64 binary, got: {description}"
+    );
 
     // Runs via Rosetta 2 on this arm64 dev host / CI runner.
     let output = Command::new(&out).output().unwrap();
@@ -260,7 +320,14 @@ fn build_and_run_with_target_set_to_the_host_s_own_triple_on_linux() {
     let out = dir.join("hello_owntriple");
 
     let status = Command::new(pycc_bin())
-        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap(), "--target", triple])
+        .args([
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--target",
+            triple,
+        ])
         .status()
         .unwrap();
     assert!(status.success());
@@ -324,6 +391,363 @@ fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
 }
 
 #[test]
+fn check_subcommand_reports_no_issues_on_valid_code() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_ok_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "ok.py",
+        "def main() -> None:\n    print(42)\n\n1 < 2\nmain()\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn check_subcommand_infers_a_private_helper_signature() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_private_inference_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "private.py",
+        "def _identity(value):\n    return value\n\n_identity(1)\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn check_subcommand_rejects_conflicting_private_helper_constraints() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_private_conflict_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "private_conflict.py",
+        "def _callee(target):\n    return target\n\ndef _caller(source):\n    return _callee(source)\n\n_callee(1)\n_caller(\"wrong\")\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0021"));
+}
+
+#[test]
+fn check_subcommand_propagates_an_annotated_binary_result() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_private_binop_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "private_binop.py",
+        "def _inc_left(value) -> int:\n    return value + 1\n\ndef _inc_right(value) -> int:\n    return 1 + value\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn check_subcommand_rejects_true_division_with_an_int_result_annotation() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_check_private_div_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "private_div.py",
+        "def _ratio(value) -> int:\n    return value / 2\n\n_ratio(4)\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0021"));
+}
+
+#[test]
+fn check_subcommand_rejects_known_string_operands_for_an_int_result() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_private_string_binop_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (name, source) in [
+        (
+            "string_left.py",
+            "def _bad(value) -> int:\n    return \"wrong\" + value\n",
+        ),
+        (
+            "string_right.py",
+            "def _bad(value) -> int:\n    return value + \"wrong\"\n",
+        ),
+    ] {
+        let src = write_fixture(&dir, name, source);
+        let output = Command::new(pycc_bin())
+            .args(["check", src.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("T0021"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn check_subcommand_reports_t0001_on_an_unannotated_public_function() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_t0001_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "def add(a, b):\n    return a + b\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0001"));
+}
+
+#[test]
+fn check_subcommand_supports_json_error_format() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_json_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "def add(a, b):\n    return a + b\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap(), "--error-format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["code"], "T0001");
+}
+
+#[test]
+fn check_subcommand_rejects_an_unknown_error_format() {
+    let output = Command::new(pycc_bin())
+        .args(["check", "unused.py", "--error-format", "xml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value 'xml'"));
+    assert!(stderr.contains("[possible values: human, json]"));
+}
+
+#[test]
+fn direct_type_api_rejects_a_for_target_representation_change() {
+    let function = pycc_hir::HirItem::Function {
+        name: "loop_over".to_string(),
+        params: vec![("value".to_string(), pycc_hir::Ty::Str)],
+        return_ty: pycc_hir::Ty::None,
+        body: vec![pycc_hir::HirStmt::ForRange {
+            var: "value".to_string(),
+            start: pycc_hir::HirExpr::IntLiteral(0),
+            stop: pycc_hir::HirExpr::IntLiteral(3),
+            step: pycc_hir::HirExpr::IntLiteral(1),
+            body: vec![],
+        }],
+    };
+    assert_eq!(
+        pycc_types::check_function(&function).unwrap_err().code,
+        "T0023"
+    );
+}
+
+#[test]
+fn module_type_api_rejects_a_for_target_representation_change() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "loop_over".to_string(),
+            params: vec![("value".to_string(), pycc_hir::Ty::Str)],
+            return_ty: pycc_hir::Ty::None,
+            body: vec![pycc_hir::HirStmt::ForRange {
+                var: "value".to_string(),
+                start: pycc_hir::HirExpr::IntLiteral(0),
+                stop: pycc_hir::HirExpr::IntLiteral(3),
+                step: pycc_hir::HirExpr::IntLiteral(1),
+                body: vec![],
+            }],
+        }],
+    };
+    assert_eq!(pycc_types::check(&hir).unwrap_err().code, "T0023");
+}
+
+#[test]
+fn direct_type_api_rejects_an_unconstrained_private_parameter() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "_unused".to_string(),
+            params: vec![("value".to_string(), pycc_hir::Ty::Infer)],
+            return_ty: pycc_hir::Ty::None,
+            body: vec![],
+        }],
+    };
+    assert_eq!(
+        pycc_types::check_and_resolve(&hir).unwrap_err().code,
+        "T0021"
+    );
+}
+
+#[test]
+fn direct_type_api_rejects_an_unconstrained_private_return() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "_unknown".to_string(),
+            params: vec![],
+            return_ty: pycc_hir::Ty::Infer,
+            body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::Name(
+                "missing".to_string(),
+            )))],
+        }],
+    };
+    let err = pycc_types::check_and_resolve(&hir).unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(err.message.contains("return type"));
+}
+
+#[test]
+fn direct_type_api_propagates_an_annotated_binary_result() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "_inc".to_string(),
+            params: vec![("value".to_string(), pycc_hir::Ty::Infer)],
+            return_ty: pycc_hir::Ty::Int,
+            body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::BinOp {
+                op: pycc_hir::BinOpKind::Add,
+                left: Box::new(pycc_hir::HirExpr::Name("value".to_string())),
+                right: Box::new(pycc_hir::HirExpr::IntLiteral(1)),
+            }))],
+        }],
+    };
+    assert!(pycc_types::check_and_resolve(&hir).is_ok());
+}
+
+#[test]
+fn direct_type_api_rejects_incompatible_resolved_binary_operands() {
+    let hir = pycc_hir::HirModule {
+        items: vec![
+            pycc_hir::HirItem::Function {
+                name: "_bad_add".to_string(),
+                params: vec![("value".to_string(), pycc_hir::Ty::Infer)],
+                return_ty: pycc_hir::Ty::Infer,
+                body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::BinOp {
+                    op: pycc_hir::BinOpKind::Add,
+                    left: Box::new(pycc_hir::HirExpr::Name("value".to_string())),
+                    right: Box::new(pycc_hir::HirExpr::StringLiteral("wrong".to_string())),
+                }))],
+            },
+            pycc_hir::HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(pycc_hir::HirExpr::Call {
+                callee: "_bad_add".to_string(),
+                args: vec![pycc_hir::HirExpr::IntLiteral(1)],
+            })),
+        ],
+    };
+    assert_eq!(
+        pycc_types::check_and_resolve(&hir).unwrap_err().code,
+        "T0021"
+    );
+}
+
+#[test]
+fn check_subcommand_reports_a_clean_error_on_a_missing_file() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_missing_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing_path = dir.join("does_not_exist.py");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", missing_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not read"));
+}
+
+#[test]
+fn check_subcommand_reports_a_syntax_error() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_syntax_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "def main(:\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("L0001"));
+}
+
+#[test]
+fn check_subcommand_reports_a_type_error() {
+    // Distinct from the T0001/T0002 cases above -- those are raised during
+    // pycc_hir::lower_checked itself. `x = undefined` parses and lowers
+    // cleanly; the undefined-name error only surfaces from
+    // pycc_types::check's own inference pass, exercising try_check's third
+    // (and otherwise untested) diagnostic-producing stage.
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_typeerr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "x = undefined\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0021"));
+}
+
+#[test]
+fn a_top_level_return_is_a_clean_error_not_a_panic() {
+    // Regression test (self-review finding, pre-merge): a bare `return` at
+    // module scope used to panic pycc_types (exit code 101, raw backtrace)
+    // instead of producing a T0024 diagnostic through the documented exit-1
+    // contract. `ruff_python_parser` parses this fine -- CPython itself only
+    // rejects it in a later compile pass, not the grammar -- so this is
+    // reachable from ordinary (if unusual) CLI input.
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_top_level_return_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "return\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0024"));
+}
+
+#[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -331,7 +755,12 @@ fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let bad_out = dir.join("does_not_exist_dir").join("hello");
 
     let status = Command::new(pycc_bin())
-        .args(["build", src.to_str().unwrap(), "-o", bad_out.to_str().unwrap()])
+        .args([
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            bad_out.to_str().unwrap(),
+        ])
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(1));
