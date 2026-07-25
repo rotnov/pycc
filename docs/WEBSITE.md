@@ -69,12 +69,15 @@ site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
 or required metadata. The landing-page contract also requires exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
 classic-script reference to relative `site.js` with no `type` override.
+The stylesheet tag permits only `rel="stylesheet"` and `href="styles.css"`;
+the script tag permits only `defer` and `src="site.js"`. References inside
+inert `template` or `noscript` content do not satisfy the contract.
 Table-driven negative controls cover missing,
 empty, duplicate, absolute, local-only, and differently targeted asset
 references so the uploaded files cannot silently become browser-orphaned.
-The validator also rejects duplicate asset attributes and HTML `base` elements,
-which could otherwise make browser URL resolution disagree with the checked
-attribute values.
+The validator also rejects suppressing or execution-changing asset attributes,
+duplicate asset attributes, and HTML `base` elements, which could otherwise
+make browser behavior disagree with the checked attribute values.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots

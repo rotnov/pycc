@@ -55,6 +55,42 @@ mutations = {
     "different stylesheet target": original.replace(
         'href="styles.css"', 'href="other.css"', 1
     ),
+    "disabled stylesheet": original.replace(
+        '<link rel="stylesheet" href="styles.css">',
+        '<link rel="stylesheet" href="styles.css" disabled>',
+        1,
+    ),
+    "non-applying stylesheet media": original.replace(
+        '<link rel="stylesheet" href="styles.css">',
+        '<link rel="stylesheet" href="styles.css" media="not all">',
+        1,
+    ),
+    "incompatible stylesheet type": original.replace(
+        '<link rel="stylesheet" href="styles.css">',
+        '<link rel="stylesheet" href="styles.css" type="text/plain">',
+        1,
+    ),
+    "alternate stylesheet relationship": original.replace(
+        'rel="stylesheet"', 'rel="alternate stylesheet"', 1
+    ),
+    "stylesheet inside an inert template": original.replace(
+        stylesheet,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <template>\n{stylesheet}\n    </template>",
+        1,
+    ),
+    "stylesheet inside an inert noscript": original.replace(
+        stylesheet,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <noscript>\n{stylesheet}\n    </noscript>",
+        1,
+    ),
     "missing script": original.replace(script, "", 1),
     "empty script target": original.replace('src="site.js"', 'src=""', 1),
     "duplicate script outside the head": original.replace(
@@ -77,9 +113,32 @@ mutations = {
     "non-deferred script": original.replace(
         '<script defer src="site.js">', '<script src="site.js">', 1
     ),
+    "async script": original.replace(
+        '<script defer src="site.js">',
+        '<script async defer src="site.js">',
+        1,
+    ),
     "non-executable script type": original.replace(
         '<script defer src="site.js">',
         '<script type="text/plain" defer src="site.js">',
+        1,
+    ),
+    "script inside an inert template": original.replace(
+        script,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <template>\n{script}\n    </template>",
+        1,
+    ),
+    "script inside an inert noscript": original.replace(
+        script,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <noscript>\n{script}\n    </noscript>",
         1,
     ),
     "base URL override": original.replace(

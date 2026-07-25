@@ -46,6 +46,7 @@ import sys
 
 class MetadataParser(HTMLParser):
     hidden_body_tags = {"script", "style", "template", "noscript"}
+    inert_asset_tags = {"template", "noscript"}
     void_tags = {
         "area",
         "base",
@@ -68,6 +69,7 @@ class MetadataParser(HTMLParser):
         self.in_title = False
         self.in_json_ld = False
         self.in_body = False
+        self.inert_element_stack = []
         self.hidden_body_depth = 0
         self.body_element_stack = []
         self.titles = []
@@ -87,11 +89,17 @@ class MetadataParser(HTMLParser):
             if len(attribute_names) != len(set(attribute_names)):
                 raise SystemExit(f"Duplicate attributes are not allowed on <{tag}>")
         attributes = dict(attrs)
+        if tag in self.inert_asset_tags:
+            self.inert_element_stack.append(tag)
         if tag == "base":
             self.base_elements.append(attributes)
-        elif tag == "link":
+        elif tag == "link" and not self.inert_element_stack:
             self.asset_links.append(attributes)
-        elif tag == "script" and "src" in attributes:
+        elif (
+            tag == "script"
+            and "src" in attributes
+            and not self.inert_element_stack
+        ):
             self.external_scripts.append(attributes)
         if tag == "body":
             self.in_body = True
@@ -124,6 +132,14 @@ class MetadataParser(HTMLParser):
                 self.current_json_ld = []
 
     def handle_endtag(self, tag):
+        if tag in self.inert_asset_tags:
+            if not self.inert_element_stack:
+                raise SystemExit(f"Unexpected closing {tag} tag")
+            expected_tag = self.inert_element_stack.pop()
+            if tag != expected_tag:
+                raise SystemExit(
+                    f"Mismatched inert tags: expected {expected_tag}, found {tag}"
+                )
         if tag == "body":
             self.in_body = False
             self.body_element_stack = []
@@ -167,6 +183,8 @@ canonical = sys.argv[2]
 parser = MetadataParser()
 parser.feed(index_path.read_text())
 
+if parser.inert_element_stack:
+    raise SystemExit(f"Unclosed inert element: {parser.inert_element_stack[-1]}")
 if parser.base_elements:
     raise SystemExit("Base elements are not allowed because assets must resolve locally")
 
@@ -252,6 +270,10 @@ stylesheet_link = require_one(
 )
 if stylesheet_link.get("href") != "styles.css":
     raise SystemExit("Stylesheet link must reference styles.css relatively")
+if stylesheet_link.get("rel", "").lower().split() != ["stylesheet"]:
+    raise SystemExit("styles.css must use only the stylesheet relationship")
+if set(stylesheet_link) != {"href", "rel"}:
+    raise SystemExit("styles.css must use only href and rel attributes")
 
 external_script = require_one(
     parser.external_scripts,
@@ -259,10 +281,8 @@ external_script = require_one(
 )
 if external_script.get("src") != "site.js":
     raise SystemExit("External script must reference site.js relatively")
-if "defer" not in external_script:
-    raise SystemExit("site.js must use deferred loading")
-if "type" in external_script:
-    raise SystemExit("site.js must use the executable classic-script default")
+if set(external_script) != {"defer", "src"}:
+    raise SystemExit("site.js must use only defer and src attributes")
 
 software_sources = []
 web_pages = []
