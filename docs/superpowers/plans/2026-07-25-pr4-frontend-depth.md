@@ -1673,7 +1673,7 @@ git commit -m "feat(pycc_hir,pycc_types): if/elif/else, while, for-range"
 **Interfaces:**
 - Produces: `HirItem::Function` gains `params: Vec<(String, Ty)>` and `return_ty: Ty` (both required — this is where T0001 actually fires, at lowering time if unannotated on a public function, per D-037's naming convention). `HirStmt` gains `Return(Option<HirExpr>)`. `pycc_types::check_function(env: &Environment, function: &HirItem) -> Result<(), Diagnostic>` type-checks a function's body against its declared parameter types and verifies every `Return` matches the declared `return_ty`.
 
-- [ ] **Step 1: Write the failing HIR tests**
+- [x] **Step 1: Write the failing HIR tests**
 
 ```rust
 #[test]
@@ -1727,12 +1727,12 @@ fn an_unannotated_private_function_is_allowed() {
 
 (`lower` becomes fallible in this task — rename the existing infallible `lower(module: &ModModule) -> HirModule` to a new `lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic>`, and every existing test calling `lower(&module)` and pattern-matching/asserting on its `HirModule` directly needs updating to `lower_checked(&module).unwrap()` — this is a breaking signature change to `pycc_hir`'s public API, done deliberately in this task since T0001 is a lowering-time error, not a later type-checking-phase error, given HIR's `Function` item now carries the annotation requirement directly in its shape.)
 
-- [ ] **Step 2: Run to verify these fail**
+- [x] **Step 2: Run to verify these fail**
 
 Run: `cargo test -p pycc_hir`
 Expected: FAIL to compile (signature/shape changes ripple through every existing test in the file).
 
-- [ ] **Step 3: Rename `lower` to `lower_checked`, returning `Result`; update `HirItem::Function`; implement T0001**
+- [x] **Step 3: Rename `lower` to `lower_checked`, returning `Result`; update `HirItem::Function`; implement T0001**
 
 ```rust
 // HirItem::Function gains:
@@ -1846,11 +1846,11 @@ Stmt::Return(pycc_ast::StmtReturn { value, .. }) => {
 }
 ```
 
-- [ ] **Step 4: Update every existing test in `pycc_hir` calling `lower(&module)`**
+- [x] **Step 4: Update every existing test in `pycc_hir` calling `lower(&module)`**
 
 Run: `grep -n "lower(&module)" crates/pycc_hir/src/lib.rs` — change each to `lower_checked(&module).unwrap()`, keeping every existing assertion identical (they all use module-level `print`/function-call statements, none currently trigger T0001, so `.unwrap()` is safe for all of them). Do **not** change any assertion's expected value.
 
-- [ ] **Step 5: Update `src/main.rs`'s call site**
+- [x] **Step 5: Update `src/main.rs`'s call site**
 
 `try_build` currently calls `pycc_parser::parse` then `pycc_hir::lower(&module)`. Change to:
 
@@ -1861,12 +1861,12 @@ let hir = pycc_hir::lower_checked(&module).map_err(|diag| {
 })?;
 ```
 
-- [ ] **Step 6: Run to verify pycc_hir tests pass**
+- [x] **Step 6: Run to verify pycc_hir tests pass**
 
 Run: `cargo test -p pycc_hir`
 Expected: PASS.
 
-- [ ] **Step 7: Write the failing pycc_types test for function body checking**
+- [x] **Step 7: Write the failing pycc_types test for function body checking**
 
 ```rust
 #[test]
@@ -1911,12 +1911,12 @@ fn recursion_is_supported_since_the_function_s_own_signature_is_in_scope() {
 }
 ```
 
-- [ ] **Step 8: Run to verify these fail**
+- [x] **Step 8: Run to verify these fail**
 
 Run: `cargo test -p pycc_types a_function_s_body_is_checked a_return_type_mismatch recursion_is_supported`
 Expected: FAIL to compile (`check_function` doesn't exist).
 
-- [ ] **Step 9: Implement `check_function`**
+- [x] **Step 9: Implement `check_function`**
 
 Calling a function needs its signature visible for both external call-sites (Task 6's placeholder `HirExpr::Call => Ok(Ty::None)` was deliberately incomplete) and recursive self-calls. Add a `FunctionSignature` registry to `Environment`:
 
@@ -2087,17 +2087,17 @@ Update `pycc_types::check`'s existing `HirItem::Function { .. }` arm (Task 6 lef
 pycc_hir::HirItem::Function { .. } => check_function(item)?,
 ```
 
-- [ ] **Step 10: Run to verify pycc_types tests pass**
+- [x] **Step 10: Run to verify pycc_types tests pass**
 
 Run: `cargo test -p pycc_types`
 Expected: PASS.
 
-- [ ] **Step 11: Run the full workspace suite, clippy, coverage**
+- [x] **Step 11: Run the full workspace suite, clippy, coverage**
 
 Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS. Note `tests/slice0.rs`'s existing `defining_main_without_calling_it_produces_no_output` and similar fixtures use `def main() -> None:` — already fully annotated, so T0001 doesn't fire for them; confirm this by re-reading those exact fixture strings in `tests/slice0.rs` before assuming. Cover every new panic arm (multi-target assign already covered in Task 6; unsupported annotation types like `def f(x: list) -> None`) with a `#[should_panic]` test.
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_types/src/lib.rs src/main.rs
