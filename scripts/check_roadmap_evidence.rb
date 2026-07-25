@@ -7,10 +7,14 @@ require "psych"
 class RoadmapEvidenceError < StandardError; end
 
 CHECKED_ITEM = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[xX]\]\s+(?<claim>.*)$/
+ATX_HEADING = /^\s{0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
 EVIDENCE_CLAIMS = {
   "ci-build-test-coverage-100" =>
     "The 100% line and region coverage gate is required and green for the current slice."
+}.freeze
+EVIDENCE_SECTIONS = {
+  "ci-build-test-coverage-100" => "v0.1 acceptance checklist"
 }.freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
@@ -229,7 +233,17 @@ end
 
 def validate_roadmap(text)
   evidence_ids = []
+  heading_path = []
   text.each_line.with_index(1) do |line, line_number|
+    heading = ATX_HEADING.match(line)
+    if heading
+      level = heading[:marks].length
+      title = heading[:title].sub(/[ \t]+#+[ \t]*$/, "").strip
+      heading_path = heading_path.first(level - 1)
+      heading_path[level - 1] = title
+      next
+    end
+
     item = CHECKED_ITEM.match(line)
     next unless item
 
@@ -243,6 +257,13 @@ def validate_roadmap(text)
     unless expected_claim
       raise RoadmapEvidenceError,
             "line #{line_number}: unknown roadmap evidence #{marker[:id].inspect}"
+    end
+
+    expected_section = EVIDENCE_SECTIONS.fetch(marker[:id])
+    unless heading_path.include?(expected_section)
+      raise RoadmapEvidenceError,
+            "line #{line_number}: evidence #{marker[:id].inspect} must appear under " \
+            "#{expected_section.inspect}"
     end
 
     actual_claim = item[:claim].sub(EVIDENCE_MARKER, "").strip

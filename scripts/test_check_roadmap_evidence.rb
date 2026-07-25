@@ -147,6 +147,22 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "does not prove this roadmap claim"
   end
 
+  def test_rejects_coverage_evidence_moved_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      ### v1.0 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: coverage_workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, 'must appear under "v0.1 acceptance checklist"'
+  end
+
   def test_rejects_an_unknown_evidence_marker
     roadmap = <<~MARKDOWN
       ### v0.1 acceptance checklist

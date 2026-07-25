@@ -64,10 +64,10 @@ one nested in a Markdown blockquote, must end with an inline marker:
 <!-- roadmap-evidence: <registered-id> -->
 ```
 
-`scripts/check_roadmap_evidence.rb` binds each registered identifier to both
-the exact claim it proves and a deterministic repository check. Missing,
-unknown, or claim-mismatched markers fail. Adding a new evidence type starts
-with a failing public-CLI mutation case in
+`scripts/check_roadmap_evidence.rb` binds each registered identifier to the
+exact roadmap section and claim it proves plus a deterministic repository
+check. Missing, unknown, misplaced, or claim-mismatched markers fail. Adding a
+new evidence type starts with a failing public-CLI mutation case in
 `scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
 and documented claim land together.
 
