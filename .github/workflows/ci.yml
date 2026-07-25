@@ -458,105 +458,13 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.locate_baseline.outputs.run_id }}
 
-      # The activation PR and activation main push (including retries of that
-      # exact push) cannot have a prior artifact.
-      # Permit that bootstrap only when the immediately preceding ci.yml is the
-      # exact pre-split workflow already trusted by the main-branch checker.
-      - name: Require a main-owned baseline or reviewed activation
-        id: validate_baseline
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          TRUSTED_ACTIVATION_HEAD: ${{ vars.PERF_ACTIVATION_HEAD }}
-          PUSH_AFTER_SHA: ${{ github.event.after }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
+      - name: Require canonical main frontend timing
         run: |
           set -euo pipefail
-          if [ -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
-            printf 'bootstrap=false\n' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          case "$GITHUB_EVENT_NAME" in
-            pull_request)
-              if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
-                echo "reviewed activation pull request cannot be replayed" >&2
-                exit 1
-              fi
-              if [ "$PR_BASE_REF" != "main" ]; then
-                echo "reviewed activation is allowed only for a pull request targeting main" >&2
-                exit 1
-              fi
-              if [ "${#TRUSTED_ACTIVATION_HEAD}" -ne 40 ] ||
-                 printf '%s' "$TRUSTED_ACTIVATION_HEAD" | LC_ALL=C grep -q '[^0-9a-f]'; then
-                echo "trusted activation head is not one lowercase 40-hex commit SHA" >&2
-                exit 1
-              fi
-              if [ "$PR_HEAD_SHA" != "$TRUSTED_ACTIVATION_HEAD" ]; then
-                echo "reviewed activation is bound to one exact pull request head" >&2
-                exit 1
-              fi
-              current_main_sha="$(
-                gh api \
-                  -H "Accept: application/vnd.github+json" \
-                  -H "X-GitHub-Api-Version: 2022-11-28" \
-                  "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-                  --jq '.object.sha'
-              )"
-              if [ "$PR_BASE_SHA" != "$current_main_sha" ]; then
-                echo "pull request base is stale; update it from the current main head" >&2
-                exit 1
-              fi
-              previous_sha="$PR_BASE_SHA"
-              ;;
-            push)
-              if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-                echo "reviewed activation push must target refs/heads/main" >&2
-                exit 1
-              fi
-              if [ "$PUSH_AFTER_SHA" != "$GITHUB_SHA" ]; then
-                echo "activation push SHA does not match the checked-out main commit" >&2
-                exit 1
-              fi
-              current_main_sha="$(
-                gh api \
-                  -H "Accept: application/vnd.github+json" \
-                  -H "X-GitHub-Api-Version: 2022-11-28" \
-                  "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-                  --jq '.object.sha'
-              )"
-              if [ "$GITHUB_SHA" != "$current_main_sha" ]; then
-                echo "activation push is not the live main head" >&2
-                exit 1
-              fi
-              previous_sha="$PUSH_BEFORE_SHA"
-              ;;
-            *)
-              echo "no canonical main baseline exists for unsupported event $GITHUB_EVENT_NAME" >&2
-              exit 1
-              ;;
-          esac
-          if [ -z "$previous_sha" ] ||
-             [ "$previous_sha" = "0000000000000000000000000000000000000000" ]; then
-            echo "cannot prove the workflow revision that precedes activation" >&2
+          if [ ! -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
+            echo "the exact predecessor has no non-expired canonical frontend timing" >&2
             exit 1
           fi
-
-          gh api \
-            -H "Accept: application/vnd.github.raw+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "repos/${GITHUB_REPOSITORY}/contents/.github/workflows/ci.yml?ref=${previous_sha}" \
-            > "$RUNNER_TEMP/previous-ci.yml"
-          previous_digest="$(shasum -a 256 "$RUNNER_TEMP/previous-ci.yml" | awk '{print $1}')"
-          if [ "$previous_digest" != "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2" ]; then
-            echo "no canonical main baseline exists and this is not the reviewed one-time activation" >&2
-            exit 1
-          fi
-
-          echo "reviewed one-time activation: no earlier main artifact is expected"
-          printf 'bootstrap=true\n' >> "$GITHUB_OUTPUT"
 
       - name: Download current frontend timing
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -565,7 +473,6 @@ jobs:
           path: target/criterion/pycc_check_frontend_fixture/current
 
       - name: Compare against canonical main baseline
-        if: steps.validate_baseline.outputs.bootstrap != 'true'
         run: |
           ruby scripts/check_perf_regression.rb \
             target/criterion/pycc_check_frontend_fixture/current/estimates.json \
