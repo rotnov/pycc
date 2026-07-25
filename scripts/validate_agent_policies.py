@@ -75,6 +75,7 @@ TRUSTED_WINDOWS_EXECUTABLE_PREFIXES = (
 )
 ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
+WINDOWS_DRIVE_RELATIVE_PATH = re.compile(r"^[A-Za-z]:(?![\\/])")
 WINDOWS_ABSOLUTE_IN_COMMAND = re.compile(r"(?:^|[\s\"'])[A-Za-z]:[\\/]")
 HOME_RELATIVE_PATH = re.compile(r"^~[^/\\]*[/\\]")
 HOME_ENV_PREFIXES = (
@@ -299,12 +300,16 @@ def loader_candidate_target(
 def trailing_filesystem_targets(
     tokens: list[str],
     project_expansion: str,
+    *,
+    include_relative: bool = True,
 ) -> list[str]:
     targets: list[str] = []
     for token in tokens:
-        candidates = [token]
-        if token.startswith("-") and "=" in token:
-            candidates.append(token.split("=", 1)[1])
+        candidates = (
+            [token.split("=", 1)[1]]
+            if token.startswith("-") and "=" in token
+            else [token]
+        )
         for candidate in candidates:
             normalized, explicit_project_path = normalize_hook_token(
                 candidate,
@@ -313,6 +318,7 @@ def trailing_filesystem_targets(
             if (
                 explicit_project_path
                 or normalized.casefold().startswith(LOCAL_PREFIXES)
+                or (include_relative and is_relative_script_path(normalized))
                 or is_home_relative_script_path(normalized)
                 or is_absolute_script_path(normalized)
             ):
@@ -500,6 +506,13 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
         executable, _ = normalize_hook_token(resolved[0], project_expansion)
         if is_relative_script_path(executable):
             targets.append(executable)
+            targets.extend(
+                trailing_filesystem_targets(
+                    resolved[1:],
+                    project_expansion,
+                    include_relative=False,
+                )
+            )
             continue
         if is_home_relative_script_path(executable):
             targets.append(executable)
@@ -547,8 +560,8 @@ def normalize_hook_token(
     token: str,
     project_expansion: str = "legacy",
 ) -> tuple[str, bool]:
-    if token.startswith("./"):
-        return token.removeprefix("./"), True
+    if token.startswith(("./", ".\\")):
+        return token[2:].replace("\\", "/"), True
     normalized = token
     if project_expansion != "none":
         project_prefixes = (
@@ -558,6 +571,12 @@ def normalize_hook_token(
             if normalized.startswith(project_prefix):
                 project_path = normalized.removeprefix(project_prefix)
                 return project_path.replace("\\", "/"), True
+    if (
+        "\\" in normalized
+        and not normalized.startswith("\\")
+        and WINDOWS_ABSOLUTE_PATH.match(normalized) is None
+    ):
+        return normalized.replace("\\", "/"), False
     return normalized, False
 
 
@@ -567,7 +586,12 @@ def is_relative_script_path(token: str) -> bool:
         and WINDOWS_ABSOLUTE_PATH.match(token) is None
         and not is_home_relative_script_path(token)
         and "://" not in token
-        and ("/" in token or token.lower().endswith(SCRIPT_SUFFIXES))
+        and (
+            WINDOWS_DRIVE_RELATIVE_PATH.match(token) is not None
+            or "/" in token
+            or "\\" in token
+            or token.lower().endswith(SCRIPT_SUFFIXES)
+        )
     )
 
 
@@ -755,6 +779,8 @@ def validate_hook_targets(
             failures.append(f"shared hook target must not be home-relative: {target}")
         elif is_absolute_script_path(target):
             failures.append(f"shared hook target must not be absolute: {target}")
+        elif WINDOWS_DRIVE_RELATIVE_PATH.match(target) is not None:
+            failures.append(f"shared hook target must not be drive-relative: {target}")
         elif target.casefold().startswith(".ievo/hooks/"):
             failures.append(f"shared hook target must remain machine-local: {target}")
         elif target not in tracked:

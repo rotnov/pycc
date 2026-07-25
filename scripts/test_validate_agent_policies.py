@@ -742,9 +742,13 @@ class AgentPolicyValidationTests(unittest.TestCase):
                         ]
                     }
                 }
+                normalized_target = target.replace("\\", "/")
                 self.assertEqual(
                     validator.validate_hook_targets(settings, set()),
-                    [f"shared hook target must not be home-relative: {target}"],
+                    [
+                        "shared hook target must not be home-relative: "
+                        f"{normalized_target}"
+                    ],
                 )
 
     def test_absolute_script_argument_is_rejected_but_interpreter_is_allowed(
@@ -1375,11 +1379,11 @@ class AgentPolicyValidationTests(unittest.TestCase):
         for target, expected in (
             (
                 r".\tools\missing.js",
-                r"shared hook target is not tracked: .\tools\missing.js",
+                "shared hook target is not tracked: tools/missing.js",
             ),
             (
                 r"..\tools\missing.js",
-                r"shared hook target is not tracked: ..\tools\missing.js",
+                "shared hook target is not tracked: ../tools/missing.js",
             ),
             (
                 r"\\server\share\missing.js",
@@ -2045,6 +2049,59 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     "shared hook target must not be home-relative: "
                     "~/.ievo/hooks/capture.ps1"
                 ),
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", "../.ievo/hooks/capture.py"],
+                ("shared hook target is not tracked: ../.ievo/hooks/capture.py"),
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", r".\.ievo\hooks\capture.py"],
+                (
+                    "shared hook target must remain machine-local: "
+                    ".ievo/hooks/capture.py"
+                ),
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", "tools/local-hook.py"],
+                "shared hook target is not tracked: tools/local-hook.py",
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", "--config=tools/local-hook.py"],
+                "shared hook target is not tracked: tools/local-hook.py",
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", r"..\local-hook"],
+                "shared hook target is not tracked: ../local-hook",
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", r"tools\local-hook"],
+                "shared hook target is not tracked: tools/local-hook",
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", r"--config=..\local-hook"],
+                "shared hook target is not tracked: ../local-hook",
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", r"--config=tools\local-hook"],
+                "shared hook target is not tracked: tools/local-hook",
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", "C:local-hook"],
+                ("shared hook target must not be drive-relative: C:local-hook"),
+            ),
+            (
+                "python3",
+                ["scripts/wrapper.py", "--config=C:local-hook"],
+                ("shared hook target must not be drive-relative: C:local-hook"),
             ),
         ):
             with self.subTest(command=command):
