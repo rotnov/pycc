@@ -802,10 +802,120 @@ class AgentAssetValidationTests(unittest.TestCase):
 
                     if rejected:
                         self.assertEqual(len(failures), 1)
+                        self.assertIn("marketplace source", failures[0])
+                        self.assertIn("example.com/agents", failures[0])
+                    else:
+                        self.assertEqual(failures, [])
+
+    def test_default_url_ports_match_their_implicit_forms(self) -> None:
+        cases = (
+            (
+                "https://example.com:443/agents",
+                "https://example.com/agents",
+                True,
+            ),
+            (
+                "https://example.com/agents",
+                "HTTPS://EXAMPLE.COM:443/agents",
+                True,
+            ),
+            (
+                "https://example.com:443/agents",
+                "example.com:443/agents",
+                True,
+            ),
+            (
+                "https://example.com/agents",
+                "example.com:443/agents",
+                True,
+            ),
+            (
+                "ssh://example.com:22/agents",
+                "example.com:22/agents",
+                True,
+            ),
+            (
+                "ssh://example.com/agents",
+                "example.com:22/agents",
+                True,
+            ),
+            (
+                "https://example.com:8443/agents",
+                "https://example.com/agents",
+                False,
+            ),
+        )
+        for source_url, required_reference, rejected in cases:
+            with self.subTest(
+                source=source_url,
+                reference=required_reference,
+            ):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        f"Use `{required_reference}` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    marketplace = "port" + "-market"
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": "url",
+                            "url": source_url,
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    if rejected:
+                        self.assertEqual(len(failures), 1)
+                        self.assertIn("marketplace source", failures[0])
+                        self.assertIn("example.com/agents", failures[0])
+                    else:
+                        self.assertEqual(failures, [])
+
+    def test_ipv6_host_path_forms_match_url_source_identity(self) -> None:
+        cases = (
+            ("[2001:DB8::1]/agents", True),
+            ("[2001:DB8::1]:443/agents", True),
+            ("[2001:db8::1]/agents", True),
+            ("HTTPS://[2001:DB8::1]:443/agents", True),
+            ("[2001:DB8::1]/Agents", False),
+        )
+        for required_reference, rejected in cases:
+            with self.subTest(reference=required_reference):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        f"Use `{required_reference}` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    marketplace = "ipv6" + "-market"
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": "url",
+                            "url": "https://[2001:db8::1]/agents",
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    if rejected:
+                        self.assertEqual(len(failures), 1)
                         self.assertIn(
-                            "marketplace source https://example.com/agents",
+                            "marketplace source",
                             failures[0],
                         )
+                        self.assertIn("[2001:db8::1]/agents", failures[0])
                     else:
                         self.assertEqual(failures, [])
 
@@ -814,6 +924,22 @@ class AgentAssetValidationTests(unittest.TestCase):
             (
                 "HTTPS://EXAMPLE.COM:8443/Path",
                 "https://example.com:8443/Path",
+            ),
+            (
+                "HTTPS://EXAMPLE.COM:443/Path",
+                "https://example.com/Path",
+            ),
+            (
+                "HTTP://EXAMPLE.COM:80/Path",
+                "http://example.com/Path",
+            ),
+            (
+                "ssh://EXAMPLE.COM:22/Path",
+                "ssh://example.com/Path",
+            ),
+            (
+                "git://EXAMPLE.COM:9418/Path",
+                "git://example.com/Path",
             ),
             (
                 "HTTPS://[2001:DB8::1]:8443/Path",
@@ -1124,6 +1250,608 @@ class AgentAssetValidationTests(unittest.TestCase):
 
                     self.assertEqual(len(failures), 1)
                     self.assertIn(relative, failures[0])
+
+    def test_extensionless_scripts_invoked_by_required_assets_are_scanned(
+        self,
+    ) -> None:
+        consumers = (
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
+                "      - run: python -X dev tools/helper\n",
+            ),
+            (
+                ".claude/settings.json",
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "hooks": [
+                                        {
+                                            "type": "command",
+                                            "command": (
+                                                "python3 -u "
+                                                '"./tools/helper"'
+                                            ),
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ),
+            ),
+        )
+        settings = {
+            "enabledPlugins": {
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                "ievo@ievo-skills": True,
+            }
+        }
+        for consumer_relative, consumer_text in consumers:
+            with self.subTest(consumer=consumer_relative):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    consumer = root / consumer_relative
+                    consumer.parent.mkdir(parents=True)
+                    consumer.write_text(consumer_text, encoding="utf-8")
+                    helper = root / "tools" / "helper"
+                    helper.parent.mkdir()
+                    helper.write_text(
+                        f"Run /{FEATURE_DEV} before continuing.\n",
+                        encoding="utf-8",
+                    )
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                        [
+                            (consumer, "100644"),
+                            (helper, "100644"),
+                        ],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn("tools/helper", failures[0])
+
+    def test_interpreter_script_discovery_is_recursive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n  check:\n    steps:\n      - run: python tools/helper\n",
+                encoding="utf-8",
+            )
+            helper = root / "tools" / "helper"
+            helper.parent.mkdir()
+            helper.write_text("python tools/nested\n", encoding="utf-8")
+            nested = root / "tools" / "nested"
+            nested.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (workflow, "100644"),
+                    (helper, "100644"),
+                    (nested, "100644"),
+                ],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("tools/nested", failures[0])
+
+    def test_bash_rcfile_discovery_continues_to_the_main_script(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n  check:\n    steps:\n"
+                "      - run: bash --rcfile tools/rc tools/helper\n",
+                encoding="utf-8",
+            )
+            rc_file = root / "tools" / "rc"
+            rc_file.parent.mkdir()
+            rc_file.write_text(
+                "export AGENT_POLICY=enabled\n",
+                encoding="utf-8",
+            )
+            helper = root / "tools" / "helper"
+            helper.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (workflow, "100644"),
+                    (rc_file, "100644"),
+                    (helper, "100644"),
+                ],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("tools/helper", failures[0])
+
+    def test_inline_commands_do_not_select_their_arguments_as_scripts(
+        self,
+    ) -> None:
+        for command in (
+            "fish --command=echo tools/helper",
+            "pwsh -c echo tools/helper",
+            "powershell.exe -C echo tools/helper",
+        ):
+            with self.subTest(command=command):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    workflow = root / ".github" / "workflows" / "check.yml"
+                    workflow.parent.mkdir(parents=True)
+                    workflow.write_text(
+                        "jobs:\n  check:\n    steps:\n"
+                        f"      - run: {command}\n",
+                        encoding="utf-8",
+                    )
+                    helper = root / "tools" / "helper"
+                    helper.parent.mkdir()
+                    helper.write_text(
+                        f"Run /{FEATURE_DEV} before continuing.\n",
+                        encoding="utf-8",
+                    )
+
+                    failures = self.optional_boundary_failures(
+                        {
+                            "enabledPlugins": {
+                                (
+                                    f"{FEATURE_DEV}@"
+                                    f"{CLAUDE_PLUGIN_MARKETPLACE}"
+                                ): True,
+                                "ievo@ievo-skills": True,
+                            }
+                        },
+                        root,
+                        [
+                            (workflow, "100644"),
+                            (helper, "100644"),
+                        ],
+                    )
+
+                    self.assertEqual(failures, [])
+
+    def test_interpreter_variants_reach_tracked_scripts_in_full_boundary(
+        self,
+    ) -> None:
+        cases = (
+            ("node -C development tools/helper", "tools/helper", False),
+            ("ruby --encoding UTF-8 tools/helper", "tools/helper", False),
+            ("ruby -E UTF-8 tools/helper", "tools/helper", False),
+            ("ruby -EUTF-8 tools/helper", "tools/helper", False),
+            (
+                "PowerShell -ExecutionPolicy Bypass -File tools/helper",
+                "tools/helper",
+                False,
+            ),
+            (r'python "tools\helper"', "tools/helper", False),
+            (r"python tools\helper", "tools/helper", False),
+            (r'python "tools\helper"', "tools/helper", True),
+            (r"python tools\helper", "tools/helper", True),
+            ("powershell.exe -File tools/helper", "tools/helper", False),
+            ("python.exe -X dev tools/helper", "tools/helper", False),
+            ("node.exe -C development tools/helper", "tools/helper", False),
+            (
+                "node --experimental-loader tools/loader tools/helper",
+                "tools/loader",
+                False,
+            ),
+            (
+                "node --experimental-loader=tools/loader tools/helper",
+                "tools/helper",
+                False,
+            ),
+            (
+                "python --future-option arbitrary tools/helper",
+                "tools/helper",
+                False,
+            ),
+            (
+                "node --future-flag --require=tools/preload tools/helper",
+                "tools/preload",
+                False,
+            ),
+            (
+                "bash --future-flag --rcfile=tools/rc tools/helper",
+                "tools/rc",
+                False,
+            ),
+            (
+                "node --future-flag -rtools/preload tools/helper",
+                "tools/preload",
+                False,
+            ),
+            (
+                "ruby --future-flag -rtools/preload tools/helper",
+                "tools/preload",
+                False,
+            ),
+            (
+                "python --future-option -- -script",
+                "-script",
+                False,
+            ),
+        )
+        settings = {
+            "enabledPlugins": {
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                "ievo@ievo-skills": True,
+            }
+        }
+        for command, violating_path, use_settings in cases:
+            with self.subTest(
+                command=command,
+                violating_path=violating_path,
+                use_settings=use_settings,
+            ):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    if use_settings:
+                        consumer = root / ".claude" / "settings.json"
+                        consumer.parent.mkdir(parents=True)
+                        consumer.write_text(
+                            json.dumps(
+                                {
+                                    "hooks": {
+                                        "PreToolUse": [
+                                            {
+                                                "hooks": [
+                                                    {
+                                                        "type": "command",
+                                                        "command": command,
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                    else:
+                        consumer = root / ".github" / "workflows" / "check.yml"
+                        consumer.parent.mkdir(parents=True)
+                        consumer.write_text(
+                            "jobs:\n  check:\n    steps:\n"
+                            f"      - run: {command}\n",
+                            encoding="utf-8",
+                        )
+                    tools = root / "tools"
+                    tools.mkdir()
+                    repository_scripts = (
+                        tools / "helper",
+                        tools / "loader",
+                        tools / "preload",
+                        tools / "rc",
+                        root / "-script",
+                    )
+                    for path in repository_scripts:
+                        relative = path.relative_to(root).as_posix()
+                        contents = (
+                            f"Run /{FEATURE_DEV} before continuing.\n"
+                            if relative == violating_path
+                            else "Use repository-owned tools.\n"
+                        )
+                        path.write_text(contents, encoding="utf-8")
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                        [
+                            (consumer, "100644"),
+                            *[
+                                (path, "100644")
+                                for path in repository_scripts
+                            ],
+                        ],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(violating_path, failures[0])
+
+    def test_command_boundaries_reach_scripts_in_full_boundary(self) -> None:
+        cases = (
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
+                "      - run: python \\\n"
+                "          tools/helper\n",
+                "tools/helper",
+            ),
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
+                "      - run: node --require=tools/preload \\\n"
+                "          tools/helper\n",
+                "tools/helper",
+            ),
+            (
+                "AGENTS.md",
+                "Run `python tools/helper` before continuing.\n",
+                "tools/helper",
+            ),
+            (
+                "AGENTS.md",
+                "Run $(python tools/helper) before continuing.\n",
+                "tools/helper",
+            ),
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
+                r"      - run: python tools/my\ helper"
+                "\n",
+                "tools/my helper",
+            ),
+        )
+        settings = {
+            "enabledPlugins": {
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                "ievo@ievo-skills": True,
+            }
+        }
+        for consumer_relative, consumer_text, violating_path in cases:
+            with self.subTest(
+                consumer=consumer_relative,
+                violating_path=violating_path,
+                text=consumer_text,
+            ):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    consumer = root / consumer_relative
+                    consumer.parent.mkdir(parents=True, exist_ok=True)
+                    consumer.write_text(consumer_text, encoding="utf-8")
+                    tools = root / "tools"
+                    tools.mkdir()
+                    repository_scripts = (
+                        tools / "helper",
+                        tools / "preload",
+                        tools / "my helper",
+                    )
+                    for path in repository_scripts:
+                        relative = path.relative_to(root).as_posix()
+                        contents = (
+                            f"Run /{FEATURE_DEV} before continuing.\n"
+                            if relative == violating_path
+                            else "Use repository-owned tools.\n"
+                        )
+                        path.write_text(contents, encoding="utf-8")
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                        [
+                            (consumer, "100644"),
+                            *[
+                                (path, "100644")
+                                for path in repository_scripts
+                            ],
+                        ],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(violating_path, failures[0])
+
+    def test_unreferenced_extensionless_file_is_not_a_required_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text(
+                "Use repository-owned tools.\n",
+                encoding="utf-8",
+            )
+            helper = root / "tools" / "helper"
+            helper.parent.mkdir()
+            helper.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (agents, "100644"),
+                    (helper, "100644"),
+                ],
+            )
+
+            self.assertEqual(failures, [])
+
+    def test_inline_interpreter_modes_do_not_select_a_file(self) -> None:
+        for invocation in (
+            "python -c tools/helper",
+            "python -cprint('tools/helper')",
+            "python -m tools/helper",
+            "python -mtools.helper tools/helper",
+            "node --eval tools/helper",
+            "node --eval=code tools/helper",
+            "ruby -e tools/helper",
+            "pwsh -Command tools/helper",
+            "pwsh -c echo tools/helper",
+            "powershell --command tools/helper",
+            "powershell.exe -C echo tools/helper",
+            "fish --command echo tools/helper",
+            "fish --command=echo tools/helper",
+        ):
+            with self.subTest(invocation=invocation):
+                self.assertEqual(
+                    validator.referenced_interpreter_scripts(invocation),
+                    set(),
+                )
+
+    def test_interpreter_options_select_the_actual_script(self) -> None:
+        cases = (
+            ("python -X dev tools/helper", {"tools/helper"}),
+            ("python -Xdev tools/helper", {"tools/helper"}),
+            ("python -W ignore tools/helper", {"tools/helper"}),
+            ("bash -O extglob tools/helper", {"tools/helper"}),
+            (
+                "bash --rcfile tools/rc tools/helper",
+                {"tools/rc", "tools/helper"},
+            ),
+            (
+                "bash --init-file=tools/rc tools/helper",
+                {"tools/rc", "tools/helper"},
+            ),
+            ("pwsh -ExecutionPolicy Bypass -File tools/helper", {"tools/helper"}),
+            ("powershell -File:tools/helper", {"tools/helper"}),
+            (
+                "node --require tools/preload tools/helper",
+                {"tools/preload", "tools/helper"},
+            ),
+            (
+                "node --require=tools/preload tools/helper",
+                {"tools/preload", "tools/helper"},
+            ),
+            ("node -C development tools/helper", {"tools/helper"}),
+            ("node --title review-probe tools/helper", {"tools/helper"}),
+            ("node --input-type module tools/helper", {"tools/helper"}),
+            ("node --inspect-port 9330 tools/helper", {"tools/helper"}),
+            (
+                "node --experimental-loader tools/loader tools/helper",
+                {"tools/loader", "tools/helper"},
+            ),
+            (
+                "node --experimental-loader=tools/loader tools/helper",
+                {"tools/loader", "tools/helper"},
+            ),
+            ("ruby --encoding UTF-8 tools/helper", {"tools/helper"}),
+            ("ruby -E UTF-8 tools/helper", {"tools/helper"}),
+            ("ruby -EUTF-8 tools/helper", {"tools/helper"}),
+            (
+                "ruby --external-encoding UTF-8 tools/helper",
+                {"tools/helper"},
+            ),
+            ("ruby --disable gems tools/helper", {"tools/helper"}),
+        )
+        for invocation, expected in cases:
+            with self.subTest(invocation=invocation):
+                self.assertEqual(
+                    validator.referenced_interpreter_scripts(invocation),
+                    expected,
+                )
+
+    def test_windows_interpreter_names_and_paths_are_canonicalized(self) -> None:
+        cases = (
+            (
+                "PowerShell -ExecutionPolicy Bypass -File tools/helper",
+                {"tools/helper"},
+            ),
+            ("powershell.exe -File tools/helper", {"tools/helper"}),
+            ("pwsh.exe -File tools/helper", {"tools/helper"}),
+            ("python.exe -X dev tools/helper", {"tools/helper"}),
+            ("node.exe -C development tools/helper", {"tools/helper"}),
+            (r"python tools\helper", {"tools/helper"}),
+            (r'python "tools\helper"', {"tools/helper"}),
+        )
+        for invocation, expected in cases:
+            with self.subTest(invocation=invocation):
+                self.assertEqual(
+                    validator.referenced_interpreter_scripts(invocation),
+                    expected,
+                )
+
+    def test_unsafe_command_paths_are_not_repository_references(self) -> None:
+        for path in (
+            "/tmp/helper",
+            r"C:\tools\helper",
+            r"\\server\share\helper",
+            "../tools/helper",
+            "tools/../helper",
+        ):
+            with self.subTest(path=path):
+                self.assertIsNone(validator.local_script_reference(path))
+
+    def test_unknown_interpreter_options_fail_closed(self) -> None:
+        cases = (
+            (
+                "python --future-option arbitrary tools/helper",
+                {"arbitrary", "tools/helper"},
+            ),
+            (
+                "node --future-loader=tools/loader tools/helper",
+                {"tools/loader", "tools/helper"},
+            ),
+            (
+                "node --future-flag --require=tools/preload tools/helper",
+                {"tools/preload", "tools/helper"},
+            ),
+            (
+                "node --future-flag "
+                "--experimental-loader=tools/loader tools/helper",
+                {"tools/loader", "tools/helper"},
+            ),
+            (
+                "bash --future-flag --rcfile=tools/rc tools/helper",
+                {"tools/rc", "tools/helper"},
+            ),
+            (
+                "node --future-flag -rtools/preload tools/helper",
+                {"tools/preload", "tools/helper"},
+            ),
+            (
+                "ruby --future-flag -rtools/preload tools/helper",
+                {"tools/preload", "tools/helper"},
+            ),
+            (
+                "python --future-option value -- -script",
+                {"value", "-script"},
+            ),
+            ("python --future-option -- -script", {"-script"}),
+        )
+        for invocation, expected in cases:
+            with self.subTest(invocation=invocation):
+                self.assertEqual(
+                    validator.referenced_interpreter_scripts(invocation),
+                    expected,
+                )
+
+    def test_command_boundaries_preserve_repository_script_paths(self) -> None:
+        cases = (
+            ("python \\\n  tools/helper", {"tools/helper"}),
+            (
+                "node --require=tools/preload \\\n tools/helper",
+                {"tools/preload", "tools/helper"},
+            ),
+            ("Run `python tools/helper`.", {"tools/helper"}),
+            ("$(python tools/helper)", {"tools/helper"}),
+            (r"python tools/my\ helper", {"tools/my helper"}),
+        )
+        for invocation, expected in cases:
+            with self.subTest(invocation=invocation):
+                self.assertEqual(
+                    validator.referenced_interpreter_scripts(invocation),
+                    expected,
+                )
 
     def test_claude_behavioral_settings_reject_optional_plugin_references(
         self,

@@ -9,7 +9,7 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 from urllib.parse import unquote, urlparse, urlunparse
 
@@ -105,7 +105,10 @@ SCP_GIT_REFERENCE_IN_TEXT = re.compile(
 )
 HOST_PATH_REFERENCE_IN_TEXT = re.compile(
     r"(?<![A-Za-z0-9_.-])"
-    r"(?P<host>(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+)"
+    r"(?P<host>"
+    r"\[[0-9A-Fa-f:.]+\]|"
+    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+"
+    r")"
     r"(?P<port>:\d+)?/"
     r"(?P<path>[A-Za-z0-9._~%+/-]+)"
 )
@@ -113,6 +116,89 @@ URL_AUTHORITY_REFERENCE = re.compile(
     r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://"
     r"(?P<authority>[^/\s?#]+)(?P<path>/[^\s?#]*)?"
 )
+DEFAULT_URL_PORTS = {
+    "git": 9418,
+    "http": 80,
+    "https": 443,
+    "ssh": 22,
+}
+INTERPRETER_REFERENCE = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?P<interpreter>"
+    r"python(?:\d+(?:\.\d+)*)?|ruby|node|perl|bash|sh|zsh|fish|"
+    r"pwsh|powershell"
+    r")(?:\.exe)?(?![A-Za-z0-9_.-])",
+    re.IGNORECASE,
+)
+INTERPRETER_VALUE_OPTIONS = {
+    "bash": {"--init-file", "--rcfile", "-O", "-o"},
+    "fish": {
+        "--debug",
+        "--debug-output",
+        "--features",
+        "--init-command",
+        "-C",
+        "-D",
+        "-d",
+        "-f",
+    },
+    "node": {
+        "--conditions",
+        "--diagnostic-dir",
+        "--experimental-loader",
+        "--icu-data-dir",
+        "--import",
+        "--input-type",
+        "--inspect-port",
+        "--loader",
+        "--openssl-config",
+        "--require",
+        "--title",
+        "-C",
+        "-r",
+    },
+    "perl": {"-F", "-I", "-M", "-m"},
+    "python": {"--check-hash-based-pycs", "-W", "-X"},
+    "ruby": {
+        "--disable",
+        "--dump",
+        "--enable",
+        "--encoding",
+        "--external-encoding",
+        "--internal-encoding",
+        "-C",
+        "-E",
+        "-F",
+        "-I",
+        "-K",
+        "-r",
+    },
+    "sh": {"-o"},
+    "zsh": {"-o"},
+}
+INTERPRETER_REQUIRED_FILE_OPTIONS = {
+    "bash": {"--init-file", "--rcfile"},
+    "node": {
+        "--experimental-loader",
+        "--import",
+        "--loader",
+        "--require",
+        "-r",
+    },
+    "ruby": {"-r"},
+}
+POWERSHELL_VALUE_OPTIONS = {
+    "-configurationfile",
+    "-configurationname",
+    "-custompipename",
+    "-executionpolicy",
+    "-inputformat",
+    "-outputformat",
+    "-settingsfile",
+    "-version",
+    "-windowstyle",
+    "-workingdirectory",
+}
 
 
 class RequiredAssetEncodingError(ValueError):
@@ -450,6 +536,20 @@ def repository_path_reference(
     return normalized
 
 
+def normalized_public_url_host(
+    scheme: str,
+    host: str,
+    port: int | None,
+) -> str:
+    normalized_scheme = scheme.lower()
+    public_host = host.lower()
+    if ":" in public_host and not public_host.startswith("["):
+        public_host = f"[{public_host}]"
+    if port is not None and DEFAULT_URL_PORTS.get(normalized_scheme) != port:
+        public_host = f"{public_host}:{port}"
+    return public_host
+
+
 def normalize_url_identity_components(text: str) -> str:
     def normalize(match: re.Match[str]) -> str:
         try:
@@ -460,13 +560,10 @@ def normalize_url_identity_components(text: str) -> str:
             return match.group(0)
         if not host:
             return match.group(0)
-        public_host = host.lower()
-        if ":" in public_host and not public_host.startswith("["):
-            public_host = f"[{public_host}]"
-        if port is not None:
-            public_host = f"{public_host}:{port}"
+        scheme = parsed.scheme.lower()
+        public_host = normalized_public_url_host(scheme, host, port)
         path = unquote(match.group("path") or "")
-        return f"{parsed.scheme.lower()}://{public_host}{path}"
+        return f"{scheme}://{public_host}{path}"
 
     return URL_AUTHORITY_REFERENCE.sub(normalize, text)
 
@@ -595,19 +692,21 @@ def optional_marketplace_source_references(
                 )
                 continue
 
-            public_host = host
-            if ":" in public_host and not public_host.startswith("["):
-                public_host = f"[{public_host}]"
-            if port is not None:
-                public_host = f"{public_host}:{port}"
+            scheme = parsed.scheme.lower()
+            public_host = normalized_public_url_host(scheme, host, port)
             host_reference = f"{public_host}/{repository}"
             canonical_url = urlunparse(
-                (parsed.scheme, public_host, f"/{repository}", "", "", "")
+                (scheme, public_host, f"/{repository}", "", "", "")
             )
             references[raw] = (alias, canonical_url)
             references[strip_git_suffix(raw)] = (alias, canonical_url)
             references[canonical_url] = (alias, canonical_url)
             references[host_reference] = (alias, host_reference)
+            default_port = DEFAULT_URL_PORTS.get(scheme)
+            if default_port is not None and port in {None, default_port}:
+                references[
+                    f"{public_host}:{default_port}/{repository}"
+                ] = (alias, host_reference)
             if len(repository.split("/")) >= 2:
                 references[repository] = (alias, repository)
     return {
@@ -672,14 +771,342 @@ def is_required_agent_asset(relative: Path, executable: bool) -> bool:
     )
 
 
+def interpreter_arguments(text: str, start: int) -> list[str]:
+    arguments: list[str] = []
+    index = start
+    while index < len(text):
+        while index < len(text):
+            if text[index] in " \t":
+                index += 1
+                continue
+            if text.startswith("\\\r\n", index):
+                index += 3
+                continue
+            if text.startswith("\\\n", index):
+                index += 2
+                continue
+            break
+        if index >= len(text) or text[index] in "\r\n;&|`)":
+            break
+        if text[index] == "#":
+            break
+        if (
+            text[index] in "\"'"
+            and index + 1 < len(text)
+            and text[index + 1] in ",}]"
+        ):
+            break
+
+        escaped_quote = (
+            text[index] == "\\"
+            and index + 1 < len(text)
+            and text[index + 1] in "\"'"
+        )
+        if escaped_quote or text[index] in "\"'":
+            quote = text[index + 1] if escaped_quote else text[index]
+            index += 2 if escaped_quote else 1
+            value: list[str] = []
+            while index < len(text):
+                if escaped_quote and text.startswith(f"\\{quote}", index):
+                    index += 2
+                    break
+                if not escaped_quote and text[index] == quote:
+                    index += 1
+                    break
+                if text.startswith("\\\r\n", index):
+                    index += 3
+                    continue
+                if text.startswith("\\\n", index):
+                    index += 2
+                    continue
+                if text[index] == "\\" and index + 1 < len(text):
+                    if text[index + 1] in {quote, "\\"}:
+                        value.append(text[index + 1])
+                        index += 2
+                        continue
+                    value.append("\\")
+                    index += 1
+                    continue
+                value.append(text[index])
+                index += 1
+            if value:
+                arguments.append("".join(value))
+            continue
+
+        value = []
+        command_ended = False
+        while index < len(text):
+            if text.startswith("\\\r\n", index):
+                index += 3
+                continue
+            if text.startswith("\\\n", index):
+                index += 2
+                continue
+            if text[index] in " \t\r\n;&|`)":
+                command_ended = text[index] in "\r\n;&|`)"
+                break
+            if text[index] in "\"'":
+                command_ended = True
+                break
+            if text[index] in ",}]":
+                command_ended = True
+                break
+            if text[index] == "\\" and index + 1 < len(text):
+                if text[index + 1] in " \t`)'\"\\":
+                    value.append(text[index + 1])
+                    index += 2
+                    continue
+                value.append("\\")
+                index += 1
+                continue
+            value.append(text[index])
+            index += 1
+        if value:
+            arguments.append("".join(value))
+        if command_ended:
+            break
+    return arguments
+
+
+def interpreter_family(interpreter: str) -> str:
+    normalized = interpreter.lower().removesuffix(".exe")
+    if normalized.startswith("python"):
+        return "python"
+    if normalized in {"powershell", "pwsh"}:
+        return "powershell"
+    return normalized
+
+
+def is_inline_interpreter_option(family: str, option: str) -> bool:
+    if family == "powershell":
+        normalized = option.lower()
+        return (
+            normalized in {
+                "--command",
+                "--commandwithargs",
+                "--encodedcommand",
+                "-c",
+                "-command",
+                "-commandwithargs",
+                "-e",
+                "-ec",
+                "-encodedcommand",
+            }
+            or normalized.startswith("--command=")
+            or normalized.startswith("--command:")
+            or normalized.startswith("--encodedcommand=")
+            or normalized.startswith("--encodedcommand:")
+            or normalized.startswith("-command=")
+            or normalized.startswith("-command:")
+            or normalized.startswith("-encodedcommand=")
+            or normalized.startswith("-encodedcommand:")
+        )
+    if family == "python":
+        return (
+            option in {"-c", "-m"}
+            or (option.startswith("-c") and not option.startswith("--"))
+            or (option.startswith("-m") and not option.startswith("--"))
+        )
+    if family == "node":
+        return (
+            option in {"--eval", "--print", "-e", "-p"}
+            or option.startswith("--eval=")
+            or option.startswith("--print=")
+            or (
+                not option.startswith("--")
+                and option.startswith(("-e", "-p"))
+            )
+        )
+    if family == "perl":
+        return (
+            option in {"-E", "-e"}
+            or (
+                not option.startswith("--")
+                and option.startswith(("-E", "-e"))
+            )
+        )
+    if family == "ruby":
+        return option == "-e" or (
+            not option.startswith("--") and option.startswith("-e")
+        )
+    if family == "fish":
+        return (
+            option in {"--command", "-c"}
+            or option.startswith("--command=")
+            or (
+                not option.startswith("--")
+                and option.startswith("-c")
+            )
+        )
+    if family in {"bash", "sh", "zsh"}:
+        return option == "-c" or (
+            not option.startswith("--") and option.startswith("-c")
+        )
+    return False
+
+
+def option_value(
+    family: str,
+    option: str,
+) -> tuple[str, str | None] | None:
+    options = INTERPRETER_VALUE_OPTIONS.get(family, set())
+    if family == "powershell":
+        normalized = option.lower()
+        for candidate in POWERSHELL_VALUE_OPTIONS:
+            if normalized == candidate:
+                return candidate, None
+            for separator in ("=", ":"):
+                prefix = f"{candidate}{separator}"
+                if normalized.startswith(prefix):
+                    return candidate, option[len(prefix) :]
+        return None
+
+    for candidate in sorted(options, key=len, reverse=True):
+        if option == candidate:
+            return candidate, None
+        if candidate.startswith("--"):
+            prefix = f"{candidate}="
+            if option.startswith(prefix):
+                return candidate, option[len(prefix) :]
+        elif option.startswith(candidate) and len(option) > len(candidate):
+            return candidate, option[len(candidate) :]
+    return None
+
+
+def local_script_reference(argument: str) -> str | None:
+    normalized = argument.replace("\\", "/")
+    if (
+        not normalized
+        or normalized == "-"
+        or normalized.startswith(("/", "$"))
+        or re.match(r"^[A-Za-z]:", normalized) is not None
+        or "://" in normalized
+    ):
+        return None
+    reference = normalized.removeprefix("./")
+    parts = PurePosixPath(reference).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
+    return PurePosixPath(*parts).as_posix()
+
+
+def ambiguous_option_references(
+    family: str,
+    option: str,
+    remaining_arguments: Iterable[str],
+) -> set[str]:
+    candidates: list[str] = []
+    if option.startswith("-"):
+        for separator in ("=", ":"):
+            if separator in option:
+                candidates.append(option.split(separator, 1)[1])
+                break
+    terminated = False
+    for argument in remaining_arguments:
+        if argument == "--" and not terminated:
+            terminated = True
+            continue
+        if not terminated and argument.startswith("-"):
+            value_option = option_value(family, argument)
+            if value_option is not None:
+                parsed_option, attached_value = value_option
+                if (
+                    attached_value is not None
+                    and parsed_option
+                    in INTERPRETER_REQUIRED_FILE_OPTIONS.get(family, set())
+                ):
+                    candidates.append(attached_value)
+            for separator in ("=", ":"):
+                if separator in argument:
+                    candidates.append(argument.split(separator, 1)[1])
+                    break
+            continue
+        candidates.append(argument)
+    return {
+        reference
+        for candidate in candidates
+        if (reference := local_script_reference(candidate)) is not None
+    }
+
+
+def referenced_interpreter_scripts(text: str) -> set[str]:
+    references: set[str] = set()
+    for match in INTERPRETER_REFERENCE.finditer(text):
+        family = interpreter_family(match.group("interpreter"))
+        arguments = interpreter_arguments(text, match.end())
+        index = 0
+        while index < len(arguments):
+            argument = arguments[index]
+            if argument == "--":
+                index += 1
+                if index < len(arguments):
+                    reference = local_script_reference(arguments[index])
+                    if reference is not None:
+                        references.add(reference)
+                break
+            if is_inline_interpreter_option(family, argument):
+                break
+            if family == "powershell":
+                normalized = argument.lower()
+                if normalized in {"-f", "-file"}:
+                    index += 1
+                    if index < len(arguments):
+                        reference = local_script_reference(arguments[index])
+                        if reference is not None:
+                            references.add(reference)
+                    break
+                if normalized.startswith(("-file=", "-file:")):
+                    reference = local_script_reference(argument[6:])
+                    if reference is not None:
+                        references.add(reference)
+                    break
+            value_option = option_value(family, argument)
+            if value_option is not None:
+                option, attached_value = value_option
+                value = attached_value
+                if value is None:
+                    index += 1
+                    if index < len(arguments):
+                        value = arguments[index]
+                if (
+                    value is not None
+                    and option
+                    in INTERPRETER_REQUIRED_FILE_OPTIONS.get(family, set())
+                ):
+                    reference = local_script_reference(value)
+                    if reference is not None:
+                        references.add(reference)
+                index += 1
+                continue
+            if argument.startswith("-"):
+                references.update(
+                    ambiguous_option_references(
+                        family,
+                        argument,
+                        arguments[index + 1 :],
+                    )
+                )
+                break
+            reference = local_script_reference(argument)
+            if reference is not None:
+                references.add(reference)
+            break
+    return references
+
+
 def required_agent_files(
     root: Path,
     repository_files: Iterable[tuple[Path, str]] | None = None,
 ) -> list[Path]:
     if repository_files is None:
         repository_files = tracked_repository_files(root)
+    entries = list(repository_files)
+    tracked = {
+        path.relative_to(root).as_posix(): (path, mode)
+        for path, mode in entries
+    }
     paths: set[Path] = set()
-    for path, mode in repository_files:
+    for path, mode in entries:
         relative = path.relative_to(root)
         if not is_required_agent_asset(relative, mode == "100755"):
             continue
@@ -688,6 +1115,29 @@ def required_agent_files(
                 f"{relative.as_posix()}: required agent assets must not be symlinks"
             )
         paths.add(path)
+
+    pending = list(paths)
+    while pending:
+        source = pending.pop()
+        try:
+            text = decode_required_asset(source.read_bytes())
+        except (OSError, UnicodeDecodeError, RequiredAssetEncodingError):
+            continue
+        relative = source.relative_to(root)
+        text = required_asset_body(relative, text)
+        for reference in referenced_interpreter_scripts(text):
+            tracked_entry = tracked.get(reference)
+            if tracked_entry is None:
+                continue
+            target, mode = tracked_entry
+            if target in paths:
+                continue
+            if mode == "120000":
+                raise RuntimeError(
+                    f"{reference}: required agent assets must not be symlinks"
+                )
+            paths.add(target)
+            pending.append(target)
     return sorted(paths)
 
 

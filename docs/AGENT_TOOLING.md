@@ -130,8 +130,17 @@ under the Codex, Claude, and iEvo evolution trees, tracked tests (including sour
 formats that can contain inline tests), required workflows, the repository `scripts/`
 tree, local action manifests anywhere in the repository, every tracked file under the
 conventional `.github/actions/` tree, interpreter-recognized script formats, and
-tracked executables. Discovery comes from `git ls-files`, so ignored caches and
-dependency checkouts cannot make local validation disagree with a clean CI checkout.
+tracked executables. It follows repository-relative script invocations from those
+required assets through recognized interpreters, including recursively referenced
+extensionless, non-executable scripts. Known interpreter options distinguish ordinary
+values, loaded code files, and inline-code modes; ambiguous future options fail closed
+by selecting every repository-relative operand. Windows `.exe` interpreter names and
+backslash paths are normalized to the same Git/POSIX tracked paths without accepting
+drive-qualified, UNC, absolute, or parent-traversing targets. Discovery comes from
+`git ls-files`; shell line continuations, escaped spaces, and Markdown or subshell
+closing delimiters are handled without becoming part of a tracked path. Ignored
+caches and dependency checkouts therefore cannot make local validation disagree with
+a clean CI checkout.
 Required agent assets stored as Git symlinks are rejected rather than followed outside
 the reviewed tree.
 Within `.claude/settings.json`, `enabledPlugins` and `extraKnownMarketplaces` declare
@@ -145,7 +154,9 @@ using strict UTF-8 or BOM-tagged UTF-16 decoding; unknown encodings fail closed.
 UTF-32 and NUL-bearing text are rejected explicitly so BOM-less UTF-16 cannot
 masquerade as UTF-8. References to an optional plugin, its marketplace alias, or its
 configured repository and URL source coordinates are rejected. URL schemes and hosts
-are normalized case-insensitively, including SCP-style and host/path forms, while
+are normalized case-insensitively, and explicit default ports for Git, HTTP, HTTPS,
+and SSH are treated as their equivalent implicit forms. SCP-style and host/path forms
+receive the same host normalization, including bracketed IPv6 literals, while
 repository paths retain their case-sensitive identity. SCP-style marketplace sources
 must use a fully qualified dotted host; ambiguous single-label hosts are rejected
 instead of case-folding ordinary `owner/repository` or `label:value` text.
