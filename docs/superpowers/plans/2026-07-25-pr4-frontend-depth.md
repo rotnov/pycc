@@ -1161,7 +1161,7 @@ git commit -m "feat(pycc_hir,pycc_types): assignment, local variables, arithmeti
 **Interfaces:**
 - Produces: `HirExpr` gains `BoolLiteral(bool)`, `Compare { op: CmpOpKind, left: Box<HirExpr>, right: Box<HirExpr> }` (single comparison only — chained comparisons like `a < b < c` are explicitly out of v0.1 scope; panic with a clear message for a chain of length > 1, per `ExprCompare.ops`/`.comparators` potentially holding more than one element). `CmpOpKind { Eq, NotEq, Lt, LtE, Gt, GtE }` (pycc-owned enum; `Is`/`IsNot`/`In`/`NotIn` are out of v0.1 scope — panic with a clear message).
 
-- [ ] **Step 1: Write the failing HIR tests**
+- [x] **Step 1: Write the failing HIR tests**
 
 ```rust
 #[test]
@@ -1202,12 +1202,12 @@ fn a_chained_comparison_is_not_supported_yet() {
 }
 ```
 
-- [ ] **Step 2: Run to verify these fail**
+- [x] **Step 2: Run to verify these fail**
 
 Run: `cargo test -p pycc_hir lowers_a_boolean_literal lowers_a_single_comparison a_chained_comparison_is_not_supported_yet`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Add `CmpOpKind`, extend `HirExpr`, extend `lower_expr`**
+- [x] **Step 3: Add `CmpOpKind`, extend `HirExpr`, extend `lower_expr`**
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1246,12 +1246,12 @@ Expr::Compare(pycc_ast::ExprCompare { left, ops, comparators, .. }) => {
 }
 ```
 
-- [ ] **Step 4: Run to verify pycc_hir tests pass**
+- [x] **Step 4: Run to verify pycc_hir tests pass**
 
 Run: `cargo test -p pycc_hir`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing pycc_types tests**
+- [x] **Step 5: Write the failing pycc_types tests**
 
 ```rust
 #[test]
@@ -1301,12 +1301,12 @@ fn comparing_a_bool_and_an_int_succeeds_since_bool_is_a_subtype_of_int() {
 }
 ```
 
-- [ ] **Step 6: Run to verify these fail**
+- [x] **Step 6: Run to verify these fail**
 
 Run: `cargo test -p pycc_types infers_a_bool_literal comparing_two_ints comparing_a_bool_and_an_int`
 Expected: FAIL to compile (`CmpOpKind` not imported/used, comparison inference doesn't exist).
 
-- [ ] **Step 7: Implement comparison inference with the bool-subtype-of-int rule**
+- [x] **Step 7: Implement comparison inference with the bool-subtype-of-int rule**
 
 Add to `pycc_types/src/lib.rs`'s `infer_expr` match, and add a shared subtype-compatibility helper both `numeric_result_type` and the new comparison function use:
 
@@ -1357,17 +1357,17 @@ fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnos
 
 (Re-run Task 6's `numeric_result_type_rejects_a_hypothetical_incompatible_pair` test after this change — `(BinOpKind::Add, Ty::Int, Ty::None)` still correctly errors, since `Ty::None` isn't numeric-like.)
 
-- [ ] **Step 8: Run to verify pycc_types tests pass**
+- [x] **Step 8: Run to verify pycc_types tests pass**
 
 Run: `cargo test -p pycc_types`
 Expected: PASS.
 
-- [ ] **Step 9: Run the full workspace suite, clippy, coverage**
+- [x] **Step 9: Run the full workspace suite, clippy, coverage**
 
 Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS. Ensure the `Is`/`IsNot`/`In`/`NotIn` panic arm and the chained-comparison panic arm each have a `#[should_panic]` test (add one for at least one of `Is`/`In` if missing — reuse the `a_chained_comparison_is_not_supported_yet` pattern).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_types/src/lib.rs
