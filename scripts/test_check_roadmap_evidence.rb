@@ -655,14 +655,29 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   def test_tier1_workflow_allowlist_stages_language_track_guard_digest
-    assert_includes(
-      TIER1_CI_WORKFLOW_SHA256S,
-      "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2"
+    assert_equal(
+      "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2",
+      ACTIVE_TIER1_CI_WORKFLOW_SHA256
     )
-    assert_includes(
-      TIER1_CI_WORKFLOW_SHA256S,
-      "05ea9d7882ea817a764afae7e0fe850fbb76c73780c93ae3d922f7fbde9290e0"
+    assert_equal(
+      "05ea9d7882ea817a764afae7e0fe850fbb76c73780c93ae3d922f7fbde9290e0",
+      STAGED_TIER1_CI_WORKFLOW_SHA256
     )
+    assert_equal(
+      [
+        ACTIVE_TIER1_CI_WORKFLOW_SHA256,
+        PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256,
+        STAGED_TIER1_CI_WORKFLOW_SHA256
+      ],
+      TIER1_CI_WORKFLOW_SHA256S
+    )
+  end
+
+  def test_staged_language_track_workflow_fixture_is_not_the_active_workflow
+    active_workflow =
+      (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
+
+    refute_equal active_workflow, STAGED_TIER1_CI_WORKFLOW_FIXTURE.read
   end
 
   def test_rejects_changed_tier1_matrix_workflow
