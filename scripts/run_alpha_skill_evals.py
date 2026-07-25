@@ -243,12 +243,20 @@ def run_pycc_check_rejection(
     if "check --fix" not in case["prompt"]:
         raise EvalError("pycc check eval must exercise the planned --fix path")
     expected = case["expected_output"]
-    for fragment in ("recognized but unimplemented", "not currently parsed"):
+    for fragment in ("check is implemented", "not currently parsed"):
         if fragment not in expected:
             raise EvalError("pycc check eval has an incomplete expected output")
-    for contract in ("planned", "not-implemented", "exit `0`"):
+    for contract in ("explicit-file", "`--fix` remains planned", "exit `0`"):
         if contract not in skill_text:
             raise EvalError(f"pycc skill is missing {contract!r}")
+
+    with tempfile.TemporaryDirectory(prefix="pycc-alpha-check-eval-") as directory:
+        source = Path(directory) / "valid.py"
+        source.write_text("print(42)\n", encoding="utf-8")
+        check = runner([str(pycc_binary), "check", "--", str(source)], root)
+        require_success(check, "alpha pycc check eval")
+        if check.stdout != b"" or check.stderr != b"":
+            raise EvalError("alpha pycc check success must be silent")
 
     result = runner([str(pycc_binary), "check", "--fix"], root)
     stderr = result.stderr.decode("utf-8", errors="replace")
@@ -256,7 +264,7 @@ def run_pycc_check_rejection(
         result.returncode != 2
         or result.stdout != b""
         or "unexpected argument '--fix' found" not in stderr
-        or "Usage: pycc check [PATH]" not in stderr
+        or "Usage: pycc check [PATHS]..." not in stderr
     ):
         raise EvalError(
             "pycc check --fix must remain an observed invalid invocation"

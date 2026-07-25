@@ -20,11 +20,13 @@ complete pycc interface.
 4. State the current revision and whether the requested path is implemented,
    planned, or unknown.
 
-At this alpha revision, `build`, `run`, and `version --verbose` have
-implementations. `check`, `test`, `explain`, `init`, and `clean` are parsed but
-return an explicit not-implemented error. The type checker is currently a
-no-op slice. Re-verify these statements against source whenever using the
-skill; do not let this snapshot override newer code.
+At this alpha revision, `build`, `run`, `version --verbose`, and explicit-file
+`check` have implementations. `check` accepts one or more files, reports every
+frontend failure, and returns exit `0` for valid input; `--fix` remains planned
+and is not parsed as an option. `test`, `explain`, `init`, and `clean` are
+parsed but return an explicit not-implemented error. The type checker is
+currently a no-op slice. Re-verify these statements against source whenever
+using the skill; do not let this snapshot override newer code.
 
 ## Build and run
 
@@ -41,12 +43,16 @@ the user chose a destination. For example, on POSIX:
 output_dir=$(mktemp -d "${TMPDIR:-/tmp}/pycc-skill.XXXXXX")
 cargo run --bin pycc -- build path/to/program.py -o "$output_dir/program"
 cargo run --bin pycc -- run path/to/program.py
+cargo run --bin pycc -- check -- path/to/program.py
 cargo run --bin pycc -- version --verbose
 ```
 
 On Windows, create a unique directory under the native temporary directory
 instead of translating the POSIX path literally. Never use a predictable
 shared filename or overwrite a user binary or source file implicitly.
+Use the `--` boundary for `check` so a selected path that starts with `-`
+remains a path. Do not claim that the planned `--fix` option works until it is
+present in both `src/cli.rs` and the current tests.
 
 Record the exact command, exit code, stdout, and stderr. For the compiler
 driver before a program starts, treat exit `0` as success, `1` as a compile or

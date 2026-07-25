@@ -99,12 +99,14 @@ class AlphaSkillEvalTests(unittest.TestCase):
             calls.append(arguments)
             if arguments[-1] == "--help":
                 return subprocess.CompletedProcess(arguments, 0, b"usage\n", b"")
-            if len(arguments) > 1 and arguments[1] == "check":
+            if len(arguments) > 2 and arguments[1:3] == ["check", "--fix"]:
                 stderr = (
                     b"error: unexpected argument '--fix' found\n"
-                    b"Usage: pycc check [PATH]\n"
+                    b"Usage: pycc check [PATHS]...\n"
                 )
                 return subprocess.CompletedProcess(arguments, 2, b"", stderr)
+            if len(arguments) > 2 and arguments[1:3] == ["check", "--"]:
+                return subprocess.CompletedProcess(arguments, 0, b"", b"")
             if len(arguments) > 1 and arguments[1] == "build":
                 if Path(arguments[2]).name == "program.py":
                     return subprocess.CompletedProcess(arguments, 0, b"", b"")
@@ -122,13 +124,14 @@ class AlphaSkillEvalTests(unittest.TestCase):
             runner=runner,
         )
 
-        self.assertEqual(len(calls), 8)
+        self.assertEqual(len(calls), 9)
         self.assertEqual(
             sum(arguments[-1] == "--help" for arguments in calls),
             4,
         )
-        self.assertTrue(
-            any(len(arguments) > 1 and arguments[1] == "check" for arguments in calls)
+        self.assertEqual(
+            sum(len(arguments) > 1 and arguments[1] == "check" for arguments in calls),
+            2,
         )
         self.assertTrue(
             any(

@@ -10,7 +10,7 @@
     {
       "id": 2,
       "prompt": "Can pycc check --fix repair this type error for me right now?",
-      "expected_output": "Distinguishes the planned CLI contract from current source, explains that the check subcommand is recognized but unimplemented while the planned --fix option is not currently parsed, and does not pretend the documented future command works.",
+      "expected_output": "Distinguishes the planned CLI contract from current source, explains that explicit-file check is implemented and returns exit 0 for valid input while the planned --fix option is not currently parsed, and does not pretend the documented future option works.",
       "runner": "observe-current-check-fix-rejection"
     },
     {
