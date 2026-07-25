@@ -208,7 +208,7 @@ fn escape_terminal_controls(text: &str, preserve_tabs: bool) -> String {
             '\r' => escaped.push_str("\\r"),
             '\t' => escaped.push_str("\\t"),
             '\0' => escaped.push_str("\\0"),
-            character if character.is_control() => {
+            character if character.is_control() || is_bidi_format_control(character) => {
                 write!(escaped, "\\u{{{:x}}}", u32::from(character))
                     .expect("writing to a string must succeed");
             }
@@ -216,6 +216,17 @@ fn escape_terminal_controls(text: &str, preserve_tabs: bool) -> String {
         }
     }
     escaped
+}
+
+fn is_bidi_format_control(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
 }
 
 fn display_width(text: &str) -> usize {
@@ -523,10 +534,14 @@ mod diagnostic_tests {
     #[test]
     fn terminal_controls_are_escaped_without_losing_source_tabs() {
         assert_eq!(
-            escape_terminal_controls("a\n\r\t\0\u{1b}\u{85}z", false),
-            r"a\n\r\t\0\u{1b}\u{85}z"
+            escape_terminal_controls(
+                "a\n\r\t\0\u{1b}\u{85}\u{061c}\u{200e}\u{200f}\u{202a}\u{202e}\u{2066}\u{2069}z",
+                false,
+            ),
+            r"a\n\r\t\0\u{1b}\u{85}\u{61c}\u{200e}\u{200f}\u{202a}\u{202e}\u{2066}\u{2069}z"
         );
         assert_eq!(escape_terminal_controls("a\t\u{1b}z", true), "a\t\\u{1b}z");
+        assert_eq!(escape_terminal_controls("a\u{200d}z", false), "a\u{200d}z");
     }
 
     #[test]
@@ -537,7 +552,7 @@ mod diagnostic_tests {
 
     #[test]
     fn source_rendering_escapes_controls_and_aligns_the_caret_to_rendered_text() {
-        let source = "\u{1b}👩‍💻👍🏽$\n";
+        let source = "\u{1b}\u{202e}👩‍💻👍🏽$\n";
         let start = source.find('$').unwrap();
         let rendered = render_source_span(
             "bad.py",
@@ -546,8 +561,9 @@ mod diagnostic_tests {
             "invalid syntax",
         );
 
-        assert!(rendered.contains("1 | \\u{1b}👩‍💻👍🏽$"));
-        assert!(rendered.contains("  |           ^ invalid syntax"));
+        assert!(rendered.contains("1 | \\u{1b}\\u{202e}👩‍💻👍🏽$"));
+        assert!(rendered.contains(&format!("  | {}^ invalid syntax", " ".repeat(18))));
         assert!(!rendered.contains('\u{1b}'));
+        assert!(!rendered.contains('\u{202e}'));
     }
 }

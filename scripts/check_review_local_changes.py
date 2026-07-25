@@ -132,8 +132,10 @@ def validate_entrypoint(
     else:
         assert canonical_text.startswith("---\nname: review-local-changes\n")
     assert "scripts/prepare_review.py" in canonical_text
+    assert "content_sources" in canonical_text
+    assert "top-level `state`" in canonical_text
     assert CODEX_METADATA.read_bytes() == CLAUDE_METADATA.read_bytes()
-    assert HELPER.read_text(encoding="utf-8").count('"--no-textconv"') == 6
+    assert HELPER.read_text(encoding="utf-8").count('"--no-textconv"') == 8
 
     helper = load_helper()
     helper.validate_repository_pin(ROOT)
@@ -158,6 +160,98 @@ def validate_entrypoint(
         ]
         working = result["scopes"][2]
         assert working["changed_files"] == ["tracked.txt", "untracked.txt"]
+        committed = result["scopes"][0]
+        staged = result["scopes"][1]
+        assert all(
+            source["kind"] == "git-blob"
+            for source in committed["content_sources"].values()
+        )
+        assert all(
+            source["kind"] == "git-blob"
+            for source in staged["content_sources"].values()
+        )
+        assert all(
+            source["kind"] == "worktree"
+            and len(source["sha256"]) == 64
+            for source in working["content_sources"].values()
+        )
+        assert result["state"]["head"] == git_output(repo, "rev-parse", "HEAD")
+        assert len(result["state"]["index_sha256"]) == 64
+        assert len(result["state"]["status_sha256"]) == 64
+
+        original_state = result["state"]
+        tracked = repo / "tracked.txt"
+        tracked.write_text("mutated\n", encoding="utf-8")
+        same_status_mutation = helper.prepare_review(
+            repo,
+            safe_manifest,
+            expected_reviewer_sha256=safe_digest,
+        )
+        assert (
+            same_status_mutation["state"]["status_sha256"]
+            == original_state["status_sha256"]
+        )
+        assert (
+            same_status_mutation["state"]["working_content_sources"]
+            != original_state["working_content_sources"]
+        )
+        tracked.write_text("working\n", encoding="utf-8")
+
+        stable_state = helper.prepare_review(
+            repo,
+            safe_manifest,
+            expected_reviewer_sha256=safe_digest,
+        )["state"]
+        staged_path = repo / "staged.txt"
+        staged_path.write_text("replaced\n", encoding="utf-8")
+        git(repo, "add", "staged.txt")
+        replaced_index = helper.prepare_review(
+            repo,
+            safe_manifest,
+            expected_reviewer_sha256=safe_digest,
+        )["state"]
+        assert replaced_index["status_sha256"] == stable_state["status_sha256"]
+        assert replaced_index["index_sha256"] != stable_state["index_sha256"]
+        staged_path.write_text("staged\n", encoding="utf-8")
+        git(repo, "add", "staged.txt")
+
+        stable_state = helper.prepare_review(
+            repo,
+            safe_manifest,
+            expected_reviewer_sha256=safe_digest,
+        )["state"]
+        old_head = git_output(repo, "rev-parse", "HEAD")
+        head_tree = git_output(repo, "rev-parse", "HEAD^{tree}")
+        moved_head = git_output(
+            repo,
+            "commit-tree",
+            head_tree,
+            "-p",
+            old_head,
+            "-m",
+            "identity-only head movement",
+        )
+        git(
+            repo,
+            "update-ref",
+            "refs/heads/feature",
+            moved_head,
+            old_head,
+        )
+        moved_state = helper.prepare_review(
+            repo,
+            safe_manifest,
+            expected_reviewer_sha256=safe_digest,
+        )["state"]
+        assert moved_state["status_sha256"] == stable_state["status_sha256"]
+        assert moved_state["head"] != stable_state["head"]
+        git(
+            repo,
+            "update-ref",
+            "refs/heads/feature",
+            old_head,
+            moved_head,
+        )
 
         unsafe_manifest = root / "unsafe-reviewer.md"
         write_reviewer(unsafe_manifest, safe=False)
@@ -440,6 +534,17 @@ def validate_entrypoint(
         pin_path = pin_repo / ".agents/plugins/marketplace.json"
         pin_copy = pin_root / "marketplace.json"
         pin_copy.write_bytes(pin_path.read_bytes())
+        for invalid_root in (b"[]", b"1", b"null"):
+            pin_path.write_bytes(invalid_root)
+            try:
+                helper.validate_repository_pin(pin_repo)
+            except helper.ReviewPreparationError:
+                pass
+            else:
+                raise AssertionError(
+                    "non-object repository pin JSON was accepted"
+                )
+        pin_path.write_bytes(pin_copy.read_bytes())
         pin_path.unlink()
         try:
             pin_path.symlink_to(pin_copy)
@@ -476,6 +581,48 @@ def validate_entrypoint(
                 pass
             else:
                 raise AssertionError("symlinked repository pin parent was accepted")
+
+        masked_root = root / "masked-pin-fixture"
+        masked_root.mkdir()
+        masked_repo = build_fixture(masked_root)
+        masked_pin = masked_repo / ".agents/plugins/marketplace.json"
+        safe_pin = masked_pin.read_bytes()
+        bad_pin = json.dumps(
+            {
+                "plugins": [
+                    {
+                        "name": "ievo",
+                        "source": {"ref": "f" * 40},
+                    }
+                ]
+            }
+        ).encode()
+        masked_pin.write_bytes(bad_pin)
+        git(masked_repo, "add", ".agents/plugins/marketplace.json")
+        masked_pin.write_bytes(safe_pin)
+        try:
+            helper.prepare_review(
+                masked_repo,
+                safe_manifest,
+                expected_reviewer_sha256=safe_digest,
+            )
+        except helper.ReviewPreparationError as error:
+            assert "staged repository iEvo pin" in str(error)
+        else:
+            raise AssertionError("safe worktree masked a mismatched staged pin")
+
+        git(masked_repo, "commit", "-m", "commit mismatched pin")
+        git(masked_repo, "add", ".agents/plugins/marketplace.json")
+        try:
+            helper.prepare_review(
+                masked_repo,
+                safe_manifest,
+                expected_reviewer_sha256=safe_digest,
+            )
+        except helper.ReviewPreparationError as error:
+            assert "committed repository iEvo pin" in str(error)
+        else:
+            raise AssertionError("safe index masked a mismatched committed pin")
 
 
 def main() -> int:

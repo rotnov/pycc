@@ -246,13 +246,14 @@ The helper binds preparation to iEvo commit
 `b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2`.
 Both values change together during the reviewed update process. Scope
 preparation fails closed when the remote default branch, merge base, pin, or
-artifact cannot be verified. Every committed, staged, tracked-working, and
-untracked path is classified before dispatch. Only regular non-symlink files
-enter the reviewer's file-read list; symlinks, symlinked path components,
-gitlinks, and deleted paths are described as inert metadata without following
-them. The fixed repository pin is traversed and opened descriptor-relative
-with no-follow semantics for every component. Preparation fails closed on a
-platform that cannot provide that race-safe primitive.
+artifact cannot be verified. The pin is checked independently from the exact
+committed blob, staged blob, and descriptor-relative no-follow working-tree
+file, so one safe state cannot mask another scope's changed dependency. Every
+committed, staged, tracked-working, and untracked path is classified before
+dispatch. Only regular non-symlink files enter the reviewer's file-read list;
+symlinks, symlinked path components, gitlinks, and deleted paths are described
+as inert metadata without following them. Preparation fails closed on a
+platform that cannot provide the race-safe no-follow primitive.
 
 For uncommitted work, the selected skill reviews the staged or working-tree
 diff. For a clean pull-request branch, it reviews the committed range from the
@@ -279,7 +280,11 @@ plugin-agent support bind the reviewer to the verified artifact and its native
 read-only policy. Other clients use the repository-owned fallback: a fresh
 subagent receives the same verified instructions, no mutation or network
 authority, and the workflow rejects the run if a before/after Git status
-snapshot changes.
+snapshot changes. Preparation also records exact commit and default-ref IDs,
+the index identity, worktree/untracked content hashes, and immutable blob IDs
+for committed and staged file reads. The helper is rerun after dispatch; any
+state or content-source mismatch invalidates the review even when porcelain
+status text stayed unchanged.
 
 ## Rollback
 

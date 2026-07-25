@@ -18,6 +18,7 @@ PINNED_REVIEWER_SHA256 = (
     "b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2"
 )
 PINNED_REVIEWER_ID = "ievo@ievo-skills/deep-reviewer"
+REPOSITORY_PIN_PATH = ".agents/plugins/marketplace.json"
 
 
 class ReviewPreparationError(RuntimeError):
@@ -113,17 +114,17 @@ def read_regular_file_without_symlinks(repo: Path, relative_path: str) -> bytes:
             os.close(directory_descriptor)
 
 
-def validate_repository_pin(repo: Path) -> None:
+def validate_repository_pin_document(raw: bytes, state: str) -> None:
     try:
-        raw = read_regular_file_without_symlinks(
-            repo,
-            ".agents/plugins/marketplace.json",
-        )
         marketplace = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ReviewPreparationError(
-            f"could not validate the repository iEvo pin: {error}"
+            f"could not validate the {state} repository iEvo pin: {error}"
         ) from error
+    if not isinstance(marketplace, dict):
+        raise ReviewPreparationError(
+            f"{state} repository iEvo pin must be a JSON object"
+        )
 
     matches = [
         plugin
@@ -137,8 +138,80 @@ def validate_repository_pin(repo: Path) -> None:
     source = matches[0].get("source")
     if not isinstance(source, dict) or source.get("ref") != PINNED_IEVO_COMMIT:
         raise ReviewPreparationError(
-            "repository iEvo pin does not match the reviewed reviewer artifact"
+            f"{state} repository iEvo pin does not match the reviewed "
+            "reviewer artifact"
         )
+
+
+def validate_repository_pin(repo: Path) -> None:
+    validate_repository_pin_document(
+        read_regular_file_without_symlinks(repo, REPOSITORY_PIN_PATH),
+        "working-tree",
+    )
+
+
+def committed_blob(repo: Path, treeish: str, relative_path: str) -> tuple[str, bytes]:
+    records = run_git(
+        repo,
+        "--literal-pathspecs",
+        "ls-tree",
+        "-z",
+        treeish,
+        "--",
+        relative_path,
+    )
+    entries = [record for record in records.split(b"\0") if record]
+    if len(entries) != 1:
+        raise ReviewPreparationError(
+            f"{relative_path!r} must exist exactly once in committed state"
+        )
+    header, raw_path = entries[0].split(b"\t", 1)
+    mode, object_type, object_id = header.decode("ascii").split()
+    if (
+        os.fsdecode(raw_path) != relative_path
+        or mode not in {"100644", "100755"}
+        or object_type != "blob"
+    ):
+        raise ReviewPreparationError(
+            f"{relative_path!r} must be a regular committed file"
+        )
+    return object_id, run_git(repo, "cat-file", "blob", object_id)
+
+
+def staged_blob(repo: Path, relative_path: str) -> tuple[str, bytes]:
+    records = run_git(
+        repo,
+        "--literal-pathspecs",
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        relative_path,
+    )
+    entries = [record for record in records.split(b"\0") if record]
+    if len(entries) != 1:
+        raise ReviewPreparationError(
+            f"{relative_path!r} must exist exactly once in staged state"
+        )
+    header, raw_path = entries[0].split(b"\t", 1)
+    mode, object_id, stage = header.decode("ascii").split()
+    if (
+        os.fsdecode(raw_path) != relative_path
+        or mode not in {"100644", "100755"}
+        or stage != "0"
+    ):
+        raise ReviewPreparationError(
+            f"{relative_path!r} must be a regular stage-zero file"
+        )
+    return object_id, run_git(repo, "cat-file", "blob", object_id)
+
+
+def validate_repository_pin_states(repo: Path, head_object_id: str) -> None:
+    _, committed_raw = committed_blob(repo, head_object_id, REPOSITORY_PIN_PATH)
+    _, staged_raw = staged_blob(repo, REPOSITORY_PIN_PATH)
+    validate_repository_pin_document(committed_raw, "committed")
+    validate_repository_pin_document(staged_raw, "staged")
+    validate_repository_pin(repo)
 
 
 def validate_reviewer_manifest(
@@ -227,9 +300,13 @@ def classify_tree_paths(
     repo: Path,
     relative_paths: list[str],
     treeish: str,
-) -> tuple[list[str], list[dict[str, str]]]:
+) -> tuple[
+    list[str],
+    list[dict[str, str]],
+    dict[str, dict[str, str]],
+]:
     if not relative_paths:
-        return [], []
+        return [], [], {}
     records = run_git(
         repo,
         "--literal-pathspecs",
@@ -249,6 +326,7 @@ def classify_tree_paths(
 
     regular: list[str] = []
     excluded: list[dict[str, str]] = []
+    content_sources: dict[str, dict[str, str]] = {}
     for relative_path in relative_paths:
         safe_relative_path(relative_path)
         component_metadata = tree_component_metadata(
@@ -266,6 +344,10 @@ def classify_tree_paths(
         mode, object_type, object_id = entry
         if mode in {"100644", "100755"} and object_type == "blob":
             regular.append(relative_path)
+            content_sources[relative_path] = {
+                "kind": "git-blob",
+                "object_id": object_id,
+            }
         elif mode == "120000" and object_type == "blob":
             excluded.append(
                 {
@@ -286,15 +368,19 @@ def classify_tree_paths(
             raise ReviewPreparationError(
                 f"unsupported Git tree mode {mode!r} for {relative_path!r}"
             )
-    return regular, excluded
+    return regular, excluded, content_sources
 
 
 def classify_index_paths(
     repo: Path,
     relative_paths: list[str],
-) -> tuple[list[str], list[dict[str, str]]]:
+) -> tuple[
+    list[str],
+    list[dict[str, str]],
+    dict[str, dict[str, str]],
+]:
     if not relative_paths:
-        return [], []
+        return [], [], {}
     records = run_git(
         repo,
         "--literal-pathspecs",
@@ -318,6 +404,7 @@ def classify_index_paths(
 
     regular: list[str] = []
     excluded: list[dict[str, str]] = []
+    content_sources: dict[str, dict[str, str]] = {}
     component_entries = {
         path: (mode, "commit" if mode == "160000" else "blob", object_id)
         for path, (mode, object_id) in entries.items()
@@ -339,6 +426,10 @@ def classify_index_paths(
         mode, object_id = entry
         if mode in {"100644", "100755"}:
             regular.append(relative_path)
+            content_sources[relative_path] = {
+                "kind": "git-blob",
+                "object_id": object_id,
+            }
         elif mode == "120000":
             excluded.append(
                 {
@@ -359,7 +450,7 @@ def classify_index_paths(
             raise ReviewPreparationError(
                 f"unsupported Git index mode {mode!r} for {relative_path!r}"
             )
-    return regular, excluded
+    return regular, excluded, content_sources
 
 
 def classify_worktree_path(
@@ -429,6 +520,67 @@ def classify_worktree_paths(
     return regular, excluded
 
 
+def sha256_bytes(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def head_object_id(repo: Path) -> str:
+    value = text_diff(
+        run_git(repo, "rev-parse", "--verify", "HEAD^{commit}")
+    ).strip()
+    if not value:
+        raise ReviewPreparationError("could not resolve HEAD to a commit")
+    return value
+
+
+def ref_object_id(repo: Path, reference: str) -> str:
+    value = text_diff(
+        run_git(
+            repo,
+            "rev-parse",
+            "--verify",
+            f"{reference}^{{commit}}",
+            allow_failure=True,
+        )
+    ).strip()
+    if not value:
+        raise ReviewPreparationError(
+            f"could not resolve {reference!r} to a commit"
+        )
+    return value
+
+
+def index_identity(repo: Path) -> str:
+    return sha256_bytes(run_git(repo, "ls-files", "--stage", "-z"))
+
+
+def status_identity(repo: Path) -> str:
+    return sha256_bytes(
+        run_git(
+            repo,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        )
+    )
+
+
+def worktree_content_sources(
+    repo: Path,
+    relative_paths: list[str],
+) -> dict[str, dict[str, object]]:
+    sources: dict[str, dict[str, object]] = {}
+    for relative_path in relative_paths:
+        raw = read_regular_file_without_symlinks(repo, relative_path)
+        sources[relative_path] = {
+            "kind": "worktree",
+            "sha256": sha256_bytes(raw),
+            "size": len(raw),
+        }
+    return sources
+
+
 def resolve_default_ref(repo: Path, explicit: str | None) -> str:
     if explicit is not None:
         return explicit
@@ -454,8 +606,10 @@ def append_scope(
     diff: str,
     files: list[str],
     excluded_entries: list[dict[str, str]] | None = None,
+    content_sources: dict[str, dict[str, object]] | None = None,
 ) -> None:
     entries = excluded_entries or []
+    sources = content_sources or {}
     if diff or files or entries:
         scopes.append(
             {
@@ -463,6 +617,9 @@ def append_scope(
                 "changed_files": sorted(set(files)),
                 "diff": diff,
                 "excluded_entries": entries,
+                "content_sources": {
+                    path: sources[path] for path in sorted(sources)
+                },
             }
         )
 
@@ -481,7 +638,10 @@ def prepare_review(
         raise ReviewPreparationError(
             f"review repository must be its Git top level: {top_level}"
         )
-    validate_repository_pin(repo)
+    prepared_head = head_object_id(repo)
+    prepared_index = index_identity(repo)
+    prepared_status = status_identity(repo)
+    validate_repository_pin_states(repo, prepared_head)
     reviewer_digest = validate_reviewer_manifest(
         reviewer_manifest,
         expected_reviewer_sha256,
@@ -489,12 +649,13 @@ def prepare_review(
 
     scopes: list[dict[str, object]] = []
     resolved_default = resolve_default_ref(repo, default_ref)
+    prepared_default = ref_object_id(repo, resolved_default)
     merge_base = text_diff(
         run_git(
             repo,
             "merge-base",
-            "HEAD",
-            resolved_default,
+            prepared_head,
+            prepared_default,
             allow_failure=True,
         )
     ).strip()
@@ -509,7 +670,8 @@ def prepare_review(
             "--no-ext-diff",
             "--no-textconv",
             "--binary",
-            f"{merge_base}..HEAD",
+            f"{merge_base}..{prepared_head}",
+            "--",
         )
     )
     committed_files = decode_path_list(
@@ -520,13 +682,18 @@ def prepare_review(
             "--no-textconv",
             "--name-only",
             "-z",
-            f"{merge_base}..HEAD",
+            f"{merge_base}..{prepared_head}",
+            "--",
         )
     )
-    committed_regular, committed_excluded = classify_tree_paths(
+    (
+        committed_regular,
+        committed_excluded,
+        committed_sources,
+    ) = classify_tree_paths(
         repo,
         committed_files,
-        "HEAD",
+        prepared_head,
     )
     append_scope(
         scopes,
@@ -534,47 +701,56 @@ def prepare_review(
         committed_diff,
         committed_regular,
         committed_excluded,
+        committed_sources,
     )
 
     staged_diff = text_diff(
         run_git(
             repo,
             "diff",
-            "--staged",
+            "--cached",
             "--no-ext-diff",
             "--no-textconv",
             "--binary",
+            prepared_head,
+            "--",
         )
     )
     staged_files = decode_path_list(
         run_git(
             repo,
             "diff",
-            "--staged",
+            "--cached",
             "--no-ext-diff",
             "--no-textconv",
             "--name-only",
             "-z",
+            prepared_head,
+            "--",
         )
     )
-    staged_regular, staged_excluded = classify_index_paths(repo, staged_files)
+    staged_regular, staged_excluded, staged_sources = classify_index_paths(
+        repo,
+        staged_files,
+    )
     append_scope(
         scopes,
         "staged",
         staged_diff,
         staged_regular,
         staged_excluded,
+        staged_sources,
     )
 
-    working_diff = text_diff(
-        run_git(
-            repo,
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--binary",
-        )
+    working_diff_raw = run_git(
+        repo,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--binary",
+        "--",
     )
+    working_diff = text_diff(working_diff_raw)
     working_files = decode_path_list(
         run_git(
             repo,
@@ -583,6 +759,7 @@ def prepare_review(
             "--no-textconv",
             "--name-only",
             "-z",
+            "--",
         )
     )
     untracked_files = decode_path_list(
@@ -592,13 +769,65 @@ def prepare_review(
         repo,
         [*working_files, *untracked_files],
     )
+    working_sources = worktree_content_sources(repo, working_regular)
     append_scope(
         scopes,
         "working",
         working_diff,
         working_regular,
         working_excluded,
+        working_sources,
     )
+
+    final_head = head_object_id(repo)
+    final_default = ref_object_id(repo, resolved_default)
+    final_index = index_identity(repo)
+    final_status = status_identity(repo)
+    final_working_diff = run_git(
+        repo,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--binary",
+        "--",
+    )
+    final_working_files = decode_path_list(
+        run_git(
+            repo,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-only",
+            "-z",
+            "--",
+        )
+    )
+    final_untracked_files = decode_path_list(
+        run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
+    )
+    final_working_regular, final_working_excluded = classify_worktree_paths(
+        repo,
+        [*final_working_files, *final_untracked_files],
+    )
+    final_working_sources = worktree_content_sources(
+        repo,
+        final_working_regular,
+    )
+    if (
+        final_head != prepared_head
+        or final_default != prepared_default
+        or final_index != prepared_index
+        or final_status != prepared_status
+        or final_working_diff != working_diff_raw
+        or final_working_files != working_files
+        or final_untracked_files != untracked_files
+        or final_working_regular != working_regular
+        or final_working_excluded != working_excluded
+        or final_working_sources != working_sources
+    ):
+        raise ReviewPreparationError(
+            "repository state changed while review scopes were prepared"
+        )
 
     return {
         "reviewer": {
@@ -607,6 +836,14 @@ def prepare_review(
             "sha256": reviewer_digest,
         },
         "default_ref": resolved_default,
+        "state": {
+            "head": prepared_head,
+            "default": prepared_default,
+            "merge_base": merge_base,
+            "index_sha256": prepared_index,
+            "status_sha256": prepared_status,
+            "working_content_sources": working_sources,
+        },
         "scopes": scopes,
     }
 

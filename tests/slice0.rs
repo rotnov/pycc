@@ -599,7 +599,7 @@ fn check_escapes_terminal_controls_in_diagnostic_paths() {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "bad\n\u{1b}.py", "x = 1\n");
+    let src = write_fixture(&dir, "bad\n\u{1b}\u{202e}.py", "x = 1\n");
 
     let output = Command::new(pycc_bin())
         .arg("check")
@@ -609,8 +609,12 @@ fn check_escapes_terminal_controls_in_diagnostic_paths() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("bad\\n\\u{1b}.py:1:1"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("bad\\n\\u{1b}\\u{202e}.py:1:1"),
+        "stderr: {stderr}"
+    );
     assert!(!stderr.contains('\u{1b}'));
+    assert!(!stderr.contains('\u{202e}'));
     assert!(!stderr.contains(&format!(" --> {}", src.display())));
 }
 

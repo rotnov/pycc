@@ -111,9 +111,10 @@ Displayed diagnostic paths are lexically normalized without filesystem
 canonicalization: native path separators are rendered as `/`, redundant `.`
 components and repeated separators are removed, and `..` components are
 preserved. A literal backslash in a Unix filename remains a backslash.
-Control characters in displayed paths and source excerpts are rendered as
-visible escapes so filenames or source text cannot inject terminal control
-sequences. Literal source tabs remain tabs. Human-format caret padding measures
-each complete non-tab Unicode sequence rather than summing individual scalar
-widths, so combining marks, emoji modifiers, and zero-width joiner sequences
-align with the rendered source.
+Control characters and Unicode bidirectional-formatting controls in displayed
+paths and source excerpts are rendered as visible escapes so filenames or
+source text cannot inject terminal controls or visually reorder diagnostics.
+Literal source tabs remain tabs, and ordinary Unicode joiners remain intact.
+Human-format caret padding measures each complete non-tab Unicode sequence
+rather than summing individual scalar widths, so combining marks, emoji
+modifiers, and zero-width joiner sequences align with the rendered source.
