@@ -122,6 +122,15 @@ was not recorded. Later snapshots record both returned rows and `Total`.
 | 2026-07-25T17:47:48Z | `AI-native compiler` | 48 | 0 | 50 | 94 |
 | 2026-07-25T17:47:48Z | `topic:aot-compiler` | 15 | 0 | 18 | 18 |
 | 2026-07-25T17:47:48Z | `topic:python-compiler` | 43 | 0 | 44 | 44 |
+| 2026-07-25T19:07:45Z | `pycc` | >50 | — | 50 | 363 |
+| 2026-07-25T19:07:45Z | `Python 3.14 compiler in:description` | 12 | 0 | 16 | 16 |
+| 2026-07-25T19:07:45Z | `ahead-of-time compiler python` | 8 | 0 | 11 | 11 |
+| 2026-07-25T19:07:45Z | `typed Python compiler` | >50 | — | 50 | 316 |
+| 2026-07-25T19:07:45Z | `python aot compiler` | 19 | 0 | 28 | 28 |
+| 2026-07-25T19:07:45Z | `compile python native binary` | 22 | 0 | 38 | 38 |
+| 2026-07-25T19:07:45Z | `AI-native compiler` | 48 | 0 | 50 | 94 |
+| 2026-07-25T19:07:45Z | `topic:aot-compiler` | 15 | 0 | 18 | 18 |
+| 2026-07-25T19:07:45Z | `topic:python-compiler` | 43 | 0 | 44 | 44 |
 
 ## GitHub traffic history
 
@@ -142,6 +151,7 @@ include CI, agents, and other automation and is not treated as human discovery.
 | 2026-07-25T16:18:15Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 | 2026-07-25T16:52:38Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 | 2026-07-25T17:47:48Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
+| 2026-07-25T19:08:00Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 
 ## Google Search Console history
 
@@ -156,6 +166,7 @@ indexed, so this ledger records those states independently.
 | 2026-07-25T16:15:43Z | Correction: the inspected `/compare/python-compilers/` path still reports “URL is not on Google” because it is unknown, but an independent fetch proves that path is a noncanonical `404`; the live `/python-aot-compilers/` comparison URL was not inspected in this snapshot, so its individual index state remains unknown | Public `/sitemap.xml` returns `200 application/xml` with 5 canonical URLs including `/python-aot-compilers/`. Search Console still reports “Couldn’t fetch,” no processing date, and 0 discovered pages | The processed 3-month web report is updated about 5.5 hours before this observation and reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
 | 2026-07-25T16:43:18Z | The live `/python-aot-compilers/` URL reports “URL is on Google,” HTTPS valid, and one valid breadcrumb item. Googlebot Smartphone last crawled it at 13:58:20 UTC; fetch and indexing permission succeeded, and Google selected the inspected canonical | Public `/sitemap.xml` still returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” 0 discovered pages, and a temporary processing error for the page's sitemap discovery field | The processed 3-month web report is updated about 5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
 | 2026-07-25T17:49:31Z | No new URL Inspection was run; the latest authoritative evidence remains the positive inspection state for all 5 canonical URLs recorded above | Public `/sitemap.xml` returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” no processing date, and 0 discovered pages | The processed 3-month web report is updated about 4.5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
+| 2026-07-25T19:10:03Z | No new URL Inspection was run; the latest authoritative evidence remains the positive inspection state for all 5 canonical URLs recorded above | Public `/sitemap.xml` returns `200 application/xml` with all 5 canonical URLs. Search Console still reports “Couldn’t fetch,” no processing date, and 0 discovered pages | The processed 3-month web report is updated about 5 hours before this observation and still reports 0 clicks, 0 impressions, and no query rows; therefore no Google query position exists yet |
 
 ## Change log
 
@@ -171,8 +182,8 @@ later movement can be correlated without presenting correlation as causation.
 
 ## Current interpretation
 
-At 17:47 UTC, all nine measured GitHub Search positions and their result totals
-were unchanged from the 16:52 UTC snapshot. The repository remains rank 12 for
+At 19:07 UTC, all nine measured GitHub Search positions and their result totals
+were unchanged from the 17:47 UTC snapshot. The repository remains rank 12 for
 the Python 3.14 description query, rank 8 for
 `ahead-of-time compiler python`, rank 19 for `python aot compiler`, rank 15 for
 `topic:aot-compiler`, and rank 43 for `topic:python-compiler`. The project
@@ -186,8 +197,10 @@ mobile crawl, matching canonical, valid HTTPS, and valid breadcrumb. The
 earlier accepted request for the noncanonical `404` path remains only a
 historical correction and is not credited for this result. Search Console
 still reports 0 impressions and 0 clicks, so there are no Google query
-positions. At 17:49 UTC, sitemap processing remained unsuccessful even though
+positions. At 19:10 UTC, sitemap processing remained unsuccessful even though
 the public sitemap returned `200` with the five canonical URLs, reinforcing
 that indexing and sitemap processing are independent signals. The unchanged
 traffic window remains too automation-heavy and low-uniqueness to attribute to
-SEO.
+SEO. Search Console's overview still says that indexing data is processing; its
+separate HTTPS aggregate currently shows 4 valid pages and 0 non-HTTPS pages,
+which neither replaces nor contradicts the five per-URL inspection results.
