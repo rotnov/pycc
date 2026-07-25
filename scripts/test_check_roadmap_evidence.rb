@@ -242,6 +242,18 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_ignores_checked_items_rendered_as_indented_code
+    ["    - [x] Root code example.\n", ">     - [x] Quoted code example.\n"].each do |example|
+      stdout, stderr, status = run_checker(
+        roadmap: "# pycc Roadmap\n\n#{example}",
+        workflow: "jobs: {}\n"
+      )
+
+      assert status.success?, stderr
+      assert_includes stdout, "Roadmap evidence policy passed."
+    end
+  end
+
   def test_rejects_setext_headings_that_change_the_rendered_section
     roadmap = <<~MARKDOWN
       # pycc Roadmap

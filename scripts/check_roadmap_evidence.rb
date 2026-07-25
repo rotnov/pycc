@@ -6,7 +6,8 @@ require "psych"
 
 class RoadmapEvidenceError < StandardError; end
 
-CHECKED_ITEM = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[xX]\]\s+(?<claim>.*)$/
+CHECKED_ITEM =
+  /\A {0,3}(?:> ?)*(?:[-*+]|\d+[.)])[ \t]+\[[xX]\][ \t]+(?<claim>.*)$/
 ATX_HEADING = /^\s{0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
 SETEXT_UNDERLINE = /\A {0,3}(?:=+|-+)[ \t]*(?:\r?\n)?\z/
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
