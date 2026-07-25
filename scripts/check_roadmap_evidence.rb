@@ -8,6 +8,7 @@ class RoadmapEvidenceError < StandardError; end
 
 CHECKED_ITEM = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[xX]\]\s+(?<claim>.*)$/
 ATX_HEADING = /^\s{0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
+SETEXT_UNDERLINE = /\A {0,3}(?:=+|-+)[ \t]*(?:\r?\n)?\z/
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
 EVIDENCE_CLAIMS = {
   "ci-build-test-coverage-100" =>
@@ -290,6 +291,11 @@ def validate_roadmap(text)
     visible_line, in_html_comment = without_html_comments(line, in_html_comment)
     fence = opening_fence(visible_line)
     next if fence
+
+    if SETEXT_UNDERLINE.match?(visible_line)
+      raise RoadmapEvidenceError,
+            "line #{line_number}: Setext headings are not supported; use ATX headings"
+    end
 
     heading = ATX_HEADING.match(visible_line)
     if heading

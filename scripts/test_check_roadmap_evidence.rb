@@ -242,6 +242,29 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_rejects_setext_headings_that_change_the_rendered_section
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      Wrong rendered root
+      ===================
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: coverage_workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "Setext headings are not supported"
+  end
+
   def test_rejects_an_unknown_evidence_marker
     roadmap = <<~MARKDOWN
       # pycc Roadmap
