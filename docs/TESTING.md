@@ -122,6 +122,17 @@ pins. The trusted checker validates the exact ordered lifecycle whenever
 `frontend-perf-gate` is present in the candidate workflow, in addition to
 requiring the exact reviewed digest.
 
+A separate reviewed prospective workflow authorizes the Python language-track
+regression guard without activating it. Its inert
+`scripts/fixtures/ci-language-track-policy.yml` snapshot adds a dedicated
+`language-track-policy` job, runs the repository guard before any
+head-controlled self-test import, and makes the job an explicit `ci-gate`
+dependency. The active workflow on `main` does not yet contain that job; the
+extra allowlist entry is phase-one authorization, not evidence that the guard
+is already live. The open PR-4 activation changes the same `ci.yml`, so the two
+activation changes are serialized: after either workflow lands, the other must
+stage a newly reviewed combined snapshot and digest before activation.
+
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
 violate the trusted setup sequence. The authority is the required read-only

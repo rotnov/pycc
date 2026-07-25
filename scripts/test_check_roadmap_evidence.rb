@@ -660,7 +660,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
       ACTIVE_TIER1_CI_WORKFLOW_SHA256
     )
     assert_equal(
-      "05ea9d7882ea817a764afae7e0fe850fbb76c73780c93ae3d922f7fbde9290e0",
+      "19739c5dbdc0161fc17d44dfbcbe1322994573abac15926d6680b1ccef4c5cfe",
       STAGED_TIER1_CI_WORKFLOW_SHA256
     )
     assert_equal(

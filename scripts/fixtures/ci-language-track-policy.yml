@@ -137,8 +137,8 @@ jobs:
           PYTHONHOME: ""
           PYTHONPATH: ""
         run: |
-          /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -B -m unittest discover -s scripts -p 'test_check_language_tracks.py'
           /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -B scripts/check_language_tracks.py
+          /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -B -m unittest discover -s scripts -p 'test_check_language_tracks.py'
 
   # PR-3: native build+test+lint on the other 4 Tier-1 targets. No coverage
   # requirement here -- that's build-test-coverage's job alone, per D-014.
