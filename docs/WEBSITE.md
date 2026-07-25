@@ -23,9 +23,10 @@ The canonical landing page links to four crawlable evidence pages:
   scope, and the next planned delivery slice;
 - `/architecture/` separates the working compiler path and current crates from
   the target typed-Python architecture;
-- `/python-aot-compilers/` maps pycc, Codon, Nuitka, mypyc, and Cython by
-  language contract, output artifact, runtime model, and maturity using each
-  project's official documentation, with no unsupported benchmark claims;
+- `/python-aot-compilers/` maps pycc, LPython, Codon, Nuitka, mypyc, and
+  Cython by language contract, output artifact, runtime model, and current
+  positioning using each project's official documentation, with no unsupported
+  benchmark claims;
 - `/ai-native/` documents the AI-author/human-manager boundary, operating loop,
   safeguards, and public audit trail.
 
@@ -70,8 +71,11 @@ preview is `site/og.png`.
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
 site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
-missing official comparison sources, a missing pre-alpha comparison warning,
-or required metadata. The landing-page contract also requires exactly one
+missing official comparison sources, missing LPython alpha-status evidence, a
+missing pre-alpha comparison warning, or required metadata. The self-test
+independently removes LPython's official project source and alpha positioning
+so a newly covered compiler model cannot silently disappear. The landing-page
+contract also requires exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
 classic-script reference to relative `site.js` with no `type` override.
 The stylesheet tag permits only `rel="stylesheet"` and `href="styles.css"`;
@@ -87,10 +91,14 @@ references so the uploaded files cannot silently become browser-orphaned.
 The validator also rejects suppressing or execution-changing asset attributes,
 duplicate asset attributes, and HTML `base` elements, which could otherwise
 make browser behavior disagree with the checked attribute values.
-At viewports up to 680 CSS pixels, the footer must stack into one grid column
-and its navigation group must wrap within the available width. The validator
-and a negative mutation test preserve that narrow-screen overflow contract as
-the evidence-page link set grows.
+The landing-page hero grid lets both children shrink so the code example does
+not widen the document beyond a narrow viewport. Browser QA at 320 and 390 CSS
+pixels confirmed that the document width remains equal to the viewport while
+wide comparison tables scroll only inside their containers. At viewports up to
+680 CSS pixels, the footer must stack into one grid column and its navigation
+group must wrap within the available width; the validator and an independent
+negative mutation preserve that footer contract as the evidence-page link set
+grows.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots
