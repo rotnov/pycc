@@ -171,6 +171,7 @@ class MainHistoryAuditTests(unittest.TestCase):
                                     {
                                         "merged_at": merged_at,
                                         "base": {"ref": "main"},
+                                        "merge_commit_sha": commit,
                                     }
                                 ]
                             ),
@@ -200,6 +201,40 @@ class MainHistoryAuditTests(unittest.TestCase):
                         result(
                             [],
                             stdout=json.dumps([{"merged_at": None, "base": base}]),
+                        ),
+                    ]
+                )
+                self.assertEqual(
+                    audit.audit_main_history(
+                        "owner/repo",
+                        "a" * 40,
+                        commit,
+                        fake,
+                    ),
+                    [
+                        (
+                            "Invalid main history audit response",
+                            (f"Expected pull-request associations for {commit}"),
+                        )
+                    ],
+                )
+
+        for merge_commit_sha in (None, False, 0, "", {}, []):
+            with self.subTest(merge_commit_sha=merge_commit_sha):
+                fake = runner(
+                    [
+                        result([], stdout=f"{commit}\n"),
+                        result(
+                            [],
+                            stdout=json.dumps(
+                                [
+                                    {
+                                        "merged_at": "2026-07-24T20:00:00Z",
+                                        "base": {"ref": "main"},
+                                        "merge_commit_sha": merge_commit_sha,
+                                    }
+                                ]
+                            ),
                         ),
                     ]
                 )
@@ -267,10 +302,12 @@ class MainHistoryAuditTests(unittest.TestCase):
             {
                 "merged_at": "2026-07-24T20:00:00Z",
                 "base": {"ref": "release"},
+                "merge_commit_sha": commit,
             },
             {
                 "merged_at": "2026-07-24T20:00:00Z",
                 "base": {"ref": "main"},
+                "merge_commit_sha": commit,
             },
         ]
         fake = runner(
@@ -291,12 +328,14 @@ class MainHistoryAuditTests(unittest.TestCase):
                 {
                     "merged_at": "2026-07-24T20:00:00Z",
                     "base": {"ref": "release"},
+                    "merge_commit_sha": commit,
                 }
             ],
             [
                 {
                     "merged_at": "2026-07-24T20:05:00Z",
                     "base": {"ref": "main"},
+                    "merge_commit_sha": commit,
                 }
             ],
         ]
@@ -322,7 +361,13 @@ class MainHistoryAuditTests(unittest.TestCase):
                 result(
                     [],
                     stdout=json.dumps(
-                        [{"merged_at": "2026-07-24T20:00:00Z", "base": {"ref": "main"}}]
+                        [
+                            {
+                                "merged_at": "2026-07-24T20:00:00Z",
+                                "base": {"ref": "main"},
+                                "merge_commit_sha": first,
+                            }
+                        ]
                     ),
                 ),
                 result([], stdout=json.dumps([])),
@@ -332,13 +377,35 @@ class MainHistoryAuditTests(unittest.TestCase):
             audit.audit_main_history("owner/repo", "a" * 40, second, fake),
             [
                 (
-                    "Unassociated main commit",
+                    "Uncorrelated main commit",
                     (
-                        f"{second} is not associated with a merged pull "
-                        "request targeting main"
+                        f"{second} has no merged-main pull request whose "
+                        "merge commit was introduced by this push"
                     ),
                 )
             ],
+        )
+
+    def test_source_commits_correlate_with_merge_commit_in_same_push(self) -> None:
+        source = "b" * 40
+        merge = "c" * 40
+        association = [
+            {
+                "merged_at": "2026-07-24T20:00:00Z",
+                "base": {"ref": "main"},
+                "merge_commit_sha": merge,
+            }
+        ]
+        fake = runner(
+            [
+                result([], stdout=f"{source}\n{merge}\n"),
+                result([], stdout=json.dumps(association)),
+                result([], stdout=json.dumps(association)),
+            ]
+        )
+        self.assertEqual(
+            audit.audit_main_history("owner/repo", "a" * 40, merge, fake),
+            [],
         )
 
     def test_api_request_uses_the_association_endpoint_and_media_type(self) -> None:
@@ -348,8 +415,12 @@ class MainHistoryAuditTests(unittest.TestCase):
             calls.append((arguments, kwargs))
             return result(arguments, stdout="[]")
 
-        count, error = audit.merged_main_pr_count("owner/repo", "b" * 40, fake)
-        self.assertEqual(count, 0)
+        merge_shas, error = audit.merged_main_pr_merge_shas(
+            "owner/repo",
+            "b" * 40,
+            fake,
+        )
+        self.assertEqual(merge_shas, set())
         self.assertIsNone(error)
         self.assertEqual(
             calls,
@@ -373,22 +444,34 @@ class MainHistoryAuditTests(unittest.TestCase):
             ],
         )
 
-    def test_unassociated_commit_fails(self) -> None:
+    def test_historical_merge_association_does_not_prove_this_push(self) -> None:
         commit = "b" * 40
+        historical_merge = "d" * 40
         fake = runner(
             [
                 result([], stdout=f"{commit}\n"),
-                result([], stdout=json.dumps([])),
+                result(
+                    [],
+                    stdout=json.dumps(
+                        [
+                            {
+                                "merged_at": "2026-07-24T20:00:00Z",
+                                "base": {"ref": "main"},
+                                "merge_commit_sha": historical_merge,
+                            }
+                        ]
+                    ),
+                ),
             ]
         )
         self.assertEqual(
             audit.audit_main_history("owner/repo", "a" * 40, commit, fake),
             [
                 (
-                    "Unassociated main commit",
+                    "Uncorrelated main commit",
                     (
-                        f"{commit} is not associated with a merged pull "
-                        "request targeting main"
+                        f"{commit} has no merged-main pull request whose "
+                        "merge commit was introduced by this push"
                     ),
                 )
             ],

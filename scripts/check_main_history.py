@@ -53,11 +53,11 @@ def pushed_commits(
     return commits, None
 
 
-def merged_main_pr_count(
+def merged_main_pr_merge_shas(
     repository: str,
     commit_sha: str,
     runner: Runner = subprocess.run,
-) -> tuple[int | None, AuditError | None]:
+) -> tuple[set[str] | None, AuditError | None]:
     result = run_command(
         [
             "gh",
@@ -87,7 +87,12 @@ def merged_main_pr_count(
         and isinstance(item["base"].get("ref"), str)
         and (
             item.get("merged_at") is None
-            or (isinstance(item.get("merged_at"), str) and bool(item["merged_at"]))
+            or (
+                isinstance(item.get("merged_at"), str)
+                and bool(item["merged_at"])
+                and isinstance(item.get("merge_commit_sha"), str)
+                and bool(item["merge_commit_sha"])
+            )
         )
         for item in payload
     )
@@ -96,11 +101,13 @@ def merged_main_pr_count(
             "Invalid main history audit response",
             f"Expected pull-request associations for {commit_sha}",
         )
-    count = sum(
-        item.get("merged_at") is not None and item["base"].get("ref") == "main"
+    merge_shas = {
+        item["merge_commit_sha"]
         for item in payload
-    )
-    return count, None
+        if item.get("merged_at") is not None
+        and item["base"].get("ref") == "main"
+    }
+    return merge_shas, None
 
 
 def audit_main_history(
@@ -135,17 +142,22 @@ def audit_main_history(
         return [error]
 
     failures: list[AuditError] = []
+    pushed_commit_set = set(commits)
     for commit_sha in commits:
-        count, api_error = merged_main_pr_count(repository, commit_sha, runner)
+        merge_shas, api_error = merged_main_pr_merge_shas(
+            repository,
+            commit_sha,
+            runner,
+        )
         if api_error is not None:
             failures.append(api_error)
-        elif count == 0:
+        elif merge_shas is not None and not merge_shas & pushed_commit_set:
             failures.append(
                 (
-                    "Unassociated main commit",
+                    "Uncorrelated main commit",
                     (
-                        f"{commit_sha} is not associated with a merged pull "
-                        "request targeting main"
+                        f"{commit_sha} has no merged-main pull request whose "
+                        "merge commit was introduced by this push"
                     ),
                 )
             )
