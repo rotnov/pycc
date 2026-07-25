@@ -112,13 +112,21 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The currently staged PR-4 digest replaces the superseded single-job
-performance design with a split trust boundary. `frontend-perf-measure`
+The staged D-048 activation and steady-state digests replace the superseded
+single-job performance design with a split trust boundary. `frontend-perf-measure`
 executes pull-request benchmark code and uploads only Criterion's estimates
 JSON as untrusted data. `frontend-perf-gate` executes only the two sparse
 checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
 then validates the downloaded measurement against the canonical baseline.
 Artifact and checkout actions use immutable reviewed pins.
+
+The exact prospective bytes are checked in as inert
+`tests/fixtures/d48-activation-ci.yml` and
+`tests/fixtures/d48-steady-ci.yml`. Tests bind each fixture's whole-file digest
+to the allowlist constant and run the structural validator over both. The
+activation and cleanup changes replace `.github/workflows/ci.yml`
+byte-for-byte from the corresponding reviewed fixture; hand-reconstructing
+either workflow is not an accepted transition.
 
 The baseline lifecycle is fail-closed and main-owned. The gate queries only a
 successful `push` run of `ci.yml` on `main` whose `head_sha` is the exact PR
@@ -130,19 +138,30 @@ pull-request merge ref can weaken baseline provenance. The artifact is retained
 for 90 days and each successful main run refreshes it.
 
 The only missing-baseline exception is the one-time activation of the reviewed
-split workflow. The pull-request half is explicitly bound to PR #86 targeting
-`main` and run attempt 1; the gate resolves the live `main` head through the API
-and requires it to equal the event's base SHA, so a stale event or rerun cannot
-replay the exception. The first push half requires `refs/heads/main`, run
-attempt 1, an event `after` SHA equal to `github.sha`, and that SHA equal to the
-live `main` head resolved through the API. In both cases the predecessor
-`ci.yml` must have the exact pre-split digest already trusted here. Once the
-split workflow is active, a missing or expired main artifact fails closed. Both
-performance jobs are required by an exact fail-closed `ci-gate`; the trusted
-checker validates all three complete job shapes in addition to the prospective
-workflow digest. The PR-specific bootstrap is a transitional exception and
-must be retired in a follow-up reviewed digest after the first successful main
-artifact exists.
+split workflow. The pull-request half is bound to the single reviewed head SHA
+stored in the repository Actions variable `PERF_ACTIVATION_HEAD`, targets
+`main`, and permits only run attempt 1. Repository workflow variables are
+administrator-controlled state rather than pull-request content; the gate
+validates this value's exact lowercase 40-hex form and requires it to equal the
+event's head SHA. It separately resolves the live `main` head and requires it
+to equal the event's base SHA, so neither a synchronize event for a new head, a
+stale event, nor a rerun can replay the exception. The first push half requires
+`refs/heads/main`, run attempt 1, an event `after` SHA equal to `github.sha`,
+and that SHA equal to the live `main` head resolved through the API. In both
+cases the predecessor `ci.yml` must have the exact pre-split digest already
+trusted here. Once the split workflow is active, a missing or expired main
+artifact fails closed. Both performance jobs are required by an exact
+fail-closed `ci-gate`; the trusted checker validates all three complete job
+shapes in both prospective workflow digests. The bootstrap-free steady state
+requires the exact predecessor artifact unconditionally and compares without a
+skip expression. The activation variable, activation digest, and bootstrap are
+transitional and must be removed after the first successful main artifact
+exists; the steady-state digest remains and the variable is not a reusable
+feature flag. The
+administrator lifecycle, including absence/set/read-back evidence, a ban on
+post-set head changes, restart behavior when `main` advances, and verified
+deletion evidence, is normative in
+[REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md).
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would

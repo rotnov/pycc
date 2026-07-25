@@ -33,11 +33,14 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ]
 }.freeze
-PR4_SPLIT_PERF_CI_WORKFLOW_SHA256 =
-  "8edc932077fc235edecb99723450dc27022cbbfba4491eda05d6ff37167f48ce"
+D48_SPLIT_PERF_CI_WORKFLOW_SHA256 =
+  "5d3b2b8da766134e65d7e19a7ce61be2e68105c7b96f136cdb39f6d1161d62b2"
+D48_STEADY_PERF_CI_WORKFLOW_SHA256 =
+  "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
 TIER1_CI_WORKFLOW_SHA256S = [
   "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2",
-  PR4_SPLIT_PERF_CI_WORKFLOW_SHA256
+  D48_SPLIT_PERF_CI_WORKFLOW_SHA256,
+  D48_STEADY_PERF_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -165,8 +168,13 @@ PERF_BASELINE_VALIDATION_SCRIPT_TEMPLATE = <<~'SHELL'.strip
         echo "reviewed activation is allowed only for a pull request targeting main" >&2
         exit 1
       fi
-      if [ "$PR_NUMBER" != "86" ]; then
-        echo "reviewed activation is bound to pull request #86" >&2
+      if [ "${#TRUSTED_ACTIVATION_HEAD}" -ne 40 ] ||
+         printf '%s' "$TRUSTED_ACTIVATION_HEAD" | LC_ALL=C grep -q '[^0-9a-f]'; then
+        echo "trusted activation head is not one lowercase 40-hex commit SHA" >&2
+        exit 1
+      fi
+      if [ "$PR_HEAD_SHA" != "$TRUSTED_ACTIVATION_HEAD" ]; then
+        echo "reviewed activation is bound to one exact pull request head" >&2
         exit 1
       fi
       current_main_sha="$(
@@ -243,6 +251,13 @@ SPLIT_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
     target/criterion/pycc_check_frontend_fixture/current/estimates.json \
     target/criterion/pycc_check_frontend_fixture/previous/estimates.json
 SHELL
+STEADY_PERF_BASELINE_REQUIRE_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  if [ ! -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
+    echo "the exact predecessor has no non-expired canonical frontend timing" >&2
+    exit 1
+  fi
+SHELL
 SPLIT_PERF_GATE_STEPS = [
   {
     "name" => "Check out only the reviewed performance checker",
@@ -291,7 +306,8 @@ SPLIT_PERF_GATE_STEPS = [
       "GH_TOKEN" => "${{ github.token }}",
       "PR_BASE_REF" => "${{ github.event.pull_request.base.ref }}",
       "PR_BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
-      "PR_NUMBER" => "${{ github.event.pull_request.number }}",
+      "PR_HEAD_SHA" => "${{ github.event.pull_request.head.sha }}",
+      "TRUSTED_ACTIVATION_HEAD" => "${{ vars.PERF_ACTIVATION_HEAD }}",
       "PUSH_AFTER_SHA" => "${{ github.event.after }}",
       "PUSH_BEFORE_SHA" => "${{ github.event.before }}"
     },
@@ -311,6 +327,15 @@ SPLIT_PERF_GATE_STEPS = [
     "run" => SPLIT_PERF_COMPARE_SCRIPT
   }
 ].freeze
+STEADY_SPLIT_PERF_GATE_STEPS = [
+  *SPLIT_PERF_GATE_STEPS.first(5),
+  {
+    "name" => "Require canonical main frontend timing",
+    "run" => STEADY_PERF_BASELINE_REQUIRE_SCRIPT
+  },
+  SPLIT_PERF_GATE_STEPS.fetch(6),
+  SPLIT_PERF_GATE_STEPS.fetch(7).reject { |key, _value| key == "if" }
+].freeze
 SPLIT_PERF_MEASURE_JOB = {
   "runs-on" => "macos-14",
   "permissions" => { "contents" => "read" },
@@ -324,6 +349,15 @@ SPLIT_PERF_GATE_JOB = {
     "contents" => "read"
   },
   "steps" => SPLIT_PERF_GATE_STEPS
+}.freeze
+STEADY_SPLIT_PERF_GATE_JOB = {
+  "needs" => "frontend-perf-measure",
+  "runs-on" => "macos-14",
+  "permissions" => {
+    "actions" => "read",
+    "contents" => "read"
+  },
+  "steps" => STEADY_SPLIT_PERF_GATE_STEPS
 }.freeze
 SPLIT_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
@@ -604,7 +638,7 @@ def validate_perf_gate_baseline_lifecycle(workflow_text, source)
           "#{source}: split performance measurement requires frontend-perf-gate"
   end
   perf_job = yaml_value(perf_job_node, "#{source} frontend-perf-gate job")
-  unless perf_job == SPLIT_PERF_GATE_JOB
+  unless [SPLIT_PERF_GATE_JOB, STEADY_SPLIT_PERF_GATE_JOB].include?(perf_job)
     raise RoadmapEvidenceError,
           "#{source}: frontend-perf-gate must match the reviewed isolated comparison job"
   end

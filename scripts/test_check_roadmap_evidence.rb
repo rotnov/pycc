@@ -13,6 +13,12 @@ require_relative "check_roadmap_evidence"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
+  D48_ACTIVATION_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d48-activation-ci.yml"
+  D48_STEADY_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d48-steady-ci.yml"
+  ACTIVATION_HEAD_SHA = "a" * 40
+  DIFFERENT_HEAD_SHA = "b" * 40
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -94,12 +100,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
-  def split_perf_workflow
+  def split_perf_workflow(steady: false)
     jobs = {
       "frontend-perf-measure" =>
         Marshal.load(Marshal.dump(SPLIT_PERF_MEASURE_JOB)),
       "frontend-perf-gate" =>
-        Marshal.load(Marshal.dump(SPLIT_PERF_GATE_JOB)),
+        Marshal.load(
+          Marshal.dump(
+            steady ? STEADY_SPLIT_PERF_GATE_JOB : SPLIT_PERF_GATE_JOB
+          )
+        ),
       "ci-gate" =>
         Marshal.load(Marshal.dump(SPLIT_PERF_CI_GATE_JOB))
     }
@@ -113,7 +123,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     base_ref: "main",
     base_sha: "current-main-sha",
     current_main_sha: "current-main-sha",
-    pr_number: "86",
+    pr_head_sha: ACTIVATION_HEAD_SHA,
+    trusted_activation_head: ACTIVATION_HEAD_SHA,
     push_after_sha: "activation-sha",
     push_before_sha: "pre-split-sha",
     github_sha: "activation-sha",
@@ -165,7 +176,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
         "GITHUB_REPOSITORY" => "rotnov/pycc",
         "PR_BASE_REF" => base_ref,
         "PR_BASE_SHA" => base_sha,
-        "PR_NUMBER" => pr_number,
+        "PR_HEAD_SHA" => pr_head_sha,
+        "TRUSTED_ACTIVATION_HEAD" => trusted_activation_head,
         "PUSH_AFTER_SHA" => push_after_sha,
         "PUSH_BEFORE_SHA" => push_before_sha,
         "STUB_CURRENT_MAIN_SHA" => current_main_sha,
@@ -677,12 +689,35 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_tier1_workflow_allowlist_stages_the_split_frontend_perf_gate_digest
     # Per docs/TESTING.md's staged-update procedure: the reviewed prospective
-    # digest for the pending split measurement/comparison ci.yml revision is
-    # appended here while the current digest remains active, ahead of the pull
-    # request that activates the workflow and retires the current digest.
+    # digests for activation and bootstrap-free steady state are appended while
+    # the current digest remains active, ahead of the two pull requests that
+    # activate the workflow and then retire the transition.
     assert_includes(
       TIER1_CI_WORKFLOW_SHA256S,
-      PR4_SPLIT_PERF_CI_WORKFLOW_SHA256
+      D48_SPLIT_PERF_CI_WORKFLOW_SHA256
+    )
+    assert_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      D48_STEADY_PERF_CI_WORKFLOW_SHA256
+    )
+  end
+
+  def test_d48_workflow_digests_match_the_reviewed_inert_fixtures
+    assert_equal(
+      D48_SPLIT_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D48_ACTIVATION_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_equal(
+      D48_STEADY_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D48_STEADY_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_perf_gate_baseline_lifecycle(
+      D48_ACTIVATION_WORKFLOW_FIXTURE.read,
+      D48_ACTIVATION_WORKFLOW_FIXTURE.to_s
+    )
+    assert validate_perf_gate_baseline_lifecycle(
+      D48_STEADY_WORKFLOW_FIXTURE.read,
+      D48_STEADY_WORKFLOW_FIXTURE.to_s
     )
   end
 
@@ -698,6 +733,27 @@ class RoadmapEvidenceCliTest < Minitest::Test
       split_perf_workflow,
       "ci.yml"
     )
+  end
+
+  def test_accepts_the_reviewed_steady_state_perf_trust_boundary
+    assert validate_perf_gate_baseline_lifecycle(
+      split_perf_workflow(steady: true),
+      "ci.yml"
+    )
+  end
+
+  def test_rejects_steady_state_gate_without_a_canonical_baseline_requirement
+    workflow = split_perf_workflow(steady: true) do |jobs|
+      require_baseline = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Require canonical main frontend timing"
+      end
+      require_baseline["run"] = "true"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
   end
 
   def test_rejects_split_measurement_with_a_mutable_upload_action
@@ -815,7 +871,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
       end
       validate["run"] = validate.fetch("run").sub(
         PRE_SPLIT_PERF_CI_WORKFLOW_SHA256,
-        PR4_SPLIT_PERF_CI_WORKFLOW_SHA256
+        D48_SPLIT_PERF_CI_WORKFLOW_SHA256
       )
     end
 
@@ -871,15 +927,27 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_empty output
   end
 
-  def test_baseline_validation_rejects_another_pull_request
+  def test_baseline_validation_rejects_a_fresh_run_for_a_new_pull_request_head
     _stdout, stderr, status, output = run_perf_baseline_validation(
       event_name: "pull_request",
-      github_ref: "refs/pull/87/merge",
-      pr_number: "87"
+      github_ref: "refs/pull/86/merge",
+      pr_head_sha: DIFFERENT_HEAD_SHA
     )
 
     refute status.success?
-    assert_includes stderr, "bound to pull request #86"
+    assert_includes stderr, "bound to one exact pull request head"
+    assert_empty output
+  end
+
+  def test_baseline_validation_rejects_an_invalid_trusted_activation_head
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      trusted_activation_head: "#{ACTIVATION_HEAD_SHA}\n#{DIFFERENT_HEAD_SHA}"
+    )
+
+    refute status.success?
+    assert_includes stderr, "not one lowercase 40-hex commit SHA"
     assert_empty output
   end
 
@@ -970,7 +1038,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
       event_name: "pull_request",
       github_ref: "refs/pull/999/merge",
       base_ref: "release",
-      pr_number: "999",
       baseline_present: true
     )
 
