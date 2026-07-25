@@ -311,6 +311,30 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_rejects_headings_hidden_inside_raw_html_blocks
+    roadmap = <<~MARKDOWN
+      # Wrong Roadmap
+
+      <script>
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+      </script>
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: coverage_workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "raw HTML blocks are not supported"
+  end
+
   def test_rejects_tab_indented_pseudo_headings
     roadmap = <<~MARKDOWN
       \t# pycc Roadmap

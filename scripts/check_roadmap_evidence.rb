@@ -12,6 +12,8 @@ LIST_ITEM =
 CHECKED_ITEM_BODY = /\A\[[xX]\][ \t]+(?<claim>.*)$/
 ATX_HEADING = /\A {0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
 SETEXT_UNDERLINE = /\A {0,3}(?:=+|-+)[ \t]*(?:\r?\n)?\z/
+RAW_HTML_BLOCK_START =
+  /\A {0,3}<(?:\/?[A-Za-z][A-Za-z0-9-]*(?=[ \t\/>])|\?|![A-Z]|!\[CDATA\[)/i
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
 EVIDENCE_CLAIMS = {
   "ci-tier1-cross-compile" =>
@@ -393,6 +395,11 @@ def validate_roadmap(text)
     list_item = rendered_list_item(fence_candidate, containers)
     block_content = list_item ? list_item[:body] : normalized_container_content
     content_indent = list_item[:content_indent] if list_item
+
+    if block_content && RAW_HTML_BLOCK_START.match?(block_content)
+      raise RoadmapEvidenceError,
+            "line #{line_number}: raw HTML blocks are not supported in the roadmap"
+    end
 
     opening = block_content && opening_fence(block_content)
     if opening
