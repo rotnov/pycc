@@ -94,6 +94,13 @@ The initial `ci-build-test-coverage-100` evidence requires all of the following:
   `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
   inside a clean environment owned by the unprivileged `nobody` user.
 
+That workflow proof is also an unconditional repository invariant. The trusted
+checker validates it even while the roadmap claim is unchecked or absent, so a
+pull request cannot remove every evidence marker and replace the required
+coverage job with a successful no-op. The marker controls whether the delivery
+claim may be shown as complete; it never controls whether hard coverage is
+enforced.
+
 The `ci-tier1-cross-compile` evidence binds an allowlist of exact reviewed
 `ci.yml` byte digests that provide the five Tier-1 native targets, cross-host
 build and execution proof, and aggregate `ci-gate`. Because a workflow can
