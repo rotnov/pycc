@@ -67,8 +67,9 @@ the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
 site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
 or required metadata. The landing-page contract also requires exactly one
-relative `styles.css` stylesheet link and exactly one deferred relative
-`site.js` script reference. Table-driven negative controls cover missing,
+relative `styles.css` stylesheet link and exactly one deferred, executable
+classic-script reference to relative `site.js` with no `type` override.
+Table-driven negative controls cover missing,
 empty, duplicate, absolute, local-only, and differently targeted asset
 references so the uploaded files cannot silently become browser-orphaned.
 The validator also rejects duplicate asset attributes and HTML `base` elements,

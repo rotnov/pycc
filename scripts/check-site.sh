@@ -261,6 +261,8 @@ if external_script.get("src") != "site.js":
     raise SystemExit("External script must reference site.js relatively")
 if "defer" not in external_script:
     raise SystemExit("site.js must use deferred loading")
+if "type" in external_script:
+    raise SystemExit("site.js must use the executable classic-script default")
 
 software_sources = []
 web_pages = []

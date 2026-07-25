@@ -77,6 +77,11 @@ mutations = {
     "non-deferred script": original.replace(
         '<script defer src="site.js">', '<script src="site.js">', 1
     ),
+    "non-executable script type": original.replace(
+        '<script defer src="site.js">',
+        '<script type="text/plain" defer src="site.js">',
+        1,
+    ),
     "base URL override": original.replace(
         "  <head>", '  <head>\n    <base href="https://example.com/">', 1
     ),
