@@ -41,7 +41,7 @@ def runner(
 
 
 class MainHistoryAuditTests(unittest.TestCase):
-    def test_workflow_never_executes_the_pushed_checker(self) -> None:
+    def test_workflow_selects_pre_push_or_bootstrap_checker(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1]
             / ".github"
