@@ -82,8 +82,10 @@ The competing trust-anchor work no longer blocks the compiler deliverable, and
 the reviewed replacement no longer relies on ref-scoped cache fallback. The
 gate is now delivered through a staged trust digest, an exact reviewed
 activation head, exact-predecessor artifacts from successful `main` pushes,
-and an immediate post-seed cleanup. The staging commit does not claim the gate
-is active; the following activation and cleanup changes complete D-048 before
+and an immediate post-seed cleanup. D-049 preserves the exact pre-split
+workflow as an inert predecessor fixture so activation tests remain hermetic
+after the live workflow changes. The staging commits do not claim the gate is
+active; the following activation and cleanup changes complete D-048 before
 PR-5 work proceeds. This remains deliberately lightweight and distinct from
 the full pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer
 7), which stays out of scope until v0.2.
