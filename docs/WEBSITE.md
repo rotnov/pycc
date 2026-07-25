@@ -66,7 +66,22 @@ important links materially change. The social preview is `site/og.png`.
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
 site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
-or required metadata.
+or required metadata. The landing-page contract also requires exactly one
+relative `styles.css` stylesheet link and exactly one deferred, executable
+classic-script reference to relative `site.js` with no `type` override.
+The stylesheet tag permits only `rel="stylesheet"` and `href="styles.css"`;
+the non-self-closing script tag permits only `defer` and `src="site.js"`.
+References inside inert `template` or `noscript` content do not satisfy the
+contract. All `link` and `script` elements are rejected anywhere inside SVG or
+MathML subtrees because foreign scripts use different URL attributes and HTML
+integration points can change descendant namespaces. Valid self-closing void
+and non-asset foreign-content elements remain accepted.
+Table-driven negative controls cover missing,
+empty, duplicate, absolute, local-only, and differently targeted asset
+references so the uploaded files cannot silently become browser-orphaned.
+The validator also rejects suppressing or execution-changing asset attributes,
+duplicate asset attributes, and HTML `base` elements, which could otherwise
+make browser behavior disagree with the checked attribute values.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots
@@ -134,6 +149,9 @@ GitHub query and rolling traffic observations are preserved in
 [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) using a fixed top-50 ranking
 contract and timestamped API snapshots so changes can be compared without
 rewriting earlier responses or attributing automation traffic to SEO.
+The same ledger records Search Console URL Inspection, sitemap-processing, and
+performance-report states independently because none of those signals is a
+substitute for the others.
 
 ## Publication
 
