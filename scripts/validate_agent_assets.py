@@ -45,6 +45,14 @@ FEEDBACK_CONSENT_GUARDS = (
     "sanitize every outbound query",
     "user-authored code",
 )
+ALPHA_EVAL_RUNNERS = {
+    "pycc": {"build-and-run-self-created-fixture"},
+    "pycc-feedback": {
+        "prepare-sanitized-draft-without-write",
+        "refuse-private-automatic-publication",
+        "require-exact-payload-preview",
+    },
+}
 
 
 def load_json(
@@ -456,6 +464,30 @@ def validate_alpha_skill_contracts(
         if skill_name != name or not isinstance(cases, list) or len(cases) < 2:
             failures.append(
                 f"{evals_relative}: must define at least two evals for {name}"
+            )
+            continue
+        if not all(
+            isinstance(case, dict)
+            and isinstance(case.get("id"), int)
+            and isinstance(case.get("prompt"), str)
+            and bool(case["prompt"].strip())
+            and isinstance(case.get("expected_output"), str)
+            and bool(case["expected_output"].strip())
+            for case in cases
+        ):
+            failures.append(f"{evals_relative}: contains a malformed eval")
+            continue
+        identifiers = [case["id"] for case in cases]
+        if len(identifiers) != len(set(identifiers)):
+            failures.append(f"{evals_relative}: eval ids must be unique")
+        runners = {
+            case["runner"]
+            for case in cases
+            if isinstance(case.get("runner"), str)
+        }
+        if runners != ALPHA_EVAL_RUNNERS[name]:
+            failures.append(
+                f"{evals_relative}: must bind the complete executable runner set"
             )
 
     feedback_path = skills_root / "pycc-feedback" / "SKILL.md"

@@ -143,6 +143,7 @@ class AgentAssetValidationTests(unittest.TestCase):
         *,
         remove_feedback_text: str | None = None,
         pycc_eval_count: int | None = None,
+        remove_pycc_runner: bool = False,
     ) -> list[str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -161,6 +162,11 @@ class AgentAssetValidationTests(unittest.TestCase):
                 evals_path = root / "pycc" / "evals" / "evals.json"
                 evals = json.loads(evals_path.read_text(encoding="utf-8"))
                 evals["evals"] = evals["evals"][:pycc_eval_count]
+                evals_path.write_text(json.dumps(evals), encoding="utf-8")
+            if remove_pycc_runner:
+                evals_path = root / "pycc" / "evals" / "evals.json"
+                evals = json.loads(evals_path.read_text(encoding="utf-8"))
+                evals["evals"][0].pop("runner")
                 evals_path.write_text(json.dumps(evals), encoding="utf-8")
             failures: list[str] = []
             validator.validate_alpha_skill_contracts(
@@ -181,6 +187,12 @@ class AgentAssetValidationTests(unittest.TestCase):
     def test_alpha_skill_requires_multiple_evals(self) -> None:
         failures = self.alpha_contract_failures(pycc_eval_count=1)
         self.assertTrue(any("at least two evals" in item for item in failures))
+
+    def test_alpha_skill_requires_executable_eval_runners(self) -> None:
+        failures = self.alpha_contract_failures(remove_pycc_runner=True)
+        self.assertTrue(
+            any("complete executable runner set" in item for item in failures)
+        )
 
     def write_skill(
         self,

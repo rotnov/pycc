@@ -3,8 +3,9 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Compile examples/hello.py with the pycc in this checkout, run the result, and tell me exactly what happened.",
-      "expected_output": "Verifies the current implementation, builds the workspace and runtime first, uses a temporary binary output, and reports the exact command, exit code, stdout, and stderr."
+      "prompt": "Create a temporary self-contained typed Python program that prints 42, compile it with the pycc in this checkout, run the result, and tell me exactly what happened.",
+      "expected_output": "Verifies the current implementation, builds the workspace and runtime first, creates a unique self-contained temporary fixture and binary output, and reports the exact command, exit code, stdout, and stderr.",
+      "runner": "build-and-run-self-created-fixture"
     },
     {
       "id": 2,
