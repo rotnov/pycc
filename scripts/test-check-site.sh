@@ -91,6 +91,35 @@ mutations = {
         f"  <body>\n    <noscript>\n{stylesheet}\n    </noscript>",
         1,
     ),
+    "stylesheet inside foreign SVG content": original.replace(
+        stylesheet,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <svg>\n{stylesheet}\n    </svg>",
+        1,
+    ),
+    "additional stylesheet inside an SVG HTML integration point": (
+        original.replace(
+            "  <body>",
+            "  <body>\n"
+            "    <svg><foreignObject>"
+            '<link rel="stylesheet" href="other.css">'
+            "</foreignObject></svg>",
+            1,
+        )
+    ),
+    "additional SVG href script": original.replace(
+        "  <body>",
+        '  <body>\n    <svg><script href="other.js"></script></svg>',
+        1,
+    ),
+    "additional self-closing SVG href script": original.replace(
+        "  <body>",
+        '  <body>\n    <svg><script href="other.js" /></svg>',
+        1,
+    ),
     "missing script": original.replace(script, "", 1),
     "empty script target": original.replace('src="site.js"', 'src=""', 1),
     "duplicate script outside the head": original.replace(
@@ -141,6 +170,25 @@ mutations = {
         f"  <body>\n    <noscript>\n{script}\n    </noscript>",
         1,
     ),
+    "script inside foreign MathML content": original.replace(
+        script,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <math>\n{script}\n    </math>",
+        1,
+    ),
+    "additional script inside a MathML HTML integration point": (
+        original.replace(
+            "  <body>",
+            "  <body>\n"
+            '    <math><annotation-xml encoding="text/html">'
+            '<script src="other.js"></script>'
+            "</annotation-xml></math>",
+            1,
+        )
+    ),
     "self-closing external script": original.replace(
         script,
         '    <script defer src="site.js" />',
@@ -165,6 +213,25 @@ void_result = subprocess.run(
 )
 if void_result.returncode != 0:
     raise SystemExit("Validator rejected a self-closing void element")
+
+index_path.write_text(
+    original.replace(
+        "  <body>",
+        '  <body>\n    <svg><path d="M0 0h1v1z" /></svg>',
+        1,
+    )
+)
+foreign_result = subprocess.run(
+    [str(checker)],
+    cwd=repo_root,
+    env=environment,
+    capture_output=True,
+    text=True,
+    check=False,
+    timeout=10,
+)
+if foreign_result.returncode != 0:
+    raise SystemExit("Validator rejected a self-closing foreign element")
 
 for description, mutated in mutations.items():
     index_path.write_text(mutated)

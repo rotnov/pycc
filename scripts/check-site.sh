@@ -47,6 +47,7 @@ import sys
 class MetadataParser(HTMLParser):
     hidden_body_tags = {"script", "style", "template", "noscript"}
     inert_asset_tags = {"template", "noscript"}
+    foreign_root_tags = {"math", "svg"}
     void_tags = {
         "area",
         "base",
@@ -70,6 +71,7 @@ class MetadataParser(HTMLParser):
         self.in_json_ld = False
         self.in_body = False
         self.inert_element_stack = []
+        self.foreign_root_stack = []
         self.hidden_body_depth = 0
         self.body_element_stack = []
         self.titles = []
@@ -91,14 +93,25 @@ class MetadataParser(HTMLParser):
         attributes = dict(attrs)
         if tag in self.inert_asset_tags:
             self.inert_element_stack.append(tag)
+        if tag in self.foreign_root_tags:
+            self.foreign_root_stack.append(tag)
+        if self.foreign_root_stack and tag in {"link", "script"}:
+            raise SystemExit(
+                "Link and script elements are not allowed inside SVG or MathML"
+            )
         if tag == "base":
             self.base_elements.append(attributes)
-        elif tag == "link" and not self.inert_element_stack:
+        elif (
+            tag == "link"
+            and not self.inert_element_stack
+            and not self.foreign_root_stack
+        ):
             self.asset_links.append(attributes)
         elif (
             tag == "script"
             and "src" in attributes
             and not self.inert_element_stack
+            and not self.foreign_root_stack
         ):
             self.external_scripts.append(attributes)
         if tag == "body":
@@ -132,11 +145,25 @@ class MetadataParser(HTMLParser):
                 self.current_json_ld = []
 
     def handle_startendtag(self, tag, attrs):
+        if self.foreign_root_stack and tag in {"link", "script"}:
+            raise SystemExit(
+                "Link and script elements are not allowed inside SVG or MathML"
+            )
+        if self.foreign_root_stack or tag in self.foreign_root_tags:
+            return
         if tag not in self.void_tags:
             raise SystemExit(f"<{tag}> must use an explicit closing tag")
         self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
+        if tag in self.foreign_root_tags:
+            if not self.foreign_root_stack:
+                raise SystemExit(f"Unexpected closing foreign root: {tag}")
+            expected_tag = self.foreign_root_stack.pop()
+            if tag != expected_tag:
+                raise SystemExit(
+                    f"Mismatched foreign roots: expected {expected_tag}, found {tag}"
+                )
         if tag in self.inert_asset_tags:
             if not self.inert_element_stack:
                 raise SystemExit(f"Unexpected closing {tag} tag")
@@ -190,6 +217,8 @@ parser.feed(index_path.read_text())
 
 if parser.inert_element_stack:
     raise SystemExit(f"Unclosed inert element: {parser.inert_element_stack[-1]}")
+if parser.foreign_root_stack:
+    raise SystemExit(f"Unclosed foreign root: {parser.foreign_root_stack[-1]}")
 if parser.base_elements:
     raise SystemExit("Base elements are not allowed because assets must resolve locally")
 

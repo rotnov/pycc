@@ -72,7 +72,10 @@ classic-script reference to relative `site.js` with no `type` override.
 The stylesheet tag permits only `rel="stylesheet"` and `href="styles.css"`;
 the non-self-closing script tag permits only `defer` and `src="site.js"`.
 References inside inert `template` or `noscript` content do not satisfy the
-contract.
+contract. All `link` and `script` elements are rejected anywhere inside SVG or
+MathML subtrees because foreign scripts use different URL attributes and HTML
+integration points can change descendant namespaces. Valid self-closing void
+and non-asset foreign-content elements remain accepted.
 Table-driven negative controls cover missing,
 empty, duplicate, absolute, local-only, and differently targeted asset
 references so the uploaded files cannot silently become browser-orphaned.
