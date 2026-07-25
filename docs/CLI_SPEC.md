@@ -36,9 +36,10 @@ encodings are unreadable-input errors until pycc has a decoder with mappings
 that exactly match Python's codec. A BOM/cookie conflict or malformed encoded
 input is also an unreadable-input error. Runs of `-` and `_` in declared codec
 labels are collapsed before alias resolution, matching Python's ASCII codec
-normalization for the cookie grammar. After decoding, LF, CRLF, and CR physical
-line endings are normalized to LF before parsing and diagnostic span
-calculation.
+normalization for the cookie grammar. BOM agreement uses the tokenizer's
+stricter normalization: case is folded, `_` becomes `-`, and repeated
+separators are not collapsed. After decoding, LF, CRLF, and CR physical line
+endings are normalized to LF before parsing and diagnostic span calculation.
 
 For the other commands, the target contract remains `PATH` = file or project
 directory (using `pycc.toml`), with an omitted path meaning the current

@@ -34,7 +34,7 @@ pub fn decode_python_source(bytes: &[u8]) -> Result<String, String> {
     if has_utf8_bom
         && declared
             .as_deref()
-            .is_some_and(|label| normalize_python_encoding(label) != "utf-8")
+            .is_some_and(|label| !bom_allows_encoding_cookie(label))
     {
         return Err("UTF-8 BOM conflicts with the declared source encoding".to_string());
     }
@@ -116,6 +116,21 @@ fn resolve_encoding(label: &str) -> Option<SourceEncoding> {
         }
         _ => None,
     }
+}
+
+fn bom_allows_encoding_cookie(label: &str) -> bool {
+    let normalized = label
+        .chars()
+        .take(12)
+        .map(|character| {
+            if character == '_' {
+                '-'
+            } else {
+                character.to_ascii_lowercase()
+            }
+        })
+        .collect::<String>();
+    normalized == "utf-8" || normalized.starts_with("utf-8-")
 }
 
 fn normalize_python_encoding(label: &str) -> String {
@@ -221,9 +236,19 @@ mod tests {
     fn rejects_unknown_encodings_and_bom_conflicts() {
         assert!(decode_python_source(b"# coding: utf-42\nprint(42)\n").is_err());
         assert!(decode_python_source(b"\xef\xbb\xbf# coding: latin-1\nprint(42)\n").is_err());
-        for alias in ["utf8", "cp65001", "utf8_ucs4"] {
+        for alias in ["utf8", "cp65001", "utf8_ucs4", "utf--8", "utf__8"] {
             let source = format!("\u{feff}# coding: {alias}\nprint(42)\n");
             assert!(decode_python_source(source.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn bom_cookie_agreement_uses_cpython_tokenizer_normalization() {
+        for alias in ["utf-8", "UTF_8", "utf-8-sig", "utf_8_sig"] {
+            assert!(bom_allows_encoding_cookie(alias), "alias: {alias}");
+        }
+        for alias in ["utf8", "utf--8", "utf__8", "cp65001"] {
+            assert!(!bom_allows_encoding_cookie(alias), "alias: {alias}");
         }
     }
 

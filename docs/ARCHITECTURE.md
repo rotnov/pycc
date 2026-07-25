@@ -50,10 +50,11 @@ top-level execution does not invoke that path until after the later definition.
 The slice represents only undecorated synchronous zero-argument functions with
 an explicit `-> None` return annotation; other signatures produce `C0001`
 before their bodies are lowered. `print()` with one integer literal is the only
-built-in call lowered by this slice; other Python 3.14 built-in functions
-produce `C0001` rather than an undefined-name diagnostic unless an earlier
-module definition shadows that built-in. Function redefinition also produces
-`C0001` until HIR call sites carry the identity of the active binding.
+built-in call lowered by this slice; other callable Python 3.14 built-ins,
+including exception classes, produce `C0001` rather than an undefined-name
+diagnostic unless an earlier module function shadows that built-in. Function
+redefinition also produces `C0001` until HIR call sites carry the identity of
+the active binding.
 
 Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [DECISIONS.md](./DECISIONS.md) D-003).
 

@@ -125,7 +125,25 @@ fn lower_stmt(
         ));
     }
 
-    if name.id.as_str() == "print" {
+    let name = name.id.as_str();
+    if module_functions.contains(name) {
+        let [] = arguments.args.as_ref() else {
+            return Err(unsupported(
+                format!(
+                    "calling a user-defined function with arguments is not supported yet -- only \
+                 zero-argument calls like `{name}()`",
+                ),
+                stmt.range(),
+            ));
+        };
+        calls.push(FunctionCall {
+            name: name.to_string(),
+            range: func.range(),
+        });
+        Ok(HirStmt::CallUserFunction {
+            name: name.to_string(),
+        })
+    } else if name == "print" {
         let [Expr::NumberLiteral(lit)] = arguments.args.as_ref() else {
             return Err(unsupported(
                 "print() must take exactly one integer literal argument so far",
@@ -150,26 +168,16 @@ fn lower_stmt(
             return Err(unsupported(
                 format!(
                     "calling a user-defined function with arguments is not supported yet -- only \
-                 zero-argument calls like `{}()`",
-                    name.id.as_str(),
+                 zero-argument calls like `{name}()`",
                 ),
                 stmt.range(),
             ));
         };
-        if !module_functions.contains(name.id.as_str()) {
-            return if is_python_builtin(name.id.as_str()) {
-                Err(unsupported_builtin(name.id.as_str(), name.range()))
-            } else {
-                Err(undefined_function(name.id.as_str(), name.range()))
-            };
+        if is_python_builtin(name) {
+            Err(unsupported_builtin(name, func.range()))
+        } else {
+            Err(undefined_function(name, func.range()))
         }
-        calls.push(FunctionCall {
-            name: name.id.as_str().to_string(),
-            range: name.range(),
-        });
-        Ok(HirStmt::CallUserFunction {
-            name: name.id.as_str().to_string(),
-        })
     }
 }
 
@@ -237,7 +245,76 @@ fn unsupported_builtin(name: &str, range: TextRange) -> Diagnostic {
 fn is_python_builtin(name: &str) -> bool {
     matches!(
         name,
-        "__import__"
+        "__build_class__"
+            | "__import__"
+            | "ArithmeticError"
+            | "AssertionError"
+            | "AttributeError"
+            | "BaseException"
+            | "BaseExceptionGroup"
+            | "BlockingIOError"
+            | "BrokenPipeError"
+            | "BufferError"
+            | "BytesWarning"
+            | "ChildProcessError"
+            | "ConnectionAbortedError"
+            | "ConnectionError"
+            | "ConnectionRefusedError"
+            | "ConnectionResetError"
+            | "DeprecationWarning"
+            | "EOFError"
+            | "EncodingWarning"
+            | "Exception"
+            | "ExceptionGroup"
+            | "FileExistsError"
+            | "FileNotFoundError"
+            | "FloatingPointError"
+            | "FutureWarning"
+            | "GeneratorExit"
+            | "ImportError"
+            | "ImportWarning"
+            | "IndentationError"
+            | "IndexError"
+            | "InterruptedError"
+            | "IsADirectoryError"
+            | "KeyError"
+            | "KeyboardInterrupt"
+            | "LookupError"
+            | "MemoryError"
+            | "ModuleNotFoundError"
+            | "NameError"
+            | "NotADirectoryError"
+            | "NotImplementedError"
+            | "OSError"
+            | "OverflowError"
+            | "PendingDeprecationWarning"
+            | "PermissionError"
+            | "ProcessLookupError"
+            | "PythonFinalizationError"
+            | "RecursionError"
+            | "ReferenceError"
+            | "ResourceWarning"
+            | "RuntimeError"
+            | "RuntimeWarning"
+            | "StopAsyncIteration"
+            | "StopIteration"
+            | "SyntaxError"
+            | "SyntaxWarning"
+            | "SystemError"
+            | "SystemExit"
+            | "TabError"
+            | "TimeoutError"
+            | "TypeError"
+            | "UnboundLocalError"
+            | "UnicodeDecodeError"
+            | "UnicodeEncodeError"
+            | "UnicodeError"
+            | "UnicodeTranslateError"
+            | "UnicodeWarning"
+            | "UserWarning"
+            | "ValueError"
+            | "Warning"
+            | "ZeroDivisionError"
             | "abs"
             | "aiter"
             | "all"
@@ -549,6 +626,8 @@ first()
         for source in [
             "input()\n",
             "int()\n",
+            "Exception()\n",
+            "ValueError()\n",
             "input()\n\ndef input() -> None:\n    print(1)\n",
         ] {
             let module = pycc_parser_test_helper::parse(source);
@@ -564,6 +643,118 @@ first()
         let module = pycc_parser_test_helper::parse(source);
         let hir = lower(&module).unwrap();
         assert_eq!(hir.items.len(), 2);
+    }
+
+    #[test]
+    fn a_module_function_named_print_shadows_the_print_builtin() {
+        let source = "\
+def print() -> None:
+    helper()
+
+def helper() -> None:
+    print()
+
+helper()
+";
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower(&module).unwrap();
+
+        assert_eq!(
+            hir.items,
+            vec![
+                HirItem::Function {
+                    name: "print".to_string(),
+                    body: vec![HirStmt::CallUserFunction {
+                        name: "helper".to_string()
+                    }],
+                },
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    body: vec![HirStmt::CallUserFunction {
+                        name: "print".to_string()
+                    }],
+                },
+                HirItem::TopLevelStmt(HirStmt::CallUserFunction {
+                    name: "helper".to_string()
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_python_3_14_builtin_exception_class_is_classified_as_a_builtin() {
+        for name in [
+            "BaseException",
+            "BaseExceptionGroup",
+            "GeneratorExit",
+            "KeyboardInterrupt",
+            "SystemExit",
+            "Exception",
+            "ArithmeticError",
+            "FloatingPointError",
+            "OverflowError",
+            "ZeroDivisionError",
+            "AssertionError",
+            "AttributeError",
+            "BufferError",
+            "EOFError",
+            "ExceptionGroup",
+            "ImportError",
+            "ModuleNotFoundError",
+            "LookupError",
+            "IndexError",
+            "KeyError",
+            "MemoryError",
+            "NameError",
+            "UnboundLocalError",
+            "OSError",
+            "BlockingIOError",
+            "ChildProcessError",
+            "ConnectionError",
+            "BrokenPipeError",
+            "ConnectionAbortedError",
+            "ConnectionRefusedError",
+            "ConnectionResetError",
+            "FileExistsError",
+            "FileNotFoundError",
+            "InterruptedError",
+            "IsADirectoryError",
+            "NotADirectoryError",
+            "PermissionError",
+            "ProcessLookupError",
+            "TimeoutError",
+            "ReferenceError",
+            "RuntimeError",
+            "NotImplementedError",
+            "PythonFinalizationError",
+            "RecursionError",
+            "StopAsyncIteration",
+            "StopIteration",
+            "SyntaxError",
+            "IndentationError",
+            "TabError",
+            "SystemError",
+            "TypeError",
+            "ValueError",
+            "UnicodeError",
+            "UnicodeDecodeError",
+            "UnicodeEncodeError",
+            "UnicodeTranslateError",
+            "Warning",
+            "BytesWarning",
+            "DeprecationWarning",
+            "EncodingWarning",
+            "FutureWarning",
+            "ImportWarning",
+            "PendingDeprecationWarning",
+            "ResourceWarning",
+            "RuntimeWarning",
+            "SyntaxWarning",
+            "UnicodeWarning",
+            "UserWarning",
+        ] {
+            assert!(is_python_builtin(name), "missing built-in: {name}");
+        }
     }
 
     #[test]
@@ -591,14 +782,17 @@ f()
 
     #[test]
     fn calling_a_non_print_function_with_arguments_is_unsupported() {
-        let module = pycc_parser_test_helper::parse("foo(42)\n");
-        let error = lower(&module).unwrap_err();
-        assert_eq!(error.code, "C0001");
-        assert!(
-            error
-                .message
-                .contains("calling a user-defined function with arguments")
-        );
+        for source in ["foo(42)\n", "def foo() -> None:\n    print(1)\n\nfoo(42)\n"] {
+            let module = pycc_parser_test_helper::parse(source);
+            let error = lower(&module).unwrap_err();
+            assert_eq!(error.code, "C0001", "source: {source}");
+            assert!(
+                error
+                    .message
+                    .contains("calling a user-defined function with arguments"),
+                "source: {source}"
+            );
+        }
     }
 
     #[test]

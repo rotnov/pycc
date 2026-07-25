@@ -319,6 +319,53 @@ fn check_classifies_an_unsupported_builtin_as_a_capability_error() {
 }
 
 #[test]
+fn check_classifies_a_builtin_exception_as_a_capability_error() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_exception_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "exception.py", "ValueError()\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("error[C0001]"));
+    assert!(stderr.contains("built-in `ValueError`"));
+}
+
+#[test]
+fn check_resolves_print_to_an_earlier_module_function() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_print_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "shadowed_print.py",
+        "\
+def print() -> None:
+    helper()
+
+def helper() -> None:
+    print()
+
+helper()
+",
+    );
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn check_normalizes_the_displayed_diagnostic_path() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_path_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -437,6 +484,27 @@ fn check_accepts_python_normalized_encoding_separators() {
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_rejects_collapsed_utf8_separators_when_a_bom_is_present() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_bom_encoding_name_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("bom_conflict.py");
+    std::fs::write(&src, b"\xef\xbb\xbf# coding: utf--8\nprint(1)\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr.contains("UTF-8 BOM conflicts with the declared source encoding"));
 }
 
 #[test]
