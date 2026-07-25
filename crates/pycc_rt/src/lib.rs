@@ -291,6 +291,61 @@ pub extern "C" fn pycc_rt_print_i64(value: i64) {
     print!("{}", format_i64_line(value));
 }
 
+/// `int`'s truthiness for `if`/`while` conditions (Task 4). Never panics --
+/// unlike every `pycc_rt_int_*` arithmetic/comparison function above, this
+/// one has no failure mode to guard against, so (per this crate's
+/// established convention -- see the implementation note above `int_add`)
+/// it does not need the private-logic/public-wrapper split: nothing here
+/// ever unwinds, so there's no abort-vs-catch distinction for a caller to
+/// trip over.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
+    // A value tagged as a heap `BigInt` (Task 9) is, by construction,
+    // only ever created because it *didn't* fit the smallint range --
+    // which excludes zero -- so it's always truthy without needing to
+    // inspect it further.
+    if !is_smallint(tagged) {
+        return 1;
+    }
+    i8::from(untag_smallint(tagged) != 0)
+}
+
+// --- Implementation note / deviation from the task brief -------------
+//
+// The brief's own Step 2 code makes `pycc_rt_range_continue` a single
+// plain `extern "C" fn`, with a Step 1 `#[should_panic]` test calling that
+// same public wrapper directly for the zero-step case. Per this crate's
+// own established convention (see the implementation-note comment above
+// `int_add`, discovered empirically during Task 3): a panic that unwinds
+// past a plain `extern "C" fn`'s own boundary is caught right there and
+// turned into a process abort, regardless of who calls it -- including
+// this crate's own same-binary Rust tests. `pycc_rt_range_continue` *can*
+// panic (`require_smallint`'s bigint-rejection path, and the zero-step
+// case below), so it needs the same split every other panicking
+// `pycc_rt_int_*` function already gets: a private, ordinary-Rust-ABI
+// `range_continue` holding the real logic (freely panics, unwinds
+// normally, `#[should_panic]`-testable), and a thin `pub extern "C"`
+// wrapper of the exact brief-specified name/signature for pycc-generated
+// code to call. The zero-step test below calls `range_continue` directly,
+// not the public wrapper, for the same reason every other
+// `#[should_panic]` test in this file does.
+fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
+    require_smallint(i, "iterating");
+    require_smallint(stop, "iterating");
+    require_smallint(step, "iterating");
+    let (i, stop, step) = (untag_smallint(i), untag_smallint(stop), untag_smallint(step));
+    match step.cmp(&0) {
+        std::cmp::Ordering::Greater => i8::from(i < stop),
+        std::cmp::Ordering::Less => i8::from(i > stop),
+        std::cmp::Ordering::Equal => panic!("pycc_rt: range() arg 3 must not be zero"),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_range_continue(i: i64, stop: i64, step: i64) -> i8 {
+    range_continue(i, stop, step)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -481,5 +536,45 @@ mod tests {
     #[should_panic(expected = "bigint-valued")]
     fn pycc_rt_int_print_on_a_bigint_tagged_value_panics() {
         int_print(0);
+    }
+
+    #[test]
+    fn pycc_rt_int_truthy_is_false_only_for_zero() {
+        assert_eq!(pycc_rt_int_truthy(tag_smallint(0)), 0);
+        assert_eq!(pycc_rt_int_truthy(tag_smallint(1)), 1);
+        assert_eq!(pycc_rt_int_truthy(tag_smallint(-1)), 1);
+    }
+
+    #[test]
+    fn pycc_rt_int_truthy_treats_any_bigint_tagged_value_as_truthy() {
+        // Bit pattern `0` (even) is what D-052 reserves for a heap `BigInt`
+        // pointer -- no real allocation needed to exercise this, same
+        // precedent as `pycc_rt_int_cmp_on_a_bigint_tagged_operand_panics`
+        // above. This is the only test exercising `pycc_rt_int_truthy`'s
+        // early-return branch: the three assertions above only ever pass
+        // smallint-tagged (odd) values.
+        assert_eq!(pycc_rt_int_truthy(0), 1);
+    }
+
+    #[test]
+    fn pycc_rt_range_continue_handles_positive_step() {
+        assert_eq!(pycc_rt_range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(1)), 1);
+        assert_eq!(pycc_rt_range_continue(tag_smallint(3), tag_smallint(3), tag_smallint(1)), 0);
+    }
+
+    #[test]
+    fn pycc_rt_range_continue_handles_negative_step() {
+        assert_eq!(pycc_rt_range_continue(tag_smallint(3), tag_smallint(0), tag_smallint(-1)), 1);
+        assert_eq!(pycc_rt_range_continue(tag_smallint(0), tag_smallint(0), tag_smallint(-1)), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must not be zero")]
+    fn pycc_rt_range_continue_with_a_zero_step_panics() {
+        // Calls the private `range_continue`, not the public
+        // `pycc_rt_range_continue` wrapper -- see the implementation-note
+        // comment above `range_continue`'s definition (same rationale as
+        // `pycc_rt_int_add_panics_...` above).
+        range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(0));
     }
 }
