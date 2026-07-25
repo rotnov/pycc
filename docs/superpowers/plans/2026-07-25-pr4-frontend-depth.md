@@ -798,7 +798,7 @@ git commit -m "refactor(pycc_hir,pycc_mir): general HirExpr/MirExpr tree, behavi
 - Consumes: `HirExpr`/`HirStmt` (Task 5).
 - Produces: `HirExpr` gains `FloatLiteral(f64)`, `BinOp { op: BinOpKind, left: Box<HirExpr>, right: Box<HirExpr> }`, `BinOpKind { Add, Sub, Mul, Div, FloorDiv, Mod, Pow }` (a pycc-owned enum, not `ruff_python_ast::Operator` directly — HIR should not leak the parser's exact vocabulary, e.g. `Mult`→`Mul` renamed to the more common spelling now that it's ours to name). `HirStmt` gains `Assign { target: String, value: HirExpr }`. `pycc_types` gains a real `Ty` enum (`Int, Float, Bool, Str, None`), an `Environment` (a `HashMap<String, Ty>` scoped per function/module), and `infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic>` / `check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic>`.
 
-- [ ] **Step 1: Write the failing HIR test for assignment and arithmetic**
+- [x] **Step 1: Write the failing HIR test for assignment and arithmetic**
 
 ```rust
 #[test]
@@ -851,12 +851,12 @@ fn lowers_a_float_literal() {
 }
 ```
 
-- [ ] **Step 2: Run to verify these fail**
+- [x] **Step 2: Run to verify these fail**
 
 Run: `cargo test -p pycc_hir lowers_an_assignment_and_a_later_reference lowers_a_binary_addition lowers_a_float_literal`
 Expected: FAIL to compile (`HirStmt::Assign`, `HirExpr::BinOp`/`FloatLiteral`, `BinOpKind` don't exist yet).
 
-- [ ] **Step 3: Add `BinOpKind`, extend `HirExpr`/`HirStmt`, extend `lower_expr`/`lower_stmt`**
+- [x] **Step 3: Add `BinOpKind`, extend `HirExpr`/`HirStmt`, extend `lower_expr`/`lower_stmt`**
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,12 +917,12 @@ Expr::BinOp(pycc_ast::ExprBinOp { left, op, right, .. }) => {
 
 (Note this *replaces* Task 5's `Expr::NumberLiteral` arm with the widened version shown here — don't leave two arms for the same pattern.)
 
-- [ ] **Step 4: Run to verify HIR tests pass**
+- [x] **Step 4: Run to verify HIR tests pass**
 
 Run: `cargo test -p pycc_hir`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing type-check tests**
+- [x] **Step 5: Write the failing type-check tests**
 
 ```rust
 #[test]
@@ -979,12 +979,12 @@ fn referencing_an_undefined_name_is_a_clean_error_not_a_panic() {
 
 (Delete the placeholder `adding_an_int_and_a_str_is_a_type_error` stub before committing — it's a forward note for Task 10, not a real test; leaving an empty `#[test] fn` with no body would itself be a coverage/lint issue. Move the *idea* into Task 10's own step instead.)
 
-- [ ] **Step 6: Run to verify these fail**
+- [x] **Step 6: Run to verify these fail**
 
 Run: `cargo test -p pycc_types`
 Expected: FAIL to compile (`Ty`, `Environment`, `infer_expr`, `check_stmt` don't exist yet).
 
-- [ ] **Step 7: Implement `Ty`, `Environment`, `infer_expr`, `check_stmt`**
+- [x] **Step 7: Implement `Ty`, `Environment`, `infer_expr`, `check_stmt`**
 
 Replace `crates/pycc_types/src/lib.rs`'s content (keeping the crate's existing `pub fn check(hir: &HirModule) -> Result<(), Diagnostic>` entry point, now implemented for real rather than a no-op — Task 8 wires the "must be annotated" T0001 check into it; this task only builds the inference core it will call):
 
@@ -1105,12 +1105,12 @@ pub fn check(hir: &pycc_hir::HirModule) -> Result<(), Diagnostic> {
 
 `#[derive(Debug)]` on `BinOpKind` (added in Task 6's HIR step) is required for the `{op:?}` format above — confirm it's present.
 
-- [ ] **Step 8: Run to verify pycc_types tests pass**
+- [x] **Step 8: Run to verify pycc_types tests pass**
 
 Run: `cargo test -p pycc_types`
 Expected: PASS.
 
-- [ ] **Step 9: Fix the call site in `src/main.rs`**
+- [x] **Step 9: Fix the call site in `src/main.rs`**
 
 `try_build`'s existing line `pycc_types::check(&hir).expect("v0.1's type checker is a no-op passthrough; it never fails")` now has a real, potentially-`Err` `check` behind it. Change to:
 
@@ -1123,12 +1123,12 @@ pycc_types::check(&hir).map_err(|diag| {
 
 (Matches the existing pattern used two lines above for `pycc_parser::parse`'s error handling.)
 
-- [ ] **Step 10: Run the full workspace test suite**
+- [x] **Step 10: Run the full workspace test suite**
 
 Run: `cargo test --workspace`
 Expected: PASS. Confirm specifically that `tests/slice0.rs`'s existing tests (which only use `print(<int literal>)` and zero-arg function calls, never assignment or undefined names) still pass unchanged — `check()` never rejects anything they do.
 
-- [ ] **Step 11: Run clippy and the coverage gate**
+- [x] **Step 11: Run clippy and the coverage gate**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS. `numeric_result_type`'s error arm needs a test (`adding_an_int_and_a_str_is_a_type_error`'s *real* version can't exist until Task 10 adds `Ty::Str`, but `adding_an_int_and_a_bool`-style mismatches aren't real either until Task 7 adds bools — for Task 6 specifically, test the error arm via two `Ty` values that are both already real and incompatible in a way that doesn't require a new HIR node: there isn't one yet with only `Int`/`Float`, since Task 6 alone can't construct an `HirExpr` producing `Ty::Bool`/`Ty::Str`. Add a unit test calling `numeric_result_type` *directly* instead of only through `infer_expr`, to exercise the error arm before Task 7/10 make it reachable end-to-end:
@@ -1143,7 +1143,7 @@ fn numeric_result_type_rejects_a_hypothetical_incompatible_pair() {
 
 Make `numeric_result_type` `pub(crate)` rather than private if the test module is a sibling `mod tests` in the same file (it already is, per this crate's existing pattern) — no visibility change needed, `#[cfg(test)] mod tests { use super::*; ... }` already sees private items.)
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_types/src/lib.rs src/main.rs
