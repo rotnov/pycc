@@ -36,7 +36,7 @@ EVIDENCE_SECTIONS = {
 D48_STEADY_PERF_CI_WORKFLOW_SHA256 =
   "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
 D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
-  "b4f63c8aab8631a50a62c5d52290b4f044d21c70d367336a28e5f1f212295d40"
+  "df856d3a4816736c90fa5820570e4404a2ea4fd4ab7ff1f8e07342fbb996669c"
 TIER1_CI_WORKFLOW_SHA256S = [
   D48_STEADY_PERF_CI_WORKFLOW_SHA256,
   D51_PAIRED_PERF_CI_WORKFLOW_SHA256
@@ -263,6 +263,24 @@ PAIRED_PERF_SEAL_SCRIPT = <<~'SHELL'.strip
   sha256="$(shasum -a 256 "$estimates" | awk '{print $1}')"
   printf 'sha256=%s\n' "$sha256" >> "$GITHUB_OUTPUT"
 SHELL
+PAIRED_PERF_BIND_CURRENT_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  trusted_crates="$GITHUB_WORKSPACE/predecessor/crates"
+  sealed_crates="$GITHUB_WORKSPACE/predecessor-crates"
+  current_crates="$GITHUB_WORKSPACE/current/crates"
+  if [ ! -d "$trusted_crates" ] || [ -L "$trusted_crates" ] ||
+     [ ! -d "$current_crates" ] || [ -L "$current_crates" ] ||
+     [ -e "$sealed_crates" ]; then
+    echo "cannot bind the predecessor-owned performance harness" >&2
+    exit 1
+  fi
+  mv "$trusted_crates" "$sealed_crates"
+  ln -s "$current_crates" "$trusted_crates"
+  if [ "$(readlink "$trusted_crates")" != "$current_crates" ]; then
+    echo "the predecessor-owned performance harness is not bound to current crates" >&2
+    exit 1
+  fi
+SHELL
 PAIRED_PERF_ARTIFACT_IDENTITY_SCRIPT = <<~'SHELL'.strip
   set -euo pipefail
   if ! printf '%s' "$PREDECESSOR_ARTIFACT_ID" | grep -Eq '^[0-9]+$'; then
@@ -351,7 +369,7 @@ PAIRED_PERF_MEASURE_STEPS = [
     }
   },
   {
-    "name" => "Check out current benchmark source",
+    "name" => "Check out current compiler source",
     "uses" => PINNED_CHECKOUT_ACTION,
     "with" => {
       "persist-credentials" => "false",
@@ -360,9 +378,16 @@ PAIRED_PERF_MEASURE_STEPS = [
     }
   },
   {
-    "name" => "Run current frontend benchmark",
-    "working-directory" => "current",
-    "run" => "cargo bench --bench check_bench -- --save-baseline current"
+    "name" => "Bind predecessor-owned harness to current compiler",
+    "run" => PAIRED_PERF_BIND_CURRENT_SCRIPT
+  },
+  {
+    "name" => "Run current compiler with predecessor-owned harness",
+    "working-directory" => "predecessor",
+    "run" => <<~'SHELL'.strip
+      CARGO_TARGET_DIR="$GITHUB_WORKSPACE/current-target" \
+        cargo bench --bench check_bench -- --save-baseline current
+    SHELL
   },
   {
     "name" => "Upload current frontend timing",
@@ -370,7 +395,7 @@ PAIRED_PERF_MEASURE_STEPS = [
     "with" => {
       "name" => "frontend-perf-current",
       "path" =>
-        "current/target/criterion/pycc_check_frontend_fixture/current/estimates.json",
+        "current-target/criterion/pycc_check_frontend_fixture/current/estimates.json",
       "if-no-files-found" => "error",
       "retention-days" => "30"
     }

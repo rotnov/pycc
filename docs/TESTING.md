@@ -140,8 +140,11 @@ In D-051 mode, the measurement job resolves the same exact predecessor SHA,
 checks out and benchmarks it first on one `macos-14` runner, hashes its
 `estimates.json`, and uploads `frontend-perf-previous` before checking out or
 executing `github.sha`. The job exports the immutable upload ID, upload archive
-digest, and source-file SHA-256 before it benchmarks current source on that same
-runner and uploads `frontend-perf-current`. The isolated gate checks the
+digest, and source-file SHA-256, then checks out current source without using its
+benchmark harness. The exact predecessor's benchmark source, root manifest,
+lockfile, and Cargo configuration remain in control while their `crates/` path
+is bound to the current compiler crates; the resulting same-run timing is
+uploaded as `frontend-perf-current`. The isolated gate checks the
 comparator out from the resolved predecessor job output, verifies its digests,
 queries only the exact same-run artifact ID to require the original archive
 digest, downloads by that ID rather than name with explicit archive flattening,
@@ -152,9 +155,9 @@ original ID disappears and the gate fails closed. It performs no Actions-run
 search, accepts no cross-run run ID, and uses no cache. Focused tests reject a
 mutable action, name-based predecessor download, wrong predecessor/current ref,
 missing job output, altered identity/content verification, reordered sealing
-step, mixed job generations, unsupported event, empty/zero predecessor, API
-failure or replacement digest, tampered estimates, or comparator checkout from
-current source.
+step, mixed job generations, unsupported event, empty/zero predecessor, a
+current-owned benchmark harness, API failure or replacement digest, tampered
+estimates, or comparator checkout from current source.
 
 There is no missing-baseline exception in either mode. Missing, expired,
 cancelled, non-exact, or malformed predecessor evidence fails the pull request

@@ -515,7 +515,7 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "The D-051 digest\n              seals the exact-predecessor artifact ID and content digests before\n              current source executes, downloads only that identity, and compares\n              both measurements from the same runner.",
+        "The D-051 digest\n              seals the exact-predecessor artifact ID and content digests before\n              current source executes, then measures the current compiler crates\n              through the predecessor-owned harness and manifest. It downloads\n              only that identity and compares both measurements from the same runner.",
         "The D-051 digest\n              reuses a measurement from another runner.",
         "status page without D-051 same-run predecessor provenance",
     ),

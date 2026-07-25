@@ -149,6 +149,23 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def run_paired_harness_binding(current_crates: true, trusted_crates: true)
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      FileUtils.mkdir_p(root / "predecessor/crates") if trusted_crates
+      FileUtils.mkdir_p(root / "current/crates") if current_crates
+      stdout, stderr, status = Open3.capture3(
+        { "GITHUB_WORKSPACE" => root.to_s },
+        "bash",
+        "-s",
+        stdin_data: PAIRED_PERF_BIND_CURRENT_SCRIPT
+      )
+      trusted_path = root / "predecessor/crates"
+      link_target = trusted_path.symlink? ? trusted_path.readlink.to_s : nil
+      return stdout, stderr, status, link_target
+    end
+  end
+
   def run_paired_artifact_identity(
     artifact_id: "12345",
     expected_digest: "a" * 64,
@@ -820,7 +837,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
       end
       upload = steps.delete_at(upload_index)
       current_index = steps.index do |step|
-        step["name"] == "Check out current benchmark source"
+        step["name"] == "Check out current compiler source"
       end
       steps.insert(current_index + 1, upload)
     end
@@ -834,6 +851,21 @@ class RoadmapEvidenceCliTest < Minitest::Test
   def test_rejects_paired_measurement_without_predecessor_output
     workflow = paired_perf_workflow do |jobs|
       jobs.fetch("frontend-perf-measure").delete("outputs")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed untrusted measurement job"
+  end
+
+  def test_rejects_paired_measurement_that_runs_the_current_owned_harness
+    workflow = paired_perf_workflow do |jobs|
+      benchmark = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+        step["name"] == "Run current compiler with predecessor-owned harness"
+      end
+      benchmark["working-directory"] = "current"
+      benchmark["run"] = "cargo bench --bench check_bench -- --save-baseline current"
     end
 
     error = assert_raises(RoadmapEvidenceError) do
@@ -1000,6 +1032,23 @@ class RoadmapEvidenceCliTest < Minitest::Test
     refute status.success?
     assert_includes stderr, "cannot resolve the exact performance predecessor SHA"
     assert_empty output
+  end
+
+  def test_paired_harness_binding_points_trusted_manifest_at_current_crates
+    _stdout, stderr, status, link_target = run_paired_harness_binding
+
+    assert status.success?, stderr
+    assert_match(%r{/current/crates\z}, link_target)
+  end
+
+  def test_paired_harness_binding_rejects_missing_current_crates
+    _stdout, stderr, status, link_target = run_paired_harness_binding(
+      current_crates: false
+    )
+
+    refute status.success?
+    assert_includes stderr, "cannot bind the predecessor-owned performance harness"
+    assert_nil link_target
   end
 
   def test_paired_artifact_identity_accepts_the_original_id_and_digest

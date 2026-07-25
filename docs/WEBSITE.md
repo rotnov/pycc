@@ -49,8 +49,9 @@ slices and remains truthful across D-051's workflow-only activation. It states
 that the frontend measurement and greater-than-2% regression gate are required
 through `ci-gate`, then maps the reviewed workflow digest to either D-048's
 non-expired artifact from the exact successful `main` predecessor or D-051's
-sealed exact-predecessor artifact ID, archive/file digests, and current
-measurement from one runner. Both modes fail closed when exact predecessor
+sealed exact-predecessor artifact ID, archive/file digests, and current compiler
+measurement through the predecessor-owned harness and manifest on one runner.
+Both modes fail closed when exact predecessor
 evidence is unavailable.
 
 The canonical search phrase is “ahead-of-time compiler for typed Python”.

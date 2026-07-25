@@ -20,7 +20,8 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > digest selects the transport: the D-048 digest requires the non-expired
 > artifact from the exact successful `main` predecessor, while the D-051 digest
 > seals an exact-predecessor artifact ID and content digests before current
-> source runs, then compares the two measurements from the same runner. Both
+> source runs, then uses the predecessor-owned benchmark harness and manifest
+> to measure the current compiler crates on the same runner. Both
 > modes fail closed when exact predecessor evidence is unavailable.
 > See the [current status](https://rotnov.github.io/pycc/status/) and
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).

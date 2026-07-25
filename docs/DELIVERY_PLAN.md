@@ -85,7 +85,8 @@ transport. During D-051's staged migration, the tracked workflow digest selects
 one of two exact-predecessor modes: D-048 downloads the non-expired artifact
 from the exact successful `main` predecessor, while D-051 measures and seals
 that predecessor's immutable artifact ID and content digests before current
-source executes on the same runner. Both keep
+source executes, then binds the predecessor-owned benchmark harness and root
+manifest to the current compiler crates on the same runner. Both keep
 the comparator isolated and hash-verified, fail closed without exact evidence,
 and apply the unchanged greater-than-2% regression block. The prospective D-051
 workflow is first reviewed as an inert byte-exact fixture; a later workflow-only
