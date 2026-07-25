@@ -112,15 +112,34 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The reviewed PR-4 prospective digest also introduces the required frontend
-performance gate. Its cache lifecycle is fail-closed: the current timing is
-promoted and cached only after the benchmark, checker self-test, and comparison
-steps succeed (or the legitimate first-baseline bootstrap succeeds), so a
-failed regression cannot become the baseline for a passing rerun. Checkout and
-cache actions that control this merge invariant use reviewed immutable commit
-pins. The trusted checker validates the exact ordered lifecycle whenever
-`frontend-perf-gate` is present in the candidate workflow, in addition to
-requiring the exact reviewed digest.
+The currently staged PR-4 digest replaces the superseded single-job
+performance design with a split trust boundary. `frontend-perf-measure`
+executes pull-request benchmark code and uploads only Criterion's estimates
+JSON as untrusted data. `frontend-perf-gate` executes only the two sparse
+checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
+then validates the downloaded measurement against the canonical baseline.
+Artifact and checkout actions use immutable reviewed pins.
+
+The baseline lifecycle is fail-closed and main-owned. The gate queries only
+successful `push` runs of `ci.yml` on `main`, then downloads the newest
+non-expired `frontend-perf-current` artifact from one of those runs by explicit
+run ID. It never restores an Actions cache, so a pull-request merge ref cannot
+shadow baseline provenance. The artifact is retained for 90 days and each
+successful main run refreshes it.
+
+The only missing-baseline exception is the one-time activation of the reviewed
+split workflow. The pull-request half is explicitly bound to PR #86 targeting
+`main`; the gate resolves the live `main` head through the API and requires it
+to equal the event's base SHA, so a stale event or rerun cannot replay the
+exception. The first push half requires `refs/heads/main`, run attempt 1, an
+event `after` SHA equal to `github.sha`, and that SHA equal to the live `main`
+head resolved through the API. In both cases the predecessor `ci.yml` must have
+the exact pre-split digest already trusted here. Once the split workflow is
+active, a missing or expired main artifact fails closed. Both performance jobs
+are required by an exact fail-closed `ci-gate`; the trusted checker validates
+all three complete job shapes in addition to the prospective workflow digest.
+The PR-specific bootstrap is a transitional exception and must be retired in a
+follow-up reviewed digest after the first successful main artifact exists.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
