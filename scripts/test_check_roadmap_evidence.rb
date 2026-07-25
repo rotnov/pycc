@@ -365,5 +365,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes commands, 'sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"'
     assert_includes commands,
                     'ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"'
+    assert_operator commands.index("cargo build --workspace"),
+                    :<,
+                    commands.index("cargo test --workspace")
   end
 end

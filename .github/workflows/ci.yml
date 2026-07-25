@@ -87,6 +87,9 @@ jobs:
           ruby scripts/test_check_roadmap_evidence.rb
           ruby scripts/check_roadmap_evidence.rb
 
+      - name: cargo build --workspace
+        run: cargo build --workspace
+
       - name: cargo test --workspace
         run: cargo test --workspace
 
