@@ -695,13 +695,73 @@ fn truthy<'ctx>(
         .expect("build_int_compare should not fail comparing two i8 operands")
 }
 
+/// Allocates a pointer-typed slot for a `str` local in the *entry* block of
+/// the function currently being emitted -- never wherever `builder` happens
+/// to be positioned -- and stores an explicit null pointer into it there,
+/// before restoring `builder`'s original position. Fixes a review finding
+/// against this file's first `str`-codegen task: `emit_assign`'s general
+/// path (below) builds a local's backing `alloca` at the *current* builder
+/// position, which is fine for `Int`/`Bool`/`Float` (nothing outside this
+/// task ever reads a local's slot from a block the assignment doesn't
+/// dominate), but is wrong for `str`: this file also reads a `str` local's
+/// slot from *outside* the assignment's own block, at two sites --
+/// `decref_old_str_if_reassigning`'s reassignment load, and
+/// `compile_to_object`'s top-level-locals completion-decref loop right
+/// before `main` returns. If a `str` local's *first* assignment happens
+/// inside an `if`/`while`/`for` body, its `alloca` would live in that
+/// branch's own block, which does not dominate the merge/after block (or,
+/// for a top-level local, the point right before `main`'s `build_return`)
+/// -- `module.verify()` correctly rejects the resulting IR, and on Windows
+/// (where `verify_module` is a no-op, see D-029) the malformed IR would
+/// reach LLVM directly. The entry block dominates every other block in its
+/// function by construction, so an `alloca` placed there -- at any position
+/// within it, since entry has no predecessor and everything else in the
+/// function is only reachable through it -- dominates every later read
+/// regardless of which nested block the local's first real assignment
+/// happens to execute in. The explicit null store (rather than leaving the
+/// slot's initial value as LLVM `undef`) is what lets the null guard
+/// already built into `pycc_rt_str_incref`/`pycc_rt_str_decref` safely no-op
+/// on a path that never reaches this local's assignment at all -- an
+/// `undef` load, unlike a real null, has no defined value a guard could
+/// check.
+fn alloca_str_at_entry<'ctx>(context: &'ctx Context, builder: &inkwell::builder::Builder<'ctx>) -> PointerValue<'ctx> {
+    let current_block = builder
+        .get_insert_block()
+        .expect("builder is always positioned inside some block while a statement is being emitted");
+    let function = current_block
+        .get_parent()
+        .expect("the block builder is currently positioned in always belongs to a function");
+    let entry_block = function
+        .get_first_basic_block()
+        .expect("compile_to_object always appends a function's entry block before emitting its body");
+    match entry_block.get_terminator() {
+        Some(terminator) => builder.position_before(&terminator),
+        None => builder.position_at_end(entry_block),
+    }
+    let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+    let ptr = builder
+        .build_alloca(ptr_type, "str_slot")
+        .expect("build_alloca should not fail for a pointer-typed slot");
+    builder
+        .build_store(ptr, ptr_type.const_null())
+        .expect("build_store should not fail immediately after this function's own alloca");
+    builder.position_at_end(current_block);
+    ptr
+}
+
 /// Allocates (on first assignment) or reuses (on reassignment) the
 /// `alloca` backing `target`, stores `value` into it, and records/updates
 /// its entry in `locals`. A local's `Ty` never changes across
 /// reassignment (`pycc_types` ties one static type to each binding), so
 /// reusing an existing slot never needs a type check beyond the
 /// `debug_assert_eq!` in `emit_expr`'s `Name` arm above.
+///
+/// A `str` local's *first* assignment hoists its `alloca` to the function's
+/// entry block instead of building it at the current position -- see
+/// `alloca_str_at_entry`'s own doc comment for why this one `Scalar`
+/// variant needs different treatment here.
 fn emit_assign<'ctx>(
+    context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     locals: &mut HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
     target: &str,
@@ -711,15 +771,18 @@ fn emit_assign<'ctx>(
     let ptr = match locals.get(target) {
         Some((ptr, _)) => *ptr,
         None => {
-            let alloca_ty: inkwell::types::BasicTypeEnum = match &value {
-                Scalar::Int(v) => v.get_type().into(),
-                Scalar::Bool(v) => v.get_type().into(),
-                Scalar::Float(v) => v.get_type().into(),
-                Scalar::Str(v) => v.get_type().into(),
+            let ptr = match &value {
+                Scalar::Str(_) => alloca_str_at_entry(context, builder),
+                Scalar::Int(v) => builder
+                    .build_alloca(v.get_type(), target)
+                    .expect("build_alloca should not fail for a supported scalar type"),
+                Scalar::Bool(v) => builder
+                    .build_alloca(v.get_type(), target)
+                    .expect("build_alloca should not fail for a supported scalar type"),
+                Scalar::Float(v) => builder
+                    .build_alloca(v.get_type(), target)
+                    .expect("build_alloca should not fail for a supported scalar type"),
             };
-            let ptr = builder
-                .build_alloca(alloca_ty, target)
-                .expect("build_alloca should not fail for a supported scalar type");
             locals.insert(target.to_string(), (ptr, ty));
             ptr
         }
@@ -1185,7 +1248,7 @@ fn emit_stmt<'ctx>(
             if ty == pycc_mir::Ty::Str {
                 decref_old_str_if_reassigning(context, builder, rt, locals, target);
             }
-            emit_assign(builder, locals, target, ty, scalar);
+            emit_assign(context, builder, locals, target, ty, scalar);
             Ok(())
         }
         MirStmt::If { test, body, orelse } => {
@@ -1247,7 +1310,7 @@ fn emit_stmt<'ctx>(
             let Scalar::Int(step_v) = emit_expr(context, builder, module, rt, user_functions, locals, step) else {
                 panic!("pycc_codegen: internal error: range() step did not evaluate to int")
             };
-            emit_assign(builder, locals, var, pycc_mir::Ty::Int, Scalar::Int(start_v));
+            emit_assign(context, builder, locals, var, pycc_mir::Ty::Int, Scalar::Int(start_v));
 
             let test_bb = context.append_basic_block(function, "for_test");
             let body_bb = context.append_basic_block(function, "for_body");
@@ -3438,6 +3501,171 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    fn a_str_local_first_assigned_inside_an_if_body_is_freed_at_top_level_completion() {
+        // Regression test for a review finding against this file's first
+        // `str`-codegen task: `if True: s = "hi"` -- `s`'s *first*
+        // assignment happens inside the `if`'s own `then` block, never at
+        // the top level directly, and `s` is never read by any user code
+        // either. The only read of `s`'s slot is
+        // `compile_to_object`'s own top-level-locals completion-decref loop,
+        // positioned right before `main`'s `build_return` -- outside the
+        // `if`'s `then` block entirely. Before this fix, `s`'s `alloca`
+        // lived wherever `builder` happened to be positioned when
+        // `emit_assign` first ran for `s` (inside the `then` block), which
+        // does not dominate that later completion-loop read: `module.
+        // verify()` rejected the resulting IR and `compile_to_object`
+        // panicked ("Instruction does not dominate all uses! %final_str =
+        // load ptr, ptr %s"). Hoisting `s`'s `alloca` to the function's
+        // entry block (`alloca_str_at_entry`) fixes this regardless of
+        // which nested block `s`'s first assignment executes in.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::If {
+                test: MirExpr::BoolLiteral(true),
+                body: vec![MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::StringLiteral("hi".to_string()),
+                }],
+                orelse: vec![],
+            })],
+        };
+        let dir = tempfile_dir("str_first_assign_in_if_body");
+        let obj_path = dir.join("str_first_assign_in_if_body.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("str_first_assign_in_if_body");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    fn a_str_local_assigned_in_both_branches_of_an_if_else_is_freed_at_top_level_completion() {
+        // `if True: s = "hi" else: s = "bye"` -- `s`'s *first* assignment
+        // (the `then` branch, processed first by this file's `If` codegen)
+        // creates its slot; the `else` branch's own `Assign` then reuses
+        // that same slot (`emit_assign`'s `locals.get(target) => Some`
+        // path) from a sibling block that neither dominates nor is
+        // dominated by the `then` block. Same underlying entry-block-
+        // hoisting fix as the single-branch test above, additionally
+        // proving the reused-slot path is safe once the slot itself lives
+        // in the entry block rather than in whichever branch first created
+        // it.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::If {
+                test: MirExpr::BoolLiteral(true),
+                body: vec![MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::StringLiteral("hi".to_string()),
+                }],
+                orelse: vec![MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::StringLiteral("bye".to_string()),
+                }],
+            })],
+        };
+        let dir = tempfile_dir("str_first_assign_in_if_else_both");
+        let obj_path = dir.join("str_first_assign_in_if_else_both.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("str_first_assign_in_if_else_both");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    fn a_str_local_first_assigned_inside_a_while_body_is_freed_at_top_level_completion() {
+        // `i = 0; while i < 3: s = "x"; i = i + 1` -- `s`'s first assignment
+        // happens inside the `while`'s own body block, exercising the same
+        // entry-block-hoisting fix through a loop back-edge instead of an
+        // `if`/`else` merge. Also exercises `decref_old_str_if_reassigning`'s
+        // own reassignment load across loop iterations (the 2nd/3rd
+        // iteration each decref the previous iteration's `"x"` before
+        // overwriting `s`'s slot) -- that load site has the exact same
+        // dominance requirement the top-level completion loop does, and
+        // this is the only test in this file that reassigns a `str` local
+        // whose first binding is itself inside a loop body.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "i".to_string(),
+                    value: MirExpr::IntLiteral(0),
+                }),
+                MirItem::TopLevelStmt(MirStmt::While {
+                    test: MirExpr::Compare {
+                        op: CmpOpKind::Lt,
+                        left: Box::new(MirExpr::Name { name: "i".to_string(), ty: Ty::Int }),
+                        right: Box::new(MirExpr::IntLiteral(3)),
+                        ty: Ty::Bool,
+                    },
+                    body: vec![
+                        MirStmt::Assign {
+                            target: "s".to_string(),
+                            value: MirExpr::StringLiteral("x".to_string()),
+                        },
+                        MirStmt::Assign {
+                            target: "i".to_string(),
+                            value: MirExpr::BinOp {
+                                op: BinOpKind::Add,
+                                left: Box::new(MirExpr::Name { name: "i".to_string(), ty: Ty::Int }),
+                                right: Box::new(MirExpr::IntLiteral(1)),
+                                ty: Ty::Int,
+                            },
+                        },
+                    ],
+                }),
+            ],
+        };
+        let dir = tempfile_dir("str_first_assign_in_while_body");
+        let obj_path = dir.join("str_first_assign_in_while_body.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("str_first_assign_in_while_body");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    fn a_str_local_never_assigned_on_the_taken_path_decrefs_a_clean_null_at_completion() {
+        // `flag = ""; if flag: s = "hi"` -- `flag` is falsy (the empty
+        // string), so the `then` block containing `s`'s only assignment
+        // never runs at all. This exercises the *other* half of the same
+        // review finding the three tests above cover: hoisting `s`'s
+        // `alloca` to the entry block only fixes *dominance*; it's the
+        // explicit `store null` `alloca_str_at_entry` also does at entry
+        // that keeps this path safe, since `s`'s slot genuinely holds that
+        // null (never LLVM `undef`) when the top-level completion loop
+        // loads and decrefs it -- `pycc_rt_str_decref`'s own null guard
+        // then safely no-ops. Without the null store (hoisting the
+        // `alloca` alone), this exact path would load `undef` and hand it
+        // to `pycc_rt_str_decref`, which is undefined behavior no null
+        // guard can catch -- so this is the one test that would actually
+        // fail (or crash/UB, not just panic cleanly) if the null store were
+        // ever dropped while the hoist itself stayed in place.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "flag".to_string(),
+                    value: MirExpr::StringLiteral(String::new()),
+                }),
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::Name { name: "flag".to_string(), ty: Ty::Str },
+                    body: vec![MirStmt::Assign {
+                        target: "s".to_string(),
+                        value: MirExpr::StringLiteral("hi".to_string()),
+                    }],
+                    orelse: vec![],
+                }),
+            ],
+        };
+        let dir = tempfile_dir("str_never_assigned_on_taken_path");
+        let obj_path = dir.join("str_never_assigned_on_taken_path.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("str_never_assigned_on_taken_path");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success(), "should run without crashing (null-guarded decref of a never-assigned slot)");
     }
 
     #[test]
