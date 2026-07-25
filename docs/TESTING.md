@@ -112,24 +112,20 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The staged D-048 activation and steady-state digests replace the superseded
-single-job performance design with a split trust boundary. `frontend-perf-measure`
-executes pull-request benchmark code and uploads only Criterion's estimates
-JSON as untrusted data. `frontend-perf-gate` executes only the two sparse
-checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
-then validates the downloaded measurement against the canonical baseline.
-Artifact and checkout actions use immutable reviewed pins.
+The D-048/D-051 steady-state design uses a split trust boundary.
+`frontend-perf-measure` executes pull-request benchmark code and uploads only
+Criterion's estimates JSON as untrusted data. `frontend-perf-gate` executes
+only the two sparse checked-out Ruby checker files after verifying their
+reviewed SHA-256 digests, then validates the downloaded measurement against the
+canonical baseline. Artifact and checkout actions use immutable reviewed pins.
 
-The exact transition bytes are checked in as inert
-`tests/fixtures/d48-pre-split-ci.yml`,
-`tests/fixtures/d48-activation-ci.yml`, and
-`tests/fixtures/d48-steady-ci.yml`. Tests bind all three whole-file digests to
-their trust constants and run the structural validator over the activation and
-steady-state candidates. Per D-049, shell-level bootstrap tests obtain the
-historical predecessor from the pre-split fixture rather than from the live
-workflow that activation replaces. The activation and cleanup changes replace
-`.github/workflows/ci.yml` byte-for-byte from the corresponding reviewed
-fixture; hand-reconstructing either workflow is not an accepted transition.
+The exact steady-state bytes are checked in as inert
+`tests/fixtures/d48-steady-ci.yml`. The live `.github/workflows/ci.yml` is
+byte-identical to that fixture, and tests bind its whole-file digest to the
+only trusted Tier-1 workflow constant before running the structural validator.
+The retired pre-split and activation fixtures, digests, bootstrap scripts, and
+activation-only tests remain available through git history and D-048 through
+D-051; they are not executable current state.
 
 The baseline lifecycle is fail-closed and main-owned. The gate queries only a
 successful `push` run of `ci.yml` on `main` whose `head_sha` is the exact PR
@@ -140,35 +136,13 @@ never restores an Actions cache, so neither overlapping main workflows nor a
 pull-request merge ref can weaken baseline provenance. The artifact is retained
 for 90 days and each successful main run refreshes it.
 
-The only missing-baseline exception is the one-time activation of the reviewed
-split workflow. The pull-request half is bound to the single reviewed head SHA
-stored in the repository Actions variable `PERF_ACTIVATION_HEAD`, targets
-`main`, and permits only run attempt 1. Repository workflow variables are
-administrator-controlled state rather than pull-request content; the gate
-validates this value's exact lowercase 40-hex form and requires it to equal the
-event's head SHA. It separately resolves the live `main` head and requires it
-to equal the event's base SHA, so neither a synchronize event for a new head, a
-stale event, nor a pull-request rerun can replay the exception. The activation
-push half requires
-`refs/heads/main`, an event `after` SHA equal to `github.sha`, and that SHA
-equal to the live `main` head resolved through the API. A failed or cancelled
-attempt may be rerun while those exact activation-push identities remain true,
-so transient CI failure cannot strand the repository before its first
-baseline; a rerun after `main` advances fails closed. In both cases the
-predecessor `ci.yml` must have the exact pre-split digest already trusted here.
-Once the split workflow is active, a missing or expired main artifact fails
-closed. Both performance jobs are required by an exact fail-closed `ci-gate`;
-the trusted checker validates all three complete job shapes in both
-prospective workflow digests. The bootstrap-free steady state
-requires the exact predecessor artifact unconditionally and compares without a
-skip expression. The activation variable, activation digest, and bootstrap are
-transitional and must be removed after the first successful main artifact
-exists; the steady-state digest remains and the variable is not a reusable
-feature flag. The
-administrator lifecycle, including absence/set/read-back evidence, a ban on
-post-set head changes, restart behavior when `main` advances, and verified
-deletion evidence, is normative in
-[REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md).
+There is no missing-baseline exception. Both performance jobs are required by
+an exact fail-closed `ci-gate`; the trusted checker validates all three
+complete job shapes. The gate requires the exact predecessor artifact
+unconditionally and always compares. The retired `PERF_ACTIVATION_HEAD`
+variable must remain absent. The completed transition, exact activation run,
+artifact, variable-deletion evidence, and eight-second ordering deviation are
+recorded in [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md) and D-051.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would

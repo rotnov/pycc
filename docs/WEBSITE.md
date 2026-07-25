@@ -44,19 +44,11 @@ slice. Code-generation and runtime breadth are the next delivery step. These
 facts must move with the authoritative roadmap whenever implementation depth
 changes.
 
-During D-048's bounded workflow transition, the status page also follows
-D-050's phase-aware documentation rule. Its performance-gate copy must remain
-true while the tracked `ci.yml` is byte-identical to the pre-split, activation,
-or steady-state fixture: activation is pending in the first phase, the
-measurement and greater-than-2% regression gate are required in the second,
-where the activation-only bootstrap path for the first main-owned baseline is
-retained both before and after that artifact is published, and the gate is
-bootstrap-free in the third. The page must not infer artifact publication from
-workflow bytes or place performance activation behind later compiler slices.
-Because the exact-head activation commit is workflow-only, stage this copy,
-matching README wording, and negative validator mutations for the sequencing,
-activation, post-seed, and steady-state clauses before activation; cleanup
-replaces both public projections with direct steady-state claims.
+The status page states the D-051 steady state directly and keeps it independent
+of later compiler slices: frontend measurement and the greater-than-2%
+regression gate are required, the comparison uses the non-expired artifact
+from the exact successful `main` predecessor, and no missing-baseline bootstrap
+exists. The website validator must reject removal or weakening of this claim.
 
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile
@@ -100,12 +92,11 @@ independently removes LPython's official project source and alpha positioning
 so a newly covered compiler model cannot silently disappear. It also mutates
 the landing, status, architecture, comparison, Markdown, and `llms.txt`
 frontend/backend claims independently, preventing a structurally valid site
-from silently describing a superseded compiler milestone. It also mutates the
-status page's phase-aware performance-transition clauses independently so the
-validator rejects stale sequencing, an activation phase without the required
-greater-than-2% gate, wording that covers only the pre-seed interval, or a
-missing bootstrap-free steady phase. The landing-page contract also requires
-exactly one
+from silently describing a superseded compiler milestone. It also removes the
+status page's steady-state performance-gate claim so the validator proves that
+exact-predecessor provenance, the greater-than-2% threshold, and the absence of
+a missing-baseline bootstrap remain public. The landing-page contract also
+requires exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
 classic-script reference to relative `site.js` with no `type` override.
 The stylesheet tag permits only `rel="stylesheet"` and `href="styles.css"`;

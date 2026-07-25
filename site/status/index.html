@@ -271,13 +271,12 @@
               The next compiler slice lowers the implemented v0.1 frontend
               constructs through MIR and LLVM, then expands the runtime for
               integers, floats, strings, booleans, control flow, recursion, and
-              basic f-strings. D-048's performance transition runs independently
-              of that compiler sequence: the tracked CI workflow tells whether
-              exact-head activation is pending, the required frontend measurement
-              and greater-than-2% regression gate are active while the
-              activation-only bootstrap path for the first main-owned baseline is
-              retained both before and after that artifact is published,
-              or the gate is in bootstrap-free steady state.
+              basic f-strings. The frontend performance gate runs independently
+              of that compiler sequence: every pull request performs the required
+              frontend measurement and fails on a regression greater than 2%
+              against the non-expired artifact from its exact successful
+              <code>main</code> predecessor. There is no missing-baseline
+              bootstrap.
               The conformance testkit, named demos, and final v0.1 acceptance pass
               follow the code-generation and runtime work.
             </p>

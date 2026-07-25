@@ -33,13 +33,9 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ]
 }.freeze
-D48_SPLIT_PERF_CI_WORKFLOW_SHA256 =
-  "cbfe4b1bc81f08da84482e89b5ce8ba3a524e1058180ef24cb574e00ec796ecc"
 D48_STEADY_PERF_CI_WORKFLOW_SHA256 =
   "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
 TIER1_CI_WORKFLOW_SHA256S = [
-  "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2",
-  D48_SPLIT_PERF_CI_WORKFLOW_SHA256,
   D48_STEADY_PERF_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
@@ -48,8 +44,6 @@ PINNED_ARTIFACT_UPLOAD_ACTION =
   "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
 PINNED_ARTIFACT_DOWNLOAD_ACTION =
   "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
-PRE_SPLIT_PERF_CI_WORKFLOW_SHA256 =
-  "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2"
 PERF_BASELINE_PATH = "target/criterion/pycc_check_frontend_fixture/previous"
 PERF_CURRENT_PATH = "target/criterion/pycc_check_frontend_fixture/current"
 PERF_CHECKER_SHA256 =
@@ -151,97 +145,6 @@ PERF_BASELINE_LOOKUP_SCRIPT = <<~'SHELL'.strip
   EOF
   printf 'found=false\n' >> "$GITHUB_OUTPUT"
 SHELL
-PERF_BASELINE_VALIDATION_SCRIPT_TEMPLATE = <<~'SHELL'.strip
-  set -euo pipefail
-  if [ -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
-    printf 'bootstrap=false\n' >> "$GITHUB_OUTPUT"
-    exit 0
-  fi
-
-  case "$GITHUB_EVENT_NAME" in
-    pull_request)
-      if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
-        echo "reviewed activation pull request cannot be replayed" >&2
-        exit 1
-      fi
-      if [ "$PR_BASE_REF" != "main" ]; then
-        echo "reviewed activation is allowed only for a pull request targeting main" >&2
-        exit 1
-      fi
-      if [ "${#TRUSTED_ACTIVATION_HEAD}" -ne 40 ] ||
-         printf '%s' "$TRUSTED_ACTIVATION_HEAD" | LC_ALL=C grep -q '[^0-9a-f]'; then
-        echo "trusted activation head is not one lowercase 40-hex commit SHA" >&2
-        exit 1
-      fi
-      if [ "$PR_HEAD_SHA" != "$TRUSTED_ACTIVATION_HEAD" ]; then
-        echo "reviewed activation is bound to one exact pull request head" >&2
-        exit 1
-      fi
-      current_main_sha="$(
-        gh api \
-          -H "Accept: application/vnd.github+json" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-          --jq '.object.sha'
-      )"
-      if [ "$PR_BASE_SHA" != "$current_main_sha" ]; then
-        echo "pull request base is stale; update it from the current main head" >&2
-        exit 1
-      fi
-      previous_sha="$PR_BASE_SHA"
-      ;;
-    push)
-      if [ "$GITHUB_REF" != "refs/heads/main" ]; then
-        echo "reviewed activation push must target refs/heads/main" >&2
-        exit 1
-      fi
-      if [ "$PUSH_AFTER_SHA" != "$GITHUB_SHA" ]; then
-        echo "activation push SHA does not match the checked-out main commit" >&2
-        exit 1
-      fi
-      current_main_sha="$(
-        gh api \
-          -H "Accept: application/vnd.github+json" \
-          -H "X-GitHub-Api-Version: 2022-11-28" \
-          "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
-          --jq '.object.sha'
-      )"
-      if [ "$GITHUB_SHA" != "$current_main_sha" ]; then
-        echo "activation push is not the live main head" >&2
-        exit 1
-      fi
-      previous_sha="$PUSH_BEFORE_SHA"
-      ;;
-    *)
-      echo "no canonical main baseline exists for unsupported event $GITHUB_EVENT_NAME" >&2
-      exit 1
-      ;;
-  esac
-  if [ -z "$previous_sha" ] ||
-     [ "$previous_sha" = "0000000000000000000000000000000000000000" ]; then
-    echo "cannot prove the workflow revision that precedes activation" >&2
-    exit 1
-  fi
-
-  gh api \
-    -H "Accept: application/vnd.github.raw+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "repos/${GITHUB_REPOSITORY}/contents/.github/workflows/ci.yml?ref=${previous_sha}" \
-    > "$RUNNER_TEMP/previous-ci.yml"
-  previous_digest="$(shasum -a 256 "$RUNNER_TEMP/previous-ci.yml" | awk '{print $1}')"
-  if [ "$previous_digest" != "__PRE_SPLIT_PERF_CI_WORKFLOW_SHA256__" ]; then
-    echo "no canonical main baseline exists and this is not the reviewed one-time activation" >&2
-    exit 1
-  fi
-
-  echo "reviewed one-time activation: no earlier main artifact is expected"
-  printf 'bootstrap=true\n' >> "$GITHUB_OUTPUT"
-SHELL
-PERF_BASELINE_VALIDATION_SCRIPT =
-  PERF_BASELINE_VALIDATION_SCRIPT_TEMPLATE.sub(
-    "__PRE_SPLIT_PERF_CI_WORKFLOW_SHA256__",
-    PRE_SPLIT_PERF_CI_WORKFLOW_SHA256
-  ).freeze
 SPLIT_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
   ruby scripts/check_perf_regression.rb \
     target/criterion/pycc_check_frontend_fixture/current/estimates.json \
@@ -254,7 +157,7 @@ STEADY_PERF_BASELINE_REQUIRE_SCRIPT = <<~'SHELL'.strip
     exit 1
   fi
 SHELL
-SPLIT_PERF_GATE_STEPS = [
+STEADY_SPLIT_PERF_GATE_STEPS = [
   {
     "name" => "Check out only the reviewed performance checker",
     "uses" => PINNED_CHECKOUT_ACTION,
@@ -296,18 +199,8 @@ SPLIT_PERF_GATE_STEPS = [
     }
   },
   {
-    "name" => "Require a main-owned baseline or reviewed activation",
-    "id" => "validate_baseline",
-    "env" => {
-      "GH_TOKEN" => "${{ github.token }}",
-      "PR_BASE_REF" => "${{ github.event.pull_request.base.ref }}",
-      "PR_BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
-      "PR_HEAD_SHA" => "${{ github.event.pull_request.head.sha }}",
-      "TRUSTED_ACTIVATION_HEAD" => "${{ vars.PERF_ACTIVATION_HEAD }}",
-      "PUSH_AFTER_SHA" => "${{ github.event.after }}",
-      "PUSH_BEFORE_SHA" => "${{ github.event.before }}"
-    },
-    "run" => PERF_BASELINE_VALIDATION_SCRIPT
+    "name" => "Require canonical main frontend timing",
+    "run" => STEADY_PERF_BASELINE_REQUIRE_SCRIPT
   },
   {
     "name" => "Download current frontend timing",
@@ -319,32 +212,13 @@ SPLIT_PERF_GATE_STEPS = [
   },
   {
     "name" => "Compare against canonical main baseline",
-    "if" => "steps.validate_baseline.outputs.bootstrap != 'true'",
     "run" => SPLIT_PERF_COMPARE_SCRIPT
   }
-].freeze
-STEADY_SPLIT_PERF_GATE_STEPS = [
-  *SPLIT_PERF_GATE_STEPS.first(5),
-  {
-    "name" => "Require canonical main frontend timing",
-    "run" => STEADY_PERF_BASELINE_REQUIRE_SCRIPT
-  },
-  SPLIT_PERF_GATE_STEPS.fetch(6),
-  SPLIT_PERF_GATE_STEPS.fetch(7).reject { |key, _value| key == "if" }
 ].freeze
 SPLIT_PERF_MEASURE_JOB = {
   "runs-on" => "macos-14",
   "permissions" => { "contents" => "read" },
   "steps" => SPLIT_PERF_MEASURE_STEPS
-}.freeze
-SPLIT_PERF_GATE_JOB = {
-  "needs" => "frontend-perf-measure",
-  "runs-on" => "macos-14",
-  "permissions" => {
-    "actions" => "read",
-    "contents" => "read"
-  },
-  "steps" => SPLIT_PERF_GATE_STEPS
 }.freeze
 STEADY_SPLIT_PERF_GATE_JOB = {
   "needs" => "frontend-perf-measure",
@@ -634,7 +508,7 @@ def validate_perf_gate_baseline_lifecycle(workflow_text, source)
           "#{source}: split performance measurement requires frontend-perf-gate"
   end
   perf_job = yaml_value(perf_job_node, "#{source} frontend-perf-gate job")
-  unless [SPLIT_PERF_GATE_JOB, STEADY_SPLIT_PERF_GATE_JOB].include?(perf_job)
+  unless perf_job == STEADY_SPLIT_PERF_GATE_JOB
     raise RoadmapEvidenceError,
           "#{source}: frontend-perf-gate must match the reviewed isolated comparison job"
   end
