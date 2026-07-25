@@ -193,7 +193,17 @@ fn collect_expr_constraints(
                 return Ok(None);
             };
             for (index, (arg, parameter)) in arg_terms.into_iter().zip(&signature.1).enumerate() {
-                if let (Some(arg), Err(_)) = (arg, parameter) {
+                // Unify whenever either side is still an inference variable --
+                // not just when the callee's own parameter is unresolved.
+                // This used to only match `parameter: Err(_)`, so a concrete
+                // (e.g. explicitly annotated) callee parameter never
+                // constrained an unresolved *caller* argument variable in the
+                // reverse direction, even though `unify_terms` itself already
+                // handles that case symmetrically (self-review finding,
+                // pre-merge).
+                if let Some(arg) = arg
+                    && matches!((arg, parameter), (Err(_), _) | (_, Err(_)))
+                {
                     unify_terms(
                         *parameter,
                         arg,
@@ -657,9 +667,11 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
             Ok(())
         }
-        HirStmt::Return(_) => {
-            panic!("pycc_types: a return statement outside of a function is not supported")
-        }
+        HirStmt::Return(_) => Err(Diagnostic::error(
+            "T0024",
+            "'return' outside a function is not allowed".to_string(),
+            Span::new(0, 0),
+        )),
     }
 }
 
@@ -1061,10 +1073,28 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a return statement outside of a function is not supported")]
-    fn a_top_level_return_is_unsupported() {
+    fn a_top_level_return_is_a_clean_diagnostic_not_a_panic() {
+        // Regression test (self-review finding, pre-merge): this used to be
+        // `panic!(...)`, so a bare `return` at module scope crashed the
+        // compiler (exit code 101) instead of producing a diagnostic through
+        // the documented exit-1 contract every other error path uses.
+        // `ruff_python_parser` does not reject `return` outside a function at
+        // the grammar level (CPython itself only rejects it in a later
+        // compile pass), so this is reachable from ordinary CLI input.
         let mut env = Environment::new();
-        let _ = check_stmt(&mut env, &HirStmt::Return(None));
+        let err = check_stmt(&mut env, &HirStmt::Return(None)).unwrap_err();
+        assert_eq!(err.code, "T0024");
+    }
+
+    #[test]
+    fn a_return_nested_in_a_top_level_if_is_also_a_clean_diagnostic() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Return(None)],
+            orelse: vec![],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0024");
     }
 
     #[test]
@@ -2053,6 +2083,39 @@ mod tests {
                     callee: "_identity".to_string(),
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn private_parameter_is_inferred_by_forwarding_into_an_annotated_callee() {
+        // Regression test (self-review finding, pre-merge): the solver used
+        // to only unify a call argument against a callee's parameter when
+        // the callee's own parameter term was itself unresolved. When the
+        // callee is fully annotated (its parameter term is already
+        // `Ok(Ty::Int)`), an unresolved *caller* argument variable never got
+        // constrained in that direction, even though `unify_terms` itself
+        // already supports it symmetrically -- so `_forward` below used to
+        // fail with a spurious "add an annotation" T0021 instead of
+        // correctly inferring `x: int` from forwarding into `_sink`.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_sink".to_string(),
+                    params: vec![("value".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::Return(None)],
+                },
+                HirItem::Function {
+                    name: "_forward".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "_sink".to_string(),
+                        args: vec![HirExpr::Name("x".to_string())],
+                    })],
+                },
             ],
         };
         check(&hir).unwrap();

@@ -364,6 +364,9 @@ jobs:
       - name: Run frontend benchmark
         run: cargo bench --bench check_bench -- --save-baseline current
 
+      - name: Test perf regression checker
+        run: ruby scripts/test_check_perf_regression.rb
+
       - name: Compare against previous baseline (if one was restored)
         run: |
           if [ -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then

@@ -507,6 +507,23 @@ fn check_subcommand_reports_a_type_error() {
 }
 
 #[test]
+fn a_top_level_return_is_a_clean_error_not_a_panic() {
+    // Regression test (self-review finding, pre-merge): a bare `return` at
+    // module scope used to panic pycc_types (exit code 101, raw backtrace)
+    // instead of producing a T0024 diagnostic through the documented exit-1
+    // contract. `ruff_python_parser` parses this fine -- CPython itself only
+    // rejects it in a later compile pass, not the grammar -- so this is
+    // reachable from ordinary (if unusual) CLI input.
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_top_level_return_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "return\n");
+
+    let output = Command::new(pycc_bin()).args(["check", src.to_str().unwrap()]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0024"));
+}
+
+#[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

@@ -147,10 +147,32 @@ fn lower_params(
     is_public: bool,
     fn_name: &str,
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
+    // Every parameter kind and default value below is silently absent from
+    // `parameters.args`/`ParameterWithDefault::default` -- an earlier version
+    // of this function only ever iterated `.args` and never checked for any
+    // of these, so a function using them got a wrong signature built from
+    // whatever plain positional args happened to exist, instead of the
+    // explicit "not supported yet" panic every other out-of-scope construct
+    // in this file produces (self-review finding, pre-merge).
+    if !parameters.posonlyargs.is_empty() {
+        panic!("pycc_hir: positional-only parameters (`/`) are not supported yet");
+    }
+    if parameters.vararg.is_some() {
+        panic!("pycc_hir: `*args` is not supported yet");
+    }
+    if !parameters.kwonlyargs.is_empty() {
+        panic!("pycc_hir: keyword-only parameters are not supported yet");
+    }
+    if parameters.kwarg.is_some() {
+        panic!("pycc_hir: `**kwargs` is not supported yet");
+    }
     parameters
         .args
         .iter()
         .map(|param| {
+            if param.default.is_some() {
+                panic!("pycc_hir: default parameter values are not supported yet");
+            }
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
                 Some(ann) => Ok((name.to_string(), annotation_to_ty(ann)?)),
@@ -1118,6 +1140,45 @@ mod tests {
     #[should_panic(expected = "only a bare name type annotation is supported so far")]
     fn a_non_bare_name_annotation_panics() {
         let module = pycc_parser_test_helper::parse("def f(x: a.b) -> None:\n    return\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "default parameter values are not supported yet")]
+    fn a_default_parameter_value_panics() {
+        // Regression test (self-review finding, pre-merge): lower_params
+        // used to only read `.parameter`, silently ignoring `.default` --
+        // producing a wrong signature (as if `b` had no default at all)
+        // instead of this explicit panic.
+        let module = pycc_parser_test_helper::parse("def f(a: int, b: int = 2) -> int:\n    return a + b\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "positional-only parameters")]
+    fn a_positional_only_parameter_panics() {
+        let module = pycc_parser_test_helper::parse("def f(a: int, /, b: int) -> int:\n    return a + b\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "keyword-only parameters")]
+    fn a_keyword_only_parameter_panics() {
+        let module = pycc_parser_test_helper::parse("def f(a: int, *, b: int) -> int:\n    return a + b\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "*args` is not supported yet")]
+    fn a_vararg_parameter_panics() {
+        let module = pycc_parser_test_helper::parse("def f(*args: int) -> None:\n    return\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "**kwargs` is not supported yet")]
+    fn a_kwarg_parameter_panics() {
+        let module = pycc_parser_test_helper::parse("def f(**kwargs: int) -> None:\n    return\n");
         lower_checked(&module).unwrap();
     }
 

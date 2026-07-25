@@ -25,6 +25,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0021` | error | name, operand, call, or inference type mismatch |
 | `T0022` | error | return type mismatch |
 | `T0023` | error | incompatible assignment |
+| `T0024` | error | `return` outside a function |
 | `T0030` | error | non-exhaustive `match` (missing cases listed) |
 | `T0031` | error | `@override` without matching base method |
 | `O0201` | error | value used after move across scope boundary *(internal-only: never fires on legal Python — see note)* |
