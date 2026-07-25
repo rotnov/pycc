@@ -991,6 +991,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_empty output
   end
 
+  def test_paired_predecessor_resolution_rejects_empty_sha
+    _stdout, stderr, status, output = run_paired_predecessor_resolution(
+      event_name: "pull_request",
+      pr_base_sha: ""
+    )
+
+    refute status.success?
+    assert_includes stderr, "cannot resolve the exact performance predecessor SHA"
+    assert_empty output
+  end
+
   def test_paired_artifact_identity_accepts_the_original_id_and_digest
     _stdout, stderr, status = run_paired_artifact_identity
 
