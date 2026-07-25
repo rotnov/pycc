@@ -271,8 +271,13 @@
               The next compiler slice lowers the implemented v0.1 frontend
               constructs through MIR and LLVM, then expands the runtime for
               integers, floats, strings, booleans, control flow, recursion, and
-              basic f-strings. The conformance testkit, named demos, frontend
-              performance gate, and final v0.1 acceptance pass follow.
+              basic f-strings. D-048's performance transition runs independently
+              of that compiler sequence: the tracked CI workflow tells whether
+              exact-head activation is pending, the required frontend measurement
+              and greater-than-2% regression gate are seeding their first
+              main-owned baseline, or the gate is in bootstrap-free steady state.
+              The conformance testkit, named demos, and final v0.1 acceptance pass
+              follow the code-generation and runtime work.
             </p>
             <div class="page-links">
               <a href="../architecture/">

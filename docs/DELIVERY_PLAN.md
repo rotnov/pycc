@@ -86,7 +86,7 @@ and an immediate post-seed cleanup. D-049 preserves the exact pre-split
 workflow as an inert predecessor fixture so activation tests remain hermetic
 after the live workflow changes. D-050 pre-stages phase-aware current-status
 wording so the required workflow-only activation commit cannot make the
-roadmap stale: the tracked workflow's byte identity selects the pre-split,
+repository or public status stale: the tracked workflow's byte identity selects the pre-split,
 activation, or steady-state claim. D-048 remains in transition until the
 tracked workflow reaches steady state and cleanup removes the bootstrap state;
 PR-5 does not proceed before then. This remains deliberately lightweight and distinct from

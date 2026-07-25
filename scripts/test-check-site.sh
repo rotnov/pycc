@@ -496,6 +496,24 @@ mutations = (
         "status page that overstates diagnostic snapshot coverage",
     ),
     (
+        site_dir / "status" / "index.html",
+        "D-048's performance transition runs independently",
+        "The frontend performance gate follows the compiler work",
+        "status page with stale performance-transition sequencing",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "and greater-than-2% regression gate are seeding their first",
+        "and the regression gate remains informational during activation",
+        "status page without the required activation-phase gate",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "main-owned baseline, or the gate is in bootstrap-free steady state.",
+        "main-owned baseline.",
+        "status page without the bootstrap-free steady phase",
+    ),
+    (
         site_dir / "architecture" / "index.html",
         "<strong>Resolve and type-check</strong>",
         "<strong>Pass through the type stage</strong>",

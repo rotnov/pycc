@@ -14,6 +14,11 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > private-helper signatures, and rendering human or JSON diagnostics.
 > `pycc build` and `pycc run` still compile only the original narrow native
 > slice; code-generation and runtime breadth are the next delivery step.
+> D-048's performance transition is independent of that compiler sequence:
+> the tracked CI workflow selects pre-split activation pending, required
+> measurement/gating while the first main-owned baseline is seeded, or
+> bootstrap-free steady state. Cleanup replaces this transitional wording
+> with the direct steady-state claim.
 > See the [current status](https://rotnov.github.io/pycc/status/) and
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 
