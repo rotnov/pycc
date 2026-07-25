@@ -636,6 +636,19 @@ h1 span {
   overflow-x: auto;
 }
 
+.comparison-detail {
+  padding: 18px 24px;
+  margin: 0;
+  color: var(--ink-soft);
+  border-top: 1px solid var(--line);
+  font-size: 0.84rem;
+}
+
+.comparison-detail a {
+  color: var(--acid);
+  font-weight: 800;
+}
+
 table {
   width: 100%;
   min-width: 680px;
@@ -960,6 +973,10 @@ footer > div a:hover {
   align-items: start;
   padding: 80px 0 30px;
   border-top: 1px solid var(--line);
+}
+
+.prose {
+  min-width: 0;
 }
 
 .toc {
@@ -1563,13 +1580,20 @@ footer > div a:hover {
   }
 
   footer {
-    grid-template-columns: 1fr auto;
-    gap: 20px;
+    grid-template-columns: 1fr;
+    gap: 18px;
     padding: 24px 0;
   }
 
   footer p {
     display: none;
+  }
+
+  footer > div {
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    justify-self: stretch;
   }
 }
 

@@ -112,6 +112,16 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
+The reviewed PR-4 prospective digest also introduces the required frontend
+performance gate. Its cache lifecycle is fail-closed: the current timing is
+promoted and cached only after the benchmark, checker self-test, and comparison
+steps succeed (or the legitimate first-baseline bootstrap succeeds), so a
+failed regression cannot become the baseline for a passing rerun. Checkout and
+cache actions that control this merge invariant use reviewed immutable commit
+pins. The trusted checker validates the exact ordered lifecycle whenever
+`frontend-perf-gate` is present in the candidate workflow, in addition to
+requiring the exact reviewed digest.
+
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
 violate the trusted setup sequence. The authority is the required read-only
@@ -185,14 +195,11 @@ Branch protection is strict and requires `ci-gate` and `audit`, bound to the
 GitHub Actions app. `ci-gate` (D-032) is a single stable-named job in
 `ci.yml` that fans in every job in that workflow (`build-test-coverage`, all
 four `native-build-test` Tier-1 legs, `cross-compile-build`,
-`cross-compile-verify`, D-046's untrusted `frontend-perf-measure`, and the
-isolated D-044/D-046 `frontend-perf-gate`) so branch
-protection enforces the whole Tier-1 matrix, hard coverage invariant, and
->2% frontend-regression block through one required-check name that survives
-matrix edits, rather than naming each matrix leg directly (whose
-GitHub-generated name bakes in the matrix values and would go stale the
-moment an `os`/`target` entry changes). The switch from directly requiring
-`build-test-coverage` to
+`cross-compile-verify`) so branch protection enforces the whole Tier-1
+matrix through one required-check name that survives matrix edits, rather
+than naming each matrix leg directly (whose GitHub-generated name bakes in
+the matrix values and would go stale the moment an `os`/`target` entry
+changes). The switch from directly requiring `build-test-coverage` to
 requiring `ci-gate` happened once `ci-gate` existed on `main` (PR #19,
 merged 2026-07-25) -- it was deliberately not done inside that same PR,
 since flipping it earlier, while other branches were still open against a
@@ -201,16 +208,6 @@ check they had no way to satisfy. Removing either required check, disabling
 strict mode, accepting an `audit` context from another app, or dropping a
 job from `ci-gate`'s `needs:` list is a policy regression; all later policy
 changes are evaluated by the trusted checker from their base revision.
-
-Per D-046, `frontend-perf-measure` is the only performance job that executes
-pull-request compiler/build code, and it exports only Criterion
-`estimates.json`. `frontend-perf-gate` sparse-checks out the comparator and its
-tests, verifies their reviewed SHA-256 digests before execution, and treats the
-downloaded measurement as untrusted data. The gate restores only the fresh
-`frontend-perf-main-v1-` namespace. It promotes and saves a new canonical
-baseline only on a successful `push` to `refs/heads/main`; pull-request
-merge-ref caches from the superseded namespace cannot shadow the merged
-baseline for later heads of the same PR.
 
 ## Code coverage (D-014)
 

@@ -17,12 +17,15 @@ indexable explanation of pycc:
 - the project is pre-alpha, and design targets are not presented as released
   features.
 
-The canonical landing page links to three crawlable evidence pages:
+The canonical landing page links to four crawlable evidence pages:
 
 - `/status/` describes implemented behavior, enforced gates, remaining v0.1
   scope, and the next planned delivery slice;
 - `/architecture/` separates the working compiler path and current crates from
   the target typed-Python architecture;
+- `/python-aot-compilers/` maps pycc, Codon, Nuitka, mypyc, and Cython by
+  language contract, output artifact, runtime model, and maturity using each
+  project's official documentation, with no unsupported benchmark claims;
 - `/ai-native/` documents the AI-author/human-manager boundary, operating loop,
   safeguards, and public audit trail.
 
@@ -59,14 +62,35 @@ development-model claim is part of the public project identity, not hidden
 metadata.
 
 `site/robots.txt` and `site/sitemap.xml` must use the same canonical origin.
-The sitemap lists the landing page plus `/status/`, `/architecture/`, and
-`/ai-native/`; it records `lastmod` when main content, structured data, or
-important links materially change. The social preview is `site/og.png`.
+The sitemap lists the landing page plus `/status/`, `/architecture/`,
+`/python-aot-compilers/`, and `/ai-native/`; it records `lastmod` when main
+content, structured data, or important links materially change. The social
+preview is `site/og.png`.
 `scripts/check-site.sh` enforces these mechanical requirements locally and in
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
 site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
-or required metadata.
+missing official comparison sources, a missing pre-alpha comparison warning,
+or required metadata. The landing-page contract also requires exactly one
+relative `styles.css` stylesheet link and exactly one deferred, executable
+classic-script reference to relative `site.js` with no `type` override.
+The stylesheet tag permits only `rel="stylesheet"` and `href="styles.css"`;
+the non-self-closing script tag permits only `defer` and `src="site.js"`.
+References inside inert `template` or `noscript` content do not satisfy the
+contract. All `link` and `script` elements are rejected anywhere inside SVG or
+MathML subtrees because foreign scripts use different URL attributes and HTML
+integration points can change descendant namespaces. Valid self-closing void
+and non-asset foreign-content elements remain accepted.
+Table-driven negative controls cover missing,
+empty, duplicate, absolute, local-only, and differently targeted asset
+references so the uploaded files cannot silently become browser-orphaned.
+The validator also rejects suppressing or execution-changing asset attributes,
+duplicate asset attributes, and HTML `base` elements, which could otherwise
+make browser behavior disagree with the checked attribute values.
+At viewports up to 680 CSS pixels, the footer must stack into one grid column
+and its navigation group must wrap within the available width. The validator
+and a negative mutation test preserve that narrow-screen overflow contract as
+the evidence-page link set grows.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots
@@ -103,15 +127,24 @@ from the relevant providers:
 map for tools that choose to consume the emerging
 [llms.txt proposal](https://llmstxt.org/). It is not described as a ranking
 factor. `site/index.html.md` is the clean Markdown equivalent recommended by
-that proposal. Both files link to the evidence pages and must preserve the
-landing page's status and AI-authorship disclosures.
+that proposal. Both files link to the evidence pages, including the
+source-backed compiler comparison, and must preserve the landing page's status
+and AI-authorship disclosures.
 
 The sitemap carries the standards-based discovery signal. After a successful
-production deployment, `scripts/notify-indexnow.sh` submits the canonical URL
-to IndexNow so Bing and participating engines can discover material updates
-quickly. Its public verification key is hosted below `/pycc/`, which limits
-that key to URLs in the project path. The notification is best-effort and does
-not block a successful Pages deployment.
+production deployment, `scripts/notify-indexnow.sh` parses that validated
+sitemap and submits its complete canonical URL set in one IndexNow batch POST
+so Bing and participating engines can discover material updates quickly. It
+rejects empty, duplicate, out-of-scope, query-bearing, or fragment-bearing URLs
+before making a request. Its public verification key is hosted below `/pycc/`,
+which limits that key to URLs in the project path. The notification is
+best-effort, has finite connection and request timeouts, and does not block a
+successful Pages deployment.
+
+`scripts/test-notify-indexnow.py` points the production notifier at a local HTTP
+fixture and proves that the real non-dry-run path sends the expected JSON
+payload and fails on an HTTP error without contacting a public search endpoint.
+An accepted IndexNow response proves receipt only, not crawl or indexing.
 
 Discovery is not ranking. Long-term visibility depends on publishing accurate,
 non-commodity compiler evidence—implemented language features, architecture
@@ -122,6 +155,13 @@ fixed query-position checks are the measurement surfaces; no position is
 guaranteed. Operational monitoring must distinguish sitemap submission,
 sitemap fetch/processing, URL indexing, impressions, clicks, and query position
 instead of treating any one of them as proof of the others.
+GitHub query and rolling traffic observations are preserved in
+[SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) using a fixed top-50 ranking
+contract and timestamped API snapshots so changes can be compared without
+rewriting earlier responses or attributing automation traffic to SEO.
+The same ledger records Search Console URL Inspection, sitemap-processing, and
+performance-report states independently because none of those signals is a
+substitute for the others.
 
 ## Publication
 

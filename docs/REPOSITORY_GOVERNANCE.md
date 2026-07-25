@@ -11,14 +11,16 @@ enforce the normal delivery path.
   (D-032) is a single stable-named job that fans in every job in `ci.yml`,
   including `build-test-coverage` (which runs the agent-policy tests and
   clean-clone validator) and the four-target `native-build-test`/
-  `cross-compile-build`/`cross-compile-verify` Tier-1 matrix, plus the D-044
-  untrusted `frontend-perf-measure` job and isolated `frontend-perf-gate`
-  that make a measured >2% regression merge-blocking without executing
-  PR-head comparator code -- named directly rather than each matrix leg, since a matrix job's
-  GitHub-generated check name bakes in its matrix values and would go stale
-  the moment an `os`/`target` entry changes. The standalone `agent-policy`
-  job provides faster feedback until its exact context has run successfully
-  on `main` and is added to branch protection.
+  `cross-compile-build`/`cross-compile-verify` Tier-1 matrix -- named directly
+  rather than each matrix leg, since a matrix job's GitHub-generated check
+  name bakes in its matrix values and would go stale the moment an
+  `os`/`target` entry changes. D-044's untrusted `frontend-perf-measure` job
+  and isolated `frontend-perf-gate`, which make a measured >2% regression
+  merge-blocking without executing PR-head comparator code, join this fan-in
+  once they land in PR-6 rather than in the PR that introduced this document
+  (D-047 overrides D-042/D-044's original early-start timeline). The
+  standalone `agent-policy` job provides faster feedback until its exact
+  context has run successfully on `main` and is added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
   Requiring the author's own approval would deadlock every pull request. Enable one
   independent approval, stale-approval dismissal, and last-push approval when a

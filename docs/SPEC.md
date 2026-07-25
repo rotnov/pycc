@@ -20,6 +20,7 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 | [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md) | Protected-branch contract, required controls, emergency bypass, and audit response | GitHub settings, governance workflows |
 | [AGENT_TOOLING.md](./AGENT_TOOLING.md) | Agent plugin pins, reviewed update process, validation, and rollback | `.agents/`, `.claude/`, agent-asset CI |
 | [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
+| [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) | Chronological search-query measurements and ranking methodology | discoverability monitoring |
 
 ## Invariants (short version)
 
