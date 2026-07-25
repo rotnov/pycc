@@ -33,6 +33,292 @@ class WorkflowPermissionsTest < Minitest::Test
     validate_workflow(workflow)
   end
 
+  def language_track_workflow
+    (WORKFLOW_DIRECTORY / CI_WORKFLOW_FILENAME).read
+  end
+
+  def mutate_language_track_job(text = language_track_workflow)
+    header = "  #{LANGUAGE_TRACK_JOB}:\n"
+    start = text.index(header)
+    raise "missing #{LANGUAGE_TRACK_JOB} fixture job" unless start
+
+    next_job = text.match(/^  [A-Za-z0-9_-]+:\s*$/, start + header.length)
+    finish = next_job ? next_job.begin(0) : text.length
+    job = text[start...finish]
+    mutated = yield(job)
+    raise "language-track fixture mutation had no effect" if mutated == job
+
+    text[0...start] + mutated + text[finish..]
+  end
+
+  def mutate_ci_gate(text = language_track_workflow)
+    header = "  #{LANGUAGE_TRACK_GATE_JOB}:\n"
+    start = text.index(header)
+    raise "missing #{LANGUAGE_TRACK_GATE_JOB} fixture job" unless start
+
+    job = text[start..]
+    mutated = yield(job)
+    raise "ci-gate fixture mutation had no effect" if mutated == job
+
+    text[0...start] + mutated
+  end
+
+  def test_trusted_policy_accepts_language_track_ci_contract
+    validate_language_track_ci_contract(language_track_workflow)
+  end
+
+  def test_trusted_policy_rejects_deleted_language_track_step
+    text = language_track_workflow.sub(
+      /\n      - name: Check Python language-track consistency\n.*?(?=\n      - |\z)/m,
+      ""
+    )
+    error = assert_raises(PolicyError) do
+      validate_language_track_ci_contract(text)
+    end
+    assert_match(/requires exactly one/, error.message)
+  end
+
+  def test_trusted_policy_rejects_filtered_pull_requests
+    text = language_track_workflow.sub(
+      "  pull_request:",
+      "  pull_request:\n    paths-ignore:\n      - \"**/*.md\""
+    )
+    error = assert_raises(PolicyError) do
+      validate_language_track_ci_contract(text)
+    end
+    assert_match(/unfiltered pull_request/, error.message)
+  end
+
+  def test_trusted_policy_rejects_workflow_run_defaults
+    text = language_track_workflow.sub(
+      "permissions:",
+      "defaults:\n  run:\n    shell: true {0}\n\npermissions:"
+    )
+    error = assert_raises(PolicyError) do
+      validate_language_track_ci_contract(text)
+    end
+    assert_match(/workflow-level defaults/, error.message)
+  end
+
+  def test_trusted_policy_rejects_conditional_language_track_step
+    text = language_track_workflow.sub(
+      "      - name: Check Python language-track consistency",
+      "      - name: Check Python language-track consistency\n        if: false"
+    )
+    error = assert_raises(PolicyError) do
+      validate_language_track_ci_contract(text)
+    end
+    assert_match(/execution-altering keys: if/, error.message)
+  end
+
+  def test_trusted_policy_rejects_language_track_shell_override
+    text = language_track_workflow.sub(
+      "      - name: Check Python language-track consistency",
+      "      - name: Check Python language-track consistency\n        \"shell\": true {0}"
+    )
+    error = assert_raises(PolicyError) do
+      validate_language_track_ci_contract(text)
+    end
+    assert_match(/execution-altering keys: shell/, error.message)
+  end
+
+  def test_trusted_policy_rejects_whitespace_in_isolated_environment
+    %w[BASH_ENV ENV DYLD_INSERT_LIBRARIES LD_PRELOAD].each do |name|
+      text = language_track_workflow.sub(
+        "          #{name}: \"\"",
+        "          #{name}: \" \""
+      )
+      error = assert_raises(PolicyError) do
+        validate_language_track_ci_contract(text)
+      end
+      assert_match(/environment changed/, error.message)
+    end
+  end
+
+  def test_trusted_policy_rejects_language_track_working_directory
+    text = language_track_workflow.sub(
+      "      - name: Check Python language-track consistency",
+      "      - name: Check Python language-track consistency\n        working-directory: bypass"
+    )
+    error = assert_raises(PolicyError) do
+      validate_language_track_ci_contract(text)
+    end
+    assert_match(/execution-altering keys: working-directory/, error.message)
+  end
+
+  def test_trusted_policy_rejects_inherited_language_track_environment
+    mutations = [
+      language_track_workflow.sub(
+        "env:",
+        "env:\n  BASH_ENV: bypass/exit-zero.sh"
+      ),
+      language_track_workflow.sub(
+        "env:",
+        "env:\n  SHELLOPTS: noexec"
+      ),
+      mutate_language_track_job do |job|
+        job.sub(
+          "    runs-on: ubuntu-latest",
+          "    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: bypass/exit-zero.sh"
+        )
+      end
+    ]
+    mutations.each do |text|
+      error = assert_raises(PolicyError) do
+        validate_language_track_ci_contract(text)
+      end
+      assert_match(/redirect|execution-altering keys: env/, error.message)
+    end
+  end
+
+  def test_trusted_policy_rejects_language_track_job_execution_controls
+    mutations = [
+      mutate_language_track_job do |job|
+        job.sub("    runs-on: ubuntu-latest", "    runs-on: self-hosted")
+      end,
+      mutate_language_track_job do |job|
+        job.sub(
+          "    runs-on: ubuntu-latest",
+          "    runs-on: ubuntu-latest\n    container: attacker/image"
+        )
+      end,
+      mutate_language_track_job do |job|
+        job.sub(
+          "      - name: Check Python language-track consistency",
+          "      - name: Check Python language-track consistency\n        id: hidden"
+        )
+      end
+    ]
+    mutations.each do |text|
+      assert_raises(PolicyError) do
+        validate_language_track_ci_contract(text)
+      end
+    end
+  end
+
+  def test_trusted_policy_requires_pinned_checkout_and_guard_first
+    mutations = [
+      mutate_language_track_job do |job|
+        job.sub(LANGUAGE_TRACK_CHECKOUT, "actions/checkout@v4")
+      end,
+      mutate_language_track_job do |job|
+        job.sub(
+          "          persist-credentials: false",
+          "          persist-credentials: false\n          ref: main"
+        )
+      end,
+      mutate_language_track_job do |job|
+        job.sub(
+          "          persist-credentials: false",
+          "          persist-credentials: false\n        run: ./head-controlled.sh"
+        )
+      end,
+      mutate_language_track_job do |job|
+        job.sub(
+          "      - name: Check Python language-track consistency",
+          "      - run: ./head-controlled.sh\n\n      - name: Check Python language-track consistency"
+        )
+      end
+    ]
+    mutations.each do |text|
+      assert_raises(PolicyError) do
+        validate_language_track_ci_contract(text)
+      end
+    end
+  end
+
+  def test_trusted_policy_allows_language_track_timeouts
+    text = mutate_language_track_job do |job|
+      job.sub(
+        "    runs-on: ubuntu-latest",
+        "    runs-on: ubuntu-latest\n    timeout-minutes: 60"
+      ).sub(
+      "      - name: Check Python language-track consistency",
+      "      - name: Check Python language-track consistency\n        timeout-minutes: 5"
+    )
+    end
+    validate_language_track_ci_contract(text)
+  end
+
+  def test_trusted_policy_requires_language_track_in_ci_gate
+    mutations = [
+      language_track_workflow.sub(
+        "      - language-track-policy\n",
+        ""
+      ),
+      language_track_workflow.sub(
+        "          needs.language-track-policy.result != 'success' ||\n",
+        ""
+      )
+    ]
+    mutations.each do |text|
+      error = assert_raises(PolicyError) do
+        validate_language_track_ci_contract(text)
+      end
+      assert_match(/ci-gate/, error.message)
+    end
+  end
+
+  def test_trusted_policy_requires_exact_ci_gate_failure_predicate
+    text = mutate_ci_gate do |job|
+      job.sub(
+        "          needs.language-track-policy.result != 'success' ||\n",
+        "          (needs.language-track-policy.result != 'success' && false) ||\n"
+      )
+    end
+
+    error = assert_raises(PolicyError) do
+      validate_language_track_ci_contract(text)
+    end
+    assert_match(/exact fail-closed predicate and command/, error.message)
+  end
+
+  def test_trusted_policy_requires_ci_gate_to_exit_with_failure
+    text = mutate_ci_gate do |job|
+      job.sub(
+        "          exit 1\n",
+        "          true\n"
+      )
+    end
+
+    error = assert_raises(PolicyError) do
+      validate_language_track_ci_contract(text)
+    end
+    assert_match(/exact fail-closed predicate and command/, error.message)
+  end
+
+  def test_trusted_policy_rejects_ci_gate_execution_bypasses
+    mutations = [
+      mutate_ci_gate do |job|
+        job.sub(
+          "  ci-gate:\n",
+          "  ci-gate:\n    continue-on-error: true\n"
+        )
+      end,
+      mutate_ci_gate do |job|
+        job.sub(
+          "      - name: Fail unless every required job succeeded\n",
+          "      - name: Fail unless every required job succeeded\n" \
+          "        continue-on-error: true\n"
+        )
+      end,
+      mutate_ci_gate do |job|
+        job.sub(
+          "      - name: Fail unless every required job succeeded\n",
+          "      - run: true\n\n" \
+          "      - name: Fail unless every required job succeeded\n"
+        )
+      end
+    ]
+
+    mutations.each do |text|
+      error = assert_raises(PolicyError) do
+        validate_language_track_ci_contract(text)
+      end
+      assert_match(/ci-gate/, error.message)
+    end
+  end
+
   def test_accepts_explicit_empty_baseline
     validate_workflow(
       workflow.sub("permissions:\n  contents: read", "permissions: {}")

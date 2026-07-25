@@ -29,12 +29,12 @@ and What's New documents on **2026-07-24**:
 
 | Track | Upstream checkpoint | pycc consequence |
 |---|---|---|
-| v1 stable oracle | Python **3.14.6** final, released 2026-06-10 | Pin new conformance recordings and CI oracle setup to 3.14.6; re-record outputs when the oracle moves from 3.14.3. |
-| Post-v1 preview | Python **3.15.0b4**, released 2026-07-18 | Feature-frozen since 3.15.0b1; track only Final/Accepted Standards Track PEPs below until 3.15.0 final. |
+| v1.0 stable oracle | Python **3.14.6** final, released 2026-06-10 | Pin new conformance recordings and CI oracle setup to 3.14.6; re-record outputs when the oracle moves from 3.14.3. |
+| Post-v1.0 preview | Python **3.15.0b4**, released 2026-07-18 | Feature-frozen since 3.15.0b1; track only Final/Accepted Standards Track PEPs below until 3.15.0 final. |
 
-D-012 remains unchanged: v1 accepts exactly Python 3.14. The 3.15 rows do not
-expand the v1 grammar or acceptance gate. Promoting them into a supported
-language level requires Python 3.15 final, the post-v1 roadmap gate, and a new
+D-012 fixes v1.0 to exactly Python 3.14. The 3.15 rows do not
+expand the v1.0 grammar or acceptance gate. Promoting them into a supported
+language level requires Python 3.15 final, the post-v1.0 roadmap gate, and a new
 ADR that supersedes D-012.
 
 The gate-opening change must also add a machine-readable supported-language
@@ -213,7 +213,7 @@ For each newly observed upstream release:
 
 These rows reflect the feature-frozen 3.15.0b4 surface. They are planning
 inputs for the post-v1.0 language-level upgrade and are not part of the Python
-3.14 v1 acceptance gate.
+3.14 v1.0 acceptance gate.
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|

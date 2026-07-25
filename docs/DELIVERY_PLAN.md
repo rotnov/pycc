@@ -27,7 +27,7 @@ Verified empirically on the primary dev host (macOS, aarch64-apple-darwin) befor
 |---|---|---|
 | Rust | `rustc 1.97.1` (stable, updated via `rustup update stable`; matches README's "1.97+" exactly) | Toolchain pinned via `rust-toolchain.toml` inside the repo — **not** a global `rustup default` change, since this machine has other toolchains (incl. a `solana` one) that must stay untouched |
 | LLVM | `22.1.1` (single Homebrew keg; the `llvm@17`..`llvm@22` opt-paths are stale symlinks to the same keg, not distinct installs) | `inkwell = "0.9"` with feature `llvm22-1` — clean match, no version fudging needed |
-| CPython oracle | `python3.14` → `3.14.3` at `/opt/homebrew/bin/python3.14` | Matches the v1 language line but is behind the current 3.14.6 patch target; upgrade before PR-6. |
+| CPython oracle | `python3.14` → `3.14.3` at `/opt/homebrew/bin/python3.14` | Matches the v1.0 language line but is behind the current 3.14.6 patch target; upgrade before PR-6. |
 | Local linker | Apple clang 21 / Xcode CLT `ld64` | Sufficient for the first vertical slice on native host; PR-3's `--target` work (D-026/D-028/D-031) routes through each host's own driver -- system `cc` (Apple clang) on macOS, bundled clang on Windows/Linux when `--target` is given -- not a universally bundled `lld` binary, which none of the three LLVM distributions this project installs actually ships |
 | crates.io | Reachable (a bare `curl -I` 403s on crates.io's anti-bot filter — mundane, not a sandbox restriction; a real UA gets 200) | `cargo build` can fetch `ruff_python_parser`, `inkwell`, `rayon`, `mimalloc` |
 | `gh` CLI | Authenticated, `repo`+`workflow` scopes | Can open PRs and push `.github/workflows` |

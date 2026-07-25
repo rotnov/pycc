@@ -37,7 +37,7 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 [project]
 name = "myapp"
 entry = "src/main.py"
-python = "3.14"          # language level; only 3.14 in v1
+python = "3.14"          # v1.0 language level; later v1.x needs its gate + ADR
 
 [build]
 opt = "release"          # default profile for `pycc build`

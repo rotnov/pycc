@@ -43,7 +43,7 @@ Everything else (`tkinter`, `multiprocessing`, `ctypes`, …) reachable through 
 
 ## Python 3.15 preview (post-v1.0)
 
-The v1 surface remains CPython 3.14. The v1.x upgrade defined in ROADMAP.md
+The v1.0 surface remains CPython 3.14. The v1.x upgrade defined in ROADMAP.md
 adds these feature-frozen 3.15 deltas:
 
 | PEP | Surface | Plan |

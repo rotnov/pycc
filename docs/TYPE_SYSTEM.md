@@ -64,7 +64,7 @@ Per PEP 649/749 (3.14): annotations are lazily evaluated code — pycc evaluates
 
 ## Python 3.15 typing preview (post-v1.0)
 
-The preview does not expand the v1 Python 3.14 contract. The v1.x language
+The preview does not expand the v1.0 Python 3.14 contract. The v1.x language
 upgrade in ROADMAP.md adds four type-system obligations: singleton-value typing
 and `is` narrowing for `sentinel()` (PEP 661), typed `TypedDict` extra items
 (PEP 728), `TypeForm` (PEP 747), and disjoint-base reasoning (PEP 800). Each is

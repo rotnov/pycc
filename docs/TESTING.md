@@ -28,6 +28,57 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
+## Language-track regression assertions
+
+Required CI runs `scripts/check_language_tracks.py` before importing
+`scripts/test_check_language_tracks.py`. The registered assertions bind the
+root invariant, README, roadmap, conformance matrix, testing contract, active
+ADR, and public-site projections to the same v1.0/Python 3.14 scope. They also
+preserve the cumulative 3.14 and planned 3.15 fixture ranges plus the
+independent pinned 3.14 compatibility run.
+
+The self-tests mutate each contract independently. They reintroduce the
+permanent-3.14 wording, widen v1.0 claims to all of v1, make either language run
+non-cumulative, remove the independent 3.14 run or superseding-ADR gate, and
+remove either CI command. A registered mutation-test inventory prevents silent
+test deletion or rebinding. It requires every named test exactly once and
+hashes the complete executable self-test source, so a hollow method or
+module-level unittest discovery override also requires explicit
+re-registration. Hidden Markdown comments, quoted text, non-normative fenced
+examples, and struck text cannot satisfy a required visible claim (the normative
+`pycc.toml` example in `CLI_SPEC.md` is the sole fenced assertion).
+The checker also hashes all visible normative Markdown in every registered
+policy document, plus the normative `pycc.toml` example. Any new or edited
+statement there therefore fails as unregistered regardless of wording; an
+intentional edit updates the reviewable prose, exact assertions, mutation
+cases, and canonical digest together. Public-site projections are checked by
+exact required claims and mutation cases without hashing unrelated HTML,
+metadata, or presentation.
+
+The trusted-base workflow policy separately parses the head `ci.yml` as data.
+It requires a dedicated `language-track-policy` job on every pull request, its
+pinned credential-free candidate-merge checkout, and the unique unconditional
+language-track step as the first executable step. The step uses an isolated
+environment with the default shell and the exact guard-then-self-test command
+sequence. The repository contract is therefore checked before Python imports
+the head-controlled mutation suite. No preceding head-controlled command can
+rewrite its inputs, and `ci-gate` requires the job to succeed. Deleting,
+redirecting, or masking the
+regular-CI invocation therefore fails the required `audit` check without
+executing pull-request code. The prose digests and their
+validator remain head-controlled regression tripwires, not a security boundary;
+the trusted audit protects their invocation, while human review protects an
+intentional simultaneous weakening of head tests, validator, and digests.
+
+The initial rollout follows the repository's staged CI-evidence protocol. A
+preparatory pull request adds the exact prospective `ci.yml` digest while
+retaining the active digest. After that change merges to the default branch,
+the activation pull request changes the workflow byte-for-byte to the reviewed
+version and adds the semantic Psych-AST contract; its trusted-default-branch
+`audit` authorizes the already-staged digest without executing head code. A
+cleanup change retires the old digest. After activation, both the exact
+workflow digest and the semantic contract protect every later pull request.
+
 ## Differential fuzzing
 
 Generator produces well-typed programs (type-directed generation — always compile-clean), weighted toward: arithmetic edges (overflow → bigint promotion paths), string unicode edges, collection aliasing, control-flow + exceptions, match patterns. Mismatch → auto-minimize (creduce-style) → auto-file issue with repro. Runs continuously on a dedicated runner.
@@ -119,25 +170,27 @@ structural cache-lifecycle validator remains fail-closed for any future
 `frontend-perf-gate`, but PR-6 must still stage its exact new workflow bytes and
 digest before activation.
 
-A separate reviewed prospective workflow authorizes the Python language-track
-regression guard without activating it. Its inert
+The preceding staged authorization reviews the Python language-track workflow
+before activation. Its inert
 `scripts/fixtures/ci-language-track-policy.yml` snapshot adds a dedicated
 `language-track-policy` job, runs the repository guard before any
 head-controlled self-test import, and makes the job an explicit `ci-gate`
-dependency. The active workflow on `main` does not yet contain that job; the
-extra allowlist entry is phase-one authorization, not evidence that the guard
-is already live. No frontend-performance workflow remains allowlisted: under
-D-047, PR-6 must stage a fresh exact candidate that preserves every then-active
-required job before it can activate the deferred performance gate.
+dependency. This activation replaces `ci.yml` with those exact reviewed bytes,
+so the language-track job is active in this revision. No frontend-performance
+workflow remains allowlisted: under D-047, PR-6 must stage a fresh exact
+candidate that preserves every then-active required job before it can activate
+the deferred performance gate.
 
-Regular CI runs the self-tests and repository checker after the hard coverage
-step for fast feedback; placing a head-controlled script before that step would
-violate the trusted setup sequence. The authority is the required read-only
-`Workflow policy` job: it checks out the base revision, downloads the head
-revision's workflows and `docs/ROADMAP.md` as non-executable data, then runs the
-base revision's roadmap tests and checker against those inputs. A pull request
-that replaces its own checker therefore cannot replace the implementation that
-authorizes its checked roadmap markers.
+The dedicated language-track job runs its repository guard and then its
+self-tests immediately after the pinned checkout. The authority is the
+required read-only `Workflow policy` job: it checks out the base revision,
+downloads the head revision's workflows and `docs/ROADMAP.md` as non-executable
+data, then runs the base revision's roadmap tests and checker against those
+inputs. A pull request that replaces its own checker therefore cannot replace
+the implementation that authorizes its checked roadmap markers. Because
+`pull_request_target` binds `github.sha` to the pull request's base branch, an
+activation pull request must target the protected default branch directly; a
+non-default stacked base is not an acceptable trust context.
 
 ## CI privilege policy
 
@@ -165,6 +218,8 @@ them through Ruby's standard-library `Psych` YAML AST so quoted/spaced keys,
 null values, and duplicates cannot bypass the policy. YAML merge keys and
 aliases are rejected conservatively because the checker must not infer a
 less-privileged expanded job than GitHub executes.
+It also enforces the language-track invocation contract described above for
+the unique `ci.yml` in the audited workflow set.
 The audited workflow set must contain `workflow-policy.yml`, and that file must
 match an explicitly approved SHA-256 digest in the trusted checker. This makes
 deletion, renaming, trigger replacement, or an extra executable step fail
@@ -176,13 +231,15 @@ activation change.
 
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
-`pull_request_target` on every pull request, checks out the trusted base commit,
-downloads the head revision's workflow YAML and `docs/ROADMAP.md` through the
-read-only GitHub API, and treats them as data. It never checks out or executes
-pull-request code, so the check can remain required without path-filtered runs
-getting stuck as pending. Its checkout uses `github.sha`, which
-`pull_request_target` defines as the latest commit on the base branch; do not
-substitute the webhook payload's potentially stale `pull_request.base.sha`.
+`pull_request_target` on every pull request, checks out the pull request's base
+commit through `github.sha`, downloads the head revision's workflow YAML and
+`docs/ROADMAP.md` through the read-only GitHub API, and treats them as data. It
+never checks out or executes pull-request code. The checkout is a trusted
+default-branch anchor only when the pull request targets protected `main`;
+security-sensitive activation PRs therefore target `main` directly even when
+their preparatory authorization remains an unmerged dependency. A stacked
+non-default base is useful for reviewing a diff but is not accepted as audit
+evidence. Do not substitute another webhook payload ref for this constraint.
 Job-level trusted-ref exceptions remain a review boundary: reviewers
 must verify the event, actor where relevant, ref, trusted commit, environment,
 and every artifact/cache/output boundary, with a focused negative-event test
@@ -201,13 +258,13 @@ checked out the trusted policy implementation from base commit
 [PR #35](https://github.com/rotnov/pycc/pull/35) head as non-executable data.
 Branch protection is strict and requires `ci-gate` and `audit`, bound to the
 GitHub Actions app. `ci-gate` (D-032) is a single stable-named job in
-`ci.yml` that fans in every job in that workflow (`build-test-coverage`, all
-four `native-build-test` Tier-1 legs, `cross-compile-build`,
-`cross-compile-verify`) so branch protection enforces the whole Tier-1
-matrix through one required-check name that survives matrix edits, rather
-than naming each matrix leg directly (whose GitHub-generated name bakes in
-the matrix values and would go stale the moment an `os`/`target` entry
-changes). The switch from directly requiring `build-test-coverage` to
+`ci.yml` that fans in every job in that workflow (`build-test-coverage`,
+`language-track-policy`, all four `native-build-test` Tier-1 legs,
+`cross-compile-build`, `cross-compile-verify`) so branch protection enforces
+the whole Tier-1 matrix through one required-check name that survives matrix
+edits, rather than naming each matrix leg directly (whose GitHub-generated
+name bakes in the matrix values and would go stale the moment an `os`/`target`
+entry changes). The switch from directly requiring `build-test-coverage` to
 requiring `ci-gate` happened once `ci-gate` existed on `main` (PR #19,
 merged 2026-07-25) -- it was deliberately not done inside that same PR,
 since flipping it earlier, while other branches were still open against a

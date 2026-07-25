@@ -119,6 +119,27 @@ jobs:
           rustup component add clippy
           cargo clippy --workspace --all-targets -- -D warnings
 
+  language-track-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Check Python language-track consistency
+        env:
+          BASH_ENV: ""
+          ENV: ""
+          DYLD_INSERT_LIBRARIES: ""
+          DYLD_LIBRARY_PATH: ""
+          LD_PRELOAD: ""
+          LD_LIBRARY_PATH: ""
+          PYTHONHOME: ""
+          PYTHONPATH: ""
+        run: |
+          /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -B scripts/check_language_tracks.py
+          /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 -I -B -m unittest discover -s scripts -p 'test_check_language_tracks.py'
+
   # PR-3: native build+test+lint on the other 4 Tier-1 targets. No coverage
   # requirement here -- that's build-test-coverage's job alone, per D-014.
   native-build-test:
@@ -323,7 +344,12 @@ jobs:
   # unsatisfiable) while the new leg goes unenforced. This job's own name
   # never changes regardless of matrix edits.
   ci-gate:
-    needs: [build-test-coverage, native-build-test, cross-compile-build, cross-compile-verify]
+    needs:
+      - build-test-coverage
+      - language-track-policy
+      - native-build-test
+      - cross-compile-build
+      - cross-compile-verify
     if: always()
     runs-on: ubuntu-latest
     # Overrides the workflow-level `contents: read` default: this job only
@@ -343,6 +369,7 @@ jobs:
       - name: Fail unless every required job succeeded
         if: >-
           needs.build-test-coverage.result != 'success' ||
+          needs.language-track-policy.result != 'success' ||
           needs.native-build-test.result != 'success' ||
           needs.cross-compile-build.result != 'success' ||
           needs.cross-compile-verify.result != 'success'
