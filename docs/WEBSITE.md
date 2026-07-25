@@ -17,12 +17,15 @@ indexable explanation of pycc:
 - the project is pre-alpha, and design targets are not presented as released
   features.
 
-The canonical landing page links to three crawlable evidence pages:
+The canonical landing page links to four crawlable evidence pages:
 
 - `/status/` describes implemented behavior, enforced gates, remaining v0.1
   scope, and the next planned delivery slice;
 - `/architecture/` separates the working compiler path and current crates from
   the target typed-Python architecture;
+- `/python-aot-compilers/` maps pycc, Codon, Nuitka, mypyc, and Cython by
+  language contract, output artifact, runtime model, and maturity using each
+  project's official documentation, with no unsupported benchmark claims;
 - `/ai-native/` documents the AI-author/human-manager boundary, operating loop,
   safeguards, and public audit trail.
 
@@ -59,13 +62,15 @@ development-model claim is part of the public project identity, not hidden
 metadata.
 
 `site/robots.txt` and `site/sitemap.xml` must use the same canonical origin.
-The sitemap lists the landing page plus `/status/`, `/architecture/`, and
-`/ai-native/`; it records `lastmod` when main content, structured data, or
-important links materially change. The social preview is `site/og.png`.
+The sitemap lists the landing page plus `/status/`, `/architecture/`,
+`/python-aot-compilers/`, and `/ai-native/`; it records `lastmod` when main
+content, structured data, or important links materially change. The social
+preview is `site/og.png`.
 `scripts/check-site.sh` enforces these mechanical requirements locally and in
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
 site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
+missing official comparison sources, a missing pre-alpha comparison warning,
 or required metadata. The landing-page contract also requires exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
 classic-script reference to relative `site.js` with no `type` override.
@@ -118,8 +123,9 @@ from the relevant providers:
 map for tools that choose to consume the emerging
 [llms.txt proposal](https://llmstxt.org/). It is not described as a ranking
 factor. `site/index.html.md` is the clean Markdown equivalent recommended by
-that proposal. Both files link to the evidence pages and must preserve the
-landing page's status and AI-authorship disclosures.
+that proposal. Both files link to the evidence pages, including the
+source-backed compiler comparison, and must preserve the landing page's status
+and AI-authorship disclosures.
 
 The sitemap carries the standards-based discovery signal. After a successful
 production deployment, `scripts/notify-indexnow.sh` parses that validated

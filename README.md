@@ -16,7 +16,7 @@ standard Python language levels may enter only through explicit versioned
 conformance gates and superseding design decisions; pycc never adds its own
 syntax or dialect.
 
-[Project website](https://rotnov.github.io/pycc/) · [Current status](https://rotnov.github.io/pycc/status/) · [Architecture](https://rotnov.github.io/pycc/architecture/) · [AI-native experiment](https://rotnov.github.io/pycc/ai-native/) · [Search visibility](./docs/SEARCH_VISIBILITY.md) · [Specification](./docs/SPEC.md) · [Roadmap](./docs/ROADMAP.md)
+[Project website](https://rotnov.github.io/pycc/) · [Current status](https://rotnov.github.io/pycc/status/) · [Architecture](https://rotnov.github.io/pycc/architecture/) · [Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/) · [AI-native experiment](https://rotnov.github.io/pycc/ai-native/) · [Search visibility](./docs/SEARCH_VISIBILITY.md) · [Specification](./docs/SPEC.md) · [Roadmap](./docs/ROADMAP.md)
 
 ## The experiment
 

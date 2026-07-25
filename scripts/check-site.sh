@@ -19,6 +19,7 @@ for required_file in \
   404.html \
   status/index.html \
   architecture/index.html \
+  python-aot-compilers/index.html \
   ai-native/index.html
 do
   test -f "$site_dir/$required_file"
@@ -372,6 +373,7 @@ PY
 python3 - \
   "$site_dir/status/index.html" \
   "$site_dir/architecture/index.html" \
+  "$site_dir/python-aot-compilers/index.html" \
   "$site_dir/ai-native/index.html" <<'PY'
 from html.parser import HTMLParser
 import json
@@ -401,6 +403,32 @@ PAGE_SPECS = {
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
             "current crate boundaries, and the planned path from typed "
             "Python 3.14 to native binaries."
+        ),
+    },
+    "python-aot-compilers": {
+        "canonical": f"{ROOT}python-aot-compilers/",
+        "title": "Python AOT compilers compared — where pycc fits",
+        "description": (
+            "Compare pycc with Codon, Nuitka, mypyc, and Cython using "
+            "official documentation: input language, output artifact, "
+            "runtime model, and project status."
+        ),
+        "required_hrefs": (
+            "https://docs.exaloop.io/language/overview/",
+            "https://nuitka.net/user-documentation/use-cases.html",
+            "https://mypyc.readthedocs.io/en/stable/introduction.html",
+            (
+                "https://docs.cython.org/en/latest/src/quickstart/"
+                "overview.html"
+            ),
+            (
+                "https://docs.cython.org/en/latest/src/tutorial/"
+                "embedding.html"
+            ),
+        ),
+        "required_visible_text": (
+            "Do not choose pycc for production today.",
+            "Benchmarks none claimed",
         ),
     },
     "ai-native": {
@@ -680,16 +708,29 @@ for path_value in sys.argv[1:]:
                 f"{slug} is missing visible disclosure: {disclosure}"
             )
 
+    for required_text in spec.get("required_visible_text", ()):
+        if required_text not in visible_text:
+            raise SystemExit(
+                f"{slug} is missing required visible text: {required_text}"
+            )
+
     for required_href in (
         "../",
         "../status/",
         "../architecture/",
+        "../python-aot-compilers/",
         "../ai-native/",
         "https://github.com/rotnov/pycc",
     ):
         if required_href not in parser.anchors:
             raise SystemExit(
                 f"{slug} is missing internal navigation link: {required_href}"
+            )
+
+    for required_href in spec.get("required_hrefs", ()):
+        if required_href not in parser.anchors:
+            raise SystemExit(
+                f"{slug} is missing required source link: {required_href}"
             )
 PY
 
@@ -718,6 +759,7 @@ expected_locations = {
     canonical,
     f"{canonical}status/",
     f"{canonical}architecture/",
+    f"{canonical}python-aot-compilers/",
     f"{canonical}ai-native/",
 }
 locations = []
@@ -762,6 +804,7 @@ for required_link in (
     f"[Markdown website]({canonical}index.html.md)",
     f"[Current implementation status]({canonical}status/)",
     f"[Compiler architecture]({canonical}architecture/)",
+    f"[Python AOT compiler comparison]({canonical}python-aot-compilers/)",
     f"[AI-native experiment]({canonical}ai-native/)",
     "[Source repository](https://github.com/rotnov/pycc)",
     "[Specification index](https://github.com/rotnov/pycc/blob/main/docs/SPEC.md)",
@@ -782,6 +825,7 @@ for disclosure in (
 for evidence_link in (
     f"[Current implementation status]({canonical}status/)",
     f"[Compiler architecture]({canonical}architecture/)",
+    f"[Python AOT compiler comparison]({canonical}python-aot-compilers/)",
     f"[AI-native experiment]({canonical}ai-native/)",
 ):
     if evidence_link not in markdown:
