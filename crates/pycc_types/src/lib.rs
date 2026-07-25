@@ -5,7 +5,7 @@ use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
 use std::collections::HashMap;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Environment {
     bindings: HashMap<String, Ty>,
     functions: HashMap<String, (Vec<Ty>, Ty)>,
@@ -30,13 +30,6 @@ impl Environment {
 
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
         self.functions.get(name)
-    }
-
-    /// A fresh scope for a function body: starts with no local bindings (a
-    /// function body never sees its caller's or the module's variables),
-    /// but inherits the full function registry so sibling calls resolve.
-    fn child_for_function(&self) -> Self {
-        Self { bindings: HashMap::new(), functions: self.functions.clone() }
     }
 }
 
@@ -199,14 +192,16 @@ pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
     check_function_in(&Environment::new(), function)
 }
 
-/// Checks one function's body, resolving sibling calls against
-/// `module_env`'s function registry (see D-039) instead of an isolated,
-/// self-only scope.
+/// Checks one function's body, resolving sibling calls and module-level
+/// global reads against a clone of `module_env` (see D-039/D-040) instead
+/// of an isolated, self-only scope. Cloning (not sharing) `module_env`
+/// means a function's own parameter bindings and local assignments never
+/// leak back into the module scope or into any other function's check.
 fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(), Diagnostic> {
     let HirItem::Function { name, params, return_ty, body } = function else {
         panic!("check_function called with a non-Function HirItem");
     };
-    let mut env = module_env.child_for_function();
+    let mut env = module_env.clone();
     env.bind_function(name.clone(), params.iter().map(|(_, ty)| *ty).collect(), *return_ty);
     for (param_name, param_ty) in params {
         env.bind(param_name.clone(), *param_ty);
@@ -273,20 +268,35 @@ fn check_stmt_in_function(env: &mut Environment, stmt: &HirStmt, return_ty: Ty) 
 
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     let mut env = Environment::new();
-    // Register every function's signature before checking any statement
-    // body, matching Python's own "a module runs top to bottom, but any def
-    // already executed is callable" semantics -- top-level code and other
-    // function bodies (D-039) both need to see every function regardless of
-    // its position in the file.
+    // Pass 1: register every function's signature before checking any
+    // statement body, matching Python's own "a module runs top to bottom,
+    // but any def already executed is callable" semantics -- top-level
+    // code and other function bodies (D-039) both need to see every
+    // function regardless of its position in the file.
     for item in &hir.items {
         if let HirItem::Function { name, params, return_ty, .. } = item {
             env.bind_function(name.clone(), params.iter().map(|(_, ty)| *ty).collect(), *return_ty);
         }
     }
+    // Pass 2: check every top-level statement in source order, growing
+    // `env`'s bindings as module-level assignments are encountered --
+    // ordinary top-level code is still checked top-to-bottom (a top-level
+    // forward reference to a not-yet-assigned name is a genuine error).
     for item in &hir.items {
-        match item {
-            HirItem::TopLevelStmt(stmt) => check_stmt(&mut env, stmt)?,
-            HirItem::Function { .. } => check_function_in(&env, item)?,
+        if let HirItem::TopLevelStmt(stmt) = item {
+            check_stmt(&mut env, stmt)?;
+        }
+    }
+    // Pass 3: check every function body against a clone of `env` as it
+    // stands once the whole module's top-level code has been processed
+    // (D-040) -- a function can read any module-level global regardless of
+    // whether its own `def` appears before or after that global's
+    // assignment in the file, since real Python only evaluates a function
+    // body when it's *called*, typically after the module has finished
+    // running top to bottom.
+    for item in &hir.items {
+        if let HirItem::Function { .. } = item {
+            check_function_in(&env, item)?;
         }
     }
     Ok(())
@@ -877,6 +887,68 @@ mod tests {
                 },
             ],
         };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_can_read_a_module_level_global_defined_before_it() {
+        // Regression test for D-040: reading a module global from a function
+        // body needs no `global` declaration in real Python (that's only
+        // required to *rebind* one) -- child_for_function used to reset
+        // bindings to empty, so `f`'s body couldn't see `x` even though it's
+        // an ordinary module-level constant, not some caller's local.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(5) }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_can_read_a_module_level_global_defined_after_it() {
+        // Same gap, other direction: a function is only ever *called* after
+        // the module has (typically) finished running top to bottom, so a
+        // global defined later in the file is still visible inside an
+        // earlier function's body.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(5) }),
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_parameter_shadows_a_module_level_global_of_the_same_name() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::StringLiteral("global".to_string()),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+            ],
+        };
+        // If the global (Ty::Str) leaked through instead of the parameter
+        // (Ty::Int), this would fail with a T0023 return-type mismatch.
         assert!(check(&hir).is_ok());
     }
 
