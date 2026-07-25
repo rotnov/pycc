@@ -57,8 +57,8 @@ GitHub Action (`corpus-bot`):
 ## Roadmap acceptance evidence
 
 A checked acceptance item in [ROADMAP.md](./ROADMAP.md) is a release claim, not
-a manually maintained status decoration. Every `[x]` item must end with an
-inline marker:
+a manually maintained status decoration. Every `[x]` task-list item, including
+one nested in a Markdown blockquote, must end with an inline marker:
 
 ```markdown
 <!-- roadmap-evidence: <registered-id> -->
