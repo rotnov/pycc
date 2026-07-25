@@ -834,6 +834,8 @@ class AgentAssetValidationTests(unittest.TestCase):
             (".claude/skills/demo/agents/openai.yaml", "100644"),
             (".ievo/evolution/project.md", "100644"),
             (".github/actions/demo/action.yml", "100644"),
+            ("ci/check/action.yml", "100644"),
+            ("ci/check/action.yaml", "100644"),
             ("tests/agent_smoke.py", "100644"),
             ("scripts/check_ci_permissions.rb", "100644"),
             ("crates/demo/src/lib.rs", "100644"),
@@ -859,6 +861,115 @@ class AgentAssetValidationTests(unittest.TestCase):
 
                     self.assertEqual(len(failures), 1)
                     self.assertIn(relative, failures[0])
+
+    def test_claude_behavioral_settings_reject_optional_plugin_references(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings_path = root / ".claude" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            settings = self.claude_settings()
+            settings["enabledPlugins"][
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}"
+            ] = True
+            settings["hooks"] = {
+                "PreToolUse": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": f"/{FEATURE_DEV}",
+                            }
+                        ]
+                    }
+                ]
+            }
+            settings_path.write_text(
+                json.dumps(settings),
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(".claude/settings.json", failures[0])
+            self.assertIn(
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}",
+                failures[0],
+            )
+
+    def test_claude_marketplace_declarations_are_not_required_consumers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings_path = root / ".claude" / "settings.json"
+            settings_path.parent.mkdir(parents=True)
+            settings = self.claude_settings()
+            settings["enabledPlugins"][
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}"
+            ] = True
+            settings["extraKnownMarketplaces"][
+                CLAUDE_PLUGIN_MARKETPLACE
+            ] = {
+                "source": {
+                    "source": "github",
+                    "repo": "example" + "/optional-tools",
+                }
+            }
+            settings_path.write_text(
+                json.dumps(settings),
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+            )
+
+            self.assertEqual(failures, [])
+
+    def test_invalid_claude_settings_shapes_are_scanned_as_raw_text(self) -> None:
+        settings = {
+            "enabledPlugins": {
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                "ievo@ievo-skills": True,
+            }
+        }
+        cases = (
+            f'{{"hooks": ["/{FEATURE_DEV}"]',
+            json.dumps([f"/{FEATURE_DEV}"]),
+        )
+        for contents in cases:
+            with self.subTest(contents=contents):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    settings_path = root / ".claude" / "settings.json"
+                    settings_path.parent.mkdir(parents=True)
+                    settings_path.write_text(contents, encoding="utf-8")
+
+                    self.assertEqual(
+                        validator.required_asset_body(
+                            Path(".claude/settings.json"),
+                            contents,
+                        ),
+                        contents,
+                    )
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(".claude/settings.json", failures[0])
+                    self.assertIn(
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}",
+                        failures[0],
+                    )
 
     def test_ignored_instruction_file_is_not_a_repository_asset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

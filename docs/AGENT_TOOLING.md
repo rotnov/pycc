@@ -123,14 +123,16 @@ not depend on optional plugins. The agent-asset validator scans the shared
 instructions (including scoped `AGENTS.md` and `CLAUDE.md` files), every tracked file
 under the Codex, Claude, and iEvo evolution trees, tracked tests (including source
 formats that can contain inline tests), required workflows, the repository `scripts/`
-tree, local composite actions, interpreter-recognized script formats, and tracked
-executables. Discovery comes from `git ls-files`, so ignored caches and dependency
-checkouts cannot make local validation disagree with a clean CI checkout. Required
-agent assets stored as Git symlinks are rejected rather than followed outside the
-reviewed tree.
-`.claude/settings.json` is the declaration of optional capabilities rather than a
-required consumer and is excluded from the reference scan. The provenance frontmatter
-of a vendored `.ievo/evolution` overlay is likewise metadata. A standard dated
+tree, local action manifests anywhere in the repository, every tracked file under the
+conventional `.github/actions/` tree, interpreter-recognized script formats, and
+tracked executables. Discovery comes from `git ls-files`, so ignored caches and
+dependency checkouts cannot make local validation disagree with a clean CI checkout.
+Required agent assets stored as Git symlinks are rejected rather than followed outside
+the reviewed tree.
+Within `.claude/settings.json`, `enabledPlugins` and `extraKnownMarketplaces` declare
+optional capabilities and are excluded from the reference scan; behavioral fields
+such as shared hooks remain required and scanned. The provenance frontmatter of a
+vendored `.ievo/evolution` overlay is likewise metadata. A standard dated
 `Vendored from <repo>` heading is also provenance only when its repository exactly
 matches that frontmatter; every other part of the overlay body remains required and
 scanned. Every selected asset is checked regardless of file extension,

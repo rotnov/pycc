@@ -67,7 +67,12 @@ AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
 REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
 PINNED_CLAUDE_PLUGINS = {"ievo@ievo-skills"}
 INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md"}
-DECLARATION_ONLY_FILES = {Path(".claude/settings.json")}
+CLAUDE_SETTINGS_PATH = Path(".claude/settings.json")
+CLAUDE_MARKETPLACE_DECLARATION_FIELDS = {
+    "enabledPlugins",
+    "extraKnownMarketplaces",
+}
+LOCAL_ACTION_MANIFESTS = {"action.yml", "action.yaml"}
 SCRIPT_SUFFIXES = {
     ".bash",
     ".bat",
@@ -571,11 +576,10 @@ def is_test_asset(relative: Path) -> bool:
 
 
 def is_required_agent_asset(relative: Path, executable: bool) -> bool:
-    if relative in DECLARATION_ONLY_FILES:
-        return False
     parts = relative.parts
     return (
         relative.name in INSTRUCTION_FILES
+        or relative.name in LOCAL_ACTION_MANIFESTS
         or (parts and parts[0] in {".agents", ".claude", "agents"})
         or parts[:2] == (".ievo", "evolution")
         or parts[:2] == (".github", "workflows")
@@ -628,6 +632,23 @@ def mask_token(text: str, token: str) -> str:
 
 
 def required_asset_body(relative: Path, text: str) -> str:
+    if relative == CLAUDE_SETTINGS_PATH:
+        try:
+            settings = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        if not isinstance(settings, dict):
+            return text
+        behavioral_settings = {
+            key: value
+            for key, value in settings.items()
+            if key not in CLAUDE_MARKETPLACE_DECLARATION_FIELDS
+        }
+        return json.dumps(
+            behavioral_settings,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
     if relative.parts[:2] != (".ievo", "evolution"):
         return text
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
