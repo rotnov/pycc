@@ -7,8 +7,9 @@ require "digest"
 
 class RoadmapEvidenceError < StandardError; end
 
-CHECKED_ITEM =
-  /\A {0,3}(?:> ?)*(?:[-*+]|\d+[.)])[ \t]+\[[xX]\][ \t]+(?<claim>.*)$/
+LIST_ITEM =
+  /\A(?<indent>[ \t]*)(?<marker>[-*+]|\d+[.)])(?<spacing>[ \t]+)(?<body>.*)$/
+CHECKED_ITEM_BODY = /\A\[[xX]\][ \t]+(?<claim>.*)$/
 ATX_HEADING = /^\s{0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
 SETEXT_UNDERLINE = /\A {0,3}(?:=+|-+)[ \t]*(?:\r?\n)?\z/
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
@@ -30,8 +31,9 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ]
 }.freeze
-TIER1_CI_WORKFLOW_SHA256 =
+TIER1_CI_WORKFLOW_SHA256S = [
   "58e2d5026b59e7c921b57c882d24b6507c95dd8f99e390c0a68af217e5e038c8"
+].freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
@@ -307,11 +309,37 @@ def blockquote_content(line)
   [content, depth]
 end
 
+def indentation_width(whitespace, initial_column = 0)
+  whitespace.each_char.reduce(initial_column) do |column, character|
+    character == "\t" ? column + (4 - (column % 4)) : column + 1
+  end
+end
+
+def rendered_list_item(line, containers)
+  item = LIST_ITEM.match(line)
+  return unless item
+
+  indent = indentation_width(item[:indent])
+  parent_index = containers.rindex { |content_indent| indent >= content_indent }
+  return if indent > 3 && parent_index.nil?
+
+  containers.replace(parent_index ? containers.first(parent_index + 1) : [])
+  marker_end = indent + item[:marker].length
+  content_indent = indentation_width(item[:spacing], marker_end)
+  padding = content_indent - marker_end
+  containers << (padding <= 4 ? content_indent : marker_end + 1)
+
+  return if padding > 4
+
+  CHECKED_ITEM_BODY.match(item[:body])
+end
+
 def validate_roadmap(text)
   evidence_ids = []
   heading_path = []
   fence = nil
   in_html_comment = false
+  list_containers = Hash.new { |containers, depth| containers[depth] = [] }
   text.each_line.with_index(1) do |line, line_number|
     if fence
       candidate, quote_depth = blockquote_content(line)
@@ -335,6 +363,7 @@ def validate_roadmap(text)
 
     heading = ATX_HEADING.match(visible_line)
     if heading
+      list_containers.clear
       level = heading[:marks].length
       title = heading[:title].sub(/[ \t]+#+[ \t]*$/, "").strip
       heading_path = heading_path.first(level - 1)
@@ -342,7 +371,16 @@ def validate_roadmap(text)
       next
     end
 
-    item = CHECKED_ITEM.match(visible_line)
+    containers = list_containers[quote_depth]
+    item = rendered_list_item(fence_candidate, containers)
+    unless LIST_ITEM.match?(fence_candidate)
+      if fence_candidate.strip.empty?
+        next
+      end
+
+      indent = indentation_width(fence_candidate[/\A[ \t]*/])
+      containers.pop while containers.any? && indent < containers.last
+    end
     next unless item
 
     marker_ids = []
@@ -387,7 +425,7 @@ def validate_evidence(root, evidence_ids)
   workflow_text = workflow.read
   if evidence_ids.include?("ci-tier1-cross-compile")
     digest = Digest::SHA256.hexdigest(workflow_text)
-    unless digest == TIER1_CI_WORKFLOW_SHA256
+    unless TIER1_CI_WORKFLOW_SHA256S.include?(digest)
       raise RoadmapEvidenceError,
             "#{workflow}: does not match the reviewed Tier-1 CI workflow"
     end

@@ -68,10 +68,11 @@ exactly one inline marker, including an item nested in a Markdown blockquote:
 complete roadmap heading path and claim it proves plus a deterministic
 repository check. Missing, unknown, misplaced, or claim-mismatched markers
 fail. Fenced code, including a fence nested in a blockquote, and HTML comments
-do not contribute rendered headings or task items; four-space-indented blocks
-are also treated as code rather than task lists. Setext headings are rejected
-fail-closed; roadmap structure uses ATX `#` headings only. Adding a new evidence
-type starts with a failing public-CLI mutation in
+do not contribute rendered headings or task items. A task indented beneath a
+rendered list container is still checked, while an unattached
+four-space-indented block is code. Setext headings are rejected fail-closed;
+roadmap structure uses ATX `#` headings only. Adding a new evidence type starts
+with a failing public-CLI mutation in
 `scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
 and documented claim land together.
 
@@ -89,12 +90,13 @@ The initial `ci-build-test-coverage-100` evidence requires all of the following:
   `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
   inside a clean environment owned by the unprivileged `nobody` user.
 
-The `ci-tier1-cross-compile` evidence binds the exact reviewed `ci.yml` bytes
-that provide the five Tier-1 native targets, cross-host build and execution
-proof, and aggregate `ci-gate`. Because a workflow can preserve plausible job
-names while bypassing their commands, any future change to that evidence is
-staged: first review and authorize the prospective digest in the trusted
-checker, then change the workflow and roadmap claim.
+The `ci-tier1-cross-compile` evidence binds an allowlist of exact reviewed
+`ci.yml` byte digests that provide the five Tier-1 native targets, cross-host
+build and execution proof, and aggregate `ci-gate`. Because a workflow can
+preserve plausible job names while bypassing their commands, any future change
+to that evidence is staged: first append the reviewed prospective digest while
+retaining the current digest in the trusted checker, then change the workflow
+and roadmap claim, and finally remove the superseded digest.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would

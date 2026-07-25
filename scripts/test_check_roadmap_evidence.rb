@@ -9,6 +9,8 @@ require "psych"
 require "rbconfig"
 require "tmpdir"
 
+require_relative "check_roadmap_evidence"
+
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
   COVERAGE_STEP_HEADER =
@@ -145,6 +147,25 @@ class RoadmapEvidenceCliTest < Minitest::Test
       refute status.success?, "expected #{prefix.inspect} task item to be checked"
       assert_includes stderr, "checked roadmap item is missing an evidence marker"
     end
+  end
+
+  def test_rejects_checked_items_nested_under_list_containers_without_evidence
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - Grouped acceptance claims:
+
+          - [x] `pycc check` processes 1k LOC in under 50 ms.
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: "jobs: {}\n")
+
+    refute status.success?
+    assert_includes stderr, "checked roadmap item is missing an evidence marker"
   end
 
   def test_rejects_evidence_marker_attached_to_the_wrong_claim
@@ -355,6 +376,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     assert status.success?, stderr
     assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_tier1_workflow_authorization_is_an_allowlist
+    assert_kind_of Array, TIER1_CI_WORKFLOW_SHA256S
+    assert_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      Digest::SHA256.hexdigest(
+        (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
+      )
+    )
   end
 
   def test_rejects_changed_tier1_matrix_workflow
