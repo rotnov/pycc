@@ -76,7 +76,7 @@ HOME_RELATIVE_IN_COMMAND = re.compile(
     r"\$env:userprofile|%userprofile%)[/\\]",
     re.IGNORECASE,
 )
-SHELL_CONTROL = re.compile(r"&&|\|\||[;&|]")
+SHELL_CONTROL = re.compile(r"&&|\|\||[;&|\r\n]")
 
 
 def tracked_files() -> set[str]:
@@ -112,16 +112,19 @@ def parsed_hook_commands(
                 command = entry.get("command")
                 if not isinstance(command, str):
                     continue
-                command_for_split = (
-                    command.replace("\\", "\\\\")
-                    if WINDOWS_ABSOLUTE_IN_COMMAND.search(command)
-                    or HOME_RELATIVE_IN_COMMAND.search(command)
-                    else command
-                )
-                try:
-                    command_tokens = shlex.split(command_for_split)
-                except ValueError:
+                if "\r" in command or "\n" in command:
                     command_tokens = [command]
+                else:
+                    command_for_split = (
+                        command.replace("\\", "\\\\")
+                        if WINDOWS_ABSOLUTE_IN_COMMAND.search(command)
+                        or HOME_RELATIVE_IN_COMMAND.search(command)
+                        else command
+                    )
+                    try:
+                        command_tokens = shlex.split(command_for_split)
+                    except ValueError:
+                        command_tokens = [command]
                 argument_tokens = (
                     [argument for argument in arguments if isinstance(argument, str)]
                     if isinstance(arguments, list)
