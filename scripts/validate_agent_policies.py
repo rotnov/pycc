@@ -97,7 +97,7 @@ HOME_RELATIVE_IN_COMMAND = re.compile(
     r"\$env:userprofile|%userprofile%)[/\\]",
     re.IGNORECASE,
 )
-SHELL_CONTROL = re.compile(r"&&|\|\||[;&|]")
+SHELL_CONTROL = re.compile(r"&&|\|\||[;&|\r\n]")
 UNSAFE_RAW_SHELL_SYNTAX = re.compile(r"[\r\n`()<>]")
 RAW_SHELL_EXPANSION = re.compile(r"\$|%[A-Za-z_][A-Za-z0-9_]*%|[*?\[{]")
 PROJECT_VARIABLE = r"\$(?:CLAUDE_PROJECT_DIR|\{CLAUDE_PROJECT_DIR\})"

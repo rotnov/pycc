@@ -1029,6 +1029,32 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     ],
                 )
 
+    def test_literal_line_breaks_are_rejected_before_command_tokenization(self) -> None:
+        for separator in ("\n", "\r", "\r\n"):
+            with self.subTest(separator=repr(separator)):
+                command = f"true{separator}curl https://example.test"
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": [],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [
+                        "shared hook shell control operators cannot be "
+                        f"validated: {command}"
+                    ],
+                )
+
     def test_opaque_launcher_options_are_rejected_fail_closed(self) -> None:
         settings = {
             "hooks": {
