@@ -474,6 +474,11 @@ end
 def validate_evidence(root, evidence_ids)
   workflow = root / ".github/workflows/ci.yml"
   workflow_text = workflow.read
+  unless coverage_gate_present?(workflow_text, workflow.to_s)
+    raise RoadmapEvidenceError,
+          "#{workflow}: evidence does not provide the exact 100% line and region gate"
+  end
+
   if evidence_ids.include?("ci-tier1-cross-compile")
     digest = Digest::SHA256.hexdigest(workflow_text)
     unless TIER1_CI_WORKFLOW_SHA256S.include?(digest)
@@ -481,12 +486,6 @@ def validate_evidence(root, evidence_ids)
             "#{workflow}: does not match the reviewed Tier-1 CI workflow"
     end
   end
-
-  return unless evidence_ids.include?("ci-build-test-coverage-100")
-  return if coverage_gate_present?(workflow_text, workflow.to_s)
-
-  raise RoadmapEvidenceError,
-        "#{workflow}: evidence does not provide the exact 100% line and region gate"
 end
 
 def main(arguments)

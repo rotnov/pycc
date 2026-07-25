@@ -94,6 +94,13 @@ The initial `ci-build-test-coverage-100` evidence requires all of the following:
   `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
   inside a clean environment owned by the unprivileged `nobody` user.
 
+That workflow proof is also an unconditional repository invariant. The trusted
+checker validates it even while the roadmap claim is unchecked or absent, so a
+pull request cannot remove every evidence marker and replace the required
+coverage job with a successful no-op. The marker controls whether the delivery
+claim may be shown as complete; it never controls whether hard coverage is
+enforced.
+
 The `ci-tier1-cross-compile` evidence binds an allowlist of exact reviewed
 `ci.yml` byte digests that provide the five Tier-1 native targets, cross-host
 build and execution proof, and aggregate `ci-gate`. Because a workflow can
@@ -107,12 +114,12 @@ current contract.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
-violate the trusted setup sequence. This preparatory change does not authorize
-a checked roadmap marker yet because a pull request controls that copy of the
-checker. The follow-up trust-anchor change must make the required read-only
-`Workflow policy` job run the base revision's checker against head workflows
-and `docs/ROADMAP.md` as non-executable data before the coverage item can return
-to `[x]`.
+violate the trusted setup sequence. The authority is the required read-only
+`Workflow policy` job: it checks out the base revision, downloads the head
+revision's workflows and `docs/ROADMAP.md` as non-executable data, then runs the
+base revision's roadmap tests and checker against those inputs. A pull request
+that replaces its own checker therefore cannot replace the implementation that
+authorizes its checked roadmap markers.
 
 ## CI privilege policy
 
@@ -146,18 +153,19 @@ deletion, renaming, trigger replacement, or an extra executable step fail
 closed. Updating the anchor is intentionally staged: first add the independently
 reviewed prospective workflow as an inert fixture and add its exact digest
 while the old anchor remains, then replace the active anchor byte-for-byte from
-that fixture in a later pull request, and remove the retired digest afterward.
+that fixture in a later pull request and retire the superseded digest in that
+activation change.
 
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
 `pull_request_target` on every pull request, checks out the trusted base commit,
-downloads only the head revision's workflow YAML through the read-only GitHub
-API, and treats it as data. It never checks out or executes pull-request code,
-so the check can remain required without path-filtered runs getting stuck as
-pending. Its checkout uses `github.sha`, which `pull_request_target` defines as
-the latest commit on the base branch; do not substitute the webhook payload's
-potentially stale `pull_request.base.sha`. Job-level trusted-ref exceptions
-remain a review boundary: reviewers
+downloads the head revision's workflow YAML and `docs/ROADMAP.md` through the
+read-only GitHub API, and treats them as data. It never checks out or executes
+pull-request code, so the check can remain required without path-filtered runs
+getting stuck as pending. Its checkout uses `github.sha`, which
+`pull_request_target` defines as the latest commit on the base branch; do not
+substitute the webhook payload's potentially stale `pull_request.base.sha`.
+Job-level trusted-ref exceptions remain a review boundary: reviewers
 must verify the event, actor where relevant, ref, trusted commit, environment,
 and every artifact/cache/output boundary, with a focused negative-event test
 whenever practical.

@@ -364,7 +364,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     hidden_items.each do |hidden_item|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{hidden_item}",
-        workflow: "jobs: {}\n"
+        workflow: coverage_workflow
       )
 
       assert status.success?, stderr
@@ -383,7 +383,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: "jobs: {}\n"
+      workflow: coverage_workflow
     )
 
     assert status.success?, stderr
@@ -403,7 +403,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: "jobs: {}\n"
+      workflow: coverage_workflow
     )
 
     assert status.success?, stderr
@@ -414,7 +414,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     ["    - [x] Root code example.\n", ">     - [x] Quoted code example.\n"].each do |example|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{example}",
-        workflow: "jobs: {}\n"
+        workflow: coverage_workflow
       )
 
       assert status.success?, stderr
@@ -540,6 +540,26 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     refute status.success?
     assert_includes stderr, "does not match the reviewed Tier-1 CI workflow"
+  end
+
+  def test_requires_the_hard_coverage_gate_while_its_roadmap_claim_is_unchecked
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [ ] The 100% line and region coverage gate is required and green for the current slice.
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: coverage_workflow("true")
+    )
+
+    refute status.success?
+    assert_includes stderr, "does not provide the exact 100% line and region gate"
   end
 
   def test_rejects_coverage_evidence_when_the_threshold_is_lowered
