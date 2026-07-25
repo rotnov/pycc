@@ -91,10 +91,27 @@ SCRIPT_SUFFIXES = {
 }
 SOURCE_SUFFIXES_WITH_INLINE_TESTS = {".c", ".cc", ".cpp", ".h", ".hpp", ".rs"}
 SCP_GIT_REFERENCE = re.compile(
-    r"^(?:[^/@:\s]+@)?(?P<host>[A-Za-z0-9.-]+):(?P<path>[^?#]+)$"
+    r"^(?:(?P<user>[^/@:\s]+)@)?"
+    r"(?P<host>[A-Za-z0-9.-]+):(?P<path>[^?#]+)$"
+)
+DOTTED_HOST_REFERENCE = re.compile(
+    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+"
+)
+SCP_GIT_REFERENCE_IN_TEXT = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?:(?P<user>[^/@:\s]+)@)?"
+    r"(?P<host>(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+):"
+    r"(?P<path>[A-Za-z0-9._~%+/-]+)"
+)
+HOST_PATH_REFERENCE_IN_TEXT = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?P<host>(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+)"
+    r"(?P<port>:\d+)?/"
+    r"(?P<path>[A-Za-z0-9._~%+/-]+)"
 )
 URL_AUTHORITY_REFERENCE = re.compile(
-    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?P<authority>[^/\s?#]+)"
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://"
+    r"(?P<authority>[^/\s?#]+)(?P<path>/[^\s?#]*)?"
 )
 
 
@@ -446,9 +463,33 @@ def normalize_url_identity_components(text: str) -> str:
             public_host = f"[{public_host}]"
         if port is not None:
             public_host = f"{public_host}:{port}"
-        return f"{parsed.scheme.lower()}://{public_host}"
+        path = unquote(match.group("path") or "")
+        return f"{parsed.scheme.lower()}://{public_host}{path}"
 
     return URL_AUTHORITY_REFERENCE.sub(normalize, text)
+
+
+def normalize_scp_identity_components(text: str) -> str:
+    def normalize(match: re.Match[str]) -> str:
+        user = match.group("user")
+        prefix = f"{user}@" if user else ""
+        return (
+            f"{prefix}{match.group('host').lower()}:"
+            f"{unquote(match.group('path'))}"
+        )
+
+    return SCP_GIT_REFERENCE_IN_TEXT.sub(normalize, text)
+
+
+def normalize_host_path_identity_components(text: str) -> str:
+    return HOST_PATH_REFERENCE_IN_TEXT.sub(
+        lambda match: (
+            f"{match.group('host').lower()}"
+            f"{match.group('port') or ''}/"
+            f"{unquote(match.group('path'))}"
+        ),
+        text,
+    )
 
 
 def optional_marketplace_source_references(
@@ -494,6 +535,14 @@ def optional_marketplace_source_references(
                 else None
             )
             if scp_match is not None:
+                if DOTTED_HOST_REFERENCE.fullmatch(
+                    scp_match.group("host")
+                ) is None:
+                    failures.append(
+                        f".claude/settings.json: optional marketplace {alias} "
+                        "source.url must use a fully qualified dotted SCP host"
+                    )
+                    continue
                 repository = repository_path_reference(
                     scp_match.group("path"),
                     minimum_parts=1,
@@ -504,9 +553,15 @@ def optional_marketplace_source_references(
                         "source.url must include a repository path"
                     )
                     continue
-                host_reference = f"{scp_match.group('host')}/{repository}"
+                host = scp_match.group("host").lower()
+                user = scp_match.group("user")
+                prefix = f"{user}@" if user else ""
+                host_reference = f"{host}/{repository}"
+                canonical_scp = f"{prefix}{host}:{repository}"
                 references[raw] = (alias, host_reference)
                 references[strip_git_suffix(raw)] = (alias, host_reference)
+                references[canonical_scp] = (alias, host_reference)
+                references[f"{canonical_scp}.git"] = (alias, host_reference)
                 references[host_reference] = (alias, host_reference)
                 if len(repository.split("/")) >= 2:
                     references[repository] = (alias, repository)
@@ -839,7 +894,11 @@ def validate_optional_plugin_boundary(
                         )
                         break
                 else:
-                    source_text = normalize_url_identity_components(fallback_text)
+                    source_text = normalize_host_path_identity_components(
+                        normalize_scp_identity_components(
+                            normalize_url_identity_components(fallback_text)
+                        )
+                    )
                     for token in sorted(
                         marketplace_sources,
                         key=lambda value: (-len(value), value),

@@ -776,6 +776,120 @@ class AgentAssetValidationTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_scp_and_host_path_hosts_are_normalized_but_paths_are_not(
+        self,
+    ) -> None:
+        source_url = "git@EXAMPLE.COM:agents.git"
+        cases = (
+            ("git@example.com:agents.git", True),
+            ("EXAMPLE.COM/agents", True),
+            ("git@example.com:Agents.git", False),
+        )
+        for required_reference, rejected in cases:
+            with self.subTest(reference=required_reference):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        f"Use `{required_reference}` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    marketplace = "scp-case" + "-market"
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": "url",
+                            "url": source_url,
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    if rejected:
+                        self.assertEqual(len(failures), 1)
+                        self.assertIn(
+                            "marketplace source example.com/agents",
+                            failures[0],
+                        )
+                    else:
+                        self.assertEqual(failures, [])
+
+    def test_percent_encoded_paths_compose_with_host_normalization(self) -> None:
+        cases = (
+            (
+                "HTTPS://EXAMPLE.COM/agent%2Dtools.git",
+                "https://example.com/agent%2Dtools.git",
+            ),
+            (
+                "git@EXAMPLE.COM:agent%2Dtools.git",
+                "git@example.com:agent%2Dtools.git",
+            ),
+        )
+        for source_url, required_reference in cases:
+            with self.subTest(source=source_url):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        f"Use `{required_reference}` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    marketplace = "encoded-case" + "-market"
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": "url",
+                            "url": source_url,
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(
+                        "marketplace source",
+                        failures[0],
+                    )
+                    self.assertIn(f"({marketplace})", failures[0])
+
+    def test_single_label_scp_marketplace_sources_are_rejected(self) -> None:
+        for host in ("github", "GITHUB"):
+            with self.subTest(host=host):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        "Use repository-owned tools.\n",
+                        encoding="utf-8",
+                    )
+                    marketplace = "single-label" + "-market"
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": "url",
+                            "url": f"git@{host}:agents.git",
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(marketplace, failures[0])
+                    self.assertIn(
+                        "fully qualified dotted SCP host",
+                        failures[0],
+                    )
+                    self.assertNotIn(host, failures[0])
+
     def test_malformed_marketplace_url_reports_a_controlled_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

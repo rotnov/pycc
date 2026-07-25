@@ -140,8 +140,10 @@ using strict UTF-8 or BOM-tagged UTF-16 decoding; unknown encodings fail closed.
 UTF-32 and NUL-bearing text are rejected explicitly so BOM-less UTF-16 cannot
 masquerade as UTF-8. References to an optional plugin, its marketplace alias, or its
 configured repository and URL source coordinates are rejected. URL schemes and hosts
-are normalized case-insensitively while repository paths retain their case-sensitive
-identity.
+are normalized case-insensitively, including SCP-style and host/path forms, while
+repository paths retain their case-sensitive identity. SCP-style marketplace sources
+must use a fully qualified dotted host; ambiguous single-label hosts are rejected
+instead of case-folding ordinary `owner/repository` or `label:value` text.
 For a pinned marketplace, only the exact validated baseline identity is exempt; an
 unknown or disabled sibling is still rejected. The exact iEvo exemption applies only
 while
