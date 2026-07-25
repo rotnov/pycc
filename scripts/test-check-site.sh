@@ -141,6 +141,11 @@ mutations = {
         f"  <body>\n    <noscript>\n{script}\n    </noscript>",
         1,
     ),
+    "self-closing external script": original.replace(
+        script,
+        '    <script defer src="site.js" />',
+        1,
+    ),
     "base URL override": original.replace(
         "  <head>", '  <head>\n    <base href="https://example.com/">', 1
     ),
@@ -148,6 +153,19 @@ mutations = {
 
 environment = dict(os.environ)
 environment["SITE_DIR"] = str(site_dir)
+index_path.write_text(original.replace("<br>", "<br />", 1))
+void_result = subprocess.run(
+    [str(checker)],
+    cwd=repo_root,
+    env=environment,
+    capture_output=True,
+    text=True,
+    check=False,
+    timeout=10,
+)
+if void_result.returncode != 0:
+    raise SystemExit("Validator rejected a self-closing void element")
+
 for description, mutated in mutations.items():
     index_path.write_text(mutated)
     result = subprocess.run(

@@ -131,6 +131,11 @@ class MetadataParser(HTMLParser):
                 self.in_json_ld = True
                 self.current_json_ld = []
 
+    def handle_startendtag(self, tag, attrs):
+        if tag not in self.void_tags:
+            raise SystemExit(f"<{tag}> must use an explicit closing tag")
+        self.handle_starttag(tag, attrs)
+
     def handle_endtag(self, tag):
         if tag in self.inert_asset_tags:
             if not self.inert_element_stack:
