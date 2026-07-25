@@ -827,6 +827,7 @@ fn check_accepts_a_pep_263_latin_1_source_file() {
         .unwrap();
 
     assert!(output.status.success());
+    assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
 }
 
@@ -891,8 +892,8 @@ fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
     std::fs::create_dir_all(&dir).unwrap();
 
     for (name, source) in [
-        ("cr.py", b"print(1)\rx = 1\r".as_slice()),
-        ("crlf.py", b"print(1)\r\nx = 1\r\n".as_slice()),
+        ("cr.py", b"print(1)\r$\r".as_slice()),
+        ("crlf.py", b"print(1)\r\n$\r\n".as_slice()),
     ] {
         let src = dir.join(name);
         std::fs::write(&src, source).unwrap();
@@ -901,12 +902,12 @@ fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
             .arg(&src)
             .output()
             .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
 
         assert_eq!(output.status.code(), Some(1));
-        assert!(stderr.contains(&format!("{}:2:1", rendered_diagnostic_path(&src))));
-        assert!(stderr.contains("2 | x = 1\n"));
-        assert!(!stderr.contains("x = 1\r"));
+        assert!(stdout.contains(&format!("{}:2:1", rendered_diagnostic_path(&src))));
+        assert!(stdout.contains("2 | $\n"));
+        assert!(!stdout.contains("$\r"));
     }
 }
 
@@ -992,18 +993,18 @@ fn check_accepts_a_non_utf8_staged_path_losslessly() {
     std::fs::create_dir_all(&dir).unwrap();
     let filename = std::ffi::OsString::from_vec(b"invalid_\xff.py".to_vec());
     let src = dir.join(filename);
-    std::fs::write(&src, b"x = 1\n").unwrap();
+    std::fs::write(&src, b"$\n").unwrap();
 
     let output = Command::new(pycc_bin())
         .arg("check")
         .arg(&src)
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("error[C0001]"));
-    assert!(stderr.contains("invalid_\u{fffd}.py"));
+    assert!(stdout.contains("error[L0001]"));
+    assert!(stdout.contains("invalid_\u{fffd}.py"));
 }
 
 #[test]
@@ -1019,57 +1020,36 @@ fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
         .arg(&missing)
         .output()
         .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(stderr.contains(&rendered_diagnostic_path(&invalid)));
-    assert!(stderr.contains("L0001"));
-    assert!(stderr.contains(&format!("{}:2:1", rendered_diagnostic_path(&invalid))));
-    assert!(stderr.contains("2 | $"));
-    assert!(stderr.contains("  | ^"));
+    assert!(stdout.contains(&rendered_diagnostic_path(&invalid)));
+    assert!(stdout.contains("L0001"));
+    assert!(stdout.contains(&format!("{}:2:1", rendered_diagnostic_path(&invalid))));
+    assert!(stdout.contains("2 | $"));
+    assert!(stdout.contains("  | ^"));
     assert!(stderr.contains(&rendered_diagnostic_path(&missing)));
     assert!(stderr.contains("could not read"));
-}
-
-#[test]
-fn check_rejects_a_currently_unsupported_construct_without_panicking() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_e2e_check_unsupported_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "assignment.py", "def main() -> None:\n    x = 1\n");
-
-    let output = Command::new(pycc_bin())
-        .arg("check")
-        .arg(&src)
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("C0001"));
-    assert!(stderr.contains(&format!("{}:2:5", rendered_diagnostic_path(&src))));
-    assert!(stderr.contains("2 |     x = 1"));
-    assert!(stderr.contains("  |     ^^^^^ unsupported by this pycc version"));
-    assert!(!stderr.contains("panicked"));
 }
 
 #[test]
 fn check_aligns_a_diagnostic_caret_after_tab_indentation() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_tab_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "tab.py", "def main() -> None:\n\tx = 1\n");
+    let src = write_fixture(&dir, "tab.py", "def main() -> None:\n\t$\n");
 
     let output = Command::new(pycc_bin())
         .arg("check")
         .arg(&src)
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains(&format!("{}:2:2", rendered_diagnostic_path(&src))));
-    assert!(stderr.contains("2 | \tx = 1"));
-    assert!(stderr.contains("  | \t^^^^^"));
+    assert!(stdout.contains(&format!("{}:2:2", rendered_diagnostic_path(&src))));
+    assert!(stdout.contains("2 | \t$"));
+    assert!(stdout.contains("  | \t^"));
 }
 
 #[test]
@@ -1081,13 +1061,9 @@ fn check_uses_unicode_display_width_for_diagnostic_carets() {
         (
             "wide.py",
             "\u{53d8}\u{91cf}$\n",
-            "1 | \u{53d8}\u{91cf}$\n  |     ^ invalid syntax",
+            "1 | \u{53d8}\u{91cf}$\n  |     ^",
         ),
-        (
-            "combining.py",
-            "e\u{301}$\n",
-            "1 | e\u{301}$\n  |  ^ invalid syntax",
-        ),
+        ("combining.py", "e\u{301}$\n", "1 | e\u{301}$\n  |  ^"),
     ] {
         let src = write_fixture(&dir, filename, source);
         let output = Command::new(pycc_bin())
@@ -1095,10 +1071,10 @@ fn check_uses_unicode_display_width_for_diagnostic_carets() {
             .arg(&src)
             .output()
             .unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
 
         assert_eq!(output.status.code(), Some(1));
-        assert!(stderr.contains(expected), "stderr: {stderr}");
+        assert!(stdout.contains(expected), "stdout: {stdout}");
     }
 }
 
@@ -1107,7 +1083,7 @@ fn check_sizes_the_diagnostic_gutter_for_three_digit_line_numbers() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_gutter_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut source = "print(1)\n".repeat(99);
-    source.push_str("x = 1\n");
+    source.push_str("$\n");
     let src = write_fixture(&dir, "line_100.py", &source);
 
     let output = Command::new(pycc_bin())
@@ -1115,12 +1091,12 @@ fn check_sizes_the_diagnostic_gutter_for_three_digit_line_numbers() {
         .arg(&src)
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains(&format!("{}:100:1", rendered_diagnostic_path(&src))));
-    assert!(stderr.contains("100 | x = 1"));
-    assert!(stderr.contains("    | ^^^^^"));
+    assert!(stdout.contains(&format!("{}:100:1", rendered_diagnostic_path(&src))));
+    assert!(stdout.contains("100 | $"));
+    assert!(stdout.contains("    | ^"));
 }
 
 #[test]
@@ -1129,25 +1105,6 @@ fn check_without_files_is_a_clean_invocation_error() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("at least one Python file"));
-}
-
-#[test]
-fn build_rejects_a_currently_unsupported_construct_without_panicking() {
-    let dir =
-        std::env::temp_dir().join(format!("pycc_e2e_build_unsupported_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "assignment.py", "x = 1");
-    let out = dir.join("assignment");
-
-    let output = Command::new(pycc_bin())
-        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains("C0001"));
-    assert!(!stderr.contains("panicked"));
 }
 
 #[test]

@@ -788,6 +788,7 @@ dependencies = [
  "pycc_mir",
  "pycc_parser",
  "pycc_types",
+ "regex",
  "serde_json",
 ]
 
@@ -797,6 +798,7 @@ version = "0.1.0"
 dependencies = [
  "ruff_python_ast",
  "ruff_python_parser",
+ "ruff_text_size",
 ]
 
 [[package]]
@@ -813,6 +815,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "unicode-width",
 ]
 
 [[package]]

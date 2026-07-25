@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ErrorFormat {
@@ -29,7 +30,7 @@ pub enum Command {
         path: String,
     },
     Check {
-        path: Option<String>,
+        paths: Vec<PathBuf>,
         /// CLI_SPEC.md's diagnostic-output contract: "human" (default) or "json".
         #[arg(long, value_enum, default_value = "human")]
         error_format: ErrorFormat,
@@ -50,12 +51,12 @@ pub enum Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command};
+    use super::{Cli, Command, ErrorFormat};
     use clap::Parser;
 
     fn parsed_check_paths(command: Command) -> Option<Vec<std::path::PathBuf>> {
         match command {
-            Command::Check { paths } => Some(paths),
+            Command::Check { paths, .. } => Some(paths),
             _ => None,
         }
     }
@@ -77,5 +78,25 @@ mod tests {
 
         assert_eq!(paths[0].as_os_str().as_bytes(), b"staged_\xff.py");
         assert!(parsed_check_paths(Command::Clean).is_none());
+    }
+
+    #[test]
+    fn check_accepts_json_error_format_with_multiple_paths() {
+        assert!(matches!(
+            Cli::try_parse_from([
+                "pycc",
+                "check",
+                "--error-format",
+                "json",
+                "first.py",
+                "second.py",
+            ])
+            .unwrap()
+            .command,
+            Command::Check {
+                error_format: ErrorFormat::Json,
+                paths,
+            } if paths.len() == 2
+        ));
     }
 }

@@ -6,7 +6,6 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 
 | Range | Domain |
 |---|---|
-| `C0xxx` | compiler-version capability gaps for valid Python |
 | `L0xxx` | lexing / parsing / grammar |
 | `T0xxx` | type checking |
 | `O0xxx` | ownership / memory / threading |
@@ -18,7 +17,6 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 
 | Code | Severity | Message (short form) |
 |---|---|---|
-| `C0001` | error | valid Python construct is not implemented by this pycc version |
 | `L0001` | error | syntax error (span + expected set) |
 | `L0002` | error | Python version mismatch (feature needs 3.14 level) |
 | `T0001` | error | public function missing annotation |
@@ -47,12 +45,6 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `W1002` | warning | boxed fallback in hot loop (`--memstats` hint) |
 
 Note on `O0201`: legal Python never observes moves (see MEMORY_OWNERSHIP.md — optimization is semantics-preserving). The code exists for internal assertions and `--emit mir` tooling; if it ever fires on user code, that's a pycc bug, auto-reported.
-
-`C0001` is a versioned capability diagnostic, not a rejected-by-design
-language rule. A construct stops producing it when the corresponding roadmap
-slice is implemented; the code remains reserved so older compiler output keeps
-an unambiguous meaning. The slice-0 HIR uses it instead of panicking on valid
-Python outside the currently implemented subset.
 
 ## Quality bar
 

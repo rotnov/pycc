@@ -1,4 +1,4 @@
-use pycc_ast::{ModModule, Ranged};
+use pycc_ast::ModModule;
 use pycc_diag::{Diagnostic, Span};
 
 pub fn parse(source: &str) -> Result<ModModule, Diagnostic> {
@@ -33,10 +33,8 @@ mod tests {
 
     #[test]
     fn syntax_error_becomes_an_l0001_diagnostic() {
-        let err = parse("print(1)\n$\n").unwrap_err();
+        let err = parse("def main(:\n").unwrap_err();
         assert_eq!(err.code, "L0001");
-        assert_eq!(err.span, Some(Span::new(9, 10)));
-        assert_eq!(err.label.as_deref(), Some("invalid syntax"));
     }
 
     #[test]

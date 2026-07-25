@@ -264,7 +264,7 @@ def run_pycc_check_rejection(
         result.returncode != 2
         or result.stdout != b""
         or "unexpected argument '--fix' found" not in stderr
-        or "Usage: pycc check [OPTIONS] [PATH]" not in stderr
+        or "Usage: pycc check [OPTIONS] [PATHS]..." not in stderr
     ):
         raise EvalError(
             "pycc check --fix must remain an observed invalid invocation"
