@@ -419,7 +419,15 @@ def run_evals(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--client", choices=("codex", "claude"), required=True)
+    parser.add_argument(
+        "--client",
+        choices=("codex", "claude"),
+        required=True,
+        help=(
+            "repository entrypoint to resolve; this offline runner does not "
+            "launch the named client or a language model"
+        ),
+    )
     parser.add_argument("--pycc-bin", type=Path, required=True)
     arguments = parser.parse_args()
     try:

@@ -57,6 +57,11 @@ ALPHA_EVAL_RUNNERS = {
         "require-exact-payload-preview",
     },
 }
+PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
+# Required PR CI has no model credentials. Promotion stays fail-closed until
+# reviewed, stable authenticated runs exist for both supported client surfaces.
+AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
+REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
 
 
 def load_json(
@@ -110,6 +115,7 @@ def validate_skill_lock(
 
     expected_names = set(EXPECTED_SKILL_LOCK_ENTRIES)
     actual_names = set(entries)
+    validate_alpha_promotion_gate(entries, failures)
     if actual_names != expected_names:
         failures.append(
             "skills-lock.json: locked skill set must be exactly "
@@ -167,6 +173,26 @@ def validate_skill_lock(
                 failures.append(
                     f"docs/AGENT_TOOLING.md: missing {field} for {name}"
                 )
+
+
+def validate_alpha_promotion_gate(
+    locked_skills: dict[str, object],
+    failures: list[str],
+) -> None:
+    for name in sorted(PROJECT_ALPHA_SKILLS & set(locked_skills)):
+        evidence = AUTHENTICATED_MODEL_EVAL_EVIDENCE.get(name)
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence) != REQUIRED_MODEL_EVAL_CLIENTS
+            or not all(
+                isinstance(url, str) and url.startswith("https://")
+                for url in evidence.values()
+            )
+        ):
+            failures.append(
+                f"skills-lock.json: {name} cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+            )
 
 
 def validate_claude_ievo_marketplace(

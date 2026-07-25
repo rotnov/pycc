@@ -103,7 +103,13 @@ predicate.
 These deterministic checks do not invoke a language model and do not claim
 that either client's generated response conforms to the prompts. Authenticated
 model-response evals remain a promotion requirement before either alpha skill
-can move into `rotnov/skills` or skills.sh.
+can move into `skills-lock.json`, `rotnov/skills`, or skills.sh. The asset
+validator enforces that fallback: `pycc` and `pycc-feedback` cannot enter the
+locked skill set unless immutable HTTPS evidence exists for authenticated
+model evals on both Codex and Claude. Until then, they remain project-local
+alpha workflows. The separate `Agent assets` job still installs the real
+pinned client CLIs and verifies discovery through both surfaces without model
+credentials.
 
 ## Optional Claude Code plugins
 

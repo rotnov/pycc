@@ -138,6 +138,40 @@ class AgentAssetValidationTests(unittest.TestCase):
         failures = self.skill_lock_failures(canonical_present=False)
         self.assertTrue(any("has no canonical" in item for item in failures))
 
+    def test_alpha_promotion_requires_both_authenticated_client_evals(
+        self,
+    ) -> None:
+        failures: list[str] = []
+        validator.validate_alpha_promotion_gate(
+            {"pycc": {"source": "future"}},
+            failures,
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn(
+            "authenticated Codex and Claude model-eval evidence",
+            failures[0],
+        )
+
+    def test_alpha_promotion_accepts_complete_authenticated_evidence(
+        self,
+    ) -> None:
+        original = validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE
+        try:
+            validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE = {
+                "pycc": {
+                    "codex": "https://example.test/codex-eval",
+                    "claude": "https://example.test/claude-eval",
+                }
+            }
+            failures: list[str] = []
+            validator.validate_alpha_promotion_gate(
+                {"pycc": {"source": "future"}},
+                failures,
+            )
+            self.assertEqual(failures, [])
+        finally:
+            validator.AUTHENTICATED_MODEL_EVAL_EVIDENCE = original
+
     def alpha_contract_failures(
         self,
         *,
