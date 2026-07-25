@@ -391,6 +391,17 @@ def optional_claude_plugins(settings: dict) -> dict[str, str]:
     return optional
 
 
+def declared_claude_marketplaces(settings: dict) -> set[str]:
+    marketplaces = settings.get("extraKnownMarketplaces")
+    if not isinstance(marketplaces, dict):
+        return set()
+    return {
+        name
+        for name in marketplaces
+        if isinstance(name, str) and name
+    }
+
+
 def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
     result = subprocess.run(
         ["git", "-C", str(root), "ls-files", "--stage", "-z"],
@@ -438,6 +449,7 @@ def is_required_agent_asset(relative: Path, executable: bool) -> bool:
         or (parts and parts[0] in {".agents", ".claude", "agents"})
         or parts[:2] == (".ievo", "evolution")
         or parts[:2] == (".github", "workflows")
+        or parts[:2] == (".github", "actions")
         or (parts and parts[0] == "scripts")
         or is_test_asset(relative)
         or relative.suffix.lower() in SCRIPT_SUFFIXES
@@ -529,6 +541,9 @@ def validate_optional_plugin_boundary(
         for identity in PINNED_CLAUDE_PLUGINS
         if "@" in identity
     }
+    marketplaces.update(
+        declared_claude_marketplaces(settings).difference(pinned_marketplaces)
+    )
     enabled_pinned = PINNED_CLAUDE_PLUGINS.difference(optional)
 
     try:

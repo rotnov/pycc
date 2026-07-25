@@ -544,6 +544,33 @@ class AgentAssetValidationTests(unittest.TestCase):
                 failures[0],
             )
 
+    def test_declared_marketplace_is_optional_before_a_plugin_is_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            marketplace = "new" + "-market"
+            agents.write_text(
+                f"Use `helper@{marketplace}` for every task.\n",
+                encoding="utf-8",
+            )
+            settings = {
+                "enabledPlugins": {
+                    "ievo@ievo-skills": True,
+                },
+                "extraKnownMarketplaces": {
+                    "ievo-skills": {},
+                    marketplace: {},
+                },
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(f"marketplace {marketplace}", failures[0])
+
     def test_unvalidated_sibling_in_pinned_marketplace_is_optional(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -625,6 +652,7 @@ class AgentAssetValidationTests(unittest.TestCase):
             (".claude/skills/demo/scripts/run.sh", "100644"),
             (".claude/skills/demo/agents/openai.yaml", "100644"),
             (".ievo/evolution/project.md", "100644"),
+            (".github/actions/demo/action.yml", "100644"),
             ("tests/agent_smoke.py", "100644"),
             ("scripts/check_ci_permissions.rb", "100644"),
             ("crates/demo/src/lib.rs", "100644"),
