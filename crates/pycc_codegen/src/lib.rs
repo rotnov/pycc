@@ -6,7 +6,7 @@ use inkwell::targets::{
 };
 use inkwell::types::IntType;
 use inkwell::values::FunctionValue;
-use pycc_mir::{MirInstr, MirItem, MirModule};
+use pycc_mir::{MirExpr, MirInstr, MirItem, MirModule};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -75,7 +75,9 @@ pub fn compile_to_object(
     // a triple LLVM doesn't recognize) and write_to_file, at the very end.
     builder
         .build_return(Some(&i64_type.const_int(0, false)))
-        .expect("build_return should not fail: builder is always freshly positioned before this call");
+        .expect(
+            "build_return should not fail: builder is always freshly positioned before this call",
+        );
 
     // Second pass: fill in each user function's body, now that every
     // function (including ones a body might call) is already declared.
@@ -132,7 +134,9 @@ pub fn compile_to_object(
             "creating a target machine with generic CPU/features should never fail for a \
              triple Target::from_triple has already accepted",
         );
-    target_machine.write_to_file(&module, FileType::Object, output_path).map_err(llvm_string_to_owned)
+    target_machine
+        .write_to_file(&module, FileType::Object, output_path)
+        .map_err(llvm_string_to_owned)
 }
 
 /// See D-029: every message inkwell hands back as an `LLVMString` --
@@ -183,8 +187,10 @@ fn emit_instr<'ctx>(
     instr: &MirInstr,
 ) -> Result<(), String> {
     match instr {
-        MirInstr::CallPrint { arg } => {
-            let arg_value = i64_type.const_int(*arg as u64, true);
+        MirInstr::CallPrint {
+            arg: MirExpr::IntLiteral(n),
+        } => {
+            let arg_value = i64_type.const_int(*n as u64, true);
             builder
                 .build_call(print_fn, &[arg_value.into()], "call_print")
                 .expect("build_call should not fail for a well-formed print call");
@@ -205,7 +211,7 @@ fn emit_instr<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pycc_mir::{MirInstr, MirItem, MirModule};
+    use pycc_mir::{MirExpr, MirInstr, MirItem, MirModule};
     use std::process::Command;
 
     #[test]
@@ -217,7 +223,9 @@ mod tests {
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "main".to_string(),
-                body: vec![MirInstr::CallPrint { arg: 42 }],
+                body: vec![MirInstr::CallPrint {
+                    arg: MirExpr::IntLiteral(42),
+                }],
             }],
         };
         let dir = tempfile_dir("slice0_uncalled_main");
@@ -235,9 +243,13 @@ mod tests {
             items: vec![
                 MirItem::Function {
                     name: "main".to_string(),
-                    body: vec![MirInstr::CallPrint { arg: 42 }],
+                    body: vec![MirInstr::CallPrint {
+                        arg: MirExpr::IntLiteral(42),
+                    }],
                 },
-                MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() }),
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "main".to_string(),
+                }),
             ],
         };
         let dir = tempfile_dir("slice0");
@@ -252,7 +264,9 @@ mod tests {
     #[test]
     fn compiles_top_level_statement_with_no_main() {
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
+                arg: MirExpr::IntLiteral(42),
+            })],
         };
         let dir = tempfile_dir("slice0_toplevel");
         let obj_path = dir.join("slice0_toplevel.o");
@@ -272,12 +286,18 @@ mod tests {
         // statement, not a special auto-invoked case.
         let mir = MirModule {
             items: vec![
-                MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 1 }),
+                MirItem::TopLevelStmt(MirInstr::CallPrint {
+                    arg: MirExpr::IntLiteral(1),
+                }),
                 MirItem::Function {
                     name: "main".to_string(),
-                    body: vec![MirInstr::CallPrint { arg: 2 }],
+                    body: vec![MirInstr::CallPrint {
+                        arg: MirExpr::IntLiteral(2),
+                    }],
                 },
-                MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() }),
+                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                    name: "main".to_string(),
+                }),
             ],
         };
         let dir = tempfile_dir("slice0_combined");
@@ -299,7 +319,10 @@ mod tests {
         let dir = tempfile_dir("slice0_undefined_fn");
         let obj_path = dir.join("slice0_undefined_fn.o");
         let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
-        assert!(err.contains("does_not_exist"), "error should name the offending function: {err}");
+        assert!(
+            err.contains("does_not_exist"),
+            "error should name the offending function: {err}"
+        );
     }
 
     #[test]
@@ -307,13 +330,18 @@ mod tests {
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "main".to_string(),
-                body: vec![MirInstr::CallUserFunction { name: "also_does_not_exist".to_string() }],
+                body: vec![MirInstr::CallUserFunction {
+                    name: "also_does_not_exist".to_string(),
+                }],
             }],
         };
         let dir = tempfile_dir("slice0_undefined_fn_nested");
         let obj_path = dir.join("slice0_undefined_fn_nested.o");
         let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
-        assert!(err.contains("also_does_not_exist"), "error should name the offending function: {err}");
+        assert!(
+            err.contains("also_does_not_exist"),
+            "error should name the offending function: {err}"
+        );
     }
 
     #[test]
@@ -321,11 +349,15 @@ mod tests {
         // There is no longer a "must be named main" restriction: any
         // function name is legal to *define*; only calling one runs it.
         let mir = MirModule {
-            items: vec![MirItem::Function { name: "helper".to_string(), body: vec![] }],
+            items: vec![MirItem::Function {
+                name: "helper".to_string(),
+                body: vec![],
+            }],
         };
         let dir = tempfile_dir("slice0_any_fn_name");
         let obj_path = dir.join("slice0_any_fn_name.o");
-        compile_to_object(&mir, &obj_path, None).expect("defining a function under any name should succeed");
+        compile_to_object(&mir, &obj_path, None)
+            .expect("defining a function under any name should succeed");
     }
 
     #[test]
@@ -336,13 +368,19 @@ mod tests {
         // clean_error below covers this function's other genuine failure
         // mode, Target::from_triple.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
+                arg: MirExpr::IntLiteral(42),
+            })],
         };
         let bad_path = std::env::temp_dir()
-            .join(format!("pycc_codegen_test_nonexistent_dir_{}", std::process::id()))
+            .join(format!(
+                "pycc_codegen_test_nonexistent_dir_{}",
+                std::process::id()
+            ))
             .join("does_not_exist")
             .join("out.o");
-        let err = compile_to_object(&mir, &bad_path, None).expect_err("should fail: parent dir doesn't exist");
+        let err = compile_to_object(&mir, &bad_path, None)
+            .expect_err("should fail: parent dir doesn't exist");
         assert!(!err.is_empty());
     }
 
@@ -355,7 +393,9 @@ mod tests {
         // object file's actual architecture, not just that codegen didn't
         // error.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
+                arg: MirExpr::IntLiteral(42),
+            })],
         };
         let dir = tempfile_dir("cross_x64");
         let obj_path = dir.join("cross_x64.o");
@@ -389,7 +429,9 @@ mod tests {
     #[test]
     fn an_unknown_target_triple_is_a_clean_error() {
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
+                arg: MirExpr::IntLiteral(42),
+            })],
         };
         let dir = tempfile_dir("bad_triple");
         let obj_path = dir.join("bad_triple.o");
@@ -399,7 +441,8 @@ mod tests {
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("pycc_codegen_test_{label}_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("pycc_codegen_test_{label}_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -420,11 +463,14 @@ mod tests {
     /// target also proved unreliable (D-028), so `-target` must be
     /// explicit too.
     fn link_object_with_runtime(obj_path: &std::path::Path, bin_path: &std::path::Path) {
-        let rt_lib_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
+        let rt_lib_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
 
         #[cfg(windows)]
         let mut cmd = {
-            let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX")).join("bin").join("clang.exe");
+            let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX"))
+                .join("bin")
+                .join("clang.exe");
             let mut cmd = Command::new(clang);
             cmd.arg("-target").arg("x86_64-pc-windows-msvc");
             cmd
@@ -432,7 +478,12 @@ mod tests {
         #[cfg(not(windows))]
         let mut cmd = Command::new("cc");
 
-        cmd.arg(obj_path).arg("-L").arg(&rt_lib_dir).arg("-lpycc_rt").arg("-o").arg(bin_path);
+        cmd.arg(obj_path)
+            .arg("-L")
+            .arg(&rt_lib_dir)
+            .arg("-lpycc_rt")
+            .arg("-o")
+            .arg(bin_path);
 
         #[cfg(windows)]
         for lib in [
