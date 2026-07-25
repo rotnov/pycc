@@ -48,6 +48,7 @@ pub enum HirExpr {
     IntLiteral(i64),
     FloatLiteral(f64),
     BoolLiteral(bool),
+    StringLiteral(String),
     Name(String),
     Call { callee: String, args: Vec<HirExpr> },
     BinOp { op: BinOpKind, left: Box<HirExpr>, right: Box<HirExpr> },
@@ -106,7 +107,7 @@ fn lower_params(
         .map(|param| {
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
-                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann))),
+                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann)?)),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
                     format!("parameter `{name}` of public function `{fn_name}` needs a type annotation"),
@@ -120,7 +121,7 @@ fn lower_params(
 
 fn lower_return_annotation(returns: Option<&Expr>, is_public: bool, fn_name: &str) -> Result<Ty, Diagnostic> {
     match returns {
-        Some(ann) => Ok(annotation_to_ty(ann)),
+        Some(ann) => annotation_to_ty(ann),
         None if is_public => Err(Diagnostic::error(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
@@ -130,14 +131,19 @@ fn lower_return_annotation(returns: Option<&Expr>, is_public: bool, fn_name: &st
     }
 }
 
-fn annotation_to_ty(annotation: &Expr) -> Ty {
+fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
     match annotation {
-        Expr::NoneLiteral(_) => Ty::None,
+        Expr::NoneLiteral(_) => Ok(Ty::None),
         Expr::Name(name) => match name.id.as_str() {
-            "int" => Ty::Int,
-            "float" => Ty::Float,
-            "bool" => Ty::Bool,
-            "str" => Ty::Str,
+            "int" => Ok(Ty::Int),
+            "float" => Ok(Ty::Float),
+            "bool" => Ok(Ty::Bool),
+            "str" => Ok(Ty::Str),
+            "Any" => Err(Diagnostic::error(
+                "T0002",
+                "`Any` is not permitted in pycc code outside a declared interop boundary".to_string(),
+                Span::new(0, 0),
+            )),
             other => panic!("pycc_hir: type annotation `{other}` is not supported yet"),
         },
         other => panic!("pycc_hir: only a bare name type annotation is supported so far: {other:?}"),
@@ -258,6 +264,7 @@ fn lower_expr(expr: &Expr) -> HirExpr {
             }
         }
         Expr::BooleanLiteral(lit) => HirExpr::BoolLiteral(lit.value),
+        Expr::StringLiteral(lit) => HirExpr::StringLiteral(lit.value.to_str().to_string()),
         Expr::Compare(cmp) => {
             if cmp.ops.len() != 1 {
                 panic!("pycc_hir: chained comparisons are not supported yet: {:?}", cmp.ops);
@@ -971,6 +978,33 @@ mod tests {
     fn a_non_bare_name_annotation_panics() {
         let module = pycc_parser_test_helper::parse("def f(x: a.b) -> None:\n    return\n");
         lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    fn lowers_a_plain_string_literal() {
+        let module = pycc_parser_test_helper::parse("x = \"hi\"\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::StringLiteral("hi".to_string()),
+            })]
+        );
+    }
+
+    #[test]
+    fn an_any_annotation_produces_t0002() {
+        let module = pycc_parser_test_helper::parse("def f(x: Any) -> None:\n    pass\n");
+        let diag = lower_checked(&module).unwrap_err();
+        assert_eq!(diag.code, "T0002");
+    }
+
+    #[test]
+    fn an_any_return_annotation_produces_t0002() {
+        let module = pycc_parser_test_helper::parse("def f() -> Any:\n    pass\n");
+        let diag = lower_checked(&module).unwrap_err();
+        assert_eq!(diag.code, "T0002");
     }
 }
 

@@ -45,6 +45,7 @@ pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
         HirExpr::IntLiteral(_) => Ok(Ty::Int),
         HirExpr::FloatLiteral(_) => Ok(Ty::Float),
         HirExpr::BoolLiteral(_) => Ok(Ty::Bool),
+        HirExpr::StringLiteral(_) => Ok(Ty::Str),
         HirExpr::Name(name) => env.lookup(name).ok_or_else(|| {
             Diagnostic::error(
                 "T0021",
@@ -113,6 +114,17 @@ fn is_assignable(from: Ty, to: Ty) -> bool {
 }
 
 fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnostic> {
+    if left == Ty::Str && right == Ty::Str {
+        return if op == BinOpKind::Add {
+            Ok(Ty::Str)
+        } else {
+            Err(Diagnostic::error(
+                "T0021",
+                format!("operator {op:?} is not defined for `str` and `str`"),
+                Span::new(0, 0),
+            ))
+        };
+    }
     let as_numeric = |t: Ty| match t {
         Ty::Bool | Ty::Int => Some(Ty::Int),
         Ty::Float => Some(Ty::Float),
@@ -131,7 +143,7 @@ fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnos
 
 fn numeric_or_bool_compatible(a: Ty, b: Ty) -> bool {
     let is_numeric_like = |t: Ty| matches!(t, Ty::Int | Ty::Float | Ty::Bool);
-    is_numeric_like(a) && is_numeric_like(b)
+    (is_numeric_like(a) && is_numeric_like(b)) || (a == Ty::Str && b == Ty::Str)
 }
 
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
@@ -298,6 +310,84 @@ mod tests {
     fn infers_a_bool_literal_as_bool() {
         let env = Environment::new();
         assert_eq!(infer_expr(&env, &HirExpr::BoolLiteral(true)), Ok(Ty::Bool));
+    }
+
+    #[test]
+    fn infers_a_string_literal_as_str() {
+        let env = Environment::new();
+        assert_eq!(infer_expr(&env, &HirExpr::StringLiteral("hi".to_string())), Ok(Ty::Str));
+    }
+
+    #[test]
+    fn adding_an_int_and_a_str_is_a_clean_type_error() {
+        let env = Environment::new();
+        let expr = HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(HirExpr::IntLiteral(1)),
+            right: Box::new(HirExpr::StringLiteral("x".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn adding_two_strings_infers_str() {
+        let env = Environment::new();
+        let expr = HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(HirExpr::StringLiteral("a".to_string())),
+            right: Box::new(HirExpr::StringLiteral("b".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
+    }
+
+    #[test]
+    fn subtracting_two_strings_is_a_clean_type_error() {
+        // Python allows `"a" + "b"` but no other arithmetic operator between
+        // two strings -- `"a" - "b"` is a `TypeError` at runtime in CPython.
+        let env = Environment::new();
+        let expr = HirExpr::BinOp {
+            op: BinOpKind::Sub,
+            left: Box::new(HirExpr::StringLiteral("a".to_string())),
+            right: Box::new(HirExpr::StringLiteral("b".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn comparing_two_strings_infers_bool() {
+        // `"a" == "b"`, `"a" < "b"`, etc. are ordinary, valid Python
+        // (lexicographic ordering) -- not covered by numeric_or_bool_compatible
+        // before `Ty::Str` became constructible via literals.
+        let env = Environment::new();
+        for op in [
+            CmpOpKind::Eq,
+            CmpOpKind::NotEq,
+            CmpOpKind::Lt,
+            CmpOpKind::LtE,
+            CmpOpKind::Gt,
+            CmpOpKind::GtE,
+        ] {
+            let expr = HirExpr::Compare {
+                op,
+                left: Box::new(HirExpr::StringLiteral("a".to_string())),
+                right: Box::new(HirExpr::StringLiteral("b".to_string())),
+            };
+            assert_eq!(infer_expr(&env, &expr), Ok(Ty::Bool), "comparison {op:?} should type-check");
+        }
+    }
+
+    #[test]
+    fn comparing_a_string_and_an_int_is_a_clean_type_error() {
+        let env = Environment::new();
+        let expr = HirExpr::Compare {
+            op: CmpOpKind::Eq,
+            left: Box::new(HirExpr::StringLiteral("a".to_string())),
+            right: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
     }
 
     #[test]
