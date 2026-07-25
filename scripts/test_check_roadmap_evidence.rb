@@ -654,6 +654,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes error.message, "must propagate failures"
   end
 
+  def test_tier1_workflow_allowlist_stages_language_track_guard_digest
+    assert_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2"
+    )
+    assert_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      "05ea9d7882ea817a764afae7e0fe850fbb76c73780c93ae3d922f7fbde9290e0"
+    )
+  end
+
   def test_rejects_changed_tier1_matrix_workflow
     repository_root = Pathname(__dir__).parent
     workflow = (repository_root / ".github/workflows/ci.yml").read.sub(
