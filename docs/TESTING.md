@@ -120,13 +120,16 @@ checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
 then validates the downloaded measurement against the canonical baseline.
 Artifact and checkout actions use immutable reviewed pins.
 
-The exact prospective bytes are checked in as inert
-`tests/fixtures/d48-activation-ci.yml` and
-`tests/fixtures/d48-steady-ci.yml`. Tests bind each fixture's whole-file digest
-to the allowlist constant and run the structural validator over both. The
-activation and cleanup changes replace `.github/workflows/ci.yml`
-byte-for-byte from the corresponding reviewed fixture; hand-reconstructing
-either workflow is not an accepted transition.
+The exact transition bytes are checked in as inert
+`tests/fixtures/d48-pre-split-ci.yml`,
+`tests/fixtures/d48-activation-ci.yml`, and
+`tests/fixtures/d48-steady-ci.yml`. Tests bind all three whole-file digests to
+their trust constants and run the structural validator over the activation and
+steady-state candidates. Per D-049, shell-level bootstrap tests obtain the
+historical predecessor from the pre-split fixture rather than from the live
+workflow that activation replaces. The activation and cleanup changes replace
+`.github/workflows/ci.yml` byte-for-byte from the corresponding reviewed
+fixture; hand-reconstructing either workflow is not an accepted transition.
 
 The baseline lifecycle is fail-closed and main-owned. The gate queries only a
 successful `push` run of `ci.yml` on `main` whose `head_sha` is the exact PR

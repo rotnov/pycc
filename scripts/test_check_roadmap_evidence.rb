@@ -13,6 +13,8 @@ require_relative "check_roadmap_evidence"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
+  D48_PRE_SPLIT_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d48-pre-split-ci.yml"
   D48_ACTIVATION_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d48-activation-ci.yml"
   D48_STEADY_WORKFLOW_FIXTURE =
@@ -129,7 +131,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     push_before_sha: "pre-split-sha",
     github_sha: "activation-sha",
     run_attempt: "1",
-    workflow_path: Pathname(__dir__).parent / ".github/workflows/ci.yml",
+    workflow_path: D48_PRE_SPLIT_WORKFLOW_FIXTURE,
     api_failure: false,
     baseline_present: false
   )
@@ -702,7 +704,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d48_workflow_digests_match_the_reviewed_inert_fixtures
+  def test_d48_transition_workflow_digests_match_the_reviewed_inert_fixtures
+    assert_equal(
+      PRE_SPLIT_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D48_PRE_SPLIT_WORKFLOW_FIXTURE).hexdigest
+    )
     assert_equal(
       D48_SPLIT_PERF_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(D48_ACTIVATION_WORKFLOW_FIXTURE).hexdigest
@@ -1015,7 +1021,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status, output = run_perf_baseline_validation(
       event_name: "pull_request",
       github_ref: "refs/pull/86/merge",
-      workflow_path: CHECKER
+      workflow_path: D48_ACTIVATION_WORKFLOW_FIXTURE
     )
 
     refute status.success?
