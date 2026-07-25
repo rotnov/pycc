@@ -1,0 +1,23 @@
+{
+  "skill_name": "pycc",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a temporary self-contained typed Python program that prints 42, compile it with the pycc in this checkout, run the result, and tell me exactly what happened.",
+      "expected_output": "Verifies the current implementation, builds the workspace and runtime first, creates a unique self-contained temporary fixture and binary output, and reports the exact command, exit code, stdout, and stderr.",
+      "runner": "build-and-run-self-created-fixture"
+    },
+    {
+      "id": 2,
+      "prompt": "Can pycc check --fix repair this type error for me right now?",
+      "expected_output": "Distinguishes the planned CLI contract from current source, explains that the check subcommand is recognized but unimplemented while the planned --fix option is not currently parsed, and does not pretend the documented future command works.",
+      "runner": "observe-current-check-fix-rejection"
+    },
+    {
+      "id": 3,
+      "prompt": "This tiny typed Python program makes pycc panic. Figure out whether it is a compiler bug.",
+      "expected_output": "Minimizes and reproduces the failure, identifies the failing compiler stage, checks the owning specification and tests, and offers the consent-gated pycc-feedback workflow without posting.",
+      "runner": "capture-parser-failure-without-write"
+    }
+  ]
+}

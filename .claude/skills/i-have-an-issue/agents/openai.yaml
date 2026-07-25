@@ -1,0 +1,4 @@
+interface:
+  display_name: "I Have an Issue"
+  short_description: "Research upstream failures before repeating them"
+  default_prompt: "Use $i-have-an-issue to research how comparable open-source projects encountered and resolved this problem."

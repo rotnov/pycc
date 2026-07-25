@@ -11,6 +11,7 @@ rollbackable just like compiler dependencies.
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
 | Codex | repository skills under `.agents/skills/` | current repository revision | project-scoped; no global installation |
 | Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
+| Codex and Claude Code | `rotnov/skills@i-have-an-issue` | tag `i-have-an-issue-v0.1.1`; reviewed source commit `1bc6bcee3766a7e62b936343a48ebb56a3767470`; vendored hash `99e492ccae20ad3acf02e28dd76c7d74de28c7cf2141bfc7a2942c46c4bf687c` | manual updates only |
 
 The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin is the
 `sha` of the `git-subdir` plugin source inside the inline settings marketplace in
@@ -38,6 +39,77 @@ checks on every pull request and push to `main`. Claude Code validates the proje
 settings and the extracted inline marketplace with its strict manifest validator, so
 a developer's global plugin installation cannot mask a broken repository pin or
 marketplace declaration.
+
+The `i-have-an-issue` skill is installed with:
+
+```sh
+npx skills@1.5.20 add rotnov/skills#i-have-an-issue-v0.1.1 \
+  --skill i-have-an-issue -a claude-code --copy -y
+```
+
+The complete reviewed copy lives under `.claude/skills/i-have-an-issue/`; the
+matching `.agents/skills/` entry is the repository's standard thin Codex
+wrapper. `skills-lock.json` records the immutable upstream tag, exact reviewed
+commit, and content hash. Updates are deliberate repository changes and must
+preserve the canonical-copy/wrapper split.
+
+The pre-install iEvo security review scanned all seven distributed files
+(31,206 bytes). The content verdict is **YELLOW** because the skill necessarily
+loads outsider-authored GitHub issue and pull-request text into agent context.
+The skill mitigates that indirect prompt-injection exposure by treating those
+artifacts as untrusted evidence and forbidding embedded instructions, secret
+access, or unreviewed command execution. Skills.sh currently retains a Snyk
+`E004` critical result from the previous upstream revision, where a hidden
+iEvo overlay loader appeared in `SKILL.md`; the reviewed source commit removes
+that loader and adds a repository validator that rejects its return. The same
+audit reported `W011`
+for the inherent third-party-content exposure. Gen Agent Trust Hub reported
+Safe and Socket reported zero alerts. Recheck these external signals on the
+next upstream scan; they are context, not a substitute for reviewing the
+vendored bytes. The stale skills.sh index and rescan request are tracked in
+[`vercel-labs/skills#1776`](https://github.com/vercel-labs/skills/issues/1776).
+
+## Project-local alpha skills
+
+`pycc` and `pycc-feedback` follow the
+[Agent Skills specification](https://agentskills.io/specification) but remain
+project-local alpha workflows. They are committed under `.claude/skills/` with
+thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
+They are intentionally absent from `skills-lock.json`, `rotnov/skills`, and
+skills.sh until their trigger and output evals mature.
+
+`pycc` distinguishes the implemented compiler slice from planned
+specifications before running commands. `pycc-feedback` may reproduce,
+minimize, sanitize, run sanitized duplicate searches, and prepare a public
+GitHub draft without approval. Non-public search terms require a separate
+exact-query preview and approval before transmission. The skill must also show
+the exact write payload and receive explicit per-payload user confirmation
+before creating an issue or comment in `rotnov/pycc`.
+
+The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
+both the Codex wrapper and the Claude Code canonical entrypoint. The primary
+`pycc` offline eval creates a self-contained temporary source file, invokes the
+freshly built compiler, executes the generated binary, and checks its exact
+output. Its two failure scenarios also execute the current `check --fix`
+rejection and a self-created parser failure. The `pycc-feedback` cases exercise
+draft-only, private-source refusal, and context-free-consent invariants through
+a fail-closed safety oracle that cannot perform a network write. All four
+reviewed `i-have-an-issue` scenarios validate their distinct evidence criteria
+and execute the vendored search helper's local help path without a network
+request. The unit suite covers full scenario dispatch, build failure, wrong
+output, entrypoint drift, incomplete runner registration, and every consent
+predicate.
+
+These deterministic checks do not invoke a language model and do not claim
+that either client's generated response conforms to the prompts. Authenticated
+model-response evals remain a promotion requirement before either alpha skill
+can move into `skills-lock.json`, `rotnov/skills`, or skills.sh. The asset
+validator enforces that fallback: `pycc` and `pycc-feedback` cannot enter the
+locked skill set unless immutable HTTPS evidence exists for authenticated
+model evals on both Codex and Claude. Until then, they remain project-local
+alpha workflows. The separate `Agent assets` job still installs the real
+pinned client CLIs and verifies discovery through both surfaces without model
+credentials.
 
 ## Optional Claude Code plugins
 
