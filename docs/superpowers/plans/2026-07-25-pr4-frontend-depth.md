@@ -2462,7 +2462,7 @@ git commit -m "feat(pycc_hir,pycc_types): basic f-strings (no format spec/conver
 - Consumes: `pycc_parser::parse`, `pycc_hir::lower_checked`, `pycc_types::check`, `pycc_diag::render_human`/`render_json` (all prior tasks).
 - Produces: `fn try_check(path: &str, format: CheckFormat) -> Result<(), ExitCode>` in `src/main.rs`, wired to `Command::Check`. Exit codes match CLI_SPEC.md's contract: `0` on a clean check, `1` on any diagnostic.
 
-- [ ] **Step 1: Read `src/cli.rs`'s current `Check` variant shape**
+- [x] **Step 1: Read `src/cli.rs`'s current `Check` variant shape**
 
 Run: `grep -n "Check" src/cli.rs`
 Expected output describes whatever fields already exist (likely just `{ path: Option<String> }`, possibly no `--error-format` flag yet per CLI_SPEC.md's `--error-format human|json` key flag, which is currently unimplemented workspace-wide). If `--error-format` isn't already a field, add it:
@@ -2475,7 +2475,7 @@ Check {
 },
 ```
 
-- [ ] **Step 2: Write the failing CLI test**
+- [x] **Step 2: Write the failing CLI test**
 
 Add to `tests/slice0.rs`:
 
@@ -2521,12 +2521,12 @@ fn check_subcommand_supports_json_error_format() {
 
 (`serde_json` becomes a `[dev-dependencies]` addition to the root `pycc` binary crate's `Cargo.toml` for this test — it isn't already a dependency there, only in `pycc_diag`.)
 
-- [ ] **Step 3: Run to verify these fail**
+- [x] **Step 3: Run to verify these fail**
 
 Run: `cargo test --test slice0 check_subcommand`
 Expected: FAIL — `check` currently prints "pycc: this subcommand is not yet implemented" and exits 2, not the behavior these tests expect.
 
-- [ ] **Step 4: Implement `try_check` and wire it into `main`**
+- [x] **Step 4: Implement `try_check` and wire it into `main`**
 
 In `src/main.rs`, replace `Command::Check { .. }`'s current arm (which currently falls into the shared "not yet implemented" branch alongside `Test`/`Explain`/`Init`/`Clean`) with its own dedicated case:
 
@@ -2571,17 +2571,17 @@ fn try_check(path: &str, error_format: &str) -> Result<(), ExitCode> {
 }
 ```
 
-- [ ] **Step 5: Run to verify the CLI tests pass**
+- [x] **Step 5: Run to verify the CLI tests pass**
 
 Run: `cargo test --test slice0 check_subcommand`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full workspace suite, clippy, coverage**
+- [x] **Step 6: Run the full workspace suite, clippy, coverage**
 
 Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS. Confirm `unimplemented_subcommands_exit_with_code_2` (an existing `tests/slice0.rs` test asserting `pycc clean` exits 2) still passes — `Check` moving out of that shared match arm must not affect the other still-unimplemented subcommands (`Test`, `Explain`, `Init`, `Clean`).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/main.rs src/cli.rs tests/slice0.rs Cargo.toml
