@@ -12,10 +12,13 @@ use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// One MIR-level value during codegen. Extended (never replaced) by
-/// later tasks: `Str` in Task 7. `Ty::None` never needs a variant here --
-/// no v0.1 `MirExpr` can actually construct a `None` *value* (see Task
-/// 6's note).
+/// One MIR-level value during codegen. Extended (never replaced) by later
+/// tasks: `Str` (Task 7) is a pointer to an opaque `pycc_rt::PyStrObj` --
+/// `pycc_codegen` never inspects its layout (D-050's inline/heap
+/// representation is entirely `pycc_rt`'s own concern), only ever passing
+/// it through to a `pycc_rt_str_*` call. `Ty::None` never needs a variant
+/// here -- no v0.1 `MirExpr` can actually construct a `None` *value* (see
+/// Task 6's note).
 enum Scalar<'ctx> {
     /// Tagged per D-052. Always LLVM `i64`.
     Int(IntValue<'ctx>),
@@ -30,12 +33,16 @@ enum Scalar<'ctx> {
     /// to `int`'s own overflow/bigint-promotion story); every `float`
     /// value is exactly one `f64`, always (Task 6).
     Float(FloatValue<'ctx>),
+    /// A pointer to a heap-allocated `pycc_rt::PyStrObj` (D-050/D-051,
+    /// Task 7) -- always refcounted, never inspected directly by this
+    /// crate (see this enum's own doc comment).
+    Str(PointerValue<'ctx>),
 }
 
 /// Every `pycc_rt` function this crate calls, declared once in
 /// `compile_to_object` and threaded through `emit_stmt`/`emit_expr`.
-/// Extended (never replaced) by Tasks 6/7/8/9/10 as they add more
-/// `pycc_rt` declarations.
+/// Extended (never replaced) by Tasks 8/9/10 as they add more `pycc_rt`
+/// declarations.
 struct RtFns<'ctx> {
     int_add: FunctionValue<'ctx>,
     int_sub: FunctionValue<'ctx>,
@@ -51,6 +58,12 @@ struct RtFns<'ctx> {
     float_floordiv: FunctionValue<'ctx>,
     float_floormod: FunctionValue<'ctx>,
     float_pow: FunctionValue<'ctx>,
+    str_from_literal: FunctionValue<'ctx>,
+    str_concat: FunctionValue<'ctx>,
+    str_cmp: FunctionValue<'ctx>,
+    str_truthy: FunctionValue<'ctx>,
+    str_incref: FunctionValue<'ctx>,
+    str_decref: FunctionValue<'ctx>,
 }
 
 fn declare_rt_functions<'ctx>(
@@ -61,6 +74,7 @@ fn declare_rt_functions<'ctx>(
     let i32_type = context.i32_type();
     let void_type = context.void_type();
     let f64_type = context.f64_type();
+    let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
     let declare = |name: &str, fn_type: inkwell::types::FunctionType<'ctx>| {
         module.add_function(name, fn_type, Some(Linkage::External))
     };
@@ -115,6 +129,24 @@ fn declare_rt_functions<'ctx>(
             "pycc_rt_float_pow",
             f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
         ),
+        str_from_literal: declare(
+            "pycc_rt_str_from_literal",
+            ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        str_concat: declare(
+            "pycc_rt_str_concat",
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+        ),
+        str_cmp: declare(
+            "pycc_rt_str_cmp",
+            i32_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+        ),
+        str_truthy: declare(
+            "pycc_rt_str_truthy",
+            context.i8_type().fn_type(&[ptr_type.into()], false),
+        ),
+        str_incref: declare("pycc_rt_str_incref", void_type.fn_type(&[ptr_type.into()], false)),
+        str_decref: declare("pycc_rt_str_decref", void_type.fn_type(&[ptr_type.into()], false)),
     }
 }
 
@@ -139,6 +171,7 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         pycc_mir::Ty::Int => context.i64_type().into(),
         pycc_mir::Ty::Bool => context.i8_type().into(),
         pycc_mir::Ty::Float => context.f64_type().into(),
+        pycc_mir::Ty::Str => context.ptr_type(inkwell::AddressSpace::default()).into(),
         other => panic!("pycc_codegen: a `{other:?}`-typed parameter/return value is not supported yet"),
     }
 }
@@ -175,6 +208,9 @@ fn to_tagged_int<'ctx>(
         Scalar::Float(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got float")
         }
+        Scalar::Str(_) => {
+            panic!("pycc_codegen: internal error: expected an int-or-bool operand, got str")
+        }
     }
 }
 
@@ -200,6 +236,9 @@ fn to_float<'ctx>(
         Scalar::Bool(v) => builder
             .build_unsigned_int_to_float(v, context.f64_type(), "bool_to_float")
             .expect("build_unsigned_int_to_float should not fail for an i8 0/1 value"),
+        Scalar::Str(_) => {
+            panic!("pycc_codegen: internal error: expected a numeric operand, got str")
+        }
     }
 }
 
@@ -225,13 +264,14 @@ fn build_float_rt_binop<'ctx>(
 fn emit_expr<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
-    // Only ever passed to `emit_expr`'s own recursive calls in every arm
-    // this task adds -- clippy's `only_used_in_recursion` lint (part of
-    // `-D warnings`) requires the underscore prefix for that shape until
-    // Task 7 adds a `MirExpr::StringLiteral` arm that reads it directly
-    // to build a constant global (Task 7 renames this to `module`,
-    // dropping the underscore).
-    _module: &inkwell::module::Module<'ctx>,
+    // Tasks 3-6 only ever passed this to `emit_expr`'s own recursive calls
+    // (clippy's `only_used_in_recursion` lint, part of `-D warnings`,
+    // required an underscore-prefixed `_module` name for that shape). Task
+    // 7's `MirExpr::StringLiteral` arm below is the first to read it
+    // directly (`module.add_global`, to embed a literal's bytes as a
+    // constant), so it's no longer only-used-in-recursion -- dropping the
+    // underscore.
+    module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
     user_functions: &HashMap<&str, FunctionValue<'ctx>>,
     locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
@@ -241,6 +281,29 @@ fn emit_expr<'ctx>(
     match expr {
         MirExpr::IntLiteral(n) => Scalar::Int(tag_smallint_const(context, *n)),
         MirExpr::FloatLiteral(f) => Scalar::Float(context.f64_type().const_float(*f)),
+        MirExpr::StringLiteral(s) => {
+            // Never null-terminated -- a Python `str` can contain an
+            // embedded `\0`, so the byte length is always passed
+            // explicitly to `pycc_rt_str_from_literal` rather than relying
+            // on termination (Task 7).
+            let bytes = s.as_bytes();
+            let array_ty = context.i8_type().array_type(bytes.len() as u32);
+            let global = module.add_global(array_ty, None, "str_lit");
+            global.set_initializer(&context.const_string(bytes, false));
+            global.set_constant(true);
+            global.set_linkage(Linkage::Private);
+            let ptr = global.as_pointer_value();
+            let len = context.i64_type().const_int(bytes.len() as u64, false);
+            let call_site = builder
+                .build_call(rt.str_from_literal, &[ptr.into(), len.into()], "str_lit_obj")
+                .expect("build_call should not fail for a well-formed string literal construction");
+            Scalar::Str(
+                call_site
+                    .try_as_basic_value()
+                    .expect_basic("pycc_rt_str_from_literal returns a non-void pointer")
+                    .into_pointer_value(),
+            )
+        }
         MirExpr::Name { name, ty } => {
             let (ptr, local_ty) = locals
                 .get(name)
@@ -279,6 +342,16 @@ fn emit_expr<'ctx>(
                         .expect("build_load should not fail for a slot this function itself allocated");
                     Scalar::Float(loaded.into_float_value())
                 }
+                Ty::Str => {
+                    let loaded = builder
+                        .build_load(
+                            context.ptr_type(inkwell::AddressSpace::default()),
+                            *ptr,
+                            "load",
+                        )
+                        .expect("build_load should not fail for a slot this function itself allocated");
+                    Scalar::Str(loaded.into_pointer_value())
+                }
                 other => panic!("pycc_codegen: reading a `{other:?}`-typed local is not supported yet"),
             }
         }
@@ -289,8 +362,8 @@ fn emit_expr<'ctx>(
             // -- ".left()" doesn't exist on this type); `.expect_basic(msg)`
             // is the direct equivalent, panicking with `msg` if the callee
             // turned out to be void instead of returning a value.
-            let l = emit_expr(context, builder, _module, rt, user_functions, locals, left);
-            let r = emit_expr(context, builder, _module, rt, user_functions, locals, right);
+            let l = emit_expr(context, builder, module, rt, user_functions, locals, left);
+            let r = emit_expr(context, builder, module, rt, user_functions, locals, right);
             match ty {
                 Ty::Int => {
                     // `to_tagged_int` promotes a `bool` operand instead of
@@ -370,14 +443,31 @@ fn emit_expr<'ctx>(
                         }
                     }
                 }
+                Ty::Str => {
+                    let Scalar::Str(l) = l else {
+                        panic!("pycc_codegen: internal error: str BinOp operand did not evaluate to str")
+                    };
+                    let Scalar::Str(r) = r else {
+                        panic!("pycc_codegen: internal error: str BinOp operand did not evaluate to str")
+                    };
+                    if *op != pycc_mir::BinOpKind::Add {
+                        panic!("pycc_codegen: `str {op:?} str` is not supported yet (only concatenation is)");
+                    }
+                    let result = builder
+                        .build_call(rt.str_concat, &[l.into(), r.into()], "str_concat")
+                        .expect("build_call should not fail for a well-formed concatenation")
+                        .try_as_basic_value()
+                        .expect_basic("pycc_rt_str_concat returns a non-void pointer");
+                    Scalar::Str(result.into_pointer_value())
+                }
                 other => panic!("pycc_codegen: a `{other:?}`-result BinOp is not supported yet"),
             }
         }
         MirExpr::Compare { op, left, right, .. } => {
             let left_ty = left.ty();
             let right_ty = right.ty();
-            let l = emit_expr(context, builder, _module, rt, user_functions, locals, left);
-            let r = emit_expr(context, builder, _module, rt, user_functions, locals, right);
+            let l = emit_expr(context, builder, module, rt, user_functions, locals, left);
+            let r = emit_expr(context, builder, module, rt, user_functions, locals, right);
             let as_bool = if left_ty == Ty::Float || right_ty == Ty::Float {
                 let l = to_float(context, builder, rt, l);
                 let r = to_float(context, builder, rt, r);
@@ -402,6 +492,34 @@ fn emit_expr<'ctx>(
                     .expect("build_float_compare should not fail for two f64 operands");
                 builder
                     .build_int_z_extend(cond, context.i8_type(), "bool_from_fcmp")
+                    .expect("build_int_z_extend should not fail widening i1 to i8")
+            } else if left_ty == Ty::Str || right_ty == Ty::Str {
+                let Scalar::Str(l) = l else {
+                    panic!("pycc_codegen: internal error: str Compare operand did not evaluate to str")
+                };
+                let Scalar::Str(r) = r else {
+                    panic!("pycc_codegen: internal error: str Compare operand did not evaluate to str")
+                };
+                let ordering = builder
+                    .build_call(rt.str_cmp, &[l.into(), r.into()], "str_cmp")
+                    .expect("build_call should not fail for a well-formed comparison")
+                    .try_as_basic_value()
+                    .expect_basic("pycc_rt_str_cmp returns a non-void `i32`")
+                    .into_int_value();
+                let zero = context.i32_type().const_int(0, false);
+                let predicate = match op {
+                    pycc_mir::CmpOpKind::Eq => IntPredicate::EQ,
+                    pycc_mir::CmpOpKind::NotEq => IntPredicate::NE,
+                    pycc_mir::CmpOpKind::Lt => IntPredicate::SLT,
+                    pycc_mir::CmpOpKind::LtE => IntPredicate::SLE,
+                    pycc_mir::CmpOpKind::Gt => IntPredicate::SGT,
+                    pycc_mir::CmpOpKind::GtE => IntPredicate::SGE,
+                };
+                let cond = builder
+                    .build_int_compare(predicate, ordering, zero, "str_cmp_pred")
+                    .expect("build_int_compare should not fail for two i32 operands");
+                builder
+                    .build_int_z_extend(cond, context.i8_type(), "bool_from_str_cmp")
                     .expect("build_int_z_extend should not fail widening i1 to i8")
             } else {
                 let l = to_tagged_int(context, builder, l);
@@ -452,7 +570,7 @@ fn emit_expr<'ctx>(
                      should have been rejected by pycc_types before reaching codegen"
                 )
             });
-            let call_site = build_call_to(context, builder, _module, rt, user_functions, locals, f, args);
+            let call_site = build_call_to(context, builder, module, rt, user_functions, locals, f, args);
             match ty {
                 Ty::Int => Scalar::Int(
                     call_site
@@ -471,6 +589,12 @@ fn emit_expr<'ctx>(
                         .try_as_basic_value()
                         .expect_basic("this function is declared to return float")
                         .into_float_value(),
+                ),
+                Ty::Str => Scalar::Str(
+                    call_site
+                        .try_as_basic_value()
+                        .expect_basic("this function is declared to return str")
+                        .into_pointer_value(),
                 ),
                 other => panic!("pycc_codegen: a `{other:?}`-typed call result is not supported yet"),
             }
@@ -511,10 +635,15 @@ fn build_call_to<'ctx>(
 ) -> inkwell::values::CallSiteValue<'ctx> {
     let arg_values: Vec<inkwell::values::BasicMetadataValueEnum> = args
         .iter()
-        .map(|a| match emit_expr(context, builder, module, rt, user_functions, locals, a) {
-            Scalar::Int(v) => v.into(),
-            Scalar::Bool(v) => v.into(),
-            Scalar::Float(v) => v.into(),
+        .map(|a| {
+            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
+            let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
+            match scalar {
+                Scalar::Int(v) => v.into(),
+                Scalar::Bool(v) => v.into(),
+                Scalar::Float(v) => v.into(),
+                Scalar::Str(v) => v.into(),
+            }
         })
         .collect();
     builder
@@ -523,8 +652,10 @@ fn build_call_to<'ctx>(
 }
 
 /// Turns any supported `Scalar` into an LLVM `i1` for use as a `br`
-/// condition -- the shared truthiness check behind `if`/`while` (Task 4).
-/// Extended (never replaced) by Task 7 as `Str` truthiness is added.
+/// condition -- the shared truthiness check behind `if`/`while` (Task 4),
+/// now including `str` (Task 7): `False` only for the empty string,
+/// delegated to `pycc_rt_str_truthy` (D-050's representation is opaque to
+/// this crate).
 fn truthy<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -552,6 +683,12 @@ fn truthy<'ctx>(
                 .build_int_z_extend(cond, context.i8_type(), "bool_from_float_truthy")
                 .expect("build_int_z_extend should not fail widening i1 to i8")
         }
+        Scalar::Str(v) => builder
+            .build_call(rt.str_truthy, &[v.into()], "str_truthy")
+            .expect("build_call should not fail for a well-formed truthiness check")
+            .try_as_basic_value()
+            .expect_basic("pycc_rt_str_truthy returns a non-void i8")
+            .into_int_value(),
     };
     builder
         .build_int_compare(IntPredicate::NE, as_i8, context.i8_type().const_int(0, false), "truthy")
@@ -578,6 +715,7 @@ fn emit_assign<'ctx>(
                 Scalar::Int(v) => v.get_type().into(),
                 Scalar::Bool(v) => v.get_type().into(),
                 Scalar::Float(v) => v.get_type().into(),
+                Scalar::Str(v) => v.get_type().into(),
             };
             let ptr = builder
                 .build_alloca(alloca_ty, target)
@@ -590,10 +728,68 @@ fn emit_assign<'ctx>(
         Scalar::Int(v) => v.into(),
         Scalar::Bool(v) => v.into(),
         Scalar::Float(v) => v.into(),
+        Scalar::Str(v) => v.into(),
     };
     builder
         .build_store(ptr, basic_value)
         .expect("build_store should not fail for a slot this function itself allocated");
+}
+
+/// Whether evaluating `expr` produces a *duplicate* reference to an
+/// already-owned `str` (a bare variable read) rather than a fresh object
+/// owning exactly one reference from its own construction. v0.1's grammar
+/// makes this purely syntactic: every str-producing expression other than a
+/// bare `Name` (`StringLiteral`, string concatenation, a `Call`'s return
+/// value) freshly constructs its result and already owns exactly one
+/// reference (D-051, Task 7).
+fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
+    matches!(expr, MirExpr::Name { .. })
+}
+
+/// Increments a `str` scalar's refcount when `source_expr` is a bare
+/// variable read (see `str_value_is_a_duplicate_reference`) -- binding a
+/// second owning reference to the same `PyStrObj` without this would leave
+/// the original binding's own eventual decref underflowing the refcount
+/// (D-051, Task 7). A no-op for every non-`Str` scalar.
+fn incref_if_str_duplicate<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    source_expr: &MirExpr,
+    scalar: Scalar<'ctx>,
+) -> Scalar<'ctx> {
+    if let Scalar::Str(ptr) = scalar {
+        if str_value_is_a_duplicate_reference(source_expr) {
+            builder
+                .build_call(rt.str_incref, &[ptr.into()], "str_incref")
+                .expect("build_call should not fail for a well-formed incref");
+        }
+        Scalar::Str(ptr)
+    } else {
+        scalar
+    }
+}
+
+/// Only meaningful for `Ty::Str` targets: if `target` already has a slot in
+/// `locals` (this `Assign` is a reassignment, not a first binding), loads
+/// its current value and decrefs it before the new value overwrites it --
+/// otherwise reassigning a `str` local in a loop would leak its previous
+/// value every iteration (D-051/D-052, Task 7).
+fn decref_old_str_if_reassigning<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    target: &str,
+) {
+    if let Some((slot_ptr, pycc_mir::Ty::Str)) = locals.get(target) {
+        let old = builder
+            .build_load(context.ptr_type(inkwell::AddressSpace::default()), *slot_ptr, "old_str")
+            .expect("build_load should not fail for this function's own alloca")
+            .into_pointer_value();
+        builder
+            .build_call(rt.str_decref, &[old.into()], "str_decref_old")
+            .expect("build_call should not fail for a well-formed decref");
+    }
 }
 
 /// Emits every statement in `body` in order, stopping early the moment the
@@ -730,6 +926,21 @@ pub fn compile_to_object(
     for item in &mir.items {
         if let MirItem::TopLevelStmt(stmt) = item {
             emit_stmt(&context, &builder, &module, &rt, &user_functions, &mut top_level_locals, stmt)?;
+        }
+    }
+    // Module-level Python code has no `return` (T0024) -- every top-level
+    // `str` local's single exit point is program completion right here, so
+    // this is where its accepted refcounting scope (D-052's Task 7
+    // addendum) decrefs it exactly once, before `main` itself returns.
+    for (ptr, ty) in top_level_locals.values() {
+        if *ty == pycc_mir::Ty::Str {
+            let value = builder
+                .build_load(context.ptr_type(inkwell::AddressSpace::default()), *ptr, "final_str")
+                .expect("build_load should not fail for this function's own alloca")
+                .into_pointer_value();
+            builder
+                .build_call(rt.str_decref, &[value.into()], "str_decref_final")
+                .expect("build_call should not fail for a well-formed decref");
         }
     }
     // See the module-level comment block below for why these .expect()s
@@ -970,6 +1181,10 @@ fn emit_stmt<'ctx>(
         MirStmt::Assign { target, value } => {
             let ty = value.ty();
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+            let scalar = incref_if_str_duplicate(builder, rt, value, scalar);
+            if ty == pycc_mir::Ty::Str {
+                decref_old_str_if_reassigning(context, builder, rt, locals, target);
+            }
             emit_assign(builder, locals, target, ty, scalar);
             Ok(())
         }
@@ -1095,10 +1310,12 @@ fn emit_stmt<'ctx>(
             match value {
                 Some(expr) => {
                     let scalar = emit_expr(context, builder, module, rt, user_functions, locals, expr);
+                    let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
                     let basic_value: inkwell::values::BasicValueEnum = match scalar {
                         Scalar::Int(v) => v.into(),
                         Scalar::Bool(v) => v.into(),
                         Scalar::Float(v) => v.into(),
+                        Scalar::Str(v) => v.into(),
                     };
                     builder
                         .build_return(Some(&basic_value))
@@ -1772,18 +1989,23 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "this expression kind's codegen is not supported yet")]
-    fn assigning_a_string_literal_is_not_yet_supported_by_codegen() {
-        // `pycc_types` fully accepts `x = "hello"` (see its own
-        // `infers_a_string_literal_as_str` test); Task 3's `emit_expr`
-        // simply doesn't implement `StringLiteral` yet (Task 7's job).
+    fn assigning_an_fstring_is_not_yet_supported_by_codegen() {
+        // `pycc_types`/`pycc_mir` fully build an `MirExpr::FString`
+        // (f-string interpolation, Task 8's job); `emit_expr` doesn't
+        // implement it yet. This test's earlier (Task 3-era) incarnation
+        // used `StringLiteral` here to exercise `emit_expr`'s final
+        // catch-all -- Task 7 closes that gap (see
+        // `compiles_string_concatenation_and_a_reassignment_that_frees_the_old_value`
+        // below), so `FString` is the one remaining unimplemented
+        // `MirExpr` variant that still reaches it.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
-                value: MirExpr::StringLiteral("hello".to_string()),
+                value: MirExpr::FString(vec![]),
             })],
         };
-        let dir = tempfile_dir("string_literal_panics");
-        let obj_path = dir.join("string_literal_panics.o");
+        let dir = tempfile_dir("fstring_panics");
+        let obj_path = dir.join("fstring_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
     }
 
@@ -1830,23 +2052,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "reading a `Str`-typed local is not supported yet")]
-    fn reading_a_str_typed_local_is_not_yet_supported() {
-        // Not reachable through `compile_to_object`/real MIR at all yet:
-        // every path that could insert a non-`Int`/`Bool`/`Float`-typed
-        // entry into `locals` needs `emit_expr` to first evaluate a value
-        // of that type successfully via `emit_assign`, and nothing in this
-        // crate's own `emit_expr` can do that yet for `Str`
-        // (`StringLiteral` itself hits the generic catch-all before an
-        // `Assign` could ever complete) -- so this calls `emit_expr`
-        // directly with a hand-built `locals` map instead. This test's
-        // earlier (Task 3) incarnation proved the identical gap for
-        // `Ty::Float`, which Task 6 closed (see
-        // `reading_a_float_local_back_out_of_its_alloca` below) -- this
-        // becomes reachable via `compile_to_object` for real, legitimate
-        // source the moment Task 7 adds real local support for `str`;
-        // this same arm keeps guarding whatever remains unimplemented at
-        // that point.
+    #[should_panic(expected = "reading a `None`-typed local is not supported yet")]
+    fn reading_a_none_typed_local_is_not_yet_supported() {
+        // Not reachable through `compile_to_object`/real MIR at all: no
+        // real pipeline can produce a `None`-typed *local* (only a call's
+        // or function's return type is ever legitimately `None`) -- this
+        // calls `emit_expr` directly with a hand-built `locals` map
+        // instead, exercising the `Name` arm's defensive catch-all. This
+        // test's earlier (Task 3-era) incarnation used `Ty::Str` here,
+        // before Task 7 added real `str`-local support (see
+        // `reading_a_float_local_back_out_of_its_alloca` below for the
+        // precedent this mirrors, and
+        // `compiles_string_concatenation_and_a_reassignment_that_frees_the_old_value`
+        // for the real `str`-local read-back test that replaced this one's
+        // old role).
         let context = Context::create();
         let module = context.create_module("test");
         let builder = context.create_builder();
@@ -1858,14 +2077,14 @@ mod tests {
 
         let user_functions: HashMap<&str, FunctionValue> = HashMap::new();
         let mut locals = HashMap::new();
-        // The alloca's own LLVM type is arbitrary here (`str` has no
-        // codegen representation yet to allocate correctly) -- it's never
+        // The alloca's own LLVM type is arbitrary here (`None` has no
+        // codegen representation to allocate correctly) -- it's never
         // actually loaded from, since `emit_expr`'s `Name` arm panics on
-        // `Ty::Str` before reaching any `build_load` call.
+        // `Ty::None` before reaching any `build_load` call.
         let ptr = builder
             .build_alloca(context.f64_type(), "x")
             .expect("build_alloca should not fail for a fresh block");
-        locals.insert("x".to_string(), (ptr, Ty::Str));
+        locals.insert("x".to_string(), (ptr, Ty::None));
 
         emit_expr(
             &context,
@@ -1874,7 +2093,7 @@ mod tests {
             &rt,
             &user_functions,
             &locals,
-            &MirExpr::Name { name: "x".to_string(), ty: Ty::Str },
+            &MirExpr::Name { name: "x".to_string(), ty: Ty::None },
         );
     }
 
@@ -2601,42 +2820,52 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a `Str`-typed parameter/return value is not supported yet")]
-    fn a_str_typed_return_value_is_not_yet_supported() {
-        // `def f() -> str: ...` -- `ty_to_basic_type` implements
-        // `Int`/`Bool`/`Float` (Task 6 added `Float`, see
-        // `compiles_a_function_with_a_float_parameter_and_float_return_value`
-        // below); `Str` is Task 7's job. This test's earlier (Task 3)
-        // incarnation used `Ty::Float` here, before Task 6 closed that gap.
+    #[should_panic(expected = "a `Infer`-typed parameter/return value is not supported yet")]
+    fn an_infer_typed_return_value_is_not_yet_supported() {
+        // `ty_to_basic_type` now implements `Int`/`Bool`/`Float`/`Str`
+        // (Task 7 closed the `Str` gap this test's earlier, Task 3-era
+        // incarnation exercised -- see
+        // `compiles_a_function_with_a_str_parameter_and_str_return_value`
+        // below). `Ty::None` can't stand in for "still unhandled" here:
+        // `compile_to_object`'s own `return_ty` match special-cases
+        // `Ty::None` into `void_type().fn_type(...)` *before*
+        // `ty_to_basic_type` is ever called for a return type (see that
+        // match's own `Ty::None` arm) -- `Ty::Infer` (an HIR-only inference
+        // placeholder no real MIR ever carries this far) is the one `Ty`
+        // variant left that still reaches `ty_to_basic_type`'s own
+        // defensive catch-all from the return-type position.
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "f".to_string(),
                 params: vec![],
-                return_ty: Ty::Str,
+                return_ty: Ty::Infer,
                 body: vec![],
             }],
         };
-        let dir = tempfile_dir("str_return_panics");
-        let obj_path = dir.join("str_return_panics.o");
+        let dir = tempfile_dir("infer_return_panics");
+        let obj_path = dir.join("infer_return_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
     }
 
     #[test]
-    #[should_panic(expected = "a `Str`-typed parameter/return value is not supported yet")]
-    fn a_str_typed_parameter_is_not_yet_supported() {
-        // `def f(x: str): ...` -- a distinct `ty_to_basic_type` call site
+    #[should_panic(expected = "a `None`-typed parameter/return value is not supported yet")]
+    fn a_none_typed_parameter_is_not_yet_supported() {
+        // `def f(x: None): ...` -- a distinct `ty_to_basic_type` call site
         // from the return-type test above (a function's parameter list,
-        // inside `compile_to_object`'s first pass), same underlying panic.
+        // inside `compile_to_object`'s first pass, which has no `Ty::None`
+        // bypass of its own), same underlying panic. This test's earlier
+        // (Task 3-era) incarnation used `Ty::Str` here, before Task 7
+        // closed that gap.
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "f".to_string(),
-                params: vec![("x".to_string(), Ty::Str)],
+                params: vec![("x".to_string(), Ty::None)],
                 return_ty: Ty::None,
                 body: vec![],
             }],
         };
-        let dir = tempfile_dir("str_param_panics");
-        let obj_path = dir.join("str_param_panics.o");
+        let dir = tempfile_dir("none_param_panics");
+        let obj_path = dir.join("none_param_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
     }
 
@@ -2961,21 +3190,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a `Str`-result BinOp is not supported yet")]
-    fn a_str_result_binop_is_not_yet_supported() {
-        // `pycc_types` can legitimately produce a `Ty::Str`-typed `BinOp`
-        // (`"a" + "b"`, string concatenation -- see its own
-        // `adding_two_strings_infers_str` test), but reaching *this* arm
-        // with that real shape isn't actually possible yet: a real `str`
-        // operand (`StringLiteral`/a `str`-typed `Name`) already panics in
-        // `emit_expr` before ever reaching this `BinOp` arm's own `ty`
-        // dispatch (`Str` codegen is Task 7's job -- see
-        // `assigning_a_string_literal_is_not_yet_supported_by_codegen` and
-        // `reading_a_str_typed_local_is_not_yet_supported` above). This
-        // exercises the `BinOp` arm's own defensive catch-all directly
-        // instead, using `int` operands under a mislabeled `ty` -- same
+    #[should_panic(expected = "a `None`-result BinOp is not supported yet")]
+    fn a_none_result_binop_is_not_yet_supported() {
+        // No real Python operator returns `None` from a `BinOp`, so
+        // `pycc_types`/`pycc_mir` never produce this shape -- hand-crafted
+        // MIR exercises the `BinOp` arm's own defensive catch-all directly
+        // instead, using `int` operands under a mislabeled `ty`, same
         // "hand-construct the otherwise-unreachable shape" convention as
         // `true_division_binop_codegen_panics_via_its_dedicated_arm` above.
+        // This test's earlier (Task 3-era) incarnation used `Ty::Str` here
+        // (real string concatenation was Task 7's job then); Task 7 now
+        // implements `Ty::Str` for real, so `Ty::None` is the placeholder
+        // that keeps this catch-all covered.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
@@ -2983,12 +3209,81 @@ mod tests {
                     op: BinOpKind::Add,
                     left: Box::new(MirExpr::IntLiteral(1)),
                     right: Box::new(MirExpr::IntLiteral(2)),
+                    ty: Ty::None,
+                },
+            })],
+        };
+        let dir = tempfile_dir("binop_none_result_panics");
+        let obj_path = dir.join("binop_none_result_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: str BinOp operand did not evaluate to str")]
+    fn a_str_result_binop_with_a_non_str_left_operand_hits_the_internal_consistency_check() {
+        // Deliberately malformed MIR: `pycc_types`/`pycc_mir` only ever
+        // produce a `Ty::Str`-typed `BinOp` for `str + str` (see
+        // `pycc_mir`'s own `adding_two_strings_infers_str` test), so no real
+        // pipeline could reach this arm with a non-`str` left operand.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(MirExpr::IntLiteral(1)),
+                    right: Box::new(MirExpr::StringLiteral("b".to_string())),
                     ty: Ty::Str,
                 },
             })],
         };
-        let dir = tempfile_dir("binop_str_result_panics");
-        let obj_path = dir.join("binop_str_result_panics.o");
+        let dir = tempfile_dir("str_binop_left_mismatch_panics");
+        let obj_path = dir.join("str_binop_left_mismatch_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: str BinOp operand did not evaluate to str")]
+    fn a_str_result_binop_with_a_non_str_right_operand_hits_the_internal_consistency_check() {
+        // Same rationale as the left-operand version above, isolating the
+        // `BinOp` arm's *second* `let Scalar::Str(r) = r else { .. }` check
+        // -- the left operand must genuinely be `str` (so the first check
+        // passes) for this one to be reached at all.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(MirExpr::IntLiteral(2)),
+                    ty: Ty::Str,
+                },
+            })],
+        };
+        let dir = tempfile_dir("str_binop_right_mismatch_panics");
+        let obj_path = dir.join("str_binop_right_mismatch_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "`str Sub str` is not supported yet (only concatenation is)")]
+    fn a_str_binop_other_than_concatenation_is_not_yet_supported() {
+        // `"a" - "b"` -- real `str` operands on both sides, but only `Add`
+        // (concatenation) is implemented; Python doesn't define `str - str`
+        // either, so `pycc_types` would reject this long before codegen --
+        // this exercises the `Str` arm's own `op != Add` guard directly.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Sub,
+                    left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(MirExpr::StringLiteral("b".to_string())),
+                    ty: Ty::Str,
+                },
+            })],
+        };
+        let dir = tempfile_dir("str_binop_unsupported_op_panics");
+        let obj_path = dir.join("str_binop_unsupported_op_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
     }
 
@@ -3110,6 +3405,291 @@ mod tests {
         let dir = tempfile_dir("remaining_float_cmp_ops");
         let obj_path = dir.join("remaining_float_cmp_ops.o");
         compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn compiles_string_concatenation_and_a_reassignment_that_frees_the_old_value() {
+        // `x = "foo"; x = x + "bar"` -- the second `Assign` reads the
+        // existing `x` (needs an incref before rebinding) and overwrites
+        // `x`'s slot (must decref the *original* `"foo"` first). Nothing
+        // observes the refcounting directly; this proves it doesn't crash
+        // and that codegen for the whole sequence succeeds.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::StringLiteral("foo".to_string()),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(MirExpr::Name { name: "x".to_string(), ty: Ty::Str }),
+                        right: Box::new(MirExpr::StringLiteral("bar".to_string())),
+                        ty: Ty::Str,
+                    },
+                }),
+            ],
+        };
+        let dir = tempfile_dir("str_concat_reassign");
+        let obj_path = dir.join("str_concat_reassign.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("str_concat_reassign");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    fn compiles_a_string_comparison() {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "b".to_string(),
+                value: MirExpr::Compare {
+                    op: CmpOpKind::Lt,
+                    left: Box::new(MirExpr::StringLiteral("apple".to_string())),
+                    right: Box::new(MirExpr::StringLiteral("banana".to_string())),
+                    ty: Ty::Bool,
+                },
+            })],
+        };
+        let dir = tempfile_dir("str_cmp");
+        let obj_path = dir.join("str_cmp.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn compiles_the_remaining_string_comparison_operators() {
+        // `Lt` already has its own dedicated test above
+        // (`compiles_a_string_comparison`); this exercises the rest of the
+        // `str` branch's `IntPredicate` match arms
+        // (`Eq`/`NotEq`/`LtE`/`Gt`/`GtE`), mirroring
+        // `compiles_the_remaining_comparison_operators`'s `int` coverage and
+        // `compiles_the_remaining_float_comparison_operators`'s `float` one.
+        fn assign_compare(target: &str, op: CmpOpKind) -> MirStmt {
+            MirStmt::Assign {
+                target: target.to_string(),
+                value: MirExpr::Compare {
+                    op,
+                    left: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    right: Box::new(MirExpr::StringLiteral("b".to_string())),
+                    ty: Ty::Bool,
+                },
+            }
+        }
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_compare("a", CmpOpKind::Eq)),
+                MirItem::TopLevelStmt(assign_compare("b", CmpOpKind::NotEq)),
+                MirItem::TopLevelStmt(assign_compare("c", CmpOpKind::LtE)),
+                MirItem::TopLevelStmt(assign_compare("d", CmpOpKind::Gt)),
+                MirItem::TopLevelStmt(assign_compare("e", CmpOpKind::GtE)),
+            ],
+        };
+        let dir = tempfile_dir("remaining_str_cmp_ops");
+        let obj_path = dir.join("remaining_str_cmp_ops.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: str Compare operand did not evaluate to str")]
+    fn a_mixed_int_and_string_comparison_hits_the_internal_consistency_check() {
+        // `1 < "x"` -- deliberately malformed MIR (`pycc_types` never mixes
+        // `int`/`str` operands in one comparison): `left_ty` alone is
+        // `Ty::Int` here, so only evaluating `right_ty` decides this enters
+        // the `Compare` arm's `str` branch (exercising that `||`'s
+        // right-hand disjunct, mirroring
+        // `compiles_a_mixed_int_and_float_comparison`'s identical
+        // left-Int/right-Float construction) -- and since the left operand
+        // genuinely evaluates to `Scalar::Int`, this also isolates the
+        // `str` branch's *left*-operand internal-consistency check.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "b".to_string(),
+                value: MirExpr::Compare {
+                    op: CmpOpKind::Lt,
+                    left: Box::new(MirExpr::IntLiteral(1)),
+                    right: Box::new(MirExpr::StringLiteral("x".to_string())),
+                    ty: Ty::Bool,
+                },
+            })],
+        };
+        let dir = tempfile_dir("mixed_int_str_cmp_panics");
+        let obj_path = dir.join("mixed_int_str_cmp_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: str Compare operand did not evaluate to str")]
+    fn a_string_comparison_with_a_lying_right_operand_hits_the_internal_consistency_check() {
+        // Deliberately malformed MIR, isolating the `Compare` arm's str
+        // branch's *right*-operand check specifically (the test above only
+        // ever reaches the *left*-operand one, since that check runs
+        // first): the right operand is a nested `Compare` node that claims
+        // `ty: Ty::Str` but -- like every `Compare` node, regardless of its
+        // own `ty` field -- always evaluates to `Scalar::Bool` (`emit_expr`'s
+        // `Compare` arm never reads its own `ty` when constructing its
+        // result; only a *parent* expression's `left.ty()`/`right.ty()`
+        // call ever inspects it). This makes `right_ty == Ty::Str` true
+        // (entering the branch) while `r` itself evaluates to `Scalar::Bool`
+        // -- with the left operand a real `str`, so the left-operand check
+        // passes and only the right-operand one fires. Same "nested lying
+        // node" convention as this file's other internal-consistency tests
+        // (e.g. `printing_a_mistyped_compare_expression_hits_the_internal_consistency_check`).
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "b".to_string(),
+                value: MirExpr::Compare {
+                    op: CmpOpKind::Eq,
+                    left: Box::new(MirExpr::StringLiteral("x".to_string())),
+                    right: Box::new(MirExpr::Compare {
+                        op: CmpOpKind::Lt,
+                        left: Box::new(MirExpr::IntLiteral(1)),
+                        right: Box::new(MirExpr::IntLiteral(2)),
+                        ty: Ty::Str,
+                    }),
+                    ty: Ty::Bool,
+                },
+            })],
+        };
+        let dir = tempfile_dir("lying_str_cmp_panics");
+        let obj_path = dir.join("lying_str_cmp_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    fn compiles_an_if_test_on_a_string_expression() {
+        // `if "": print(1)` prints nothing; `if "x": print(1)` prints `1`.
+        for (test, expected) in [("", ""), ("x", "1\n")] {
+            let mir = MirModule {
+                items: vec![MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::StringLiteral(test.to_string()),
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::IntLiteral(1)],
+                        ty: Ty::None,
+                    })],
+                    orelse: vec![],
+                })],
+            };
+            let dir = tempfile_dir(&format!("str_truthy_{}", test.len()));
+            let obj_path = dir.join("str_truthy.o");
+            compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+            let bin_path = dir.join("str_truthy");
+            link_object_with_runtime(&obj_path, &bin_path);
+            let output = Command::new(&bin_path).output().expect("binary should run");
+            assert_eq!(output.stdout, expected.as_bytes(), "test value {test:?}");
+        }
+    }
+
+    #[test]
+    fn compiles_a_string_literal_longer_than_the_inline_cap() {
+        let long = "y".repeat(30); // exceeds D-050's 22-byte inline threshold
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "s".to_string(),
+                value: MirExpr::StringLiteral(long),
+            })],
+        };
+        let dir = tempfile_dir("str_long_literal");
+        let obj_path = dir.join("str_long_literal.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn compiles_a_function_with_a_str_parameter_and_str_return_value() {
+        // `def f(x: str) -> str: return x` ; `y = f("hi")` -- exercises
+        // `ty_to_basic_type`'s `Ty::Str` arm (both the parameter and
+        // return-type positions), `build_call_to`'s argument-marshaling
+        // match's `Scalar::Str` arm (plus `incref_if_str_duplicate`'s
+        // duplicate-reference branch on the `"hi"` literal argument, which
+        // is *not* a duplicate reference, exercising its `else` half),
+        // `emit_expr`'s `Call` arm's `Ty::Str`-result match arm, and
+        // `emit_stmt`'s `Return` arm's `Scalar::Str` arm together with
+        // `incref_if_str_duplicate`'s duplicate-reference branch on `return
+        // x` (a bare `Name`, which *is* a duplicate reference, exercising
+        // its `if` half) -- every `str`-typed position Task 5/6's
+        // float-parameter precedent
+        // (`compiles_a_function_with_a_float_parameter_and_float_return_value`)
+        // established for `float`, now closed for `str`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("x".to_string(), Ty::Str)],
+                    return_ty: Ty::Str,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Str,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "y".to_string(),
+                    value: MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![MirExpr::StringLiteral("hi".to_string())],
+                        ty: Ty::Str,
+                    },
+                }),
+            ],
+        };
+        let dir = tempfile_dir("str_param_and_return");
+        let obj_path = dir.join("str_param_and_return.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("str_param_and_return");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    #[should_panic(expected = "expected an int-or-bool operand, got str")]
+    fn an_int_result_binop_with_a_str_operand_hits_to_tagged_int_defensive_panic() {
+        // Deliberately malformed MIR: `pycc_types::numeric_result_type`
+        // never types a `str`-operand `BinOp` as `Ty::Int` (`str` only ever
+        // combines with `str`, under `Add`, per its own
+        // `adding_two_strings_infers_str` test), so no real pipeline could
+        // ever produce this shape. Exercises `to_tagged_int`'s own
+        // defensive `Scalar::Str` arm -- same convention as
+        // `an_int_result_binop_with_a_float_operand_hits_to_tagged_int_defensive_panic`
+        // above, now for `str` instead of `float`.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(MirExpr::StringLiteral("x".to_string())),
+                    right: Box::new(MirExpr::IntLiteral(1)),
+                    ty: Ty::Int,
+                },
+            })],
+        };
+        let dir = tempfile_dir("binop_int_result_str_operand_panics");
+        let obj_path = dir.join("binop_int_result_str_operand_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected a numeric operand, got str")]
+    fn a_float_result_binop_with_a_str_operand_hits_to_float_defensive_panic() {
+        // Same rationale as the `to_tagged_int` version above, exercising
+        // `to_float`'s own defensive `Scalar::Str` arm instead (a brand-new
+        // arm this task adds -- `to_float`'s match was previously exhaustive
+        // over `Int`/`Bool`/`Float` alone, with no catch-all to fill in).
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(MirExpr::StringLiteral("x".to_string())),
+                    right: Box::new(MirExpr::FloatLiteral(1.0)),
+                    ty: Ty::Float,
+                },
+            })],
+        };
+        let dir = tempfile_dir("binop_float_result_str_operand_panics");
+        let obj_path = dir.join("binop_float_result_str_operand_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {

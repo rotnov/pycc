@@ -28,6 +28,8 @@
 //! `pycc` binary directly instead of linking a sibling staticlib -- both
 //! bigger changes than this sharp edge currently justifies.
 
+use std::cell::Cell;
+
 fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
 }
@@ -393,6 +395,161 @@ pub extern "C" fn pycc_rt_float_pow(a: f64, b: f64) -> f64 {
     a.powf(b)
 }
 
+/// D-050's `str` representation: up to 22 bytes are stored inline directly
+/// in the `PyStrObj` allocation itself (no separate heap allocation for the
+/// byte payload); anything longer heap-allocates a second, separate byte
+/// buffer. Either way, `PyStrObj` itself (its refcount included) is always
+/// exactly one heap allocation -- `pycc_codegen` never sees anything but an
+/// opaque pointer to it (the same ABI-avoidance principle D-052 already
+/// applies to `int`'s `BigInt`: no struct ever crosses the LLVM/Rust
+/// boundary by value).
+enum PyStrPayload {
+    /// `(bytes, len)` -- only the first `len` bytes of `bytes` are
+    /// meaningful; the rest is unused padding.
+    Inline([u8; 22], u8),
+    Heap(Box<[u8]>),
+}
+
+// `pub`, not private: every `pycc_rt_str_*` function below is a public
+// (`#[unsafe(no_mangle)] pub extern "C" fn`) FFI entry point taking/
+// returning `*mut PyStrObj`, and rustc's `private_interfaces` lint (a hard
+// error under this project's `-D warnings` clippy gate) correctly refuses a
+// private type in a public signature. `PyStrObj` stays fully opaque to any
+// real Rust caller anyway: both fields below stay private, so nothing
+// outside this module can construct one or read its contents except
+// through these functions -- the "opaque pointer" contract this file's own
+// doc comments describe is a privacy-of-fields property, not a
+// privacy-of-the-type-name one.
+pub struct PyStrObj {
+    rc: Cell<u32>,
+    payload: PyStrPayload,
+}
+
+impl PyStrObj {
+    fn bytes(&self) -> &[u8] {
+        match &self.payload {
+            PyStrPayload::Inline(buf, len) => &buf[..*len as usize],
+            PyStrPayload::Heap(b) => b,
+        }
+    }
+}
+
+/// Allocates a fresh `PyStrObj` with refcount `1`, choosing the inline or
+/// heap `PyStrPayload` per D-050's 22-byte threshold. Shared by every
+/// `pycc_rt_str_*` entry point below that constructs a brand-new string (a
+/// literal, or a concatenation result) rather than merely operating on
+/// already-existing ones.
+fn new_pystr(bytes: &[u8]) -> *mut PyStrObj {
+    let payload = if bytes.len() <= 22 {
+        let mut buf = [0u8; 22];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        PyStrPayload::Inline(buf, bytes.len() as u8)
+    } else {
+        PyStrPayload::Heap(bytes.to_vec().into_boxed_slice())
+    };
+    Box::into_raw(Box::new(PyStrObj { rc: Cell::new(1), payload }))
+}
+
+/// Builds a `str` object from a compile-time literal's bytes
+/// (`pycc_codegen`'s `MirExpr::StringLiteral` codegen, Task 7). Unlike every
+/// `pycc_rt_int_*` arithmetic/comparison function, this has no failure mode
+/// to guard against (allocation failure aborts via Rust's global allocator
+/// rather than unwinding) -- so, per this crate's established convention
+/// (see the implementation note above `int_add`, and `pycc_rt_int_truthy`'s
+/// own doc comment for the same reasoning), this does not need the
+/// private-logic/public-wrapper split: nothing here ever unwinds, so there's
+/// no abort-vs-catch distinction for a caller to trip over. The same
+/// rationale applies to every other `pycc_rt_str_*` function below.
+///
+/// # Safety
+/// `ptr` must point to at least `len` readable bytes -- true for every
+/// `pycc_codegen`-emitted call site, which always passes a compile-time
+/// string literal's own constant global and byte length together.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_str_from_literal(ptr: *const u8, len: i64) -> *mut PyStrObj {
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    new_pystr(bytes)
+}
+
+/// Concatenates two `str` objects into a brand-new one (Python's `+` on
+/// `str`, Task 7) -- never mutates either operand.
+///
+/// # Safety
+/// `a`/`b` must be live `PyStrObj` pointers -- every `pycc_codegen` call
+/// site only ever passes a value it just evaluated from a well-typed
+/// `Ty::Str` expression.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_str_concat(a: *mut PyStrObj, b: *mut PyStrObj) -> *mut PyStrObj {
+    let a_bytes = unsafe { &*a }.bytes();
+    let b_bytes = unsafe { &*b }.bytes();
+    let mut combined = Vec::with_capacity(a_bytes.len() + b_bytes.len());
+    combined.extend_from_slice(a_bytes);
+    combined.extend_from_slice(b_bytes);
+    new_pystr(&combined)
+}
+
+/// Lexicographic byte-wise ordering (Task 7's `str` comparison codegen) --
+/// `-1`/`0`/`1`, matching `pycc_rt_int_cmp`'s own convention.
+///
+/// # Safety
+/// Same as `pycc_rt_str_concat`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_str_cmp(a: *mut PyStrObj, b: *mut PyStrObj) -> i32 {
+    match unsafe { &*a }.bytes().cmp(unsafe { &*b }.bytes()) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
+/// `str`'s truthiness for `if`/`while` conditions (Task 7, mirrors
+/// `pycc_rt_int_truthy`'s own doc comment): `False` only for the empty
+/// string, matching CPython.
+///
+/// # Safety
+/// `s` must be a live `PyStrObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_str_truthy(s: *mut PyStrObj) -> i8 {
+    i8::from(!unsafe { &*s }.bytes().is_empty())
+}
+
+/// D-051's unconditional refcounting for `str`: increments `s`'s refcount by
+/// one. A no-op on a null pointer -- not something Task 7's own codegen
+/// ever actually passes, but a documented, tested part of this function's
+/// contract nonetheless (mirroring how a null check is cheap insurance
+/// against any future caller that binds a `str` local before it's ever
+/// assigned).
+///
+/// # Safety
+/// `s` must be either a null pointer or a live `PyStrObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_str_incref(s: *mut PyStrObj) {
+    if s.is_null() {
+        return;
+    }
+    let obj = unsafe { &*s };
+    obj.rc.set(obj.rc.get() + 1);
+}
+
+/// D-051's unconditional refcounting for `str`: decrements `s`'s refcount by
+/// one, freeing the allocation once it reaches zero. A no-op on a null
+/// pointer, same rationale as `pycc_rt_str_incref` above.
+///
+/// # Safety
+/// Same as `pycc_rt_str_incref`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
+    if s.is_null() {
+        return;
+    }
+    let new_rc = unsafe { &*s }.rc.get() - 1;
+    if new_rc == 0 {
+        drop(unsafe { Box::from_raw(s) });
+    } else {
+        unsafe { &*s }.rc.set(new_rc);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,5 +804,88 @@ mod tests {
     fn pycc_rt_float_pow_computes_the_correct_power() {
         assert_eq!(pycc_rt_float_pow(2.0, 10.0), 1024.0);
         assert_eq!(pycc_rt_float_pow(9.0, 0.5), 3.0);
+    }
+
+    #[test]
+    fn a_short_literal_round_trips_through_the_inline_representation() {
+        // Every `pycc_rt_str_*` function is `unsafe extern "C"` (see their
+        // own doc comments' `# Safety` sections) -- a genuinely public,
+        // pointer-taking FFI entry point, unlike every plain-`i64`
+        // `pycc_rt_int_*` function above, so calling one directly (even
+        // from this crate's own same-binary Rust tests) needs an explicit
+        // `unsafe` block, upholding each call's own documented precondition.
+        unsafe {
+            let bytes = b"hi";
+            let s = pycc_rt_str_from_literal(bytes.as_ptr(), bytes.len() as i64);
+            assert_eq!((*s).bytes(), b"hi");
+            pycc_rt_str_decref(s);
+        }
+    }
+
+    #[test]
+    fn a_long_literal_round_trips_through_the_heap_representation() {
+        unsafe {
+            let long = "x".repeat(23); // one byte past the 22-byte inline cap (D-050)
+            let s = pycc_rt_str_from_literal(long.as_ptr(), long.len() as i64);
+            assert_eq!((*s).bytes(), long.as_bytes());
+            pycc_rt_str_decref(s);
+        }
+    }
+
+    #[test]
+    fn concat_joins_bytes_from_both_operands() {
+        unsafe {
+            let a = pycc_rt_str_from_literal(b"foo".as_ptr(), 3);
+            let b = pycc_rt_str_from_literal(b"bar".as_ptr(), 3);
+            let joined = pycc_rt_str_concat(a, b);
+            assert_eq!((*joined).bytes(), b"foobar");
+            pycc_rt_str_decref(a);
+            pycc_rt_str_decref(b);
+            pycc_rt_str_decref(joined);
+        }
+    }
+
+    #[test]
+    fn cmp_orders_strings_lexicographically() {
+        unsafe {
+            let a = pycc_rt_str_from_literal(b"apple".as_ptr(), 5);
+            let b = pycc_rt_str_from_literal(b"banana".as_ptr(), 6);
+            assert_eq!(pycc_rt_str_cmp(a, a), 0);
+            assert_eq!(pycc_rt_str_cmp(a, b), -1);
+            assert_eq!(pycc_rt_str_cmp(b, a), 1);
+            pycc_rt_str_decref(a);
+            pycc_rt_str_decref(b);
+        }
+    }
+
+    #[test]
+    fn truthy_is_false_only_for_the_empty_string() {
+        unsafe {
+            let empty = pycc_rt_str_from_literal(b"".as_ptr(), 0);
+            let non_empty = pycc_rt_str_from_literal(b"x".as_ptr(), 1);
+            assert_eq!(pycc_rt_str_truthy(empty), 0);
+            assert_eq!(pycc_rt_str_truthy(non_empty), 1);
+            pycc_rt_str_decref(empty);
+            pycc_rt_str_decref(non_empty);
+        }
+    }
+
+    #[test]
+    fn incref_then_decref_survives_until_the_final_decref() {
+        unsafe {
+            let s = pycc_rt_str_from_literal(b"hi".as_ptr(), 2);
+            pycc_rt_str_incref(s); // rc 1 -> 2
+            pycc_rt_str_decref(s); // rc 2 -> 1, must NOT free yet
+            assert_eq!(pycc_rt_str_cmp(s, s), 0); // still safe to read
+            pycc_rt_str_decref(s); // rc 1 -> 0, frees
+        }
+    }
+
+    #[test]
+    fn incref_and_decref_on_a_null_pointer_are_safe_no_ops() {
+        unsafe {
+            pycc_rt_str_incref(std::ptr::null_mut());
+            pycc_rt_str_decref(std::ptr::null_mut());
+        }
     }
 }
