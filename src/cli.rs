@@ -1,5 +1,10 @@
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ErrorFormat {
+    Human,
+    Json,
+}
 
 #[derive(Parser)]
 #[command(name = "pycc")]
@@ -24,7 +29,10 @@ pub enum Command {
         path: String,
     },
     Check {
-        paths: Vec<PathBuf>,
+        path: Option<String>,
+        /// CLI_SPEC.md's diagnostic-output contract: "human" (default) or "json".
+        #[arg(long, value_enum, default_value = "human")]
+        error_format: ErrorFormat,
     },
     Test,
     Explain {

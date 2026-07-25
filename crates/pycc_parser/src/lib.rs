@@ -9,14 +9,9 @@ pub fn parse(source: &str) -> Result<ModModule, Diagnostic> {
     // `Parsed::into_result` source before writing this, not assumed.
     ruff_python_parser::parse_module(source)
         .map(|parsed| parsed.into_syntax())
-        .map_err(|error| {
-            let range = error.range();
-            Diagnostic::error(
-                "L0001",
-                error.to_string(),
-                Span::new(range.start().into(), range.end().into()),
-                "invalid syntax",
-            )
+        .map_err(|e| {
+            let span = Span::new(e.location.start().to_u32(), e.location.end().to_u32());
+            Diagnostic::error("L0001", e.to_string(), span)
         })
 }
 
@@ -42,5 +37,14 @@ mod tests {
         assert_eq!(err.code, "L0001");
         assert_eq!(err.span, Some(Span::new(9, 10)));
         assert_eq!(err.label.as_deref(), Some("invalid syntax"));
+    }
+
+    #[test]
+    fn syntax_error_carries_the_real_byte_span_not_a_placeholder() {
+        let err = parse("def main(:\n").unwrap_err();
+        // "def main(:\n" -- ruff's parser fails at the malformed parameter
+        // list; this must no longer be Span::new(0, 0) for every input
+        // regardless of where the error actually is.
+        assert_ne!(err.span, Some(Span::new(0, 0)));
     }
 }

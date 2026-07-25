@@ -2,10 +2,7 @@ mod cli;
 mod source;
 
 use clap::Parser;
-use cli::{Cli, Command};
-use pycc_diag::{Diagnostic, Span};
-use std::fmt::Write;
-use std::path::Path;
+use cli::{Cli, Command, ErrorFormat};
 use std::process::ExitCode;
 use unicode_width::UnicodeWidthStr;
 
@@ -21,11 +18,48 @@ fn main() -> ExitCode {
             println!("pycc 0.1.0 (rustc 1.97.1, LLVM 22.1.1)");
             ExitCode::SUCCESS
         }
-        Command::Check { paths } => check_paths(&paths),
+        Command::Check { path, error_format } => {
+            match try_check(path.as_deref().unwrap_or("."), error_format) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(code) => code,
+            }
+        }
         Command::Test | Command::Explain { .. } | Command::Init { .. } | Command::Clean => {
             eprintln!("pycc: this subcommand is not yet implemented");
             ExitCode::from(2)
         }
+    }
+}
+
+/// `pycc check`: parse + HIR-lowering + type-checking only, no codegen --
+/// CLI_SPEC.md's contract for this subcommand (ruff-fast, no codegen).
+/// `error_format`: "human" (default) or "json", matching CLI_SPEC.md's
+/// `--error-format` flag. Any diagnostic is printed to stdout and reported
+/// as exit code 1; a missing/unreadable file is a clean exit-2 error (same
+/// convention as `try_build`).
+fn try_check(path: &str, error_format: ErrorFormat) -> Result<(), ExitCode> {
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        eprintln!("error: could not read `{path}`: {e}");
+        ExitCode::from(2)
+    })?;
+    let report = |diag: pycc_diag::Diagnostic| -> ExitCode {
+        match error_format {
+            ErrorFormat::Human => print!("{}", pycc_diag::render_human(&diag, path, &source)),
+            ErrorFormat::Json => println!("{}", pycc_diag::render_json(&diag, path, &source)),
+        }
+        ExitCode::from(1)
+    };
+    let module = match pycc_parser::parse(&source) {
+        Ok(m) => m,
+        Err(diag) => return Err(report(diag)),
+    };
+    let hir = match pycc_hir::lower_checked(&module) {
+        Ok(h) => h,
+        Err(diag) => return Err(report(diag)),
+    };
+    match pycc_types::check(&hir) {
+        Ok(()) => Ok(()),
+        Err(diag) => Err(report(diag)),
     }
 }
 
@@ -38,10 +72,23 @@ fn main() -> ExitCode {
 /// no sense). `Some(triple)` cross-compiles -- see `find_pycc_rt_lib_dir`
 /// for what that requires to actually be available.
 fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode> {
-    let path = Path::new(path);
-    let hir = check_frontend(path)
-        .map_err(|failure| ExitCode::from(report_frontend_failure(path, failure)))?;
-    let mir = pycc_mir::build(&hir);
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        eprintln!("error: could not read `{path}`: {e}");
+        ExitCode::from(2)
+    })?;
+    let module = pycc_parser::parse(&source).map_err(|diag| {
+        eprintln!("error[{}]: {}", diag.code, diag.message);
+        ExitCode::from(1)
+    })?;
+    let hir = pycc_hir::lower_checked(&module).map_err(|diag| {
+        eprintln!("error[{}]: {}", diag.code, diag.message);
+        ExitCode::from(1)
+    })?;
+    let typed_hir = pycc_types::check_and_resolve(&hir).map_err(|diag| {
+        eprintln!("error[{}]: {}", diag.code, diag.message);
+        ExitCode::from(1)
+    })?;
+    let mir = pycc_mir::build(&typed_hir);
 
     let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
     pycc_codegen::compile_to_object(&mir, &obj_path, target).map_err(|e| {
@@ -70,178 +117,6 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
     } else {
         Err(ExitCode::from(1))
     }
-}
-
-enum FrontendFailure {
-    Input(String),
-    Compile {
-        diagnostic: Diagnostic,
-        source: String,
-    },
-}
-
-fn check_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
-    let bytes = std::fs::read(path).map_err(|error| FrontendFailure::Input(error.to_string()))?;
-    let source = source::decode_python_source(&bytes).map_err(FrontendFailure::Input)?;
-    let module = match pycc_parser::parse(&source) {
-        Ok(module) => module,
-        Err(diagnostic) => return Err(FrontendFailure::Compile { diagnostic, source }),
-    };
-    let hir = match pycc_hir::lower(&module) {
-        Ok(hir) => hir,
-        Err(diagnostic) => return Err(FrontendFailure::Compile { diagnostic, source }),
-    };
-    pycc_types::check(&hir).expect("v0.1's type checker is a no-op passthrough; it never fails");
-    Ok(hir)
-}
-
-fn check_paths(paths: &[std::path::PathBuf]) -> ExitCode {
-    if paths.is_empty() {
-        eprintln!("error: `pycc check` requires at least one Python file in v0.1");
-        return ExitCode::from(2);
-    }
-
-    let mut exit_code = 0;
-    for path in paths {
-        if let Err(failure) = check_frontend(path) {
-            exit_code = exit_code.max(report_frontend_failure(path, failure));
-        }
-    }
-    ExitCode::from(exit_code)
-}
-
-fn report_frontend_failure(path: &Path, failure: FrontendFailure) -> u8 {
-    let path = escape_terminal_controls(&normalize_diagnostic_path(&path.to_string_lossy()), false);
-    match failure {
-        FrontendFailure::Input(message) => {
-            eprintln!("error: could not read `{path}`: {message}");
-            2
-        }
-        FrontendFailure::Compile { diagnostic, source } => {
-            let span = diagnostic
-                .span
-                .expect("compile errors must carry a primary source span");
-            let label = diagnostic
-                .label
-                .as_deref()
-                .expect("compile errors must carry a primary source label");
-            eprintln!(
-                "error[{}]: {}\n{}",
-                diagnostic.code,
-                diagnostic.message,
-                render_source_span(&path, &source, span, label),
-            );
-            1
-        }
-    }
-}
-
-fn normalize_diagnostic_path(path: &str) -> String {
-    #[cfg(windows)]
-    let path = path.replace('\\', "/");
-    #[cfg(not(windows))]
-    let path = path.to_string();
-    let root = if path.starts_with("//") {
-        "//"
-    } else if path.starts_with('/') {
-        "/"
-    } else {
-        ""
-    };
-    let joined = path
-        .trim_start_matches('/')
-        .split('/')
-        .filter(|component| !component.is_empty() && *component != ".")
-        .collect::<Vec<_>>()
-        .join("/");
-
-    if joined.is_empty() {
-        if root.is_empty() {
-            ".".to_string()
-        } else {
-            root.to_string()
-        }
-    } else {
-        format!("{root}{joined}")
-    }
-}
-
-fn render_source_span(path: &str, source: &str, span: Span, label: &str) -> String {
-    let start = usize::try_from(span.start).expect("source offsets must fit usize");
-    let end = usize::try_from(span.end).expect("source offsets must fit usize");
-    let prefix = &source[..start];
-    let line_number = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
-    let line_start = match prefix.rfind('\n') {
-        Some(newline) => newline + 1,
-        None => 0,
-    };
-    let line_end = match source[start..].find('\n') {
-        Some(relative_newline) => start + relative_newline,
-        None => source.len(),
-    };
-    let source_line = &source[line_start..line_end];
-    let source_prefix = &source[line_start..start];
-    let column = source_prefix.chars().count() + 1;
-    let highlight_end = end.max(start).min(line_end);
-    let rendered_source_line = escape_terminal_controls(source_line, true);
-    let rendered_prefix = escape_terminal_controls(source_prefix, true);
-    let rendered_highlight = escape_terminal_controls(&source[start..highlight_end], true);
-    let highlight_width = display_width(&rendered_highlight).max(1);
-    let gutter_width = line_number.to_string().len();
-    let empty_gutter = " ".repeat(gutter_width);
-    let caret_padding = display_padding(&rendered_prefix);
-
-    format!(
-        " --> {path}:{line_number}:{column}\n{empty_gutter} |\n\
-         {line_number:>gutter_width$} | {rendered_source_line}\n\
-         {empty_gutter} | {caret_padding}{} {label}",
-        "^".repeat(highlight_width),
-    )
-}
-
-fn escape_terminal_controls(text: &str, preserve_tabs: bool) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '\t' if preserve_tabs => escaped.push('\t'),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            '\0' => escaped.push_str("\\0"),
-            character if character.is_control() || is_bidi_format_control(character) => {
-                write!(escaped, "\\u{{{:x}}}", u32::from(character))
-                    .expect("writing to a string must succeed");
-            }
-            character => escaped.push(character),
-        }
-    }
-    escaped
-}
-
-fn is_bidi_format_control(character: char) -> bool {
-    matches!(
-        character,
-        '\u{061c}'
-            | '\u{200e}'
-            | '\u{200f}'
-            | '\u{202a}'..='\u{202e}'
-            | '\u{2066}'..='\u{2069}'
-    )
-}
-
-fn display_width(text: &str) -> usize {
-    text.split('\t').map(UnicodeWidthStr::width).sum()
-}
-
-fn display_padding(text: &str) -> String {
-    let mut padding = String::new();
-    for (index, segment) in text.split('\t').enumerate() {
-        if index > 0 {
-            padding.push('\t');
-        }
-        padding.extend(std::iter::repeat_n(' ', UnicodeWidthStr::width(segment)));
-    }
-    padding
 }
 
 /// Windows has no `cc` by default (that's a Unix convention -- MSVC's own
@@ -495,75 +370,5 @@ mod linker_tests {
             pycc_rt_lib_filename(Some("x86_64-unknown-linux-gnu")),
             "libpycc_rt.a"
         );
-    }
-}
-
-#[cfg(test)]
-mod diagnostic_tests {
-    use super::{
-        display_padding, escape_terminal_controls, normalize_diagnostic_path, render_source_span,
-    };
-    use pycc_diag::Span;
-
-    #[test]
-    fn diagnostic_paths_are_lexically_normalized() {
-        #[cfg(windows)]
-        assert_eq!(
-            normalize_diagnostic_path(r".\src\.\package\\module.py"),
-            "src/package/module.py"
-        );
-        #[cfg(not(windows))]
-        assert_eq!(normalize_diagnostic_path(r"bad\name.py"), r"bad\name.py");
-        assert_eq!(
-            normalize_diagnostic_path("/tmp//./package/module.py"),
-            "/tmp/package/module.py"
-        );
-        assert_eq!(
-            normalize_diagnostic_path("//server//share/./module.py"),
-            "//server/share/module.py"
-        );
-        #[cfg(windows)]
-        assert_eq!(
-            normalize_diagnostic_path(r"\\server\share\.\module.py"),
-            "//server/share/module.py"
-        );
-        assert_eq!(normalize_diagnostic_path("."), ".");
-        assert_eq!(normalize_diagnostic_path("/"), "/");
-    }
-
-    #[test]
-    fn terminal_controls_are_escaped_without_losing_source_tabs() {
-        assert_eq!(
-            escape_terminal_controls(
-                "a\n\r\t\0\u{1b}\u{85}\u{061c}\u{200e}\u{200f}\u{202a}\u{202e}\u{2066}\u{2069}z",
-                false,
-            ),
-            r"a\n\r\t\0\u{1b}\u{85}\u{61c}\u{200e}\u{200f}\u{202a}\u{202e}\u{2066}\u{2069}z"
-        );
-        assert_eq!(escape_terminal_controls("a\t\u{1b}z", true), "a\t\\u{1b}z");
-        assert_eq!(escape_terminal_controls("a\u{200d}z", false), "a\u{200d}z");
-    }
-
-    #[test]
-    fn diagnostic_padding_uses_whole_unicode_sequences_and_retains_tabs() {
-        assert_eq!(display_padding("👩‍💻👍🏽"), "    ");
-        assert_eq!(display_padding("\t👩‍💻"), "\t  ");
-    }
-
-    #[test]
-    fn source_rendering_escapes_controls_and_aligns_the_caret_to_rendered_text() {
-        let source = "\u{1b}\u{202e}👩‍💻👍🏽$\n";
-        let start = source.find('$').unwrap();
-        let rendered = render_source_span(
-            "bad.py",
-            source,
-            Span::new(start as u32, (start + 1) as u32),
-            "invalid syntax",
-        );
-
-        assert!(rendered.contains("1 | \\u{1b}\\u{202e}👩‍💻👍🏽$"));
-        assert!(rendered.contains(&format!("  | {}^ invalid syntax", " ".repeat(18))));
-        assert!(!rendered.contains('\u{1b}'));
-        assert!(!rendered.contains('\u{202e}'));
     }
 }
