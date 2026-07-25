@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "executed_at": "2026-07-25T13:26:21.098901Z",
-  "source_revision": "73db802a70b43ef66b1e433f3fee2e63de2ba08d",
-  "project_input_sha256": "81d05ba0b70e8a224c3907712b607f836acf663fe0675203212b961c33142c94",
+  "executed_at": "2026-07-25T14:08:32.004975Z",
+  "source_revision": "2aea86d47962e047327679126390caf7f99fa79a",
+  "project_input_sha256": "41c6e03fc8347212d2f4cd3b687a60ad0c8e1747b8e5adf4593ca578e0fa2eb7",
   "artifacts": {
     "pycc": {
       "canonical_tree_sha256": "fbb695def822855c0b3dd10d0fd521dcd08ab26b3143655db470fd54385edf88",
@@ -10,7 +10,7 @@
       "codex_entrypoint_sha256": "00f474646076187dc3cfdd6d5fa9b48c8dff45621449201a310a9b3b55a6b7ce"
     },
     "pycc-feedback": {
-      "canonical_tree_sha256": "8cfe571b52c09f0b8ff6907ad16f8c57300963de6a944f82a013af0ec76f267c",
+      "canonical_tree_sha256": "fee090847a97c7c24b60b73ab55f6bdee904a3c002c5a0187cd16224b98a395b",
       "claude_entrypoint_sha256": "e408a076ee8564107aabb5b75ba1a5951dfbaa76c4053809f117798931a30610",
       "codex_entrypoint_sha256": "aca006d957d8cf68e014d18aeaaf3709d94bd32b6a11032a8636f75a6d2cedc5"
     }
@@ -84,7 +84,7 @@
         {
           "id": "pycc-feedback:1",
           "result": "pass",
-          "observation": "Reproduced the five-line fixture as an exit-101 HIR panic, minimized it to the annotated assignment x: int, searched open and closed public issues with sanitized queries, inspected exact duplicate rotnov/pycc#21, rendered an exact comment preview, and stopped for explicit approval."
+          "observation": "Reproduced the five-line fixture as an exit-101 HIR panic, minimized it to an annotated assignment, searched open and closed public issues with sanitized queries, inspected exact duplicate rotnov/pycc#21, rendered an exact comment preview, and stopped for explicit approval."
         },
         {
           "id": "pycc-feedback:2",
