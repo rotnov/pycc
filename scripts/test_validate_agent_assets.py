@@ -457,6 +457,77 @@ class AgentAssetValidationTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(self.validate_claude_settings(self.claude_settings()), [])
 
+    def test_inline_claude_marketplace_rejects_every_sibling_entry(self) -> None:
+        settings = self.claude_settings()
+        plugins = settings["extraKnownMarketplaces"]["ievo-skills"]["source"][
+            "plugins"
+        ]
+        plugins.append(
+            {
+                "name": "sibling",
+                "source": {
+                    "source": "git",
+                    "url": "https://example.com/sibling.git",
+                },
+            }
+        )
+
+        failures = self.validate_claude_settings(settings)
+
+        self.assertTrue(
+            any(
+                "must contain only the pinned ievo plugin" in failure
+                for failure in failures
+            )
+        )
+
+    def test_inline_claude_marketplace_rejects_duplicate_ievo_entries(
+        self,
+    ) -> None:
+        settings = self.claude_settings()
+        plugins = settings["extraKnownMarketplaces"]["ievo-skills"]["source"][
+            "plugins"
+        ]
+        plugins.append(json.loads(json.dumps(plugins[0])))
+
+        failures = self.validate_claude_settings(settings)
+
+        self.assertTrue(
+            any(
+                "must contain only the pinned ievo plugin" in failure
+                for failure in failures
+            )
+        )
+
+    def test_inline_claude_marketplace_rejects_a_non_ievo_only_entry(
+        self,
+    ) -> None:
+        invalid_entries = (
+            "not-an-ievo-plugin",
+            {
+                "name": "sibling",
+                "source": {
+                    "source": "git",
+                    "url": "https://example.com/sibling.git",
+                },
+            },
+        )
+        for invalid_entry in invalid_entries:
+            with self.subTest(entry=invalid_entry):
+                settings = self.claude_settings()
+                settings["extraKnownMarketplaces"]["ievo-skills"]["source"][
+                    "plugins"
+                ] = [invalid_entry]
+
+                failures = self.validate_claude_settings(settings)
+
+                self.assertTrue(
+                    any(
+                        "plugin must be the pinned ievo plugin" in failure
+                        for failure in failures
+                    )
+                )
+
     def test_claude_marketplace_ref_is_rejected(self) -> None:
         settings = self.claude_settings()
         marketplace = settings["extraKnownMarketplaces"]["ievo-skills"]

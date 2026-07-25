@@ -294,18 +294,20 @@ def validate_claude_ievo_marketplace(
             f"{settings_path}: inline marketplace plugins must be a non-empty array"
         )
         return
-    ievo_plugins = [
-        plugin
-        for plugin in plugins
-        if isinstance(plugin, dict) and plugin.get("name") == "ievo"
-    ]
-    if len(ievo_plugins) != 1:
+    if len(plugins) != 1:
         failures.append(
-            f"{settings_path}: inline marketplace must contain exactly one ievo plugin"
+            f"{settings_path}: inline marketplace must contain only the pinned "
+            "ievo plugin"
+        )
+        return
+    ievo_plugin = plugins[0]
+    if not isinstance(ievo_plugin, dict) or ievo_plugin.get("name") != "ievo":
+        failures.append(
+            f"{settings_path}: inline marketplace plugin must be the pinned ievo plugin"
         )
         return
 
-    plugin_source = ievo_plugins[0].get("source")
+    plugin_source = ievo_plugin.get("source")
     if not isinstance(plugin_source, dict):
         failures.append(f"{settings_path}: ievo plugin source must be an object")
         return

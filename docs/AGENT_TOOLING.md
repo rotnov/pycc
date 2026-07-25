@@ -24,6 +24,11 @@ is bootstrapped explicitly:
 ./scripts/bootstrap-agent-tools.sh
 ```
 
+The inline `ievo-skills` marketplace must contain exactly that one pinned `ievo`
+plugin. Any sibling or malformed plugin entry invalidates the configuration; the
+marketplace-wide source exemption is safe only because the complete entry set is
+validated.
+
 Codex does not implicitly register a repository-local marketplace. The bootstrap
 script replaces a same-named registration from another checkout, registers this
 repository as the marketplace, and installs only the pinned iEvo plugin.
