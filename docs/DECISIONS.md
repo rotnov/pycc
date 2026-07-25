@@ -24,6 +24,11 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-018 | `pycc_testkit` deferred past PR-1/PR-2: no PEP conformance matrix exists yet for a real harness to check against; `tests/slice0.rs` covers the two named fixtures ad hoc in the meantime, built for real at PR-4/PR-6 | proposed |
 | D-019 | Agent surfaces: repository-owned agents and skills support both OpenAI Codex and Claude Code; `AGENTS.md` is the shared instruction source and `CLAUDE.md` imports it | accepted |
 | D-020 | CI trust: pull-request code is untrusted; workflow permissions default to explicit read-only/none, and workflow changes are audited from the trusted base revision | accepted |
+| D-021 | Every agent task starts from refreshed repository/spec/API evidence and never mutates a stale or dirty base implicitly | accepted |
+| D-022 | Confirmed iEvo defects may be reported publicly without per-report permission, within strict scope and privacy limits | accepted |
+| D-023 | Auto-evolution intent is shared, but executable hooks and generated scripts remain machine-local | accepted |
+| D-024 | `main` is protected by PR, CI, resolved conversations, and an audited emergency path; independent approval starts when a second maintainer is available | accepted |
+| D-025 | Shared hook targets require a registered, CI-discovered fail-silent clean-clone contract | accepted |
 
 ## Template
 
@@ -93,3 +98,48 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 - Decision: every workflow declares an explicit workflow-level read/none permission baseline. Jobs that execute or consume untrusted pull-request state receive no elevated capability beyond a minimally scoped read-only `GITHUB_TOKEN`. Every privileged job, including one in a push-only or reusable workflow, is isolated behind the exact `push` plus `refs/heads/main` guard. The semantic policy checker provides normal CI feedback, while a separate read-only `pull_request_target` workflow runs the checker from the trusted base commit and downloads only head-revision workflow YAML as non-executable data. The checker also requires the trust-anchor workflow itself to match an independently reviewed SHA-256 allowlist.
 - Alternatives: rely on repository permission defaults (rejected because they are mutable and implicit); trust an in-branch grep checker (rejected because YAML spellings bypass text matching and the PR can modify its own checker); grant workflow-level credentials and skip only the deploy step (rejected because credentials exist before step conditions contain their use).
 - Consequences: after the one-time manually reviewed bootstrap PR introduces the trust anchor, workflow changes must pass the trusted `Workflow policy` check from their base revision. Cross-job artifacts, caches, outputs, reusable workflows, secrets, and environments remain explicit review boundaries even when the static checker accepts the YAML.
+
+## D-021: Agent task preflight and documentation refresh
+
+- Status: accepted
+- Context: this AI-first repository treats specifications and generated Rust API documentation as implementation inputs. Starting from a stale remote ref, stale rustdoc, or an unidentified dirty tree can make an otherwise-correct agent optimize against the wrong contract or overwrite user work.
+- Decision: before a new task mutates the repository, the agent records status and HEAD, fetches/prunes without changing checked-out files, resolves the remote default branch, starts from that exact commit in a clean task branch/worktree, generates `cargo doc --workspace --no-deps`, and reads the specification/rustdoc that owns the affected area. Continuing dirty work is allowed only in place and only after comparing it with refreshed remote state; no implicit pull, merge, rebase, reset, or branch switch is authorized.
+- Authority and scope: the preflight authorizes read-only Git/network discovery, creation of an isolated task branch/worktree, and local generated rustdoc. It does not authorize integrating upstream changes into a dirty tree, publishing a branch, or changing external systems.
+- Privacy and failure behavior: preflight output stays in the task transcript and must not publish local paths or repository content. A failed fetch or documentation build is recorded and understood; older generated documentation must not be represented as current.
+- Rollback: the isolated worktree/branch can be removed after preserving any intended commits. Changing this mandatory sequence requires a superseding decision because every later agent task depends on it.
+
+## D-022: Autonomous public iEvo bug reporting
+
+- Status: accepted
+- Context: reproducible defects in the iEvo control plane can affect every agent task until upstream fixes ship. Requiring a new permission round-trip after the user has adopted the project policy delays correction and encourages local-only workarounds that other users cannot discover.
+- Decision: after reproducing an iEvo malfunction, contradiction, broken hook, or invalid command and searching open and closed upstream issues, agents may create or update a public `ievo-ai/skills` issue without additional per-report permission. Duplicates, expected behavior, unverified suspicion, and ordinary pycc failures are not reportable.
+- Authority and scope: the standing authority covers only the minimum useful iEvo report and evidence. It does not authorize publishing unrelated pycc material, reporting to other projects, or changing upstream code/labels/issue state beyond the report itself.
+- Privacy and failure behavior: reports omit credentials, personal data, private/proprietary content, raw conversations, and identifying local paths even when the pycc repository is public. If authentication/network submission fails, preserve the pending sanitized report locally and surface the failure; do not repeatedly spam the endpoint.
+- Rollback: a public report cannot be made private retroactively. A mistaken report is corrected and closed with an explicit explanation. Revoking standing authority requires a superseding decision and removal of the matching AGENTS.md section.
+
+## D-023: Shared auto-evolution intent with local hook execution
+
+- Status: accepted
+- Context: the repository wants correction-driven evolution to survive across contributors, but iEvo generates hook scripts under gitignored `.ievo/hooks/`. Committing shared hook entries that invoke those absent targets made every clean clone emit hook errors (issue #28; upstream `ievo-ai/skills#446`).
+- Decision: `.ievo/evo-auto.flag` records shared intent with `signal: corrections-only` and `auto_write_scope: project-wide-only`. Generated scripts and their hook wiring are machine-local: `.ievo/hooks/` and `.claude/settings.local.json` are ignored, while shared `.claude/settings.json` may reference only tracked targets or tracked fail-silent wrappers. Inline interpreter forms such as `sh -c`, `python -c`, and `node --eval` are forbidden in shared hooks because their executable targets cannot be validated statically. Agents validate the tracked-file view in CI.
+- Authority and scope: automatic capture may record confirmed user corrections under the configured project-wide scope. It does not broaden authority for external writes, source-code changes, secrets collection, or arbitrary per-agent behavior changes. Candidate lessons outside the auto-write scope remain reviewable candidates.
+- Privacy and failure behavior: local hook inputs and generated logs remain local/ignored. Missing local setup must be a silent no-op in shared state, never a failing committed command. Validation failure blocks merge.
+- Rollback: run the iEvo auto-disable workflow locally, remove or supersede the shared flag, remove local hook wiring/scripts, and verify the clean tracked view. A future tracked-wrapper design requires a superseding decision and security review.
+
+## D-024: Protected main and audited emergency bypass
+
+- Status: accepted
+- Context: commit `0ac9b1d` reached `main` while PR #3 remained open after a timed-out merge request, proving that commit messages and monitoring conventions do not create a review boundary. An AI-authored compiler needs the repository host—not agent intent—to enforce the PR/CI/review path. The repository currently has one maintainer, and GitHub does not count an author's approval of their own pull request.
+- Decision: protect `main` for administrators and automation alike. Require an up-to-date pull request, the current `build-test-coverage` status, and resolved conversations, and disallow force pushes/deletion. Set required approving reviews to zero while there is only one maintainer; enable one independent approval, stale-review dismissal, and last-push approval when a second human maintainer is available. A push-triggered audit runs the pre-push checker (or an immutable reviewed bootstrap when that parent predates the checker) and requires every introduced commit to correlate with a merged-main PR whose merge commit arrived in the same push; a historical commit-to-PR association alone is insufficient. Because GitHub loads a push workflow from the pushed revision, the external repository monitor independently verifies the workflow content and expected run. New required checks are added to protection only after they have run successfully on `main`.
+- Authority and scope: normal agent/bot credentials may open/update PRs but cannot bypass protection. Repository administrators retain the platform ability to edit protection only for the documented emergency procedure; that authority is not delegated to routine tasks.
+- Privacy and failure behavior: the audit publishes only repository-native commit/PR identifiers. A direct or unassociated commit, changed audit workflow, missing expected run, or failed run requires a governance incident and blocks releases until history/protection are reconciled. CI/provider or external-monitor outages delay release rather than weakening requirements.
+- Rollback: emergency relaxation is time-bounded, linked to an incident, records before/after settings, and restores protection immediately after recovery. Permanently weakening the rule requires a superseding decision and explicit review.
+
+## D-025: Registered contracts for shared hook targets
+
+- Status: accepted
+- Context: D-023 permits a tracked fail-silent wrapper, but merely finding a hook target in Git does not prove that it tolerates an absent machine-local dependency. A tracked script or symlink can still invoke a missing `.ievo/hooks/` file and fail in every clean clone.
+- Decision: this entry supersedes D-023 only for admitting shared hook targets. Every tracked filesystem target referenced by shared hook configuration must appear in `FAIL_SILENT_WRAPPER_CONTRACTS`, paired with a tracked `scripts/test_*.py` contract that is discovered by the required agent-policy test run. The contract must exercise the target from a clean-clone simulation with local generated hooks absent and assert a silent successful no-op. The registry is empty until such a wrapper and its security review are delivered.
+- Authority and scope: registration permits only the named target in shared hook configuration. It does not permit generated hooks, local settings, arbitrary inline code, shell control operators, absolute or home-relative paths, loader URLs, or untracked files.
+- Privacy and failure behavior: wrapper contracts use synthetic paths and inputs and must not access user state, credentials, or the network. A missing target, missing contract test, undiscovered test path, or unregistered target fails CI.
+- Rollback: remove the shared hook entry and registry record together. Weakening the registry or accepting a wrapper without its clean-clone contract requires a superseding decision and security review.

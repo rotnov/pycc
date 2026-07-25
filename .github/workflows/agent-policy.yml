@@ -1,0 +1,21 @@
+name: Agent policy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  agent-policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test policy validators
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Validate clean-clone agent policy
+        run: python3 scripts/validate_agent_policies.py
