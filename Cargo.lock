@@ -571,6 +571,7 @@ name = "pycc_hir"
 version = "0.1.0"
 dependencies = [
  "pycc_ast",
+ "pycc_diag",
  "pycc_parser",
 ]
 

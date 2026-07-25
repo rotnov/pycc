@@ -2,32 +2,13 @@ use pycc_diag::{Diagnostic, Span};
 use pycc_hir::{BinOpKind, HirExpr, HirItem, HirModule, HirStmt};
 #[cfg(test)]
 use pycc_hir::CmpOpKind;
+pub use pycc_hir::Ty;
 use std::collections::HashMap;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ty {
-    Int,
-    Float,
-    Bool,
-    Str,
-    None,
-}
-
-impl Ty {
-    fn name(self) -> &'static str {
-        match self {
-            Ty::Int => "int",
-            Ty::Float => "float",
-            Ty::Bool => "bool",
-            Ty::Str => "str",
-            Ty::None => "None",
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct Environment {
     bindings: HashMap<String, Ty>,
+    functions: HashMap<String, (Vec<Ty>, Ty)>,
 }
 
 impl Environment {
@@ -41,6 +22,14 @@ impl Environment {
 
     pub fn bind(&mut self, name: String, ty: Ty) {
         self.bindings.insert(name, ty);
+    }
+
+    pub fn bind_function(&mut self, name: String, param_tys: Vec<Ty>, return_ty: Ty) {
+        self.functions.insert(name, (param_tys, return_ty));
+    }
+
+    pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
+        self.functions.get(name)
     }
 }
 
@@ -74,14 +63,46 @@ pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
                 ))
             }
         }
-        HirExpr::Call { .. } => {
-            // Call type-checking (arguments/return) lands in Task 9 alongside
-            // real function signatures; until then, treat any call as
-            // producing an unconstrained placeholder the caller can't yet
-            // misuse, since nothing consumes a call's result type before Task 9.
-            Ok(Ty::None)
+        HirExpr::Call { callee, args } => {
+            let arg_tys = args.iter().map(|a| infer_expr(env, a)).collect::<Result<Vec<_>, _>>()?;
+            if callee == "print" {
+                return Ok(Ty::None); // print's own signature isn't user-declarable in v0.1
+            }
+            let Some((param_tys, return_ty)) = env.lookup_function(callee) else {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!("call to undefined function `{callee}`"),
+                    Span::new(0, 0),
+                ));
+            };
+            if arg_tys.len() != param_tys.len() {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!("`{callee}` expects {} argument(s), got {}", param_tys.len(), arg_tys.len()),
+                    Span::new(0, 0),
+                ));
+            }
+            for (i, (arg_ty, param_ty)) in arg_tys.iter().zip(param_tys.iter()).enumerate() {
+                if !is_assignable(*arg_ty, *param_ty) {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "argument {} of `{callee}` expects `{}`, got `{}`",
+                            i + 1,
+                            param_ty.name(),
+                            arg_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+            }
+            Ok(*return_ty)
         }
     }
+}
+
+fn is_assignable(from: Ty, to: Ty) -> bool {
+    from == to || (from == Ty::Bool && to == Ty::Int) // bool is a subtype of int, TYPE_SYSTEM.md's representation table
 }
 
 fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnostic> {
@@ -141,20 +162,96 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
             Ok(())
         }
+        HirStmt::Return(_) => {
+            panic!("pycc_types: a return statement outside of a function is not supported")
+        }
+    }
+}
+
+pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
+    let HirItem::Function { name, params, return_ty, body } = function else {
+        panic!("check_function called with a non-Function HirItem");
+    };
+    let mut env = Environment::new();
+    env.bind_function(name.clone(), params.iter().map(|(_, ty)| *ty).collect(), *return_ty);
+    for (param_name, param_ty) in params {
+        env.bind(param_name.clone(), *param_ty);
+    }
+    for stmt in body {
+        check_stmt_in_function(&mut env, stmt, *return_ty)?;
+    }
+    Ok(())
+}
+
+fn check_stmt_in_function(env: &mut Environment, stmt: &HirStmt, return_ty: Ty) -> Result<(), Diagnostic> {
+    match stmt {
+        HirStmt::Return(None) => {
+            if return_ty != Ty::None {
+                return Err(Diagnostic::error(
+                    "T0023",
+                    format!("expected a return value of type `{}`, got none", return_ty.name()),
+                    Span::new(0, 0),
+                ));
+            }
+            Ok(())
+        }
+        HirStmt::Return(Some(expr)) => {
+            let actual = infer_expr(env, expr)?;
+            if !is_assignable(actual, return_ty) {
+                return Err(Diagnostic::error(
+                    "T0023",
+                    format!("expected return type `{}`, got `{}`", return_ty.name(), actual.name()),
+                    Span::new(0, 0),
+                ));
+            }
+            Ok(())
+        }
+        HirStmt::If { test, body, orelse } => {
+            infer_expr(env, test)?;
+            for s in body {
+                check_stmt_in_function(env, s, return_ty)?;
+            }
+            for s in orelse {
+                check_stmt_in_function(env, s, return_ty)?;
+            }
+            Ok(())
+        }
+        HirStmt::While { test, body } => {
+            infer_expr(env, test)?;
+            for s in body {
+                check_stmt_in_function(env, s, return_ty)?;
+            }
+            Ok(())
+        }
+        HirStmt::ForRange { var, start, stop, step, body } => {
+            infer_expr(env, start)?;
+            infer_expr(env, stop)?;
+            infer_expr(env, step)?;
+            env.bind(var.clone(), Ty::Int);
+            for s in body {
+                check_stmt_in_function(env, s, return_ty)?;
+            }
+            Ok(())
+        }
+        other => check_stmt(env, other),
     }
 }
 
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     let mut env = Environment::new();
+    // Register every function's signature before checking any statement
+    // body, matching Python's own "call it before its def runs" semantics --
+    // top-level code (and, once sibling calls are in scope, other function
+    // bodies) must be able to see a function defined later in the file.
+    for item in &hir.items {
+        if let HirItem::Function { name, params, return_ty, .. } = item {
+            env.bind_function(name.clone(), params.iter().map(|(_, ty)| *ty).collect(), *return_ty);
+        }
+    }
     for item in &hir.items {
         match item {
             HirItem::TopLevelStmt(stmt) => check_stmt(&mut env, stmt)?,
-            HirItem::Function { .. } => {
-                // Function-body checking (its own scope, T0001 on the
-                // signature) lands in Task 9 -- until then, a function's
-                // body is not yet type-checked at all, matching this crate's
-                // pre-existing behavior of never failing.
-            }
+            HirItem::Function { .. } => check_function(item)?,
         }
     }
     Ok(())
@@ -236,11 +333,12 @@ mod tests {
 
     #[test]
     fn comparing_incompatible_types_is_a_clean_type_error() {
-        let env = Environment::new();
-        // A bare call's result type is still the Task-6 placeholder
-        // `Ty::None` (real call-return typing lands in Task 9), which isn't
-        // numeric-like -- comparing an int against it is a genuine,
-        // both-sides-defined incompatibility.
+        let mut env = Environment::new();
+        // A call to a properly declared, zero-arg, `None`-returning function
+        // legitimately infers `Ty::None`, which isn't numeric-like --
+        // comparing an int against it is a genuine, both-sides-defined
+        // incompatibility.
+        env.bind_function("f".to_string(), vec![], Ty::None);
         let expr = HirExpr::Compare {
             op: CmpOpKind::Eq,
             left: Box::new(HirExpr::IntLiteral(1)),
@@ -271,6 +369,13 @@ mod tests {
             right: Box::new(HirExpr::FloatLiteral(1.5)),
         };
         assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    #[should_panic(expected = "a return statement outside of a function is not supported")]
+    fn a_top_level_return_is_unsupported() {
+        let mut env = Environment::new();
+        let _ = check_stmt(&mut env, &HirStmt::Return(None));
     }
 
     #[test]
@@ -556,14 +661,36 @@ mod tests {
     }
 
     #[test]
-    fn a_function_body_is_not_yet_checked() {
+    fn a_top_level_call_to_a_previously_defined_function_type_checks() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "main".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::Return(None)],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "main".to_string(),
+                    args: vec![],
+                })),
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_body_is_now_checked() {
         let hir = HirModule {
             items: vec![HirItem::Function {
                 name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
                 body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
             }],
         };
-        assert!(check(&hir).is_ok());
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
     }
 
     #[test]
@@ -571,5 +698,289 @@ mod tests {
         let env = Environment::new();
         let expr = HirExpr::Call { callee: "print".to_string(), args: vec![] };
         assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
+    }
+
+    #[test]
+    fn calling_an_undefined_function_is_a_clean_error() {
+        let env = Environment::new();
+        let expr = HirExpr::Call { callee: "undefined".to_string(), args: vec![] };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("undefined"));
+    }
+
+    #[test]
+    fn calling_a_defined_function_infers_its_declared_return_type() {
+        let mut env = Environment::new();
+        env.bind_function("add".to_string(), vec![Ty::Int, Ty::Int], Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "add".to_string(),
+            args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn calling_a_function_with_a_bool_argument_for_an_int_parameter_succeeds() {
+        let mut env = Environment::new();
+        env.bind_function("f".to_string(), vec![Ty::Int], Ty::None);
+        let expr = HirExpr::Call { callee: "f".to_string(), args: vec![HirExpr::BoolLiteral(true)] };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
+    }
+
+    #[test]
+    fn calling_a_function_with_the_wrong_number_of_arguments_is_a_clean_error() {
+        let mut env = Environment::new();
+        env.bind_function("add".to_string(), vec![Ty::Int, Ty::Int], Ty::Int);
+        let expr = HirExpr::Call { callee: "add".to_string(), args: vec![HirExpr::IntLiteral(1)] };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("expects 2 argument"));
+    }
+
+    #[test]
+    fn calling_a_function_with_a_wrong_typed_argument_is_a_clean_error() {
+        let mut env = Environment::new();
+        env.bind_function("add".to_string(), vec![Ty::Int, Ty::Int], Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "add".to_string(),
+            args: vec![HirExpr::IntLiteral(1), HirExpr::FloatLiteral(2.5)],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("argument 2") && err.message.contains("int") && err.message.contains("float"));
+    }
+
+    #[test]
+    fn calling_a_function_with_an_undefined_argument_propagates_the_error() {
+        let mut env = Environment::new();
+        env.bind_function("f".to_string(), vec![Ty::Int], Ty::None);
+        let expr =
+            HirExpr::Call { callee: "f".to_string(), args: vec![HirExpr::Name("undefined".to_string())] };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_function_s_body_is_checked_against_its_declared_param_types() {
+        let function = HirItem::Function {
+            name: "add".to_string(),
+            params: vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::Name("a".to_string())),
+                right: Box::new(HirExpr::Name("b".to_string())),
+            }))],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_return_with_no_value_when_none_is_expected_succeeds() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_return_with_no_value_when_a_value_is_expected_is_a_clean_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(None)],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    #[test]
+    fn a_return_type_mismatch_is_a_clean_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Str,
+            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    #[test]
+    fn a_return_whose_value_is_undefined_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("undefined".to_string())))],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn recursion_is_supported_since_the_function_s_own_signature_is_in_scope() {
+        let function = HirItem::Function {
+            name: "count".to_string(),
+            params: vec![("n".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Call {
+                callee: "count".to_string(),
+                args: vec![HirExpr::Name("n".to_string())],
+            }))],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_function_s_if_while_and_for_bodies_are_checked_against_its_return_type() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::While {
+                    test: HirExpr::BoolLiteral(true),
+                    body: vec![HirStmt::ForRange {
+                        var: "i".to_string(),
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(1),
+                        step: HirExpr::IntLiteral(1),
+                        body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                    }],
+                }],
+                orelse: vec![HirStmt::Return(Some(HirExpr::IntLiteral(0)))],
+            }],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_bad_return_nested_in_if_while_and_for_is_still_caught() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Str,
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::While {
+                    test: HirExpr::BoolLiteral(true),
+                    body: vec![HirStmt::ForRange {
+                        var: "i".to_string(),
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(1),
+                        step: HirExpr::IntLiteral(1),
+                        body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                    }],
+                }],
+                orelse: vec![],
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    #[test]
+    #[should_panic(expected = "check_function called with a non-Function HirItem")]
+    fn check_function_panics_on_a_non_function_item() {
+        let _ = check_function(&HirItem::TopLevelStmt(HirStmt::Return(None)));
+    }
+
+    #[test]
+    fn an_if_s_test_undefined_in_a_function_body_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::If {
+                test: HirExpr::Name("undefined".to_string()),
+                body: vec![],
+                orelse: vec![],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn an_if_s_orelse_ill_typed_in_a_function_body_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![],
+                orelse: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_while_s_test_undefined_in_a_function_body_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::While { test: HirExpr::Name("undefined".to_string()), body: vec![] }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_range_s_start_undefined_in_a_function_body_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::Name("undefined".to_string()),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+                body: vec![],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_range_s_stop_undefined_in_a_function_body_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::Name("undefined".to_string()),
+                step: HirExpr::IntLiteral(1),
+                body: vec![],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_range_s_step_undefined_in_a_function_body_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::Name("undefined".to_string()),
+                body: vec![],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
     }
 }

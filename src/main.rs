@@ -44,7 +44,10 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         eprintln!("error[{}]: {}", diag.code, diag.message);
         ExitCode::from(1)
     })?;
-    let hir = pycc_hir::lower(&module);
+    let hir = pycc_hir::lower_checked(&module).map_err(|diag| {
+        eprintln!("error[{}]: {}", diag.code, diag.message);
+        ExitCode::from(1)
+    })?;
     pycc_types::check(&hir).map_err(|diag| {
         eprintln!("error[{}]: {}", diag.code, diag.message);
         ExitCode::from(1)

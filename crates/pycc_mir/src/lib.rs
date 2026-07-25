@@ -26,7 +26,7 @@ pub fn build(hir: &HirModule) -> MirModule {
         .items
         .iter()
         .map(|item| match item {
-            HirItem::Function { name, body } => MirItem::Function {
+            HirItem::Function { name, body, .. } => MirItem::Function {
                 name: name.clone(),
                 body: body.iter().map(lower_instr).collect(),
             },
@@ -60,7 +60,7 @@ fn lower_instr(stmt: &HirStmt) -> MirInstr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt};
+    use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, Ty};
 
     fn call_print(arg: i64) -> HirStmt {
         HirStmt::ExprStmt(HirExpr::Call { callee: "print".to_string(), args: vec![HirExpr::IntLiteral(arg)] })
@@ -93,7 +93,12 @@ mod tests {
     #[test]
     fn builds_a_function_item_with_its_body_lowered() {
         let hir = HirModule {
-            items: vec![HirItem::Function { name: "main".to_string(), body: vec![call_print(7)] }],
+            items: vec![HirItem::Function {
+                name: "main".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![call_print(7)],
+            }],
         };
         let mir = build(&hir);
         assert_eq!(

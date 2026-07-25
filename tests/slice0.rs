@@ -158,6 +158,21 @@ fn a_type_error_is_a_compile_error_exit_code_1() {
 }
 
 #[test]
+fn an_unannotated_public_function_is_a_compile_error_exit_code_1() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_t0001_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "t0001.py", "def add(a, b):\n    return a + b\n");
+    let out = dir.join("t0001");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("T0001"));
+}
+
+#[test]
 fn defining_a_function_under_any_name_without_calling_it_succeeds() {
     // There's no "must be named main" restriction: any function name is
     // legal to define; only calling one runs it (matches CPython, which
@@ -177,7 +192,9 @@ fn defining_a_function_under_any_name_without_calling_it_succeeds() {
 }
 
 #[test]
-fn calling_an_undefined_function_is_a_codegen_error() {
+fn calling_an_undefined_function_is_a_compile_error() {
+    // Caught by pycc_types (T0021) since Task 9 added real function-call
+    // signature checking; previously this only failed later, at codegen.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_undefined_fn_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "undefined_fn.py", "does_not_exist()\n");

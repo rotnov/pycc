@@ -1,4 +1,26 @@
 use pycc_ast::{CmpOp, ElifElseClause, Expr, ModModule, Number, Operator, Stmt};
+use pycc_diag::{Diagnostic, Span};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ty {
+    Int,
+    Float,
+    Bool,
+    Str,
+    None,
+}
+
+impl Ty {
+    pub fn name(self) -> &'static str {
+        match self {
+            Ty::Int => "int",
+            Ty::Float => "float",
+            Ty::Bool => "bool",
+            Ty::Str => "str",
+            Ty::None => "None",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOpKind {
@@ -39,30 +61,87 @@ pub enum HirStmt {
     If { test: HirExpr, body: Vec<HirStmt>, orelse: Vec<HirStmt> },
     While { test: HirExpr, body: Vec<HirStmt> },
     ForRange { var: String, start: HirExpr, stop: HirExpr, step: HirExpr, body: Vec<HirStmt> },
+    Return(Option<HirExpr>),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum HirItem {
-    Function { name: String, body: Vec<HirStmt> },
+    Function { name: String, params: Vec<(String, Ty)>, return_ty: Ty, body: Vec<HirStmt> },
     TopLevelStmt(HirStmt),
 }
 
+#[derive(Debug)]
 pub struct HirModule {
     pub items: Vec<HirItem>,
 }
 
-pub fn lower(module: &ModModule) -> HirModule {
-    let mut items = Vec::new();
-    for stmt in &module.body {
-        match stmt {
-            Stmt::FunctionDef(f) => {
-                let body = f.body.iter().map(lower_stmt).collect();
-                items.push(HirItem::Function { name: f.name.id.as_str().to_string(), body });
+pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
+    let items = module
+        .body
+        .iter()
+        .map(|stmt| match stmt {
+            Stmt::FunctionDef(def) => lower_function(def),
+            other => Ok(HirItem::TopLevelStmt(lower_stmt(other))),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(HirModule { items })
+}
+
+fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic> {
+    let is_public = !def.name.as_str().starts_with('_'); // D-037
+    let params = lower_params(&def.parameters, is_public, def.name.as_str())?;
+    let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, def.name.as_str())?;
+    let body = def.body.iter().map(lower_stmt).collect();
+    Ok(HirItem::Function { name: def.name.to_string(), params, return_ty, body })
+}
+
+fn lower_params(
+    parameters: &pycc_ast::Parameters,
+    is_public: bool,
+    fn_name: &str,
+) -> Result<Vec<(String, Ty)>, Diagnostic> {
+    parameters
+        .args
+        .iter()
+        .map(|param| {
+            let name = param.parameter.name.as_str();
+            match &param.parameter.annotation {
+                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann))),
+                None if is_public => Err(Diagnostic::error(
+                    "T0001",
+                    format!("parameter `{name}` of public function `{fn_name}` needs a type annotation"),
+                    Span::new(0, 0),
+                )),
+                None => Ok((name.to_string(), Ty::None)), // private helper: unannotated is allowed; real inference is a later task's job
             }
-            other => items.push(HirItem::TopLevelStmt(lower_stmt(other))),
-        }
+        })
+        .collect()
+}
+
+fn lower_return_annotation(returns: Option<&Expr>, is_public: bool, fn_name: &str) -> Result<Ty, Diagnostic> {
+    match returns {
+        Some(ann) => Ok(annotation_to_ty(ann)),
+        None if is_public => Err(Diagnostic::error(
+            "T0001",
+            format!("public function `{fn_name}` needs a return type annotation"),
+            Span::new(0, 0),
+        )),
+        None => Ok(Ty::None),
     }
-    HirModule { items }
+}
+
+fn annotation_to_ty(annotation: &Expr) -> Ty {
+    match annotation {
+        Expr::NoneLiteral(_) => Ty::None,
+        Expr::Name(name) => match name.id.as_str() {
+            "int" => Ty::Int,
+            "float" => Ty::Float,
+            "bool" => Ty::Bool,
+            "str" => Ty::Str,
+            other => panic!("pycc_hir: type annotation `{other}` is not supported yet"),
+        },
+        other => panic!("pycc_hir: only a bare name type annotation is supported so far: {other:?}"),
+    }
 }
 
 fn lower_stmt(stmt: &Stmt) -> HirStmt {
@@ -118,6 +197,7 @@ fn lower_stmt(stmt: &Stmt) -> HirStmt {
             };
             HirStmt::ForRange { var: var.id.to_string(), start, stop, step, body: lower_body(&for_stmt.body) }
         }
+        Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr)),
         other => panic!("pycc_hir: statement kind not supported yet: {other:?}"),
     }
 }
@@ -206,17 +286,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ty_name_returns_the_python_spelling_of_every_variant() {
+        assert_eq!(Ty::Int.name(), "int");
+        assert_eq!(Ty::Float.name(), "float");
+        assert_eq!(Ty::Bool.name(), "bool");
+        assert_eq!(Ty::Str.name(), "str");
+        assert_eq!(Ty::None.name(), "None");
+    }
+
+    #[test]
     fn lowers_a_function_definition_without_calling_it() {
         // Defining `main` alone has no observable effect -- matches
         // CPython exactly (confirmed empirically: `python3.14 hello.py`
         // on this exact source prints nothing). Only an explicit call
         // (see the next test) makes it run.
         let module = pycc_parser_test_helper::parse("def main() -> None:\n    print(42)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::Function {
                 name: "main".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
                 body: vec![HirStmt::ExprStmt(HirExpr::Call {
                     callee: "print".to_string(),
                     args: vec![HirExpr::IntLiteral(42)],
@@ -228,12 +319,14 @@ mod tests {
     #[test]
     fn lowers_a_call_to_a_user_defined_function() {
         let module = pycc_parser_test_helper::parse("def main() -> None:\n    print(42)\n\nmain()\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![
                 HirItem::Function {
                     name: "main".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
                     body: vec![HirStmt::ExprStmt(HirExpr::Call {
                         callee: "print".to_string(),
                         args: vec![HirExpr::IntLiteral(42)],
@@ -250,7 +343,7 @@ mod tests {
     #[test]
     fn lowers_top_level_print_with_no_main() {
         let module = pycc_parser_test_helper::parse("print(42)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -266,12 +359,14 @@ mod tests {
         // only ever passes an IntLiteral or zero args to a call, never a
         // bare name reference used as a *value* (as opposed to an
         // assignment target, which Task 6 handles separately).
-        let module = pycc_parser_test_helper::parse("def f():\n    print(x)\n");
-        let hir = lower(&module);
+        let module = pycc_parser_test_helper::parse("def f() -> None:\n    print(x)\n");
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::Function {
                 name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
                 body: vec![HirStmt::ExprStmt(HirExpr::Call {
                     callee: "print".to_string(),
                     args: vec![HirExpr::Name("x".to_string())],
@@ -283,14 +378,14 @@ mod tests {
     #[test]
     fn a_bare_boolean_literal_expression_is_now_supported() {
         let module = pycc_parser_test_helper::parse("True\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(hir.items, vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::BoolLiteral(true)))]);
     }
 
     #[test]
     fn lowers_an_assignment_and_a_later_reference_to_it() {
         let module = pycc_parser_test_helper::parse("x = 1\nprint(x)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![
@@ -309,7 +404,7 @@ mod tests {
     #[test]
     fn lowers_a_binary_addition() {
         let module = pycc_parser_test_helper::parse("x = 1 + 2\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::Assign {
@@ -335,7 +430,7 @@ mod tests {
         ];
         for (source, expected_op) in cases {
             let module = pycc_parser_test_helper::parse(source);
-            let hir = lower(&module);
+            let hir = lower_checked(&module).unwrap();
             assert_eq!(
                 hir.items,
                 vec![HirItem::TopLevelStmt(HirStmt::Assign {
@@ -354,7 +449,7 @@ mod tests {
     #[test]
     fn lowers_a_float_literal() {
         let module = pycc_parser_test_helper::parse("x = 1.5\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::Assign {
@@ -368,21 +463,21 @@ mod tests {
     #[should_panic(expected = "only a single assignment target is supported so far")]
     fn a_multi_target_assignment_is_unsupported() {
         let module = pycc_parser_test_helper::parse("x = y = 1\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "only assigning to a bare name is supported so far")]
     fn assigning_to_a_non_name_target_is_unsupported() {
         let module = pycc_parser_test_helper::parse("x.attr = 1\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "binary operator not supported yet")]
     fn matrix_multiplication_is_unsupported() {
         let module = pycc_parser_test_helper::parse("x = a @ b\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
@@ -393,7 +488,7 @@ mod tests {
         // through anything pycc lowers) and it exercises the same catch-all
         // as `a_list_literal_expression_is_unsupported` does for expressions.
         let module = pycc_parser_test_helper::parse("if True:\n    pass\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
@@ -404,7 +499,7 @@ mod tests {
         // so this used to panic; HirExpr::IntLiteral now represents any
         // expression, not just call arguments.
         let module = pycc_parser_test_helper::parse("42\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(hir.items, vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(42)))]);
     }
 
@@ -412,13 +507,13 @@ mod tests {
     #[should_panic(expected = "only calling a bare name")]
     fn non_name_callee_is_unsupported() {
         let module = pycc_parser_test_helper::parse("foo.bar()\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     fn calling_a_zero_arg_function_other_than_print_is_supported() {
         let module = pycc_parser_test_helper::parse("foo()\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -436,7 +531,7 @@ mod tests {
         // real type-checking of a call's arguments against a declared
         // signature is Task 9's job, not this lowering step's.
         let module = pycc_parser_test_helper::parse("foo(42)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -451,7 +546,7 @@ mod tests {
         // Same rationale as above -- HirExpr::Call no longer special-cases
         // `print`'s arity at lowering time.
         let module = pycc_parser_test_helper::parse("print(1, 2)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -466,7 +561,7 @@ mod tests {
         // MIR/codegen still only understands an integer-literal argument to
         // `print` (see pycc_mir::lower_instr); this is HIR-only.
         let module = pycc_parser_test_helper::parse("print(2.5)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
@@ -480,7 +575,7 @@ mod tests {
     #[should_panic(expected = "does not fit in i64")]
     fn print_with_an_integer_too_large_for_i64_is_unsupported() {
         let module = pycc_parser_test_helper::parse("print(99999999999999999999999999999999)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
@@ -490,13 +585,13 @@ mod tests {
         // per TYPE_SYSTEM.md) -- unlike float/bool, this isn't deferred to a later
         // PR-4 task, it's simply out of scope for pycc entirely.
         let module = pycc_parser_test_helper::parse("x = 3j\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     fn lowers_a_boolean_literal() {
         let module = pycc_parser_test_helper::parse("x = True\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::Assign {
@@ -509,7 +604,7 @@ mod tests {
     #[test]
     fn lowers_a_single_comparison() {
         let module = pycc_parser_test_helper::parse("x = 1 < 2\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::Assign {
@@ -535,7 +630,7 @@ mod tests {
         ];
         for (source, expected_op) in cases {
             let module = pycc_parser_test_helper::parse(source);
-            let hir = lower(&module);
+            let hir = lower_checked(&module).unwrap();
             assert_eq!(
                 hir.items,
                 vec![HirItem::TopLevelStmt(HirStmt::Assign {
@@ -555,14 +650,14 @@ mod tests {
     #[should_panic(expected = "chained comparisons")]
     fn a_chained_comparison_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("x = 1 < 2 < 3\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "comparison operator not supported yet")]
     fn an_is_comparison_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("x = 1 is 2\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
@@ -573,13 +668,13 @@ mod tests {
         // comparisons -- has its own dedicated arm/panic); a list literal is
         // genuinely unhandled at every level and exercises the final arm.
         let module = pycc_parser_test_helper::parse("x = [1]\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     fn lowers_an_if_with_no_else() {
         let module = pycc_parser_test_helper::parse("if True:\n    print(1)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::If {
@@ -596,7 +691,7 @@ mod tests {
     #[test]
     fn lowers_an_if_with_an_else() {
         let module = pycc_parser_test_helper::parse("if True:\n    print(1)\nelse:\n    print(2)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::If {
@@ -617,7 +712,7 @@ mod tests {
     fn lowers_an_elif_as_a_nested_if_in_orelse() {
         let module =
             pycc_parser_test_helper::parse("if False:\n    print(1)\nelif True:\n    print(2)\nelse:\n    print(3)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::If {
@@ -644,7 +739,7 @@ mod tests {
     #[test]
     fn lowers_a_while_loop() {
         let module = pycc_parser_test_helper::parse("while True:\n    print(1)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::While {
@@ -661,13 +756,13 @@ mod tests {
     #[should_panic(expected = "while/else is not supported yet")]
     fn a_while_else_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("while True:\n    print(1)\nelse:\n    print(2)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     fn lowers_a_for_range_loop_with_one_argument() {
         let module = pycc_parser_test_helper::parse("for i in range(3):\n    print(i)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::ForRange {
@@ -686,7 +781,7 @@ mod tests {
     #[test]
     fn lowers_a_for_range_loop_with_start_and_stop() {
         let module = pycc_parser_test_helper::parse("for i in range(1, 3):\n    print(i)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::ForRange {
@@ -705,7 +800,7 @@ mod tests {
     #[test]
     fn lowers_a_for_range_loop_with_start_stop_and_step() {
         let module = pycc_parser_test_helper::parse("for i in range(0, 6, 2):\n    print(i)\n");
-        let hir = lower(&module);
+        let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
             vec![HirItem::TopLevelStmt(HirStmt::ForRange {
@@ -725,49 +820,157 @@ mod tests {
     #[should_panic(expected = "only `for x in range(...)` is supported so far")]
     fn iterating_a_non_call_expression_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("for i in [1, 2, 3]:\n    print(i)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "only iterating over `range(...)` is supported so far")]
     fn calling_something_other_than_range_in_a_for_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("for i in items(3):\n    print(i)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "only `for x in range(...)` is supported so far")]
     fn calling_via_an_attribute_in_a_for_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("for i in a.b(3):\n    print(i)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "range() with 4 arguments is not supported")]
     fn range_with_too_many_arguments_is_not_supported() {
         let module = pycc_parser_test_helper::parse("for i in range(1, 2, 3, 4):\n    print(i)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "only a bare name for-target is supported so far")]
     fn a_tuple_for_target_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("for i, j in range(3):\n    print(i)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "for/else is not supported yet")]
     fn a_for_else_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("for i in range(3):\n    print(i)\nelse:\n    print(0)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "async for is not supported yet")]
     fn an_async_for_is_not_supported_yet() {
         let module = pycc_parser_test_helper::parse("async def f() -> None:\n    async for i in range(3):\n        print(i)\n");
-        lower(&module);
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    fn lowers_a_fully_annotated_public_function_with_params_and_return() {
+        let module = pycc_parser_test_helper::parse("def add(a: int, b: int) -> int:\n    return a + b\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "add".to_string(),
+                params: vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("a".to_string())),
+                    right: Box::new(HirExpr::Name("b".to_string())),
+                }))],
+            }]
+        );
+    }
+
+    #[test]
+    fn lowers_a_return_with_no_value() {
+        let module = pycc_parser_test_helper::parse("def f() -> None:\n    return\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![HirStmt::Return(None)],
+            }]
+        );
+    }
+
+    #[test]
+    fn an_unannotated_public_function_missing_param_annotations_produces_t0001() {
+        let module = pycc_parser_test_helper::parse("def add(a, b) -> int:\n    return a + b\n");
+        let diag = lower_checked(&module).unwrap_err();
+        assert_eq!(diag.code, "T0001");
+        assert!(diag.message.contains('a'));
+    }
+
+    #[test]
+    fn an_unannotated_public_function_missing_return_annotation_produces_t0001() {
+        let module = pycc_parser_test_helper::parse("def add(a: int, b: int):\n    return a + b\n");
+        let diag = lower_checked(&module).unwrap_err();
+        assert_eq!(diag.code, "T0001");
+        assert!(diag.message.contains("add"));
+    }
+
+    #[test]
+    fn an_unannotated_private_function_is_allowed() {
+        let module = pycc_parser_test_helper::parse("def _add(a, b):\n    return a + b\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "_add".to_string(),
+                params: vec![("a".to_string(), Ty::None), ("b".to_string(), Ty::None)],
+                return_ty: Ty::None,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("a".to_string())),
+                    right: Box::new(HirExpr::Name("b".to_string())),
+                }))],
+            }]
+        );
+    }
+
+    #[test]
+    fn every_supported_annotation_type_lowers_correctly() {
+        let cases = [
+            ("def f(x: int) -> int:\n    return x\n", Ty::Int),
+            ("def f(x: float) -> float:\n    return x\n", Ty::Float),
+            ("def f(x: bool) -> bool:\n    return x\n", Ty::Bool),
+            ("def f(x: str) -> str:\n    return x\n", Ty::Str),
+            ("def f(x: None) -> None:\n    return x\n", Ty::None),
+        ];
+        for (source, expected_ty) in cases {
+            let module = pycc_parser_test_helper::parse(source);
+            let hir = lower_checked(&module).unwrap();
+            assert_eq!(
+                hir.items,
+                vec![HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("x".to_string(), expected_ty)],
+                    return_ty: expected_ty,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                }],
+                "wrong lowering for {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "type annotation `list` is not supported yet")]
+    fn an_unsupported_annotation_type_panics() {
+        let module = pycc_parser_test_helper::parse("def f(x: list) -> None:\n    return\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "only a bare name type annotation is supported so far")]
+    fn a_non_bare_name_annotation_panics() {
+        let module = pycc_parser_test_helper::parse("def f(x: a.b) -> None:\n    return\n");
+        lower_checked(&module).unwrap();
     }
 }
 
