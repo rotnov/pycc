@@ -136,29 +136,52 @@
         <article class="prose">
           <section id="implemented">
             <p class="section-kicker">Current implementation</p>
-            <h2>A real native-code path exists.</h2>
+            <h2>The frontend is broader than the native backend.</h2>
             <p>
-              The repository contains a working vertical slice from Python
-              source through parsing, HIR, a type-stage passthrough, MIR, LLVM
-              object generation, host linking, and execution of the resulting
-              native binary.
+              <code>pycc check</code> runs the broadened parser → HIR → strict
+              type checker without entering code generation. Separately, the
+              repository retains a working vertical slice from Python source
+              through MIR, LLVM object generation, host linking, and execution
+              of a native binary.
             </p>
             <div class="evidence-grid">
               <div class="evidence-card">
-                <span>Language slice</span>
-                <strong>Small, explicit surface</strong>
+                <span>Frontend language surface</span>
+                <strong>Full v0.1 grammar</strong>
                 <p>
-                  Module-level <code>print</code> of an <code>i64</code>
-                  literal, zero-argument function definitions, and explicit
-                  zero-argument calls are implemented.
+                  Arithmetic, comparisons, assignments, calls and returns,
+                  recursion, <code>if</code>/<code>while</code>/<code>for</code>
+                  with <code>range</code>, booleans, floats, strings, and basic
+                  f-strings are parsed and checked.
                 </p>
               </div>
               <div class="evidence-card">
                 <span>Compiler driver</span>
-                <strong>Build, run, version</strong>
+                <strong>Build, run, check, version</strong>
                 <p>
-                  These commands have slice-level working paths. Other
-                  documented CLI commands remain planned.
+                  <code>check</code> supports validated human and JSON
+                  diagnostics. <code>build</code> and <code>run</code> retain
+                  their slice-level paths; other documented commands remain
+                  planned.
+                </p>
+              </div>
+              <div class="evidence-card">
+                <span>Type system</span>
+                <strong>Strict checking and inference</strong>
+                <p>
+                  Public annotations are required, <code>Any</code> is
+                  rejected, and monomorphic private-helper signatures are
+                  inferred and materialized before MIR.
+                </p>
+              </div>
+              <div class="evidence-card">
+                <span>Diagnostics</span>
+                <strong>Validated frontend codes</strong>
+                <p>
+                  Parser failures use <code>L0001</code>; byte-exact CLI
+                  snapshots cover <code>T0001</code>, <code>T0002</code>,
+                  <code>T0021</code>, <code>T0022</code>,
+                  <code>T0023</code>, and <code>T0024</code>.
                 </p>
               </div>
               <div class="evidence-card">
@@ -182,20 +205,24 @@
 
           <section id="not-yet">
             <p class="section-kicker">Scope boundary</p>
-            <h2>The full typed-Python promise is still planned.</h2>
+            <h2>Native code generation remains slice-only.</h2>
             <p>
-              Strict type enforcement is not implemented yet:
-              <code>pycc_types::check</code> is currently a passthrough.
-              Arithmetic, values flowing through function arguments and
-              returns, control flow, recursion with values, strings, floats,
-              booleans, <code>range</code>, and f-strings remain v0.1 work.
+              <code>pycc build</code> and <code>pycc run</code> still lower
+              only module-level <code>print(&lt;i64 literal&gt;)</code>,
+              zero-argument function definitions, and explicit zero-argument
+              calls. New frontend constructs reach an explicit backend
+              boundary until the v0.1 MIR, code generation, and runtime work
+              lands. Containers, <code>Optional</code>, and narrowing are also
+              outside the current frontend grammar.
             </p>
             <div class="callout">
               <strong>Do not use pycc in production.</strong>
               <p>
-                Unsupported valid Python may still hit explicit slice-limit
-                failures. The examples on the landing page describe the design
-                target unless they are marked as implemented.
+                HIR and type diagnostics still use placeholder source
+                positions, safe help suggestions are not populated, and
+                unsupported backend constructs still fail at the explicit
+                pre-alpha boundary. Landing-page build examples remain design
+                targets unless marked as implemented.
               </p>
             </div>
           </section>
@@ -209,6 +236,18 @@
                   End-to-end slice tests
                 </a>
                 <span>Compile and execute the currently supported programs.</span>
+              </li>
+              <li>
+                <a href="https://github.com/rotnov/pycc/blob/main/crates/pycc_types/src/lib.rs">
+                  Type-checker implementation
+                </a>
+                <span>Strict public signatures, local inference, calls, control flow, assignments, and returns.</span>
+              </li>
+              <li>
+                <a href="https://github.com/rotnov/pycc/tree/main/tests/diagnostics">
+                  CLI diagnostic snapshots
+                </a>
+                <span>Byte-exact human output for the shipped frontend errors.</span>
               </li>
               <li>
                 <a href="https://github.com/rotnov/pycc/actions/workflows/ci.yml">
@@ -227,12 +266,13 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>Frontend depth is the next compiler slice.</h2>
+            <h2>Code generation and runtime breadth are next.</h2>
             <p>
-              The delivery plan next expands the v0.1 grammar, implements real
-              strict typing and local inference, introduces stable diagnostics,
-              and establishes the frontend performance gate. Code generation
-              breadth and conformance demos follow after that foundation.
+              The next compiler slice lowers the implemented v0.1 frontend
+              constructs through MIR and LLVM, then expands the runtime for
+              integers, floats, strings, booleans, control flow, recursion, and
+              basic f-strings. The conformance testkit, named demos, frontend
+              performance gate, and final v0.1 acceptance pass follow.
             </p>
             <div class="page-links">
               <a href="../architecture/">

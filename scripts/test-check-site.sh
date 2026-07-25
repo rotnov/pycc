@@ -466,6 +466,87 @@ fi
 cp "$repo_root/site/architecture/index.html" \
   "$fixture_root/site/architecture/index.html"
 
+python3 - "$repo_root" "$fixture_root/site" <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+
+repo_root = Path(sys.argv[1])
+site_dir = Path(sys.argv[2])
+checker = repo_root / "scripts" / "check-site.sh"
+mutations = (
+    (
+        site_dir / "index.html",
+        "<code>pycc check</code> now runs the broadened v0.1 frontend",
+        "<code>pycc check</code> is not implemented",
+        "landing page without the current frontend status",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "<strong>Strict checking and inference</strong>",
+        "<strong>Type checker placeholder</strong>",
+        "status page without the implemented type-system boundary",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "Parser failures use <code>L0001</code>; byte-exact CLI",
+        "Parser failures use <code>L0001</code>; output checks only",
+        "status page that overstates diagnostic snapshot coverage",
+    ),
+    (
+        site_dir / "architecture" / "index.html",
+        "<strong>Resolve and type-check</strong>",
+        "<strong>Pass through the type stage</strong>",
+        "architecture page without the implemented checker stage",
+    ),
+    (
+        site_dir / "python-aot-compilers" / "index.html",
+        (
+            "frontend checker implemented for the v0.1 subset, while "
+            "native code generation remains slice-only"
+        ),
+        "type checker is a stub and the backend status is unknown",
+        "comparison page with superseded pycc positioning",
+    ),
+    (
+        site_dir / "llms.txt",
+        "`pycc check` now parses and type-checks the v0.1",
+        "`pycc check` is not implemented for the v0.1",
+        "llms.txt without the current frontend status",
+    ),
+    (
+        site_dir / "index.html.md",
+        "`pycc check` now parses and type-checks the v0.1",
+        "`pycc check` is not implemented for the v0.1",
+        "Markdown landing page without the current frontend status",
+    ),
+)
+environment = dict(os.environ)
+environment["SITE_DIR"] = str(site_dir)
+
+for path, required, replacement, description in mutations:
+    original = path.read_text()
+    if required not in original:
+        raise SystemExit(
+            f"Fixture is missing current-status mutation target: {required}"
+        )
+    path.write_text(original.replace(required, replacement, 1))
+    result = subprocess.run(
+        [str(checker)],
+        cwd=repo_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    path.write_text(original)
+    if result.returncode == 0:
+        raise SystemExit(f"Validator accepted a {description}")
+PY
+
 python3 - "$fixture_root/site/python-aot-compilers/index.html" <<'PY'
 from pathlib import Path
 import sys

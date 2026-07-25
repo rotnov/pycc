@@ -175,7 +175,7 @@
                     <th scope="row">pycc</th>
                     <td>Typed, standard Python 3.14 is the v1 design target</td>
                     <td>Standalone native executable without CPython is the design target</td>
-                    <td>Pre-alpha; only a narrow end-to-end slice works today</td>
+                    <td>Pre-alpha; frontend checker implemented for the v0.1 subset, while native code generation remains slice-only</td>
                   </tr>
                   <tr>
                     <th scope="row">LPython</th>
@@ -246,8 +246,10 @@
               pycc aims to combine hard compile-time type enforcement,
               standard Python syntax, a native executable without an embedded
               CPython interpreter, and a five-target portability gate. The
-              repository currently proves only a small source-to-native
-              vertical slice. Its type checker is still a stub, broad Python
+              repository now proves two different depths: <code>pycc
+              check</code> parses and type-checks the v0.1 frontend surface,
+              while <code>build</code> and <code>run</code> still prove only a
+              small source-to-native vertical slice. Broad backend and runtime
               semantics are not implemented, and no production release exists.
             </p>
             <div class="callout">
