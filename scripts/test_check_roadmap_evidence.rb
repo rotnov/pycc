@@ -94,6 +94,48 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def perf_gate_workflow(
+    promote_if: nil,
+    save_if: nil,
+    restore_action: PINNED_CACHE_RESTORE_ACTION,
+    missing_step: nil,
+    swap_comparison_and_promotion: false,
+    comparison_continue_on_error: nil,
+    job_continue_on_error: nil
+  )
+    steps = [
+      {
+        "uses" => PINNED_CHECKOUT_ACTION,
+        "with" => { "persist-credentials" => false }
+      },
+      *TRUSTED_PERF_LIFECYCLE_STEPS.map(&:dup)
+    ]
+    restore = steps.find do |step|
+      step["name"] == "Restore previous frontend-perf baseline"
+    end
+    restore["uses"] = restore_action
+    comparison = steps.find do |step|
+      step["name"] == "Compare against previous baseline (if one was restored)"
+    end
+    comparison["continue-on-error"] = comparison_continue_on_error unless comparison_continue_on_error.nil?
+    promote = steps.find do |step|
+      step["name"] == "Save this run's timing as the next run's baseline"
+    end
+    promote["if"] = promote_if if promote_if
+    save = steps.find { |step| step["name"] == "Cache this run's baseline" }
+    save["if"] = save_if if save_if
+    steps.reject! { |step| step["name"] == missing_step } if missing_step
+    if swap_comparison_and_promotion
+      comparison_index = steps.index(comparison)
+      promote_index = steps.index(promote)
+      steps[comparison_index], steps[promote_index] = steps[promote_index], steps[comparison_index]
+    end
+
+    perf_job = { "steps" => steps }
+    perf_job["continue-on-error"] = job_continue_on_error unless job_continue_on_error.nil?
+    { "jobs" => { "frontend-perf-gate" => perf_job } }.to_yaml
+  end
+
   def test_rejects_false_completed_item_without_evidence
     roadmap = <<~MARKDOWN
       # pycc Roadmap
@@ -529,8 +571,87 @@ class RoadmapEvidenceCliTest < Minitest::Test
     # digest.
     assert_includes(
       TIER1_CI_WORKFLOW_SHA256S,
-      "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
+      PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256
     )
+  end
+
+  def test_accepts_a_perf_baseline_published_only_after_success
+    assert validate_perf_gate_baseline_lifecycle(
+      perf_gate_workflow,
+      "ci.yml"
+    )
+  end
+
+  def test_rejects_promoting_a_perf_baseline_after_a_failed_comparison
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(
+        perf_gate_workflow(promote_if: "always()"),
+        "ci.yml"
+      )
+    end
+    assert_includes error.message, "fail-closed sequence"
+  end
+
+  def test_rejects_caching_a_perf_baseline_after_a_failed_comparison
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(
+        perf_gate_workflow(save_if: "always()"),
+        "ci.yml"
+      )
+    end
+    assert_includes error.message, "fail-closed sequence"
+  end
+
+  def test_rejects_a_mutable_perf_cache_action
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(
+        perf_gate_workflow(restore_action: "actions/cache/restore@v4"),
+        "ci.yml"
+      )
+    end
+    assert_includes error.message, "reviewed immutable pins"
+  end
+
+  def test_rejects_a_missing_perf_comparison
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(
+        perf_gate_workflow(
+          missing_step: "Compare against previous baseline (if one was restored)"
+        ),
+        "ci.yml"
+      )
+    end
+    assert_includes error.message, "ordered baseline lifecycle"
+  end
+
+  def test_rejects_a_reordered_perf_comparison
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(
+        perf_gate_workflow(swap_comparison_and_promotion: true),
+        "ci.yml"
+      )
+    end
+    assert_includes error.message, "ordered baseline lifecycle"
+  end
+
+  def test_rejects_a_perf_comparison_that_can_hide_failure
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(
+        perf_gate_workflow(comparison_continue_on_error: true),
+        "ci.yml"
+      )
+    end
+    assert_includes error.message, "fail-closed sequence"
+  end
+
+  def test_rejects_a_perf_job_that_can_hide_failure
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(
+        perf_gate_workflow(job_continue_on_error: true),
+        "ci.yml"
+      )
+    end
+    assert_includes error.message, "must propagate failures"
   end
 
   def test_rejects_changed_tier1_matrix_workflow

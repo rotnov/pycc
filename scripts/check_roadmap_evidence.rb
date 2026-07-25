@@ -33,9 +33,67 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ]
 }.freeze
+PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256 =
+  "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
 TIER1_CI_WORKFLOW_SHA256S = [
   "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2",
-  "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
+  PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256
+].freeze
+PINNED_CHECKOUT_ACTION =
+  "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
+PINNED_CACHE_RESTORE_ACTION =
+  "actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830"
+PINNED_CACHE_SAVE_ACTION =
+  "actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830"
+PERF_BASELINE_PATH = "target/criterion/pycc_check_frontend_fixture/previous"
+PERF_CURRENT_PATH = "target/criterion/pycc_check_frontend_fixture/current"
+PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
+  if [ -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
+    ruby scripts/check_perf_regression.rb \
+      target/criterion/pycc_check_frontend_fixture/current/estimates.json \
+      target/criterion/pycc_check_frontend_fixture/previous/estimates.json
+  else
+    echo "no previous baseline cached yet -- this run establishes it"
+  fi
+SHELL
+PERF_PROMOTE_SCRIPT = <<~'SHELL'.strip
+  rm -rf target/criterion/pycc_check_frontend_fixture/previous
+  cp -r target/criterion/pycc_check_frontend_fixture/current target/criterion/pycc_check_frontend_fixture/previous
+SHELL
+TRUSTED_PERF_LIFECYCLE_STEPS = [
+  {
+    "name" => "Restore previous frontend-perf baseline",
+    "uses" => PINNED_CACHE_RESTORE_ACTION,
+    "with" => {
+      "path" => PERF_BASELINE_PATH,
+      "key" => "frontend-perf-baseline-${{ github.run_id }}",
+      "restore-keys" => "frontend-perf-baseline-"
+    }
+  },
+  {
+    "name" => "Run frontend benchmark",
+    "run" => "cargo bench --bench check_bench -- --save-baseline current"
+  },
+  {
+    "name" => "Test perf regression checker",
+    "run" => "ruby scripts/test_check_perf_regression.rb"
+  },
+  {
+    "name" => "Compare against previous baseline (if one was restored)",
+    "run" => PERF_COMPARE_SCRIPT
+  },
+  {
+    "name" => "Save this run's timing as the next run's baseline",
+    "run" => PERF_PROMOTE_SCRIPT
+  },
+  {
+    "name" => "Cache this run's baseline",
+    "uses" => PINNED_CACHE_SAVE_ACTION,
+    "with" => {
+      "path" => PERF_BASELINE_PATH,
+      "key" => "frontend-perf-baseline-${{ github.run_id }}"
+    }
+  }
 ].freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
@@ -253,6 +311,70 @@ def coverage_gate_present?(workflow_text, source)
   unless actual_prefix == TRUSTED_COVERAGE_STEPS
     raise RoadmapEvidenceError,
           "#{source}: coverage setup steps do not match the trusted sequence"
+  end
+
+  true
+end
+
+def validate_perf_gate_baseline_lifecycle(workflow_text, source)
+  stream = Psych.parse_stream(workflow_text, filename: source)
+  root = yaml_mapping(stream.children.first.root, source)
+  jobs = yaml_mapping(root["jobs"], "#{source} jobs")
+  perf_job_node = jobs["frontend-perf-gate"]
+  return true unless perf_job_node
+
+  perf_job = yaml_mapping(perf_job_node, "#{source} frontend-perf-gate job")
+  if perf_job.key?("if")
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate must run unconditionally"
+  end
+  job_continue_on_error = perf_job["continue-on-error"]
+  if job_continue_on_error &&
+     yaml_scalar(
+       job_continue_on_error,
+       "#{source} frontend-perf-gate continue-on-error"
+     ).strip != "false"
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate must propagate failures"
+  end
+
+  steps_node = perf_job["steps"]
+  unless steps_node.is_a?(Psych::Nodes::Sequence)
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate steps must be a sequence"
+  end
+  steps = steps_node.children.map do |step_node|
+    yaml_value(step_node, "#{source} frontend-perf-gate step")
+  end
+  checkout = steps.find { |step| step["uses"]&.start_with?("actions/checkout@") }
+  unless checkout && checkout["uses"] == PINNED_CHECKOUT_ACTION
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate checkout must use the reviewed immutable pin"
+  end
+  unless checkout.dig("with", "persist-credentials") == "false"
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate checkout must not persist credentials"
+  end
+
+  lifecycle_names = TRUSTED_PERF_LIFECYCLE_STEPS.map { |step| step.fetch("name") }
+  lifecycle_indices = lifecycle_names.map do |name|
+    steps.index { |step| step["name"] == name }
+  end
+  if lifecycle_indices.any?(&:nil?) ||
+     lifecycle_indices !=
+       (lifecycle_indices.first...(lifecycle_indices.first + lifecycle_names.length)).to_a
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate must keep the reviewed ordered baseline lifecycle"
+  end
+  lifecycle = lifecycle_indices.map { |index| steps.fetch(index) }
+  unless lifecycle.fetch(0)["uses"] == PINNED_CACHE_RESTORE_ACTION &&
+         lifecycle.fetch(5)["uses"] == PINNED_CACHE_SAVE_ACTION
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate cache steps must use reviewed immutable pins"
+  end
+  unless lifecycle == TRUSTED_PERF_LIFECYCLE_STEPS
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate lifecycle must match the reviewed fail-closed sequence"
   end
 
   true
@@ -479,6 +601,7 @@ def validate_evidence(root, evidence_ids)
     raise RoadmapEvidenceError,
           "#{workflow}: evidence does not provide the exact 100% line and region gate"
   end
+  validate_perf_gate_baseline_lifecycle(workflow_text, workflow.to_s)
 
   if evidence_ids.include?("ci-tier1-cross-compile")
     digest = Digest::SHA256.hexdigest(workflow_text)
