@@ -78,8 +78,7 @@ assert "grill-with-docs" in wrappers, "Codex skill wrappers are missing"
 assert "i-have-an-issue" in wrappers, "installed issue-research skill is missing"
 assert "pycc" in wrappers, "project-local pycc alpha skill is missing"
 assert "pycc-feedback" in wrappers, "project-local feedback alpha skill is missing"
-assert "review-local-changes" in wrappers, "local review skill is missing"
-assert len(wrappers) == 17, "Codex did not retain every repository skill wrapper"
+assert len(wrappers) == 16, "Codex did not retain every repository skill wrapper"
 prompt = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 model_input = "\n".join(
     content.get("text", "")
@@ -126,9 +125,28 @@ if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
   echo "error: expected one pinned Codex deep-reviewer artifact" >&2
   exit 1
 fi
-python3 "$repo_root/scripts/check_review_local_changes.py" \
-  --client codex \
-  --reviewer-manifest "$1"
+reviewer_manifest=$1
+set -- "$test_codex_home"/plugins/cache/ievo-skills/ievo/*/skills/deep-review/SKILL.md
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+  echo "error: expected one pinned Codex deep-review entrypoint" >&2
+  exit 1
+fi
+review_skill=$1
+python3 - "$review_skill" "$reviewer_manifest" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+expected = {
+    "SKILL.md": "ec8805e22fff7db49cfe49c2a7cd49f340a618bf58da6acaf4253e875279670d",
+    "deep-reviewer.md": "b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2",
+}
+for raw_path in sys.argv[1:]:
+    path = pathlib.Path(raw_path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == expected[path.name], f"{path.name} digest drifted"
+print("Codex pinned deep-review entrypoint and agent: valid")
+PY
 
 skill_dir="$repo_root/.claude/skills/i-have-an-issue"
 python3 "$skill_dir/scripts/search_github.py" --help >/dev/null

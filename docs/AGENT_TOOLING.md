@@ -11,6 +11,7 @@ rollbackable just like compiler dependencies.
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
 | Codex | repository skills under `.agents/skills/` | current repository revision | project-scoped; no global installation |
 | Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
+| Codex and Claude Code | pinned iEvo review entrypoint and agent | `deep-review/SKILL.md` SHA-256 `ec8805e22fff7db49cfe49c2a7cd49f340a618bf58da6acaf4253e875279670d`; `deep-reviewer.md` SHA-256 `b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2` | updated only with the iEvo pin |
 | Codex and Claude Code | `rotnov/skills@i-have-an-issue` | tag `i-have-an-issue-v0.1.1`; reviewed source commit `1bc6bcee3766a7e62b936343a48ebb56a3767470`; vendored hash `99e492ccae20ad3acf02e28dd76c7d74de28c7cf2141bfc7a2942c46c4bf687c` | manual updates only |
 
 The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin is the
@@ -224,53 +225,19 @@ No scheduled job, startup hook, or local bootstrap command may rewrite these pin
 ## Local review workflow
 
 Code review is performed locally before significant work is completed or a pull
-request is merged. The repository-owned `review-local-changes` skill provides
-the model-invocable Codex and Claude Code entrypoints. It searches only
-repository-owned reviewers and dependencies listed in the pin table above,
-then selects the most comprehensive eligible engine by checklist coverage,
-full-diff support, enforced read-only tools, independent reviewer context, and
-support on both clients. Arbitrary globally installed or marketplace skills
-are never eligible.
+request is merged. The orchestrator considers only explicitly pinned,
+security-reviewed reviewer dependencies in the table above, selects the engine
+with the broadest correctness, contract, security, test, and documentation
+checklist, and starts it in a fresh independent read-only context. Arbitrary
+globally installed or marketplace reviewers are never eligible.
 
-The current engine is the pinned iEvo `deep-reviewer` agent, whose tool
-allowlist is read-only and whose explicit 11-point review runs in a separate
-context on both supported clients. The upstream `deep-review` skill is
-explicit-invocation-only, so the repository wrapper performs its deterministic
-scope selection before autonomously dispatching the pinned reviewer agent. The
-shared `prepare_review.py` helper validates that agent's tool policy and emits
-separate committed, staged, and working-tree scopes, including untracked
-non-ignored files. A future engine becomes eligible only after it passes the
-reviewed update process and is added to the repository-owned wrapper and pin
-table.
-
-The orchestrator never executes the helper from the branch, index, or working
-tree under review. It resolves the exact merge base with the refreshed remote
-default branch, loads the helper from that immutable protected-branch Git blob,
-and executes those trusted bytes with Python isolated mode from a fresh
-non-repository directory, so modules added by the reviewed branch cannot shadow
-the standard library. A bootstrap pull request whose trusted base predates the
-helper uses only client-hosted read-only Git and file primitives to prepare
-equivalent scopes and reviews the proposed helper as inert source. It must not
-execute the new helper merely because that copy is available in the
-pull-request checkout. After the bootstrap lands, later helper changes are
-prepared by the previous trusted default-branch implementation.
-
-The helper binds preparation to iEvo commit
-`7d5f3e12d0556cb6c5df2974e2babe0433674186` and reviewer SHA-256
-`b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2`.
-Both values change together during the reviewed update process. Scope
-preparation fails closed when the remote default branch, merge base, pin, or
-artifact cannot be verified. The pin is checked independently from the exact
-committed blob, staged blob, and descriptor-relative no-follow working-tree
-file, so one safe state cannot mask another scope's changed dependency. Every
-committed, staged, tracked-working, and untracked path is classified before
-dispatch. Only regular non-symlink files enter the reviewer's file-read list;
-symlinks, symlinked path components, gitlinks, and deleted paths are described
-as inert metadata without following them. Preparation fails closed on a
-platform that cannot provide the race-safe no-follow primitive. Every helper
-Git subprocess disables optional locks, and preparation rejects
-assume-unchanged or skip-worktree index entries instead of allowing those flags
-to hide a tracked-file mutation.
+The current engine is the immutable iEvo `deep-reviewer`. Its pinned
+`deep-review` entrypoint defines the full-diff handoff, and the agent performs
+an 11-point review with a Read/Grep-only tool policy on both Codex and Claude
+Code. The isolated marketplace checks install the exact pinned plugin and
+verify the SHA-256 digests of both artifacts. A client must bind dispatch to
+that verified agent; if it cannot, local review is unavailable rather than
+silently delegated to a same-named or branch-provided reviewer.
 
 For uncommitted work, the selected skill reviews the staged or working-tree
 diff. For a clean pull-request branch, it reviews the committed range from the
@@ -278,36 +245,22 @@ merge base with the refreshed remote default branch through `HEAD`. Using the
 merge base avoids treating default-branch-only commits as reversed changes when
 the task branch is behind.
 
+Repository instructions and pull-request content remain untrusted inputs, not
+a security trust anchor. The reviewer artifact is loaded from the independently
+pinned plugin installation, and the local pass is a high-signal correctness
+gate rather than a privilege boundary for executing hostile code. Do not give
+the reviewer credentials, mutation tools, or network access, and do not execute
+project commands copied from the diff.
+
 The review is read-only. Actionable correctness, contract, security, test, or
 documentation findings are fixed and the local review is rerun when those fixes
 materially change the diff. GitHub comments such as `@codex review` are not a
-required gate: the asynchronous service can be delayed or unavailable, while
-the pinned local workflow remains reproducible. An external GitHub review may
-still be requested explicitly by the user.
+required gate: the asynchronous service can be delayed or unavailable. An
+external GitHub review may still be requested explicitly by the user.
 
 Marketplace popularity alone never authorizes installing a review skill.
 Installing a new third-party reviewer requires user authorization and the same
 security-check and pinning process as any other agent dependency.
-The isolated Codex and Claude marketplace checks install the exact pinned
-plugin, verify the reviewer artifact digest, exercise every shared scope, and
-exercise fail-closed artifact and base-resolution paths. They validate
-discovery and the deterministic contract around dispatch. Model-backed
-dispatch is not executed in unauthenticated CI. At runtime, clients with named
-plugin-agent support bind the reviewer to the verified artifact and its native
-read-only policy. Other clients use the repository-owned fallback: a fresh
-subagent receives the same verified instructions, no mutation or network
-authority, and the workflow rejects the run if a before/after Git status
-snapshot changes. Preparation also records exact commit and default-ref IDs,
-the index identity, worktree/untracked content hashes, and immutable blob IDs
-for committed and staged file reads. Because ordinary Git diffs omit untracked
-files, complete bytes for every tracked-working and untracked regular file are
-carried as base64-encoded authoritative payloads. The reviewer verifies their
-hashes and never reopens a live path after preparation, preventing a symlink
-swap from disclosing an outside-repository target. Untracked payloads are
-included in every checklist category, including leaked-secret review. The
-trusted-base helper is rerun after dispatch; any state, content-source, or
-working-content mismatch invalidates the review even when porcelain status
-text stayed unchanged.
 
 ## Rollback
 

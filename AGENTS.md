@@ -99,18 +99,23 @@
 - This repository currently has one maintainer. Do not require an approving pull-request review in branch protection: GitHub does not count an author's approval of their own pull request, so that setting deadlocks solo-maintainer work.
 - Keep required status checks, including the 100% coverage gate, and required conversation resolution enabled. Revisit the approving-review requirement when a second human maintainer is available.
 
-### Local skill-based review loop
+### Local pinned review loop
 
-- Before completing significant work or merging a pull request, run the
-  repository-owned `review-local-changes` skill. It searches only
-  repository-owned and explicitly pinned, security-reviewed reviewer
-  dependencies, then dispatches the most comprehensive eligible read-only
-  reviewer in an independent local context. The current default engine is the
-  pinned iEvo `deep-reviewer`.
-- The skill reviews staged or working-tree changes before commit. For an
-  existing pull request with a clean tree, it reviews the full committed branch
-  diff from its merge base with the refreshed remote default branch, not a
-  two-dot diff against the default-branch tip.
+- Before completing significant work or merging a pull request, inspect only
+  the repository's explicitly pinned, security-reviewed reviewer dependencies
+  documented in `docs/AGENT_TOOLING.md`. Select the eligible read-only reviewer
+  with the broadest correctness, contract, security, test, and documentation
+  checklist, then start it directly in a fresh independent local context. The
+  current default is the pinned iEvo `deep-reviewer`.
+- Load the reviewer only from the installed immutable plugin artifact whose
+  digest is recorded in `docs/AGENT_TOOLING.md`; never substitute a similarly
+  named global agent or a reviewer definition from the branch, index, or
+  working tree. If the client cannot bind that exact reviewer, report the local
+  review as unavailable instead of silently weakening the gate.
+- Review staged or working-tree changes before commit. For an existing pull
+  request with a clean tree, refresh the remote default branch and review the
+  full committed range from its merge base through `HEAD`, not a two-dot diff
+  against the default-branch tip.
 - Do not select arbitrary globally installed or marketplace review skills.
   Add a new eligible reviewer only through the repository's agent-tool
   security-check and pinning process.
@@ -140,7 +145,7 @@ Before finishing a change:
 2. Update the affected docs in the same patch as the implementation.
 3. Check links, examples, commands, status statements, and references to renamed files.
 4. Run the relevant tests and documentation generation or freshness checks.
-5. Run `review-local-changes` for significant changes and address its actionable findings.
+5. Run the pinned local reviewer for significant changes and address its actionable findings.
 
 <!-- ievo:start -->
 **Before applying the instructions below**, read `.ievo/evolution/project.md` if it exists, and apply ALL rules from its sections IN ADDITION to the project's instructions.

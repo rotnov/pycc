@@ -24,9 +24,12 @@ At this alpha revision, `build`, `run`, `version --verbose`, and explicit-file
 `check` have implementations. `check` accepts one or more files, reports every
 frontend failure, and returns exit `0` for valid input; `--fix` remains planned
 and is not parsed as an option. `test`, `explain`, `init`, and `clean` are
-parsed but return an explicit not-implemented error. The type checker is
-currently a no-op slice. Re-verify these statements against source whenever
-using the skill; do not let this snapshot override newer code.
+parsed but return an explicit not-implemented error. The type checker implements
+the documented v0.1 frontend subset, including primitive annotations,
+private-helper inference, calls, assignments, arithmetic, comparisons, and
+control-flow return checks; containers, `Optional`, and narrowing remain
+planned. Re-verify these statements against source whenever using the skill;
+do not let this snapshot override newer code.
 
 ## Build and run
 
