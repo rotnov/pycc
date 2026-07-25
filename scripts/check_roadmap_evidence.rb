@@ -24,9 +24,13 @@ COVERAGE_SCRIPT = <<~SHELL.strip
   TRUSTED_RUSTC="$(rustup which rustc)"
   TRUSTED_RUSTDOC="$(rustup which rustdoc)"
   TRUSTED_COV="/Users/runner/.cargo/bin/cargo-llvm-cov"
+  TRUSTED_TOOLCHAIN="$(dirname "$(dirname "$TRUSTED_CARGO")")"
   cd "$RUNNER_TEMP"
   RUSTC="$TRUSTED_RUSTC" RUSTDOC="$TRUSTED_RUSTDOC" "$TRUSTED_CARGO" install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
   "$TRUSTED_COV" llvm-cov --version
+  sudo chmod o+x /Users/runner /Users/runner/.cargo /Users/runner/.cargo/bin /Users/runner/.rustup /Users/runner/.rustup/toolchains
+  sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"
+  sudo chmod o+rx "$TRUSTED_COV"
   ISOLATED_ROOT="$RUNNER_TEMP/pycc-coverage"
   mkdir -p "$ISOLATED_ROOT/home" "$ISOLATED_ROOT/tmp" "$ISOLATED_ROOT/cargo-home" "$ISOLATED_ROOT/target"
   sudo chown -R nobody:nobody "$ISOLATED_ROOT"
