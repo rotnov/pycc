@@ -87,6 +87,10 @@ references so the uploaded files cannot silently become browser-orphaned.
 The validator also rejects suppressing or execution-changing asset attributes,
 duplicate asset attributes, and HTML `base` elements, which could otherwise
 make browser behavior disagree with the checked attribute values.
+At viewports up to 680 CSS pixels, the footer must stack into one grid column
+and its navigation group must wrap within the available width. The validator
+and a negative mutation test preserve that narrow-screen overflow contract as
+the evidence-page link set grows.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots

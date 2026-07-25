@@ -27,6 +27,59 @@ done
 
 test -s "$site_dir/og.png"
 
+python3 - "$site_dir/styles.css" <<'PY'
+from pathlib import Path
+import sys
+
+
+def block_after(source, selector, *, last=False):
+    start = source.rfind(selector) if last else source.find(selector)
+    if start == -1:
+        raise SystemExit(f"Missing responsive CSS selector: {selector.strip()}")
+    opening = source.find("{", start)
+    if opening == -1:
+        raise SystemExit(f"Missing CSS block for selector: {selector.strip()}")
+    depth = 1
+    cursor = opening + 1
+    while cursor < len(source) and depth:
+        if source[cursor] == "{":
+            depth += 1
+        elif source[cursor] == "}":
+            depth -= 1
+        cursor += 1
+    if depth:
+        raise SystemExit(f"Unclosed responsive CSS selector: {selector.strip()}")
+    return source[opening + 1:cursor - 1]
+
+
+def declarations(block):
+    return {
+        line.strip().removesuffix(";")
+        for line in block.splitlines()
+        if ":" in line
+    }
+
+
+css = Path(sys.argv[1]).read_text()
+mobile = block_after(css, "@media (max-width: 680px)")
+footer = declarations(block_after(mobile, "\n  footer {", last=True))
+footer_links = declarations(block_after(mobile, "\n  footer > div {"))
+
+required_footer = {
+    "grid-template-columns: 1fr",
+}
+required_footer_links = {
+    "min-width: 0",
+    "flex-wrap: wrap",
+    "justify-content: flex-start",
+    "justify-self: stretch",
+}
+if not required_footer <= footer:
+    raise SystemExit("Narrow footer must stack into one grid column")
+if not required_footer_links <= footer_links:
+    raise SystemExit("Narrow footer links must wrap inside the available width")
+PY
+
 assert_once() {
   expected=$1
   file=$2

@@ -13,6 +13,66 @@ cp -R "$repo_root/site" "$fixture_root/site"
 
 SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
 
+python3 - "$fixture_root/site/styles.css" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+responsive_footer = """  footer > div {
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    justify-self: stretch;
+  }"""
+assert responsive_footer in content
+path.write_text(
+    content.replace(
+        responsive_footer,
+        responsive_footer.replace("flex-wrap: wrap", "flex-wrap: nowrap"),
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted non-wrapping narrow footer links" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/styles.css" "$fixture_root/site/styles.css"
+
+python3 - "$fixture_root/site/styles.css" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+mobile_footer = """  footer {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 24px 0;
+  }"""
+assert mobile_footer in content
+path.write_text(
+    content.replace(
+        mobile_footer,
+        mobile_footer.replace(
+            "grid-template-columns: 1fr",
+            "grid-template-columns: 1fr auto",
+        ),
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a two-column narrow footer" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/styles.css" "$fixture_root/site/styles.css"
+
 python3 - "$repo_root" "$fixture_root/site" <<'PY'
 from pathlib import Path
 import os

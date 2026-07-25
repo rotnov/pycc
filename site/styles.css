@@ -1580,13 +1580,20 @@ footer > div a:hover {
   }
 
   footer {
-    grid-template-columns: 1fr auto;
-    gap: 20px;
+    grid-template-columns: 1fr;
+    gap: 18px;
     padding: 24px 0;
   }
 
   footer p {
     display: none;
+  }
+
+  footer > div {
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    justify-self: stretch;
   }
 }
 
