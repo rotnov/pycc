@@ -97,7 +97,10 @@ build and execution proof, and aggregate `ci-gate`. Because a workflow can
 preserve plausible job names while bypassing their commands, any future change
 to that evidence is staged: first append the reviewed prospective digest while
 retaining the current digest in the trusted checker, then change the workflow
-and roadmap claim, and finally remove the superseded digest.
+and roadmap claim, and finally remove the superseded digest. A digest is
+retired immediately if later repository requirements make that workflow
+incomplete; a transition window is valid only while both versions satisfy the
+current contract.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would

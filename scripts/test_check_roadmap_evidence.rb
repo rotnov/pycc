@@ -208,6 +208,28 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
+  def test_rejects_coverage_evidence_after_a_blockquoted_heading_changes_the_section
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      > #### Other milestone
+      >
+      > - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: coverage_workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
   def test_ignores_headings_hidden_in_fences_and_html_comments
     hidden_sections = [
       <<~MARKDOWN,
@@ -425,6 +447,13 @@ class RoadmapEvidenceCliTest < Minitest::Test
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
+    )
+  end
+
+  def test_tier1_workflow_allowlist_retires_the_pre_alpha_eval_digest
+    refute_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      "58e2d5026b59e7c921b57c882d24b6507c95dd8f99e390c0a68af217e5e038c8"
     )
   end
 

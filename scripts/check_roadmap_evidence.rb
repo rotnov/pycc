@@ -32,7 +32,6 @@ EVIDENCE_SECTIONS = {
   ]
 }.freeze
 TIER1_CI_WORKFLOW_SHA256S = [
-  "58e2d5026b59e7c921b57c882d24b6507c95dd8f99e390c0a68af217e5e038c8",
   "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2"
 ].freeze
 COVERAGE_JOB = "build-test-coverage"
@@ -392,14 +391,14 @@ def validate_roadmap(text)
       next
     end
 
-    if SETEXT_UNDERLINE.match?(visible_line)
+    if SETEXT_UNDERLINE.match?(normalized_fence_candidate)
       raise RoadmapEvidenceError,
             "line #{line_number}: Setext headings are not supported; use ATX headings"
     end
 
-    heading = ATX_HEADING.match(visible_line)
+    heading = ATX_HEADING.match(normalized_fence_candidate)
     if heading
-      list_containers.clear
+      list_containers.clear if quote_depth.zero? && content_indent.zero?
       level = heading[:marks].length
       title = heading[:title].sub(/[ \t]+#+[ \t]*$/, "").strip
       heading_path = heading_path.first(level - 1)
