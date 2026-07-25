@@ -114,6 +114,33 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             Ok(())
         }
         HirStmt::ExprStmt(expr) => infer_expr(env, expr).map(|_| ()),
+        HirStmt::If { test, body, orelse } => {
+            infer_expr(env, test)?; // any type is accepted as truthy for v0.1 -- Python's own truthiness has no static type restriction
+            for stmt in body {
+                check_stmt(env, stmt)?;
+            }
+            for stmt in orelse {
+                check_stmt(env, stmt)?;
+            }
+            Ok(())
+        }
+        HirStmt::While { test, body } => {
+            infer_expr(env, test)?;
+            for stmt in body {
+                check_stmt(env, stmt)?;
+            }
+            Ok(())
+        }
+        HirStmt::ForRange { var, start, stop, step, body } => {
+            infer_expr(env, start)?;
+            infer_expr(env, stop)?;
+            infer_expr(env, step)?;
+            env.bind(var.clone(), Ty::Int);
+            for stmt in body {
+                check_stmt(env, stmt)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -264,6 +291,150 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "T0021");
         assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn an_if_s_test_must_be_bool_like_and_both_branches_are_checked() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(1) }],
+            orelse: vec![HirStmt::Assign { target: "y".to_string(), value: HirExpr::IntLiteral(2) }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        // Both branches ran in the same (single, unscoped-per-branch)
+        // environment for v0.1's simplified model -- neither branch's
+        // bindings are undone; real flow-sensitive narrowing is out of scope.
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+        assert_eq!(env.lookup("y"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_if_whose_test_is_undefined_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::Name("undefined".to_string()),
+            body: vec![],
+            orelse: vec![],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn an_if_whose_body_statement_is_ill_typed_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+            orelse: vec![],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn an_if_whose_orelse_statement_is_ill_typed_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![],
+            orelse: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_while_loop_s_test_and_body_are_checked() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::While {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(1) }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_while_loop_whose_test_is_undefined_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::While { test: HirExpr::Name("undefined".to_string()), body: vec![] };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_while_loop_whose_body_statement_is_ill_typed_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::While {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_range_loop_binds_its_variable_as_int_and_checks_its_body() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::IntLiteral(1),
+            body: vec![HirStmt::Assign { target: "x".to_string(), value: HirExpr::Name("i".to_string()) }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("i"), Some(Ty::Int));
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_for_range_loop_whose_start_is_undefined_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::Name("undefined".to_string()),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::IntLiteral(1),
+            body: vec![],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_range_loop_whose_stop_is_undefined_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::Name("undefined".to_string()),
+            step: HirExpr::IntLiteral(1),
+            body: vec![],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_range_loop_whose_step_is_undefined_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::Name("undefined".to_string()),
+            body: vec![],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_range_loop_whose_body_statement_is_ill_typed_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::IntLiteral(1),
+            body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
     }
 
     #[test]
