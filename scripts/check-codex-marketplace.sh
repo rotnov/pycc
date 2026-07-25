@@ -51,7 +51,7 @@ assert len(matches) == 1, "ievo@ievo-skills was not installed exactly once"
 assert matches[0].get("installed") is True, "ievo@ievo-skills is not installed"
 assert matches[0].get("enabled") is True, "ievo@ievo-skills is not enabled"
 assert not any(
-    entry.get("pluginId") == "pycc-agent-skills@ievo-skills"
+    entry.get("pluginId") == "pycc-agent-skills@" "ievo-skills"
     for entry in entries
 ), "repository skills must not be installed globally"
 ' <<EOF

@@ -113,6 +113,9 @@
   when it prints `REQUEST_ALLOWED` or `RETRY_ALLOWED`; preserve its evidence URL or
   timeout timestamps in the task log. `WAIT`, `ARTIFACT_EXISTS`, and
   `RETRY_LIMIT_REACHED` forbid another request on that head.
+- The retry checker must bind requests to the PR head current at each timeline event,
+  including GitHub's live `head_ref_force_pushed.commit_id` payload. Unknown
+  force-push event shapes must fail closed instead of resetting the request budget.
 - After fixes produce a new head commit, request another review only when the previous findings may no longer describe the current diff.
 - Monitor the resulting standard GitHub review, inline comments, issue comments, reactions, and unresolved review threads. Treat actionable inline comments as unfinished work.
 - Address every verified P0/P1 finding and every other actionable correctness or contract finding before merge. Keep fixes focused, push them to the pull request branch, and re-run the review and CI gates.
