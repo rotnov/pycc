@@ -13,7 +13,7 @@ before compiling or testing the workspace.
 | Layer | Location | What it proves |
 |---|---|---|
 | 1. Unit (Rust) | per-crate `#[cfg(test)]` | lexer/parser/checker/MIR internals |
-| 2. Conformance | `tests/conformance/pyXY/` | one test per PEP: compile with pycc, run, `stdout == CPython 3.14 stdout` |
+| 2. Conformance | `tests/conformance/pyXY/` | each supported language level compiles and runs its cumulative fixture set; `stdout ==` that level's pinned CPython oracle |
 | 3. Diagnostics | `tests/diagnostics/` | rejected constructs fail with the exact code + span (insta-style snapshots) |
 | 4. Differential fuzzing | `tests/fuzz/` | generated typed-Python programs: pycc binary output ≡ CPython output; crashes/mismatches auto-minimized |
 | 5. Runtime property tests | `pycc_rt` proptest | str/list/dict/RC/cycle-collector invariants |
@@ -23,7 +23,14 @@ before compiling or testing the workspace.
 ## Conformance harness (`pycc_testkit`)
 
 - Each test = single `.py` file, header comment: PEP, category, min pycc milestone.
-- Runner: compile (`--debug` and `--release` both, once `--release` exists — see below) → execute → diff vs CPython 3.14 reference output (recorded, pinned CPython version; re-recorded on CPython patch bumps).
+- Runner: for each supported language level, select that configuration's
+  cumulative fixture range and pinned oracle → compile (`--debug` and
+  `--release` both, once `--release` exists — see below) → execute → diff. The
+  v1.0 Python 3.14 run covers `py30/` through `py314/` against CPython 3.14.6.
+  After the v1.x adoption gate opens, the Python 3.15 run covers `py30/`
+  through `py315/` against a pinned current Python 3.15 patch; the separate
+  Python 3.14 compatibility run remains required. Outputs are recorded and
+  re-recorded on oracle patch bumps.
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 

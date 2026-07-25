@@ -40,3 +40,19 @@ Everything else (`tkinter`, `multiprocessing`, `ctypes`, …) reachable through 
 - Target surface: CPython 3.14 signatures + PEP 594 removals honored (no dead batteries).
 - Every implemented function: signature test (typeshed cross-check) + behavior test (differential vs CPython 3.14, all Tier-1 platforms).
 - Deviations (e.g. `re` engine corner cases, float repr edge cases) — listed per-module in `docs/semantics.md`, each with a negative/documented test. Undocumented deviation found by corpus bot = release blocker.
+
+## Python 3.15 preview (post-v1.0)
+
+The v1 surface remains CPython 3.14. The v1.x upgrade defined in ROADMAP.md
+adds these feature-frozen 3.15 deltas:
+
+| PEP | Surface | Plan |
+|---|---|---|
+| 661 | `sentinel()` builtin | Add to Tier 0 with identity, copy/pickle, repr, truthiness, and typing semantics covered by the PEP test. |
+| 686 | UTF-8 mode by default | Make default text I/O, locale interaction, and environment overrides match the pinned 3.15 oracle. |
+| 791 | `math.integer` | Add beside `math` in Tier 1. |
+| 799 | `profiling` | Add the public package surface; native profiler integration may use pycc-specific internals without changing its API. |
+| 814 | `frozendict` builtin | Add to Tier 0 with immutable mapping, hashing, and union semantics. |
+
+PEP 810 lazy imports and PEP 829 package-startup files belong to the import
+contract in PYTHON_STANDARDS.md rather than the module inventory here.
