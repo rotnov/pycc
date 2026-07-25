@@ -136,18 +136,21 @@ extensionless, non-executable scripts. Known interpreter options distinguish ord
 values, loaded code files, and inline-code modes; ambiguous future options fail closed
 by selecting every repository-relative operand. Windows `.exe` interpreter names and
 backslash paths are normalized to the same Git/POSIX tracked paths without accepting
-drive-qualified, UNC, absolute, or parent-traversing targets. Discovery comes from
+drive-qualified, UNC, or absolute targets. Parent components are resolved lexically
+against the command's effective working directory when the result stays inside the
+repository; paths that escape it fail closed. Discovery comes from
 `git ls-files`; shell line continuations, escaped spaces, and Markdown or subshell
 closing delimiters are handled without becoming part of a tracked path, and GitHub
 Actions folded `run: >` scalars are scanned with their executed newline semantics,
 including valid chomping and explicit indentation indicators such as `>-`, `>+`,
 `>2`, and `>2-`; literal `|` forms receive the corresponding block treatment. Static
-workflow-, job-, and step-level `working-directory` values
-are applied to their effective `run` steps, including recursively invoked extensionless
-helpers, without leaking one step's directory into another step or job. Quoted mapping
-keys and block sequences with standalone `-` entries are supported. Dynamic or
-non-repository working directories, YAML merge keys, aliases in structural positions,
-and flow-style job/step structures fail validation when they cannot be resolved safely.
+workflow-, job-, and step-level `working-directory` values, plus step-level values in
+repository-wide composite action manifests, are applied to their effective `run`
+steps. The directory remains in force through recursively invoked extensionless
+helpers without leaking from one step or job into another. Quoted mapping keys and
+block sequences with standalone `-` entries are supported. Dynamic or non-repository
+working directories, YAML merge keys, aliases in structural positions, and flow-style
+job/step structures fail validation when they cannot be resolved safely.
 Ignored caches and dependency checkouts therefore cannot make local validation
 disagree with a clean CI checkout.
 Required agent assets stored as Git symlinks are rejected rather than followed outside
@@ -170,9 +173,9 @@ repository paths retain their case-sensitive identity on case-sensitive hosts.
 GitHub owner/repository coordinates are matched case-insensitively for `github`
 marketplace declarations and `github.com` URL or SCP sources, matching GitHub's
 repository resolution without weakening path matching for other hosts. SCP-style
-marketplace sources must use a fully qualified dotted host; ambiguous single-label
-hosts are rejected instead of case-folding ordinary `owner/repository` or
-`label:value` text.
+marketplace sources must use a fully qualified dotted host or a valid bracketed IPv6
+literal; ambiguous single-label hosts are rejected instead of case-folding ordinary
+`owner/repository` or `label:value` text.
 For a pinned marketplace, only the exact validated baseline identity is exempt; an
 unknown or disabled sibling is still rejected. The exact iEvo exemption applies only
 while

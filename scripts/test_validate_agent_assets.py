@@ -1110,6 +1110,70 @@ class AgentAssetValidationTests(unittest.TestCase):
                     else:
                         self.assertEqual(failures, [])
 
+    def test_bracketed_ipv6_scp_marketplace_sources_are_normalized(
+        self,
+    ) -> None:
+        source_url = "git@[2001:DB8::1]:org/agents.git"
+        cases = (
+            ("git@[2001:db8::1]:org/agents.git", True),
+            ("[2001:db8::1]/org/agents", True),
+            ("git@[2001:db8::1]:org/Agents.git", False),
+        )
+        for required_reference, rejected in cases:
+            with self.subTest(reference=required_reference):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        f"Use `{required_reference}` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    marketplace = "ipv6-scp" + "-market"
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": "url",
+                            "url": source_url,
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    if rejected:
+                        self.assertEqual(len(failures), 1)
+                        self.assertIn(
+                            "marketplace source [2001:db8::1]/org/agents",
+                            failures[0],
+                        )
+                    else:
+                        self.assertEqual(failures, [])
+
+    def test_invalid_bracketed_ipv6_scp_host_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text(
+                "Use repository-owned tools.\n",
+                encoding="utf-8",
+            )
+            marketplace = "invalid-ipv6-scp" + "-market"
+            settings = self.claude_settings()
+            settings["extraKnownMarketplaces"][marketplace] = {
+                "source": {
+                    "source": "url",
+                    "url": "git@[2001:::1]:org/agents.git",
+                }
+            }
+
+            failures = self.optional_boundary_failures(settings, root)
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("bracketed IPv6 SCP host", failures[0])
+            self.assertNotIn("2001", failures[0])
+
     def test_percent_encoded_paths_compose_with_host_normalization(self) -> None:
         cases = (
             (
@@ -1178,7 +1242,7 @@ class AgentAssetValidationTests(unittest.TestCase):
                     self.assertEqual(len(failures), 1)
                     self.assertIn(marketplace, failures[0])
                     self.assertIn(
-                        "fully qualified dotted SCP host",
+                        "fully qualified dotted or bracketed IPv6 SCP host",
                         failures[0],
                     )
                     self.assertNotIn(host, failures[0])
@@ -1525,6 +1589,143 @@ class AgentAssetValidationTests(unittest.TestCase):
 
                     self.assertEqual(len(failures), 1)
                     self.assertIn(violating_path, failures[0])
+
+    def test_composite_action_working_directory_resolves_extensionless_script(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            action = root / "ci" / "check" / "action.yml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                "name: check\n"
+                "runs:\n"
+                "  using: composite\n"
+                "  steps:\n"
+                "    - shell: bash\n"
+                "      working-directory: tools/demo\n"
+                "      run: python helper\n",
+                encoding="utf-8",
+            )
+            root_helper = root / "helper"
+            root_helper.write_text(
+                "Use only repository-owned tooling.\n",
+                encoding="utf-8",
+            )
+            effective_helper = root / "tools" / "demo" / "helper"
+            effective_helper.parent.mkdir(parents=True)
+            effective_helper.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (action, "100644"),
+                    (root_helper, "100644"),
+                    (effective_helper, "100644"),
+                ],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("tools/demo/helper", failures[0])
+
+    def test_dynamic_composite_action_working_directory_fails_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            action = root / "ci" / "check" / "action.yaml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                "name: check\n"
+                "runs:\n"
+                "  using: composite\n"
+                "  steps:\n"
+                "    - shell: bash\n"
+                "      working-directory: ${{ inputs.directory }}\n"
+                "      run: python helper\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                self.claude_settings(),
+                root,
+                [(action, "100644")],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("action line 6", failures[0])
+            self.assertIn("dynamic or non-repository", failures[0])
+
+    def test_parent_script_path_inside_repository_is_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent_helper = ".." + "/helper"
+            workflow = root / ".github" / "workflows" / "check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - working-directory: tools/sub\n"
+                f"        run: python {parent_helper}\n",
+                encoding="utf-8",
+            )
+            helper = root / "tools" / "helper"
+            helper.parent.mkdir(parents=True)
+            helper.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (workflow, "100644"),
+                    (helper, "100644"),
+                ],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("tools/helper", failures[0])
+
+    def test_parent_script_path_escaping_repository_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            escaping_path = ".." + "/../outside"
+            workflow = root / ".github" / "workflows" / "check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - working-directory: tools\n"
+                f"        run: python {escaping_path}\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                self.claude_settings(),
+                root,
+                [(workflow, "100644")],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("escapes the repository", failures[0])
 
     def test_workflow_working_directory_is_scoped_to_its_step(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2284,16 +2485,24 @@ class AgentAssetValidationTests(unittest.TestCase):
                     expected,
                 )
 
-    def test_unsafe_command_paths_are_not_repository_references(self) -> None:
+    def test_absolute_command_paths_are_not_repository_references(self) -> None:
         for path in (
             "/tmp/helper",
             r"C:\tools\helper",
             r"\\server\share\helper",
-            "../tools/helper",
-            "tools/../helper",
         ):
             with self.subTest(path=path):
                 self.assertIsNone(validator.local_script_reference(path))
+
+    def test_parent_command_paths_are_retained_for_contextual_resolution(
+        self,
+    ) -> None:
+        for path in ("../tools/helper", "tools/../helper"):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    validator.local_script_reference(path),
+                    path,
+                )
 
     def test_unknown_interpreter_options_fail_closed(self) -> None:
         cases = (

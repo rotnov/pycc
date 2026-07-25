@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import codecs
 import hashlib
+import ipaddress
 import json
 import re
 import subprocess
@@ -92,7 +93,8 @@ SCRIPT_SUFFIXES = {
 SOURCE_SUFFIXES_WITH_INLINE_TESTS = {".c", ".cc", ".cpp", ".h", ".hpp", ".rs"}
 SCP_GIT_REFERENCE = re.compile(
     r"^(?:(?P<user>[^/@:\s]+)@)?"
-    r"(?P<host>[A-Za-z0-9.-]+):(?P<path>[^?#]+)$"
+    r"(?P<host>\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):"
+    r"(?P<path>[^?#]+)$"
 )
 DOTTED_HOST_REFERENCE = re.compile(
     r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+"
@@ -100,7 +102,10 @@ DOTTED_HOST_REFERENCE = re.compile(
 SCP_GIT_REFERENCE_IN_TEXT = re.compile(
     r"(?<![A-Za-z0-9_.-])"
     r"(?:(?P<user>[^/@:\s]+)@)?"
-    r"(?P<host>(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+):"
+    r"(?P<host>"
+    r"\[[0-9A-Fa-f:.]+\]|"
+    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+"
+    r"):"
     r"(?P<path>[A-Za-z0-9._~%+/-]+)"
 )
 HOST_PATH_REFERENCE_IN_TEXT = re.compile(
@@ -616,6 +621,18 @@ def is_github_repository_host(host: str) -> bool:
     return host.lower() == "github.com"
 
 
+def is_qualified_scp_host(host: str) -> bool:
+    if DOTTED_HOST_REFERENCE.fullmatch(host) is not None:
+        return True
+    if not (host.startswith("[") and host.endswith("]")):
+        return False
+    try:
+        ipaddress.IPv6Address(host[1:-1])
+    except ipaddress.AddressValueError:
+        return False
+    return True
+
+
 def optional_marketplace_source_references(
     settings: dict,
     pinned_marketplaces: set[str],
@@ -687,12 +704,11 @@ def optional_marketplace_source_references(
                 else None
             )
             if scp_match is not None:
-                if DOTTED_HOST_REFERENCE.fullmatch(
-                    scp_match.group("host")
-                ) is None:
+                if not is_qualified_scp_host(scp_match.group("host")):
                     failures.append(
                         f".claude/settings.json: optional marketplace {alias} "
-                        "source.url must use a fully qualified dotted SCP host"
+                        "source.url must use a fully qualified dotted or "
+                        "bracketed IPv6 SCP host"
                     )
                     continue
                 repository = repository_path_reference(
@@ -1117,7 +1133,9 @@ def reject_unsupported_workflow_structure(
         "defaults",
         "jobs",
         "run",
+        "runs",
         "steps",
+        "using",
         "working-directory",
     }
     job_entries = (
@@ -1217,6 +1235,81 @@ def static_working_directory(entry: WorkflowMappingEntry) -> str | None:
     return local_script_reference(value)
 
 
+def step_working_directory_references(
+    lines: list[str],
+    entries: list[WorkflowMappingEntry],
+    steps_entry: int,
+    inherited_default: int | None,
+    document_kind: str,
+) -> set[tuple[str, str]]:
+    references: set[tuple[str, str]] = set()
+    step_entries = workflow_direct_children(entries, steps_entry)
+    item_starts = [
+        index
+        for index in step_entries
+        if entries[index].sequence
+    ]
+    steps_end = workflow_entry_end(entries, steps_entry)
+    for position, item_start in enumerate(item_starts):
+        item_end = (
+            item_starts[position + 1]
+            if position + 1 < len(item_starts)
+            else steps_end
+        )
+        item_indent = entries[item_start].indent
+        item_entries = [
+            index
+            for index in range(item_start, item_end)
+            if entries[index].indent == item_indent
+        ]
+        step_default = next(
+            (
+                index
+                for index in item_entries
+                if entries[index].key == "working-directory"
+            ),
+            None,
+        )
+        effective_default = (
+            step_default
+            if step_default is not None
+            else inherited_default
+        )
+        run_references: set[str] = set()
+        for run_entry in (
+            index
+            for index in item_entries
+            if entries[index].key == "run"
+        ):
+            for command in workflow_entry_commands(
+                lines,
+                entries[run_entry],
+            ):
+                run_references.update(
+                    referenced_interpreter_scripts(command)
+                )
+        if not run_references:
+            continue
+        working_directory = ""
+        if effective_default is not None:
+            resolved_directory = static_working_directory(
+                entries[effective_default]
+            )
+            if resolved_directory is None:
+                raise RuntimeError(
+                    f"{document_kind} line "
+                    f"{entries[effective_default].line_index + 1}: "
+                    "dynamic or non-repository working-directory cannot "
+                    "be resolved for a relative interpreter script"
+                )
+            working_directory = resolved_directory
+        references.update(
+            (reference, working_directory)
+            for reference in run_references
+        )
+    return references
+
+
 def workflow_working_directory_references(
     text: str,
 ) -> set[tuple[str, str]]:
@@ -1265,82 +1358,75 @@ def workflow_working_directory_references(
         steps_entry = workflow_child_entry(entries, job_entry, "steps")
         if steps_entry is None:
             continue
-        step_entries = workflow_direct_children(entries, steps_entry)
-        item_starts = [
-            index
-            for index in step_entries
-            if entries[index].sequence
-        ]
-        steps_end = workflow_entry_end(entries, steps_entry)
-        for position, item_start in enumerate(item_starts):
-            item_end = (
-                item_starts[position + 1]
-                if position + 1 < len(item_starts)
-                else steps_end
+        effective_default = (
+            job_default
+            if job_default is not None
+            else workflow_default
+        )
+        references.update(
+            step_working_directory_references(
+                lines,
+                entries,
+                steps_entry,
+                effective_default,
+                "workflow",
             )
-            item_indent = entries[item_start].indent
-            item_entries = [
-                index
-                for index in range(item_start, item_end)
-                if entries[index].indent == item_indent
-            ]
-            step_default = next(
-                (
-                    index
-                    for index in item_entries
-                    if entries[index].key == "working-directory"
-                ),
-                None,
-            )
-            effective_default = (
-                step_default
-                if step_default is not None
-                else job_default
-                if job_default is not None
-                else workflow_default
-            )
-            run_references: set[str] = set()
-            for run_entry in (
-                index
-                for index in item_entries
-                if entries[index].key == "run"
-            ):
-                for command in workflow_entry_commands(
-                    lines,
-                    entries[run_entry],
-                ):
-                    run_references.update(
-                        referenced_interpreter_scripts(command)
-                    )
-            if not run_references:
-                continue
-            working_directory = ""
-            if effective_default is not None:
-                resolved_directory = static_working_directory(
-                    entries[effective_default]
-                )
-                if resolved_directory is None:
-                    raise RuntimeError(
-                        f"workflow line "
-                        f"{entries[effective_default].line_index + 1}: "
-                        "dynamic or non-repository working-directory cannot "
-                        "be resolved for a relative interpreter script"
-                    )
-                working_directory = resolved_directory
-            references.update(
-                (reference, working_directory)
-                for reference in run_references
-            )
+        )
     return references
+
+
+def action_working_directory_references(
+    text: str,
+) -> set[tuple[str, str]]:
+    lines = text.splitlines()
+    entries = workflow_mapping_entries(lines)
+    top_level = [
+        index
+        for index, entry in enumerate(entries)
+        if entry.indent == 0 and not entry.sequence
+    ]
+    runs_entry = next(
+        (
+            index
+            for index in top_level
+            if entries[index].key == "runs"
+        ),
+        None,
+    )
+    reject_unsupported_workflow_structure(lines, entries, None)
+    if runs_entry is None:
+        return set()
+    steps_entry = workflow_child_entry(entries, runs_entry, "steps")
+    if steps_entry is None:
+        return set()
+    return step_working_directory_references(
+        lines,
+        entries,
+        steps_entry,
+        None,
+        "action",
+    )
 
 
 def resolve_working_directory_reference(
     reference: str,
     working_directory: str,
 ) -> str | None:
-    if not working_directory:
-        return reference
-    return local_script_reference(f"{working_directory}/{reference}")
+    parts: list[str] = []
+    for part in PurePosixPath(working_directory, reference).parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                raise RuntimeError(
+                    "relative interpreter script path escapes the repository"
+                )
+            parts.pop()
+            continue
+        parts.append(part)
+    if not parts:
+        return None
+    return PurePosixPath(*parts).as_posix()
 
 
 def interpreter_family(interpreter: str) -> str:
@@ -1460,7 +1546,7 @@ def local_script_reference(argument: str) -> str | None:
         return None
     reference = normalized.removeprefix("./")
     parts = PurePosixPath(reference).parts
-    if not parts or any(part in {"", ".", ".."} for part in parts):
+    if not parts or any(part in {"", "."} for part in parts):
         return None
     return PurePosixPath(*parts).as_posix()
 
@@ -1607,16 +1693,23 @@ def required_agent_files(
         text = required_asset_body(relative, text)
         if relative.parts[:2] == (".github", "workflows"):
             references = workflow_working_directory_references(text)
+        elif relative.name in LOCAL_ACTION_MANIFESTS:
+            references = action_working_directory_references(text)
         else:
             references = {
                 (reference, working_directory)
                 for reference in referenced_interpreter_scripts(text)
             }
         for reference, reference_directory in references:
-            resolved_reference = resolve_working_directory_reference(
-                reference,
-                reference_directory,
-            )
+            try:
+                resolved_reference = resolve_working_directory_reference(
+                    reference,
+                    reference_directory,
+                )
+            except RuntimeError as error:
+                raise RuntimeError(
+                    f"{relative.as_posix()}: {error}"
+                ) from error
             if resolved_reference is None:
                 continue
             tracked_entry = tracked.get(resolved_reference)
