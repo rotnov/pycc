@@ -24,13 +24,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
     YAML
   end
 
-  def run_checker(roadmap:, workflow:)
+  def run_checker(roadmap:, workflow:, head_checker: nil)
     Dir.mktmpdir do |directory|
       root = Pathname(directory)
       FileUtils.mkdir_p(root / "docs")
       FileUtils.mkdir_p(root / ".github/workflows")
       (root / "docs/ROADMAP.md").write(roadmap)
       (root / ".github/workflows/ci.yml").write(workflow)
+      if head_checker
+        FileUtils.mkdir_p(root / "scripts")
+        (root / "scripts/check_roadmap_evidence.rb").write(head_checker)
+      end
       return Open3.capture3(RbConfig.ruby, CHECKER.to_s, root.to_s)
     end
   end
@@ -122,6 +126,23 @@ class RoadmapEvidenceCliTest < Minitest::Test
       workflow: coverage_workflow(
         "cargo llvm-cov --workspace --fail-under-lines 99 --fail-under-regions 100"
       )
+    )
+
+    refute status.success?
+    assert_includes stderr, "does not provide the exact 100% line and region gate"
+  end
+
+  def test_trusted_checker_rejects_a_noop_job_even_when_head_checker_is_replaced
+    roadmap = <<~MARKDOWN
+      ### v0.1 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: coverage_workflow("true"),
+      head_checker: "#!/usr/bin/env ruby\nexit 0\n"
     )
 
     refute status.success?

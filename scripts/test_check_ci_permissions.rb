@@ -277,4 +277,27 @@ class WorkflowPermissionsTest < Minitest::Test
     anchor = WORKFLOW_DIRECTORY / TRUST_ANCHOR_FILENAME
     validate_policy_set([anchor])
   end
+
+  def test_trust_anchor_audits_head_roadmap_with_base_checker
+    anchor = Psych.load((WORKFLOW_DIRECTORY / TRUST_ANCHOR_FILENAME).read)
+    steps = anchor.fetch("jobs").fetch("audit").fetch("steps")
+
+    checkout = steps.find { |step| step["name"] == "Check out trusted policy implementation" }
+    assert_equal "${{ github.sha }}", checkout.fetch("with").fetch("ref")
+
+    download = steps.find do |step|
+      step["name"] == "Download head policy inputs as non-executable data"
+    end
+    script = download.fetch("with").fetch("script")
+    assert_includes script, 'const output = "/tmp/pr-policy-input";'
+    assert_includes script, '"docs/ROADMAP.md"'
+
+    run_commands = steps
+                   .map { |step| step["run"] }
+                   .compact
+                   .flat_map { |run| run.lines.map(&:strip) }
+    assert_includes run_commands, "ruby scripts/test_check_roadmap_evidence.rb"
+    assert_includes run_commands,
+                    "ruby scripts/check_roadmap_evidence.rb /tmp/pr-policy-input"
+  end
 end

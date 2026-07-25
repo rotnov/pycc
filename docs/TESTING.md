@@ -81,10 +81,15 @@ The initial `ci-build-test-coverage-100` evidence requires all of the following:
 - the exact command
   `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`.
 
-Regular CI runs the self-tests and then the repository checker before building.
-The same required `build-test-coverage` job executes the coverage command, so a
-pull request cannot merge with the marker while its claimed gate is skipped,
-lowered, or failing.
+Regular CI runs the self-tests and then the repository checker before building
+for fast feedback. The authority is the required read-only `Workflow policy`
+job: it checks out the base revision, downloads the head revision's workflows
+and `docs/ROADMAP.md` as non-executable data, then runs the base revision's
+roadmap tests and checker against those inputs. A pull request that replaces
+its own checker cannot replace that base implementation. Together with the
+same required `build-test-coverage` job executing the exact coverage command,
+this prevents a marker from merging while its claimed gate is skipped,
+lowered, or converted into a successful no-op.
 
 ## CI privilege policy
 
@@ -121,13 +126,13 @@ anchor in a later pull request, and remove the retired digest afterward.
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
 `pull_request_target` on every pull request, checks out the trusted base commit,
-downloads only the head revision's workflow YAML through the read-only GitHub
-API, and treats it as data. It never checks out or executes pull-request code,
-so the check can remain required without path-filtered runs getting stuck as
-pending. Its checkout uses `github.sha`, which `pull_request_target` defines as
-the latest commit on the base branch; do not substitute the webhook payload's
-potentially stale `pull_request.base.sha`. Job-level trusted-ref exceptions
-remain a review boundary: reviewers
+downloads the head revision's workflow YAML and `docs/ROADMAP.md` through the
+read-only GitHub API, and treats them as data. It never checks out or executes
+pull-request code, so the check can remain required without path-filtered runs
+getting stuck as pending. Its checkout uses `github.sha`, which
+`pull_request_target` defines as the latest commit on the base branch; do not
+substitute the webhook payload's potentially stale `pull_request.base.sha`.
+Job-level trusted-ref exceptions remain a review boundary: reviewers
 must verify the event, actor where relevant, ref, trusted commit, environment,
 and every artifact/cache/output boundary, with a focused negative-event test
 whenever practical.

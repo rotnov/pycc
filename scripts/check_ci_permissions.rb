@@ -12,6 +12,7 @@ WORKFLOW_DIRECTORY = Pathname(".github/workflows")
 TRUST_ANCHOR_FILENAME = "workflow-policy.yml"
 TRUST_ANCHOR_SHA256_ALLOWLIST = %w[
   3a8b56776e7d44f32759301f0691220800ee6f3184b2702d13c01a28f82ce277
+  4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6
 ].freeze
 TRUSTED_EVENT_AND_REF_GUARD = /\A(?:\$\{\{\s*)?github\.event_name\s*==\s*(['"])push\1\s*&&\s*github\.ref\s*==\s*(['"])refs\/heads\/main\2\s*(?:\}\})?\z/
 

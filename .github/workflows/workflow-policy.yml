@@ -17,14 +17,15 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Download head workflows as non-executable data
+      - name: Download head policy inputs as non-executable data
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const fs = require("fs");
             const path = require("path");
-            const output = "/tmp/pr-workflows";
-            fs.mkdirSync(output, { recursive: true });
+            const output = "/tmp/pr-policy-input";
+            const workflowOutput = path.join(output, ".github", "workflows");
+            fs.mkdirSync(workflowOutput, { recursive: true });
 
             const { data: tree } = await github.rest.git.getTree({
               owner: context.repo.owner,
@@ -59,9 +60,9 @@ jobs:
               throw new Error("Head revision contains no workflow files");
             }
 
-            for (const entry of workflows) {
+            const writeBlob = async (entry, destination) => {
               if (entry.size > 1024 * 1024) {
-                throw new Error(`Workflow is unexpectedly large: ${entry.path}`);
+                throw new Error(`Policy input is unexpectedly large: ${entry.path}`);
               }
               const { data: blob } = await github.rest.git.getBlob({
                 owner: context.repo.owner,
@@ -70,15 +71,38 @@ jobs:
               });
               const encoded = blob.content.replace(/\n/g, "");
               const content = Buffer.from(encoded, blob.encoding);
+              fs.mkdirSync(path.dirname(destination), { recursive: true });
               fs.writeFileSync(
-                path.join(output, path.basename(entry.path)),
+                destination,
                 content,
                 { flag: "wx" }
               );
+            };
+
+            for (const entry of workflows) {
+              await writeBlob(
+                entry,
+                path.join(workflowOutput, path.basename(entry.path))
+              );
+            }
+
+            for (const requiredPath of ["docs/ROADMAP.md"]) {
+              const entry = tree.tree.find((candidate) =>
+                candidate.type === "blob" && candidate.path === requiredPath
+              );
+              if (!entry) {
+                throw new Error(`Head revision is missing ${requiredPath}`);
+              }
+              await writeBlob(entry, path.join(output, requiredPath));
             }
 
       - name: Test trusted checker
-        run: ruby scripts/test_check_ci_permissions.rb
+        run: |
+          ruby scripts/test_check_ci_permissions.rb
+          ruby scripts/test_check_roadmap_evidence.rb
 
       - name: Audit head workflow permissions
-        run: ruby scripts/check_ci_permissions.rb /tmp/pr-workflows
+        run: ruby scripts/check_ci_permissions.rb /tmp/pr-policy-input/.github/workflows
+
+      - name: Audit head roadmap evidence
+        run: ruby scripts/check_roadmap_evidence.rb /tmp/pr-policy-input
