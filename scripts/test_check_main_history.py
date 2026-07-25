@@ -40,21 +40,37 @@ def runner(
 
 
 class MainHistoryAuditTests(unittest.TestCase):
-    def test_zero_sha_audits_after_commit_without_revision_enumeration(self) -> None:
+    def test_zero_sha_fails_closed_without_revision_enumeration(self) -> None:
         commit = "a" * 40
-        fake = runner(
-            [
-                result(
-                    [],
-                    stdout=json.dumps(
-                        [{"merged_at": "2026-07-24T20:00:00Z", "base": {"ref": "main"}}]
-                    ),
-                )
-            ]
-        )
         self.assertEqual(
-            audit.audit_main_history("owner/repo", audit.ZERO_SHA, commit, fake),
-            [],
+            audit.audit_main_history("owner/repo", audit.ZERO_SHA, commit),
+            [
+                (
+                    "Unexpected main branch creation",
+                    "A zero before SHA cannot prove the complete introduced history",
+                )
+            ],
+        )
+
+    def test_created_and_forced_events_fail_before_revision_enumeration(self) -> None:
+        self.assertEqual(
+            audit.audit_main_history(
+                "owner/repo",
+                "a" * 40,
+                "b" * 40,
+                created=True,
+                forced=True,
+            ),
+            [
+                (
+                    "Unexpected main branch creation",
+                    "The protected main branch was reported as newly created",
+                ),
+                (
+                    "Forced main update",
+                    "The protected main branch was updated non-fast-forward",
+                ),
+            ],
         )
 
     def test_revision_enumeration_failure_is_reported(self) -> None:
@@ -141,6 +157,67 @@ class MainHistoryAuditTests(unittest.TestCase):
             ],
         )
 
+    def test_malformed_association_fields_fail_closed(self) -> None:
+        commit = "b" * 40
+        for merged_at in (False, 0, "", {}, []):
+            with self.subTest(merged_at=merged_at):
+                fake = runner(
+                    [
+                        result([], stdout=f"{commit}\n"),
+                        result(
+                            [],
+                            stdout=json.dumps(
+                                [
+                                    {
+                                        "merged_at": merged_at,
+                                        "base": {"ref": "main"},
+                                    }
+                                ]
+                            ),
+                        ),
+                    ]
+                )
+                self.assertEqual(
+                    audit.audit_main_history(
+                        "owner/repo",
+                        "a" * 40,
+                        commit,
+                        fake,
+                    ),
+                    [
+                        (
+                            "Invalid main history audit response",
+                            (f"Expected pull-request associations for {commit}"),
+                        )
+                    ],
+                )
+
+        for base in ({}, {"ref": None}, {"ref": 42}):
+            with self.subTest(base=base):
+                fake = runner(
+                    [
+                        result([], stdout=f"{commit}\n"),
+                        result(
+                            [],
+                            stdout=json.dumps([{"merged_at": None, "base": base}]),
+                        ),
+                    ]
+                )
+                self.assertEqual(
+                    audit.audit_main_history(
+                        "owner/repo",
+                        "a" * 40,
+                        commit,
+                        fake,
+                    ),
+                    [
+                        (
+                            "Invalid main history audit response",
+                            (f"Expected pull-request associations for {commit}"),
+                        )
+                    ],
+                )
+
     def test_main_rejects_missing_environment_with_annotation(self) -> None:
         output = io.StringIO()
         with (
@@ -153,7 +230,8 @@ class MainHistoryAuditTests(unittest.TestCase):
             output.getvalue(),
             (
                 "::error title=Main history audit unavailable::"
-                "AUDIT_REPOSITORY, AUDIT_BEFORE, and AUDIT_AFTER are required\n"
+                "AUDIT_REPOSITORY, AUDIT_BEFORE, AUDIT_AFTER, AUDIT_CREATED, "
+                "and AUDIT_FORCED are required with boolean event flags\n"
             ),
         )
 
@@ -163,6 +241,8 @@ class MainHistoryAuditTests(unittest.TestCase):
             "AUDIT_REPOSITORY": "owner/repo",
             "AUDIT_BEFORE": "a" * 40,
             "AUDIT_AFTER": "b" * 40,
+            "AUDIT_CREATED": "false",
+            "AUDIT_FORCED": "false",
         }
         with (
             mock.patch.dict("os.environ", environment, clear=True),
@@ -176,6 +256,8 @@ class MainHistoryAuditTests(unittest.TestCase):
             environment["AUDIT_REPOSITORY"],
             environment["AUDIT_BEFORE"],
             environment["AUDIT_AFTER"],
+            created=False,
+            forced=False,
         )
 
     def test_merged_main_association_passes(self) -> None:
@@ -195,6 +277,33 @@ class MainHistoryAuditTests(unittest.TestCase):
             [
                 result([], stdout=f"{commit}\n"),
                 result([], stdout=json.dumps(associations)),
+            ]
+        )
+        self.assertEqual(
+            audit.audit_main_history("owner/repo", "a" * 40, commit, fake),
+            [],
+        )
+
+    def test_later_api_page_can_prove_merged_main_association(self) -> None:
+        commit = "b" * 40
+        pages = [
+            [
+                {
+                    "merged_at": "2026-07-24T20:00:00Z",
+                    "base": {"ref": "release"},
+                }
+            ],
+            [
+                {
+                    "merged_at": "2026-07-24T20:05:00Z",
+                    "base": {"ref": "main"},
+                }
+            ],
+        ]
+        fake = runner(
+            [
+                result([], stdout=f"{commit}\n"),
+                result([], stdout=json.dumps(pages)),
             ]
         )
         self.assertEqual(
@@ -249,9 +358,11 @@ class MainHistoryAuditTests(unittest.TestCase):
                     [
                         "gh",
                         "api",
+                        "--paginate",
+                        "--slurp",
                         "-H",
                         "Accept: application/vnd.github+json",
-                        f"repos/owner/repo/commits/{'b' * 40}/pulls",
+                        (f"repos/owner/repo/commits/{'b' * 40}/pulls?per_page=100"),
                     ],
                     {
                         "check": False,

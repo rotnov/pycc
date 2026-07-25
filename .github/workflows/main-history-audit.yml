@@ -22,4 +22,6 @@ jobs:
           AUDIT_REPOSITORY: ${{ github.repository }}
           AUDIT_BEFORE: ${{ github.event.before }}
           AUDIT_AFTER: ${{ github.sha }}
+          AUDIT_CREATED: ${{ github.event.created }}
+          AUDIT_FORCED: ${{ github.event.forced }}
         run: python3 scripts/check_main_history.py

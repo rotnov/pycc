@@ -33,7 +33,10 @@ def pushed_commits(
     runner: Runner = subprocess.run,
 ) -> tuple[list[str], AuditError | None]:
     if before == ZERO_SHA:
-        return [after], None
+        return [], (
+            "Unexpected main branch creation",
+            "A zero before SHA cannot prove the complete introduced history",
+        )
 
     result = run_command(["git", "rev-list", f"{before}..{after}"], runner)
     if result.returncode != 0:
@@ -59,9 +62,11 @@ def merged_main_pr_count(
         [
             "gh",
             "api",
+            "--paginate",
+            "--slurp",
             "-H",
             "Accept: application/vnd.github+json",
-            f"repos/{repository}/commits/{commit_sha}/pulls",
+            f"repos/{repository}/commits/{commit_sha}/pulls?per_page=100",
         ],
         runner,
     )
@@ -74,10 +79,19 @@ def merged_main_pr_count(
         payload: Any = json.loads(result.stdout)
     except json.JSONDecodeError:
         payload = None
-    if not isinstance(payload, list) or not all(
-        isinstance(item, dict) and isinstance(item.get("base"), dict)
+    if isinstance(payload, list) and all(isinstance(page, list) for page in payload):
+        payload = [item for page in payload for item in page]
+    valid_payload = isinstance(payload, list) and all(
+        isinstance(item, dict)
+        and isinstance(item.get("base"), dict)
+        and isinstance(item["base"].get("ref"), str)
+        and (
+            item.get("merged_at") is None
+            or (isinstance(item.get("merged_at"), str) and bool(item["merged_at"]))
+        )
         for item in payload
-    ):
+    )
+    if not valid_payload:
         return None, (
             "Invalid main history audit response",
             f"Expected pull-request associations for {commit_sha}",
@@ -94,7 +108,28 @@ def audit_main_history(
     before: str,
     after: str,
     runner: Runner = subprocess.run,
+    *,
+    created: bool = False,
+    forced: bool = False,
 ) -> list[AuditError]:
+    event_failures: list[AuditError] = []
+    if created:
+        event_failures.append(
+            (
+                "Unexpected main branch creation",
+                "The protected main branch was reported as newly created",
+            )
+        )
+    if forced:
+        event_failures.append(
+            (
+                "Forced main update",
+                "The protected main branch was updated non-fast-forward",
+            )
+        )
+    if event_failures:
+        return event_failures
+
     commits, error = pushed_commits(before, after, runner)
     if error is not None:
         return [error]
@@ -121,15 +156,30 @@ def main() -> int:
     repository = os.environ.get("AUDIT_REPOSITORY", "")
     before = os.environ.get("AUDIT_BEFORE", "")
     after = os.environ.get("AUDIT_AFTER", "")
-    if not repository or not before or not after:
+    created = os.environ.get("AUDIT_CREATED", "")
+    forced = os.environ.get("AUDIT_FORCED", "")
+    if (
+        not repository
+        or not before
+        or not after
+        or created not in {"true", "false"}
+        or forced not in {"true", "false"}
+    ):
         failures = [
             (
                 "Main history audit unavailable",
-                "AUDIT_REPOSITORY, AUDIT_BEFORE, and AUDIT_AFTER are required",
+                "AUDIT_REPOSITORY, AUDIT_BEFORE, AUDIT_AFTER, AUDIT_CREATED, "
+                "and AUDIT_FORCED are required with boolean event flags",
             )
         ]
     else:
-        failures = audit_main_history(repository, before, after)
+        failures = audit_main_history(
+            repository,
+            before,
+            after,
+            created=created == "true",
+            forced=forced == "true",
+        )
 
     for title, message in failures:
         print(f"::error title={title}::{message}")

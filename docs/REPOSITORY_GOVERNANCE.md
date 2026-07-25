@@ -8,6 +8,9 @@ enforce the normal delivery path.
 - Pull request required; direct pushes are rejected.
 - The branch must be current with `main` before merge.
 - Required status checks: `build-test-coverage` and the trusted `audit` context.
+  `build-test-coverage` runs the agent-policy tests and clean-clone validator;
+  the standalone `agent-policy` job provides faster feedback until its exact
+  context has run successfully on `main` and is added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
   Requiring the author's own approval would deadlock every pull request. Enable one
   independent approval, stale-approval dismissal, and last-push approval when a
@@ -24,7 +27,10 @@ not-yet-emitted context, because that creates an unfulfillable merge gate.
 `.github/workflows/main-history-audit.yml` runs
 `scripts/check_main_history.py` after every push to `main`. The script queries GitHub's
 commit-to-pull-request association for every commit in the push and fails when no
-merged PR targeting `main` exists. Its revision enumeration, API-failure, malformed
+merged PR targeting `main` exists. It also fails closed when GitHub reports branch
+creation, a zero `before` SHA, or a forced/non-fast-forward update, because PR
+association alone cannot prove that an old associated commit arrived through its
+original merge path. Its revision enumeration, event-shape, API-failure, malformed
 response, associated-commit, and unassociated-commit paths are covered by
 `scripts/test_check_main_history.py`. This is an alert and forensic control; it does
 not replace preventive branch protection.

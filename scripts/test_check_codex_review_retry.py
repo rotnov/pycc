@@ -27,11 +27,13 @@ def comment(
     created_at: str,
     *,
     author: str = "owner",
+    author_association: str = "OWNER",
     head: str = HEAD,
     url: str | None = None,
 ) -> dict:
     value = {
         "author": {"login": author},
+        "authorAssociation": author_association,
         "body": body,
         "createdAt": created_at,
         "headRefOid": head,
@@ -70,6 +72,7 @@ class CodexReviewRetryTests(unittest.TestCase):
             {
                 "event": "commented",
                 "user": {"login": "owner"},
+                "author_association": "OWNER",
                 "body": "@codex review",
                 "created_at": "2026-07-24T20:05:00Z",
                 "html_url": "https://example.test/old",
@@ -90,6 +93,31 @@ class CodexReviewRetryTests(unittest.TestCase):
         self.assertEqual(comments[0]["headRefOid"], old_head)
         self.assertEqual(comments[1]["headRefOid"], HEAD)
         self.assertEqual(comments[1]["author"]["login"], gate.CODEX_LOGIN)
+        self.assertEqual(comments[0]["authorAssociation"], "OWNER")
+
+    def test_unauthorized_review_request_does_not_consume_budget(self) -> None:
+        data = payload()
+        data["comments"] = [
+            comment(
+                "@codex review",
+                "2026-07-24T20:55:00Z",
+                author="outsider",
+                author_association="NONE",
+            )
+        ]
+        self.assertEqual(gate.classify(data, NOW)[0], "REQUEST_ALLOWED")
+
+    def test_collaborator_review_request_consumes_budget(self) -> None:
+        data = payload()
+        data["comments"] = [
+            comment(
+                "@codex review",
+                "2026-07-24T20:55:00Z",
+                author="maintainer",
+                author_association="COLLABORATOR",
+            )
+        ]
+        self.assertEqual(gate.classify(data, NOW)[0], "WAIT")
 
     def test_old_request_does_not_consume_new_head_budget(self) -> None:
         data = payload()
