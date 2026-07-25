@@ -248,12 +248,75 @@ def embedded_option_target(kind: str | None, token: str) -> str | None:
     return loader_candidate_target(candidate) if candidate else None
 
 
+def is_embedded_loader_option(kind: str | None, token: str) -> bool:
+    if token.startswith("-") and "=" in token:
+        option = token.split("=", 1)[0]
+        return (
+            kind == "node"
+            and option in EMBEDDED_PATH_OPTIONS
+            or kind == "ruby"
+            and option == "--require"
+        )
+    return kind in {"node", "ruby"} and token.startswith("-r") and len(token) > 2
+
+
 def is_separated_loader_option(kind: str | None, token: str) -> bool:
     if kind == "node":
         return token in EMBEDDED_PATH_OPTIONS
     if kind == "ruby":
         return token in {"-r", "--require"}
     return False
+
+
+def loader_operand_indices(kind: str | None, tokens: list[str]) -> set[int]:
+    return {
+        index + 1
+        for index, token in enumerate(tokens[:-1])
+        if is_separated_loader_option(kind, token)
+    }
+
+
+def stdin_interpreter_mode(kind: str, tokens: list[str]) -> str | None:
+    loader_operands = loader_operand_indices(kind, tokens)
+    after_separator = False
+    for index, token in enumerate(tokens):
+        if index in loader_operands:
+            continue
+        if token == "--":
+            after_separator = True
+            continue
+        if after_separator:
+            return f"-- {token}" if token.startswith("-") else None
+        if token == "-":
+            return token
+        if token.startswith("-"):
+            continue
+        return None
+    return "<stdin>"
+
+
+def unsupported_interpreter_option(kind: str, tokens: list[str]) -> str | None:
+    loader_operands = loader_operand_indices(kind, tokens)
+    after_separator = False
+    for index, token in enumerate(tokens):
+        if index in loader_operands:
+            continue
+        if token == "--":
+            after_separator = True
+            continue
+        if after_separator or token == "-":
+            return None
+        if is_separated_loader_option(kind, token) or is_embedded_loader_option(
+            kind,
+            token,
+        ):
+            continue
+        if kind == "powershell" and token.lower() == "-file":
+            return None
+        if token.startswith("-"):
+            return token
+        return None
+    return None
 
 
 def unwrap_command_launcher(tokens: list[str]) -> tuple[list[str], str | None]:
@@ -321,11 +384,10 @@ def hook_targets(settings: dict[str, Any]) -> list[str]:
             script_tokens = resolved[1:]
             if inline_interpreter_mode(kind, script_tokens):
                 continue
-            loader_operands: set[int] = set()
+            loader_operands = loader_operand_indices(kind, script_tokens)
             for index, token in enumerate(script_tokens[:-1]):
                 if not is_separated_loader_option(kind, token):
                     continue
-                loader_operands.add(index + 1)
                 loader_target = loader_candidate_target(script_tokens[index + 1])
                 if loader_target is not None:
                     targets.append(loader_target)
@@ -464,6 +526,11 @@ def validate_hook_targets(
         executable, _ = normalize_hook_token(resolved[0])
         kind = interpreter_kind(executable)
         tracked_wrapper = is_relative_script_path(executable) and executable in tracked
+        script_tokens = resolved[1:]
+        missing_loader_operand = kind is not None and any(
+            is_separated_loader_option(kind, token) and index + 1 == len(script_tokens)
+            for index, token in enumerate(script_tokens)
+        )
         mode = (
             None
             if tracked_wrapper
@@ -476,16 +543,21 @@ def validate_hook_targets(
                 else opaque_inline_mode(executable, resolved[1:])
             )
         )
+        if (
+            mode is None
+            and kind is not None
+            and not tracked_wrapper
+            and not missing_loader_operand
+        ):
+            mode = stdin_interpreter_mode(kind, resolved[1:])
+        if mode is None and kind is not None and not tracked_wrapper:
+            mode = unsupported_interpreter_option(kind, resolved[1:])
         if mode is not None:
             failures.append(
                 "shared hook inline interpreter mode cannot be validated: "
                 f"{resolved[0]} {mode}"
             )
-        script_tokens = resolved[1:]
-        if kind is not None and any(
-            is_separated_loader_option(kind, token) and index + 1 == len(script_tokens)
-            for index, token in enumerate(script_tokens)
-        ):
+        if missing_loader_operand:
             failures.append(
                 "shared hook loader option is missing its operand: "
                 + " ".join(resolved)

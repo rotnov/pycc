@@ -762,8 +762,11 @@ class AgentPolicyValidationTests(unittest.TestCase):
             ),
             (
                 "ruby",
-                ["-r/home/alice/.ievo/hooks/capture.rb", "-v"],
-                set(),
+                [
+                    "-r/home/alice/.ievo/hooks/capture.rb",
+                    "scripts/tracked.rb",
+                ],
+                {"scripts/tracked.rb"},
                 (
                     "shared hook target must not be absolute: "
                     "/home/alice/.ievo/hooks/capture.rb"
@@ -1033,6 +1036,102 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     [
                         "shared hook inline interpreter mode cannot be "
                         f"validated: bash {mode}"
+                    ],
+                )
+
+    def test_explicit_stdin_programs_are_rejected(self) -> None:
+        target = "scripts/safe-wrapper.sh"
+        for command in ("python3", "node", "ruby"):
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": ["-", target],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(
+                        settings,
+                        {target},
+                        contracts(target),
+                    ),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: {command} -"
+                    ],
+                )
+
+    def test_option_only_and_bare_interpreters_are_rejected(self) -> None:
+        for command, arguments in (
+            ("bash", ["--noprofile"]),
+            ("bash", []),
+            ("python3", []),
+            ("node", []),
+            ("ruby", []),
+        ):
+            with self.subTest(command=command, arguments=arguments):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, set()),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: {command} <stdin>"
+                    ],
+                )
+
+    def test_unvalidated_option_operands_cannot_pose_as_programs(self) -> None:
+        target = "scripts/safe-wrapper.sh"
+        for command, arguments, option in (
+            ("bash", ["--rcfile", target], "--rcfile"),
+            ("python3", ["-W", target], "-W"),
+            ("node", ["--title", target], "--title"),
+            ("ruby", ["-I", target], "-I"),
+        ):
+            with self.subTest(command=command):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(
+                        settings,
+                        {target},
+                        contracts(target),
+                    ),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: {command} {option}"
                     ],
                 )
 
