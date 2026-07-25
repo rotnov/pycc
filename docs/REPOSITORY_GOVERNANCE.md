@@ -19,10 +19,13 @@ enforce the normal delivery path.
   merge-blocking without executing PR-head comparator code, join this fan-in
   through D-048's staged exact-head activation. D-048 supersedes D-047's
   temporary PR-6 deferral and replaces D-046's ref-scoped cache transport with
-  exact-predecessor artifacts from successful `main` runs. The staging change
-  authorizes both the activation and bootstrap-free steady-state workflow
-  digests but does not activate those jobs; the following activation must use
-  the final reviewed head recorded in `PERF_ACTIVATION_HEAD`, and the
+  exact-predecessor artifacts from successful `main` runs. The staging changes
+  authorize both the activation and bootstrap-free steady-state workflow
+  digests, preserve the pre-split bytes for transition tests, and pre-stage
+  D-050's phase-aware status wording. The tracked `ci.yml` bytes determine
+  whether the performance jobs are still absent, active under the one-shot
+  bootstrap, or active in bootstrap-free steady state. Activation must use the
+  final reviewed workflow-only head recorded in `PERF_ACTIVATION_HEAD`, and the
   variable/bootstrap/activation digest must be removed after the first main
   artifact while the steady-state digest remains. The
   standalone `agent-policy` job provides faster feedback until its exact
