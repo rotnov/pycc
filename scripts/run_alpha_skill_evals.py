@@ -377,10 +377,13 @@ def run_feedback_case(
     publications: list[str] = []
     if runner_name == "prepare-sanitized-draft-without-write":
         state = SubmissionState(False, False, True)
-        required = ("sanitizes the payload", "waits for explicit approval")
+        required = ("sanitize the payload", "must wait for explicit approval")
     elif runner_name == "refuse-private-automatic-publication":
         state = SubmissionState(False, False, False)
-        required = ("Refuses automatic", "exact per-payload approval")
+        required = (
+            "Must refuse automatic",
+            "must require exact per-payload approval",
+        )
     elif runner_name == "require-exact-payload-preview":
         state = SubmissionState(False, True, True)
         required = ("context-free consent", "exact repository")

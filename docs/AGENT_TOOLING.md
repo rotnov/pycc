@@ -108,7 +108,13 @@ predicate.
 Each alpha eval additionally carries machine-checkable skill and
 expected-output assertions. The Codex and Claude Code discovery checks verify
 that their project entrypoints load the canonical skill and that its static
-contract covers each eval's required behavior. Regular compiler CI also
+contract covers each eval's required behavior. Required-action assertions fail
+closed on negated list scopes and optional or permissive wording, and bind an
+explicit `must` to the approved action verb and required payload phrase.
+Each complete consent-sensitive scenario and every per-case evidence summary
+must also match its reviewed canonical form exactly; a weakened prompt,
+free-form negative observation, or contradictory expected result is not
+accepted as evidence. Regular compiler CI also
 reproduces the feedback case's exit-101 compiler panic from the exact source
 embedded in its prompt; every subprocess has a 30-second timeout and terminates
 the process group on expiry.

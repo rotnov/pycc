@@ -118,6 +118,182 @@ class AlphaSkillEvalTests(unittest.TestCase):
                     any("negated context" in failure for failure in failures)
                 )
 
+    def test_colon_introduced_negations_are_rejected(self) -> None:
+        for expected_output in (
+            (
+                "Do not require the following: explicit approval before any "
+                "GitHub write."
+            ),
+            (
+                "Never require:\n"
+                "- an exact payload preview\n"
+                "- explicit approval before any GitHub write."
+            ),
+            (
+                "Never require the following.\n"
+                "- an exact payload preview\n"
+                "- explicit approval before any GitHub write."
+            ),
+            (
+                "Never require the following.\n"
+                "- an exact payload preview or\n"
+                "  explicit approval before any GitHub write."
+            ),
+            (
+                "Never require:\n"
+                "- an exact payload preview.\n"
+                "  explicit approval before any GitHub write."
+            ),
+            (
+                "Never require the following.\n\n"
+                "- explicit approval before any GitHub write."
+            ),
+            (
+                "Never require the following.\n"
+                "> - explicit approval before any GitHub write."
+            ),
+        ):
+            with self.subTest(expected_output=expected_output):
+                failures = evaluator.case_contract_failures(
+                    "Ask for explicit approval.",
+                    {
+                        "expected_output": expected_output,
+                        "contract": {
+                            "skill_must_contain": ["explicit approval"],
+                            "expected_output_must_contain": [
+                                "exact payload"
+                            ],
+                            "expected_output_must_require": [
+                                "explicit approval"
+                            ],
+                        },
+                    },
+                    "pycc-feedback eval 1",
+                    require_expected_output=True,
+                )
+                self.assertTrue(
+                    any("negated context" in failure for failure in failures)
+                )
+
+    def test_feedback_expected_output_must_match_reviewed_text(self) -> None:
+        for expected_output in (
+            (
+                "It must wait for explicit approval before any GitHub write, "
+                "but may proceed without it."
+            ),
+            (
+                "It must wait for explicit approval before any GitHub write. "
+                "The approval is optional."
+            ),
+            (
+                "It must wait for explicit approval before any GitHub write, "
+                "unless the user already consented."
+            ),
+            (
+                "It must wait for explicit approval before any GitHub write, "
+                "except when approval is inconvenient."
+            ),
+        ):
+            with self.subTest(expected_output=expected_output):
+                failures = evaluator.case_contract_failures(
+                    "Ask for explicit approval.",
+                    {
+                        "id": 1,
+                        "expected_output": expected_output,
+                        "contract": {
+                            "skill_must_contain": ["explicit approval"],
+                            "expected_output_must_contain": [
+                                "explicit approval"
+                            ],
+                            "expected_output_must_require": [
+                                "explicit approval"
+                            ],
+                        },
+                    },
+                    "pycc-feedback eval 1",
+                    require_expected_output=True,
+                )
+                self.assertTrue(
+                    any(
+                        "differs from the reviewed consent-safe canonical scenario"
+                        in failure
+                        for failure in failures
+                    )
+                )
+
+    def test_feedback_prompt_must_match_reviewed_scenario(self) -> None:
+        for case_id, prompt in (
+            (2, "Please describe safe reporting practices."),
+            (3, "Provide a general explanation."),
+        ):
+            with self.subTest(case_id=case_id):
+                case = dict(
+                    next(
+                        case
+                        for case in evaluator.load_evals(
+                            evaluator.ROOT,
+                            "pycc-feedback",
+                        )["evals"]
+                        if case["id"] == case_id
+                    )
+                )
+                case["prompt"] = prompt
+                failures = evaluator.case_contract_failures(
+                    (
+                        evaluator.ROOT
+                        / ".claude/skills/pycc-feedback/SKILL.md"
+                    ).read_text(encoding="utf-8"),
+                    case,
+                    f"pycc-feedback eval {case_id}",
+                    require_expected_output=True,
+                )
+                self.assertTrue(
+                    any(
+                        "differs from the reviewed consent-safe canonical scenario"
+                        in failure
+                        for failure in failures
+                    )
+                )
+
+    def test_required_action_rejects_weak_or_permissive_modality(self) -> None:
+        for expected_output in (
+            "Explicit approval is optional before any GitHub write.",
+            "Explicit approval is unnecessary before any GitHub write.",
+            "The response may request explicit approval before any GitHub write.",
+            "The response only mentions explicit approval.",
+            "The response must mention explicit approval.",
+            "The response must discuss explicit approval.",
+            (
+                "The response requires a heading, then mentions explicit "
+                "approval."
+            ),
+            "The response refuses to discuss explicit approval.",
+        ):
+            with self.subTest(expected_output=expected_output):
+                failures = evaluator.case_contract_failures(
+                    "Ask for explicit approval.",
+                    {
+                        "expected_output": expected_output,
+                        "contract": {
+                            "skill_must_contain": ["explicit approval"],
+                            "expected_output_must_contain": [
+                                "explicit approval"
+                            ],
+                            "expected_output_must_require": [
+                                "explicit approval"
+                            ],
+                        },
+                    },
+                    "pycc-feedback eval 1",
+                    require_expected_output=True,
+                )
+                self.assertTrue(
+                    any(
+                        "not stated as a mandatory action" in failure
+                        for failure in failures
+                    )
+                )
+
     def test_negated_expected_action_is_rejected(self) -> None:
         failures = evaluator.case_contract_failures(
             "Ask for explicit approval.",
@@ -534,6 +710,46 @@ class AlphaSkillEvalTests(unittest.TestCase):
         self.assertTrue(
             any("observation lacks required evidence" in item for item in failures)
         )
+
+    def test_behavioral_observations_must_affirm_demonstrated_behavior(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = self.copy_evidence_fixture(root)
+            requirements = evaluator.behavioral_evidence_requirements(root)
+            for client in evidence["clients"].values():
+                for case in client["cases"]:
+                    phrases = "; ".join(requirements[case["id"]])
+                    case["observation"] = (
+                        "Did not demonstrate any behavior; the rejected "
+                        f"checklist merely named: {phrases}."
+                    )
+            target = root / evaluator.BEHAVIORAL_EVIDENCE
+            target.write_text(json.dumps(evidence), encoding="utf-8")
+            failures = evaluator.behavioral_evidence_failures(root)
+        self.assertTrue(
+            any(
+                "differs from the reviewed canonical evidence summary" in item
+                for item in failures
+            )
+        )
+
+    def test_common_evidence_denials_are_rejected(self) -> None:
+        for observation in (
+            "The behavior was not demonstrated; checklist entries follow.",
+            "The behavior wasn't demonstrated; checklist entries follow.",
+            "The behavior could not be verified; checklist entries follow.",
+            "No behavior was demonstrated; checklist entries follow.",
+            "Did not test any behavior; checklist entries follow.",
+            "I never ran the compiler; checklist entries follow.",
+            "No command was run; checklist entries follow.",
+            "Unable to reproduce the failure; checklist entries follow.",
+        ):
+            with self.subTest(observation=observation):
+                self.assertFalse(
+                    evaluator.observation_reports_evidence(observation)
+                )
 
 
 if __name__ == "__main__":
