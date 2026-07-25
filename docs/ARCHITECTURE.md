@@ -42,29 +42,22 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pyc
 | `pycc_diag` | Diagnostics engine, error registry (see DIAGNOSTICS.md) |
 | `pycc_testkit` | Conformance/differential test harness (see TESTING.md) |
 
-The v0.1 HIR preserves Python's module execution order while resolving its
-current function-call subset. A top-level call can use only function
-definitions already reached in the source, including every function reachable
-from that call. A function body may refer to a later module function when
-top-level execution does not invoke that path until after the later definition.
-Function bodies are resolved against the module bindings available when a
-reachable top-level call executes; uncalled bodies use the end-of-module
-bindings. Completed function resolution is memoized by function name and that
-set of available module-function bindings, while an active-call set terminates
-recursive cycles. Repeated edges in a call graph therefore do not repeatedly
-lower the same reachable subtree. If one function would require two different
-statically resolved bodies, the slice produces `C0001` until HIR carries
-binding identity.
-The slice represents only undecorated synchronous zero-argument functions with
-an explicit `-> None` return annotation; other signatures produce `C0001`
-before their bodies are lowered. `print()` with one integer literal is the only
-built-in call lowered by this slice; other callable Python 3.14 built-ins,
-including exception classes, produce `C0001` rather than an undefined-name
-diagnostic unless an earlier module function shadows that built-in.
-`EnvironmentError` and `IOError` are recognized as aliases of `OSError` on
-every platform; `WindowsError` is recognized only on Windows, matching
-Python's platform-specific alias. Function redefinition also produces `C0001`
-until HIR call sites carry the identity of the active binding.
+The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
+the AST. `pycc_hir::lower_checked` preserves module statement order and lowers
+primitive literals and annotations, assignments, arithmetic, comparisons,
+calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. Function items
+carry their parameter and return types, while call expressions retain only the
+callee name; HIR does not yet assign binding identities or build and memoize a
+call graph. `pycc_types::check_and_resolve` validates the lowered module,
+resolves sibling and recursive calls against the module signature set, infers
+private-helper signatures where constraints are sufficient, and returns HIR
+with those signatures materialized.
+
+`pycc check` stops after that frontend pipeline. The MIR/backend boundary is
+deliberately narrower until PR-5: it currently lowers only integer-literal
+`print()` calls and zero-argument user-function calls. Other valid frontend
+constructs reach the explicit D-035 PR-5 boundary in `pycc_mir` rather than
+being advertised as code-generation support.
 
 Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [DECISIONS.md](./DECISIONS.md) D-003).
 
