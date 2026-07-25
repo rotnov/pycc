@@ -2115,7 +2115,7 @@ git commit -m "feat(pycc_hir,pycc_types): function params/return/recursion, T000
 **Interfaces:**
 - Produces: `HirExpr` gains `StringLiteral(String)`. `annotation_to_ty` (Task 9) rejects a bare `Any` annotation with `T0002` instead of the generic "not supported yet" panic, since `Any` is a real, named, deliberately-rejected case per TYPE_SYSTEM.md rule 3 — not merely unimplemented.
 
-- [ ] **Step 1: Write the failing HIR test**
+- [x] **Step 1: Write the failing HIR test**
 
 ```rust
 #[test]
@@ -2139,12 +2139,12 @@ fn an_any_annotation_produces_t0002() {
 }
 ```
 
-- [ ] **Step 2: Run to verify these fail**
+- [x] **Step 2: Run to verify these fail**
 
 Run: `cargo test -p pycc_hir lowers_a_plain_string_literal an_any_annotation_produces_t0002`
 Expected: FAIL to compile / FAIL (wrong error code, since `Any` currently panics rather than erroring).
 
-- [ ] **Step 3: Add `HirExpr::StringLiteral`, extend `lower_expr`, make `annotation_to_ty` fallible**
+- [x] **Step 3: Add `HirExpr::StringLiteral`, extend `lower_expr`, make `annotation_to_ty` fallible**
 
 ```rust
 // HirExpr gains:
@@ -2194,12 +2194,12 @@ Some(ann) => annotation_to_ty(ann),
 
 (Both functions already return `Result<_, Diagnostic>`, so this is a small, mechanical `?`-propagation change, not a new signature.)
 
-- [ ] **Step 4: Run to verify pycc_hir tests pass**
+- [x] **Step 4: Run to verify pycc_hir tests pass**
 
 Run: `cargo test -p pycc_hir`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing pycc_types tests**
+- [x] **Step 5: Write the failing pycc_types tests**
 
 ```rust
 #[test]
@@ -2232,12 +2232,12 @@ fn adding_two_strings_infers_str() {
 }
 ```
 
-- [ ] **Step 6: Run to verify these fail**
+- [x] **Step 6: Run to verify these fail**
 
 Run: `cargo test -p pycc_types infers_a_string_literal adding_an_int_and_a_str adding_two_strings`
 Expected: FAIL (no `Ty::Str` case in `infer_expr`, `numeric_result_type` doesn't know about string concatenation).
 
-- [ ] **Step 7: Implement**
+- [x] **Step 7: Implement**
 
 Add to `infer_expr`'s match:
 
@@ -2278,17 +2278,17 @@ fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnos
 }
 ```
 
-- [ ] **Step 8: Run to verify pycc_types tests pass**
+- [x] **Step 8: Run to verify pycc_types tests pass**
 
 Run: `cargo test -p pycc_types`
 Expected: PASS.
 
-- [ ] **Step 9: Run the full workspace suite, clippy, coverage**
+- [x] **Step 9: Run the full workspace suite, clippy, coverage**
 
 Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_types/src/lib.rs
