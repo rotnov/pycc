@@ -47,6 +47,10 @@ current function-call subset. A top-level call can use only function
 definitions already reached in the source, including every function reachable
 from that call. A function body may refer to a later module function when
 top-level execution does not invoke that path until after the later definition.
+Function bodies are resolved against the module bindings available when a
+reachable top-level call executes; uncalled bodies use the end-of-module
+bindings. If one function would require two different statically resolved
+bodies, the slice produces `C0001` until HIR carries binding identity.
 The slice represents only undecorated synchronous zero-argument functions with
 an explicit `-> None` return annotation; other signatures produce `C0001`
 before their bodies are lowered. `print()` with one integer literal is the only

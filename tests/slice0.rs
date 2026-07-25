@@ -366,6 +366,35 @@ helper()
 }
 
 #[test]
+fn run_uses_builtin_print_before_a_later_module_binding() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_late_print_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "late_print.py",
+        "\
+def first() -> None:
+    print(1)
+
+first()
+
+def print() -> None:
+    print()
+",
+    );
+
+    let output = Command::new(pycc_bin())
+        .arg("run")
+        .arg(&src)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn check_normalizes_the_displayed_diagnostic_path() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_path_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

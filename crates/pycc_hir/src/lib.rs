@@ -29,9 +29,9 @@ pub struct HirModule {
     pub items: Vec<HirItem>,
 }
 
-struct FunctionCall {
-    name: String,
-    range: TextRange,
+enum PendingItem {
+    Function(String),
+    TopLevelStmt(HirStmt),
 }
 
 /// Lowers a parsed module into the subset of HIR implemented by this pycc
@@ -44,11 +44,11 @@ struct FunctionCall {
 /// to later module functions only when top-level execution reaches the call
 /// after those definitions have run.
 pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
-    let mut module_functions = HashSet::new();
+    let mut function_names = HashSet::new();
     for stmt in &module.body {
         if let Stmt::FunctionDef(function) = stmt {
             let name = function.name.id.as_str();
-            if !module_functions.insert(name.to_string()) {
+            if !function_names.insert(name.to_string()) {
                 return Err(unsupported(
                     format!("redefining function `{name}` is not supported so far"),
                     function.name.range(),
@@ -56,46 +56,73 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
             }
         }
     }
+
     let mut available_functions = HashSet::new();
-    let mut function_calls = HashMap::<String, Vec<FunctionCall>>::new();
-    let mut items = Vec::new();
+    let mut functions = HashMap::<String, &StmtFunctionDef>::new();
+    let mut resolved_bodies = HashMap::<String, Vec<HirStmt>>::new();
+    let mut pending_items = Vec::new();
     for stmt in &module.body {
         match stmt {
-            Stmt::FunctionDef(f) => {
-                validate_function_signature(f)?;
-                let mut calls = Vec::new();
-                let body = f
-                    .body
-                    .iter()
-                    .map(|stmt| lower_stmt(stmt, &module_functions, &mut calls))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let name = f.name.id.as_str().to_string();
-                function_calls.insert(name.clone(), calls);
+            Stmt::FunctionDef(function) => {
+                validate_function_signature(function)?;
+                let name = function.name.id.as_str().to_string();
+                functions.insert(name.clone(), function);
                 available_functions.insert(name.clone());
-                items.push(HirItem::Function { name, body });
+                pending_items.push(PendingItem::Function(name));
             }
             other => {
-                let mut calls = Vec::new();
-                let stmt = lower_stmt(other, &module_functions, &mut calls)?;
-                for call in &calls {
-                    validate_available_call(
-                        call,
-                        &available_functions,
-                        &function_calls,
-                        &mut HashSet::new(),
-                    )?;
-                }
-                items.push(HirItem::TopLevelStmt(stmt));
+                let stmt = lower_stmt(
+                    other,
+                    &available_functions,
+                    &functions,
+                    &mut resolved_bodies,
+                    &mut HashSet::new(),
+                )?;
+                pending_items.push(PendingItem::TopLevelStmt(stmt));
             }
         }
     }
+
+    for item in &pending_items {
+        let PendingItem::Function(name) = item else {
+            continue;
+        };
+        if !resolved_bodies.contains_key(name) {
+            let function = functions
+                .get(name)
+                .expect("every pending function must have a definition");
+            resolve_function(
+                name,
+                function.name.range(),
+                &available_functions,
+                &functions,
+                &mut resolved_bodies,
+                &mut HashSet::new(),
+            )?;
+        }
+    }
+
+    let items = pending_items
+        .into_iter()
+        .map(|item| match item {
+            PendingItem::Function(name) => HirItem::Function {
+                body: resolved_bodies
+                    .remove(&name)
+                    .expect("every function body must be resolved"),
+                name,
+            },
+            PendingItem::TopLevelStmt(stmt) => HirItem::TopLevelStmt(stmt),
+        })
+        .collect();
     Ok(HirModule { items })
 }
 
 fn lower_stmt(
     stmt: &Stmt,
-    module_functions: &HashSet<String>,
-    calls: &mut Vec<FunctionCall>,
+    available_functions: &HashSet<String>,
+    functions: &HashMap<String, &StmtFunctionDef>,
+    resolved_bodies: &mut HashMap<String, Vec<HirStmt>>,
+    active_calls: &mut HashSet<String>,
 ) -> Result<HirStmt, Diagnostic> {
     let Stmt::Expr(expr_stmt) = stmt else {
         return Err(unsupported(
@@ -126,7 +153,7 @@ fn lower_stmt(
     }
 
     let name = name.id.as_str();
-    if module_functions.contains(name) {
+    if available_functions.contains(name) {
         let [] = arguments.args.as_ref() else {
             return Err(unsupported(
                 format!(
@@ -136,10 +163,14 @@ fn lower_stmt(
                 stmt.range(),
             ));
         };
-        calls.push(FunctionCall {
-            name: name.to_string(),
-            range: func.range(),
-        });
+        resolve_function(
+            name,
+            func.range(),
+            available_functions,
+            functions,
+            resolved_bodies,
+            active_calls,
+        )?;
         Ok(HirStmt::CallUserFunction {
             name: name.to_string(),
         })
@@ -181,32 +212,49 @@ fn lower_stmt(
     }
 }
 
-fn validate_available_call(
-    call: &FunctionCall,
+fn resolve_function(
+    name: &str,
+    invocation_range: TextRange,
     available_functions: &HashSet<String>,
-    function_calls: &HashMap<String, Vec<FunctionCall>>,
+    functions: &HashMap<String, &StmtFunctionDef>,
+    resolved_bodies: &mut HashMap<String, Vec<HirStmt>>,
     active_calls: &mut HashSet<String>,
 ) -> Result<(), Diagnostic> {
-    if !available_functions.contains(call.name.as_str()) {
-        return if is_python_builtin(&call.name) {
-            Err(unsupported_builtin(&call.name, call.range))
-        } else {
-            Err(undefined_function(&call.name, call.range))
-        };
-    }
-    if !active_calls.insert(call.name.clone()) {
+    if !active_calls.insert(name.to_string()) {
         return Ok(());
     }
-    for nested_call in &function_calls[call.name.as_str()] {
-        validate_available_call(
-            nested_call,
-            available_functions,
-            function_calls,
-            active_calls,
-        )?;
+    let function = functions
+        .get(name)
+        .expect("every available function must have a definition");
+    let body = function
+        .body
+        .iter()
+        .map(|stmt| {
+            lower_stmt(
+                stmt,
+                available_functions,
+                functions,
+                resolved_bodies,
+                active_calls,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>();
+    active_calls.remove(name);
+    let body = body?;
+
+    match resolved_bodies.get(name) {
+        Some(resolved) if resolved != &body => Err(unsupported(
+            format!(
+                "calling function `{name}` under different module bindings is not supported so far"
+            ),
+            invocation_range,
+        )),
+        Some(_) => Ok(()),
+        None => {
+            resolved_bodies.insert(name.to_string(), body);
+            Ok(())
+        }
     }
-    active_calls.remove(call.name.as_str());
-    Ok(())
 }
 
 fn validate_function_signature(function: &StmtFunctionDef) -> Result<(), Diagnostic> {
@@ -679,6 +727,91 @@ helper()
                 }),
             ]
         );
+    }
+
+    #[test]
+    fn a_later_print_definition_does_not_shadow_an_earlier_execution() {
+        let source = "\
+def first() -> None:
+    print(1)
+
+first()
+
+def print() -> None:
+    print()
+";
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower(&module).unwrap();
+
+        assert_eq!(
+            hir.items,
+            vec![
+                HirItem::Function {
+                    name: "first".to_string(),
+                    body: vec![HirStmt::CallPrint { arg: 1 }],
+                },
+                HirItem::TopLevelStmt(HirStmt::CallUserFunction {
+                    name: "first".to_string()
+                }),
+                HirItem::Function {
+                    name: "print".to_string(),
+                    body: vec![HirStmt::CallUserFunction {
+                        name: "print".to_string()
+                    }],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_calls_under_the_same_bindings_reuse_the_resolved_body() {
+        let source = "\
+def first() -> None:
+    print(1)
+
+first()
+first()
+";
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower(&module).unwrap();
+
+        assert_eq!(hir.items.len(), 3);
+    }
+
+    #[test]
+    fn conflicting_cached_function_bodies_are_rejected() {
+        let source = "print(0)\n\ndef first() -> None:\n    print(1)\n";
+        let module = pycc_parser_test_helper::parse(source);
+        let function = module
+            .body
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::FunctionDef(function) => Some(function),
+                _ => None,
+            })
+            .unwrap();
+        let mut functions = HashMap::new();
+        functions.insert("first".to_string(), function);
+        let available_functions = HashSet::from(["first".to_string()]);
+        let mut resolved_bodies = HashMap::from([(
+            "first".to_string(),
+            vec![HirStmt::CallUserFunction {
+                name: "print".to_string(),
+            }],
+        )]);
+
+        let error = resolve_function(
+            "first",
+            function.name.range(),
+            &available_functions,
+            &functions,
+            &mut resolved_bodies,
+            &mut HashSet::new(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "C0001");
+        assert!(error.message.contains("under different module bindings"));
     }
 
     #[test]
