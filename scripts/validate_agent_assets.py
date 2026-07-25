@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Iterable, NamedTuple
 from urllib.parse import unquote, urlparse, urlunparse
 
 
@@ -130,6 +130,17 @@ INTERPRETER_REFERENCE = re.compile(
     r")(?:\.exe)?(?![A-Za-z0-9_.-])",
     re.IGNORECASE,
 )
+WORKFLOW_MAPPING_ENTRY = re.compile(
+    r"^(?P<indent>[ ]*)(?P<sequence>-\s+)?"
+    r"(?P<key>"
+    r'"(?:\\.|[^"])*"|'
+    r"'(?:''|[^'])*'|"
+    r"[A-Za-z0-9_-]+"
+    r")[ ]*:(?P<value>.*)$"
+)
+WORKFLOW_SEQUENCE_ENTRY = re.compile(
+    r"^(?P<indent>[ ]*)-\s*(?:#.*)?$"
+)
 INTERPRETER_VALUE_OPTIONS = {
     "bash": {"--init-file", "--rcfile", "-O", "-o"},
     "fish": {
@@ -203,6 +214,16 @@ POWERSHELL_VALUE_OPTIONS = {
 
 class RequiredAssetEncodingError(ValueError):
     """Raised when a required agent asset uses an unsupported text encoding."""
+
+
+class WorkflowMappingEntry(NamedTuple):
+    """A simple-key workflow mapping entry with its effective indentation."""
+
+    line_index: int
+    indent: int
+    sequence: bool
+    key: str
+    value: str
 
 
 def load_json(
@@ -591,16 +612,33 @@ def normalize_host_path_identity_components(text: str) -> str:
     )
 
 
+def is_github_repository_host(host: str) -> bool:
+    return host.lower() == "github.com"
+
+
 def optional_marketplace_source_references(
     settings: dict,
     pinned_marketplaces: set[str],
     failures: list[str],
-) -> dict[str, tuple[str, str]]:
+) -> dict[str, set[tuple[str, str, bool]]]:
     marketplaces = settings.get("extraKnownMarketplaces")
     if not isinstance(marketplaces, dict):
         return {}
 
-    references: dict[str, tuple[str, str]] = {}
+    references: dict[str, set[tuple[str, str, bool]]] = {}
+
+    def add_reference(
+        token: str,
+        alias: str,
+        display: str,
+        case_sensitive: bool,
+    ) -> None:
+        normalized_token = token if case_sensitive else token.lower()
+        if normalized_token:
+            references.setdefault(normalized_token, set()).add(
+                (alias, display, case_sensitive)
+            )
+
     for alias, declaration in marketplaces.items():
         if (
             not isinstance(alias, str)
@@ -624,8 +662,23 @@ def optional_marketplace_source_references(
                         "source.repo must identify at least an owner and repository"
                     )
                     continue
-                references[raw] = (alias, repository)
-                references[repository] = (alias, repository)
+                source_kind = source.get("source")
+                case_sensitive = not (
+                    isinstance(source_kind, str)
+                    and source_kind.lower() == "github"
+                )
+                add_reference(
+                    raw,
+                    alias,
+                    repository,
+                    case_sensitive,
+                )
+                add_reference(
+                    repository,
+                    alias,
+                    repository,
+                    case_sensitive,
+                )
                 continue
 
             scp_match = (
@@ -653,17 +706,34 @@ def optional_marketplace_source_references(
                     )
                     continue
                 host = scp_match.group("host").lower()
+                case_sensitive = not is_github_repository_host(host)
+                if not case_sensitive:
+                    repository = repository.lower()
                 user = scp_match.group("user")
                 prefix = f"{user}@" if user else ""
                 host_reference = f"{host}/{repository}"
                 canonical_scp = f"{prefix}{host}:{repository}"
-                references[raw] = (alias, host_reference)
-                references[strip_git_suffix(raw)] = (alias, host_reference)
-                references[canonical_scp] = (alias, host_reference)
-                references[f"{canonical_scp}.git"] = (alias, host_reference)
-                references[host_reference] = (alias, host_reference)
+                source_tokens = {
+                    raw,
+                    strip_git_suffix(raw),
+                    canonical_scp,
+                    f"{canonical_scp}.git",
+                    host_reference,
+                }
+                for token in source_tokens:
+                    add_reference(
+                        token,
+                        alias,
+                        host_reference,
+                        case_sensitive,
+                    )
                 if len(repository.split("/")) >= 2:
-                    references[repository] = (alias, repository)
+                    add_reference(
+                        repository,
+                        alias,
+                        repository,
+                        case_sensitive,
+                    )
                 continue
 
             try:
@@ -694,21 +764,50 @@ def optional_marketplace_source_references(
 
             scheme = parsed.scheme.lower()
             public_host = normalized_public_url_host(scheme, host, port)
+            case_sensitive = not is_github_repository_host(host)
+            if not case_sensitive:
+                repository = repository.lower()
             host_reference = f"{public_host}/{repository}"
             canonical_url = urlunparse(
                 (scheme, public_host, f"/{repository}", "", "", "")
             )
-            references[raw] = (alias, canonical_url)
-            references[strip_git_suffix(raw)] = (alias, canonical_url)
-            references[canonical_url] = (alias, canonical_url)
-            references[host_reference] = (alias, host_reference)
+            source_tokens = {
+                raw,
+                strip_git_suffix(raw),
+                canonical_url,
+                host_reference,
+            }
+            for token in source_tokens:
+                normalized_token = token if case_sensitive else token.lower()
+                display = (
+                    host_reference
+                    if token == host_reference
+                    else canonical_url
+                )
+                add_reference(
+                    normalized_token,
+                    alias,
+                    display,
+                    case_sensitive,
+                )
             default_port = DEFAULT_URL_PORTS.get(scheme)
             if default_port is not None and port in {None, default_port}:
-                references[
+                default_port_token = (
                     f"{public_host}:{default_port}/{repository}"
-                ] = (alias, host_reference)
+                )
+                add_reference(
+                    default_port_token,
+                    alias,
+                    host_reference,
+                    case_sensitive,
+                )
             if len(repository.split("/")) >= 2:
-                references[repository] = (alias, repository)
+                add_reference(
+                    repository,
+                    alias,
+                    repository,
+                    case_sensitive,
+                )
     return {
         token: metadata
         for token, metadata in references.items()
@@ -867,55 +966,381 @@ def interpreter_arguments(text: str, start: int) -> list[str]:
     return arguments
 
 
-def folded_yaml_run_commands(text: str) -> list[str]:
-    lines = text.splitlines()
-    commands: list[str] = []
-    index = 0
-    header = re.compile(
-        r"^(?P<indent>[ ]*)(?P<sequence>-\s+)?"
-        r"run:\s*>[+-]?(?:\s+#.*)?\s*$"
-    )
-    while index < len(lines):
-        match = header.match(lines[index])
+def workflow_mapping_entries(lines: list[str]) -> list[WorkflowMappingEntry]:
+    entries: list[WorkflowMappingEntry] = []
+    for line_index, line in enumerate(lines):
+        match = WORKFLOW_MAPPING_ENTRY.match(line)
         if match is None:
+            sequence_match = WORKFLOW_SEQUENCE_ENTRY.match(line)
+            if sequence_match is not None:
+                entries.append(
+                    WorkflowMappingEntry(
+                        line_index=line_index,
+                        indent=len(sequence_match.group("indent")) + 2,
+                        sequence=True,
+                        key="",
+                        value="",
+                    )
+                )
+            continue
+        sequence = match.group("sequence") or ""
+        entries.append(
+            WorkflowMappingEntry(
+                line_index=line_index,
+                indent=len(match.group("indent")) + len(sequence),
+                sequence=bool(sequence),
+                key=yaml_inline_scalar(match.group("key")),
+                value=match.group("value"),
+            )
+        )
+    return entries
+
+
+def workflow_entry_end(
+    entries: list[WorkflowMappingEntry],
+    entry_index: int,
+) -> int:
+    parent_indent = entries[entry_index].indent
+    for candidate_index in range(entry_index + 1, len(entries)):
+        if entries[candidate_index].indent <= parent_indent:
+            return candidate_index
+    return len(entries)
+
+
+def workflow_direct_children(
+    entries: list[WorkflowMappingEntry],
+    entry_index: int,
+) -> list[int]:
+    end = workflow_entry_end(entries, entry_index)
+    nested = [
+        candidate_index
+        for candidate_index in range(entry_index + 1, end)
+        if entries[candidate_index].indent > entries[entry_index].indent
+    ]
+    if not nested:
+        return []
+    child_indent = min(entries[index].indent for index in nested)
+    return [
+        index
+        for index in nested
+        if entries[index].indent == child_indent
+    ]
+
+
+def workflow_child_entry(
+    entries: list[WorkflowMappingEntry],
+    entry_index: int,
+    key: str,
+) -> int | None:
+    return next(
+        (
+            child
+            for child in workflow_direct_children(entries, entry_index)
+            if entries[child].key == key
+        ),
+        None,
+    )
+
+
+def workflow_descendant_entry(
+    entries: list[WorkflowMappingEntry],
+    entry_index: int,
+    keys: Iterable[str],
+) -> int | None:
+    current = entry_index
+    for key in keys:
+        child = workflow_child_entry(entries, current, key)
+        if child is None:
+            return None
+        current = child
+    return current
+
+
+def yaml_inline_scalar(value: str) -> str:
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if quote == "'" and character == "'" and value[index : index + 2] == "''":
+            index += 2
+            continue
+        if character in {"'", '"'}:
+            if quote is None:
+                quote = character
+            elif quote == character:
+                quote = None
             index += 1
             continue
-        header_indent = len(match.group("indent")) + len(
-            match.group("sequence") or ""
-        )
+        if (
+            character == "#"
+            and quote is None
+            and (index == 0 or value[index - 1].isspace())
+        ):
+            value = value[:index]
+            break
         index += 1
-        body: list[str] = []
-        while index < len(lines):
-            line = lines[index]
+
+    scalar = value.strip()
+    if len(scalar) >= 2 and scalar[0] == scalar[-1] == "'":
+        return scalar[1:-1].replace("''", "'")
+    if len(scalar) >= 2 and scalar[0] == scalar[-1] == '"':
+        try:
+            decoded = json.loads(scalar)
+        except json.JSONDecodeError:
+            return scalar[1:-1]
+        return decoded if isinstance(decoded, str) else scalar
+    return scalar
+
+
+def reject_unsupported_workflow_structure(
+    lines: list[str],
+    entries: list[WorkflowMappingEntry],
+    jobs_entry: int | None,
+) -> None:
+    for line_index, line in enumerate(lines, start=1):
+        if (
+            re.match(r"^[ ]*-\s*[\[{]", line) is not None
+            or re.match(r"^[\[{]", line) is not None
+            or re.match(r"^[ ]*---[ ]+[\[{]", line) is not None
+        ):
+            raise RuntimeError(
+                f"workflow line {line_index}: flow-style step mappings are "
+                "not supported by agent asset discovery"
+            )
+        if re.match(r"^[ ]*(?:-\s+)?<<[ ]*:", line) is not None:
+            raise RuntimeError(
+                f"workflow line {line_index}: YAML merge keys are not "
+                "supported by agent asset discovery"
+            )
+
+    structural_keys = {
+        "defaults",
+        "jobs",
+        "run",
+        "steps",
+        "working-directory",
+    }
+    job_entries = (
+        set(workflow_direct_children(entries, jobs_entry))
+        if jobs_entry is not None
+        else set()
+    )
+    for entry_index, entry in enumerate(entries):
+        value = entry.value.lstrip()
+        if not value or value[0] not in {"{", "[", "*"}:
+            continue
+        if entry.key in structural_keys or entry_index in job_entries:
+            raise RuntimeError(
+                f"workflow line {entry.line_index + 1}: flow-style or aliased "
+                "workflow structure is not supported by agent asset discovery"
+            )
+
+
+def workflow_entry_commands(
+    lines: list[str],
+    entry: WorkflowMappingEntry,
+) -> list[str]:
+    scalar = yaml_inline_scalar(entry.value)
+    block_match = re.fullmatch(
+        r"(?P<style>[>|])"
+        r"(?:(?:[+-][1-9]?)|(?:[1-9][+-]?))?",
+        scalar,
+    )
+    if block_match is None:
+        command = scalar
+        line_index = entry.line_index + 1
+        while line_index < len(lines):
+            line = lines[line_index]
             if not line.strip():
-                body.append("")
-                index += 1
+                if command:
+                    command += "\n"
+                line_index += 1
                 continue
             indentation = len(line) - len(line.lstrip(" "))
-            if indentation <= header_indent:
+            if indentation <= entry.indent:
                 break
-            body.append(line)
-            index += 1
-        content_indents = [
-            len(line) - len(line.lstrip(" "))
-            for line in body
-            if line.strip()
-        ]
-        if not content_indents:
+            content = line.strip()
+            separator = "\n" if command.endswith("\\") else " "
+            command = f"{command}{separator}{content}".strip()
+            line_index += 1
+        return [command] if command else []
+
+    body: list[str] = []
+    line_index = entry.line_index + 1
+    while line_index < len(lines):
+        line = lines[line_index]
+        if not line.strip():
+            body.append("")
+            line_index += 1
             continue
-        content_indent = min(content_indents)
-        paragraph: list[str] = []
-        for line in body:
-            content = line[content_indent:].strip()
-            if content:
-                paragraph.append(content)
-                continue
-            if paragraph:
-                commands.append(" ".join(paragraph))
-                paragraph = []
+        indentation = len(line) - len(line.lstrip(" "))
+        if indentation <= entry.indent:
+            break
+        body.append(line)
+        line_index += 1
+
+    content_indents = [
+        len(line) - len(line.lstrip(" "))
+        for line in body
+        if line.strip()
+    ]
+    if not content_indents:
+        return []
+    content_indent = min(content_indents)
+    content = [
+        line[content_indent:].strip() if line.strip() else ""
+        for line in body
+    ]
+    if block_match.group("style") == "|":
+        return ["\n".join(content)]
+
+    commands: list[str] = []
+    paragraph: list[str] = []
+    for line in content:
+        if line:
+            paragraph.append(line)
+            continue
         if paragraph:
             commands.append(" ".join(paragraph))
+            paragraph = []
+    if paragraph:
+        commands.append(" ".join(paragraph))
     return commands
+
+
+def static_working_directory(entry: WorkflowMappingEntry) -> str | None:
+    value = yaml_inline_scalar(entry.value)
+    if not value or "${{" in value or value.startswith("$"):
+        return None
+    if value in {".", "./"}:
+        return ""
+    return local_script_reference(value)
+
+
+def workflow_working_directory_references(
+    text: str,
+) -> set[tuple[str, str]]:
+    lines = text.splitlines()
+    entries = workflow_mapping_entries(lines)
+    top_level = [
+        index
+        for index, entry in enumerate(entries)
+        if entry.indent == 0 and not entry.sequence
+    ]
+    jobs_entry = next(
+        (
+            index
+            for index in top_level
+            if entries[index].key == "jobs"
+        ),
+        None,
+    )
+    reject_unsupported_workflow_structure(lines, entries, jobs_entry)
+    if jobs_entry is None:
+        return set()
+
+    workflow_default: int | None = None
+    workflow_defaults = next(
+        (
+            index
+            for index in top_level
+            if entries[index].key == "defaults"
+        ),
+        None,
+    )
+    if workflow_defaults is not None:
+        workflow_default = workflow_descendant_entry(
+            entries,
+            workflow_defaults,
+            ("run", "working-directory"),
+        )
+
+    references: set[tuple[str, str]] = set()
+    for job_entry in workflow_direct_children(entries, jobs_entry):
+        job_default = workflow_descendant_entry(
+            entries,
+            job_entry,
+            ("defaults", "run", "working-directory"),
+        )
+        steps_entry = workflow_child_entry(entries, job_entry, "steps")
+        if steps_entry is None:
+            continue
+        step_entries = workflow_direct_children(entries, steps_entry)
+        item_starts = [
+            index
+            for index in step_entries
+            if entries[index].sequence
+        ]
+        steps_end = workflow_entry_end(entries, steps_entry)
+        for position, item_start in enumerate(item_starts):
+            item_end = (
+                item_starts[position + 1]
+                if position + 1 < len(item_starts)
+                else steps_end
+            )
+            item_indent = entries[item_start].indent
+            item_entries = [
+                index
+                for index in range(item_start, item_end)
+                if entries[index].indent == item_indent
+            ]
+            step_default = next(
+                (
+                    index
+                    for index in item_entries
+                    if entries[index].key == "working-directory"
+                ),
+                None,
+            )
+            effective_default = (
+                step_default
+                if step_default is not None
+                else job_default
+                if job_default is not None
+                else workflow_default
+            )
+            run_references: set[str] = set()
+            for run_entry in (
+                index
+                for index in item_entries
+                if entries[index].key == "run"
+            ):
+                for command in workflow_entry_commands(
+                    lines,
+                    entries[run_entry],
+                ):
+                    run_references.update(
+                        referenced_interpreter_scripts(command)
+                    )
+            if not run_references:
+                continue
+            working_directory = ""
+            if effective_default is not None:
+                resolved_directory = static_working_directory(
+                    entries[effective_default]
+                )
+                if resolved_directory is None:
+                    raise RuntimeError(
+                        f"workflow line "
+                        f"{entries[effective_default].line_index + 1}: "
+                        "dynamic or non-repository working-directory cannot "
+                        "be resolved for a relative interpreter script"
+                    )
+                working_directory = resolved_directory
+            references.update(
+                (reference, working_directory)
+                for reference in run_references
+            )
+    return references
+
+
+def resolve_working_directory_reference(
+    reference: str,
+    working_directory: str,
+) -> str | None:
+    if not working_directory:
+        return reference
+    return local_script_reference(f"{working_directory}/{reference}")
 
 
 def interpreter_family(interpreter: str) -> str:
@@ -1166,31 +1591,44 @@ def required_agent_files(
             )
         paths.add(path)
 
-    pending = list(paths)
+    pending = [(path, "") for path in paths]
+    visited: set[tuple[Path, str]] = set()
     while pending:
-        source = pending.pop()
+        source, working_directory = pending.pop()
+        context = (source, working_directory)
+        if context in visited:
+            continue
+        visited.add(context)
         try:
             text = decode_required_asset(source.read_bytes())
         except (OSError, UnicodeDecodeError, RequiredAssetEncodingError):
             continue
         relative = source.relative_to(root)
         text = required_asset_body(relative, text)
-        folded_commands = folded_yaml_run_commands(text)
-        if folded_commands:
-            text = "\n".join((text, *folded_commands))
-        for reference in referenced_interpreter_scripts(text):
-            tracked_entry = tracked.get(reference)
+        if relative.parts[:2] == (".github", "workflows"):
+            references = workflow_working_directory_references(text)
+        else:
+            references = {
+                (reference, working_directory)
+                for reference in referenced_interpreter_scripts(text)
+            }
+        for reference, reference_directory in references:
+            resolved_reference = resolve_working_directory_reference(
+                reference,
+                reference_directory,
+            )
+            if resolved_reference is None:
+                continue
+            tracked_entry = tracked.get(resolved_reference)
             if tracked_entry is None:
                 continue
             target, mode = tracked_entry
-            if target in paths:
-                continue
             if mode == "120000":
                 raise RuntimeError(
-                    f"{reference}: required agent assets must not be symlinks"
+                    f"{resolved_reference}: required agent assets must not be symlinks"
                 )
             paths.add(target)
-            pending.append(target)
+            pending.append((target, reference_directory))
     return sorted(paths)
 
 
@@ -1408,8 +1846,20 @@ def validate_optional_plugin_boundary(
                         marketplace_sources,
                         key=lambda value: (-len(value), value),
                     ):
-                        if has_token(source_text, token):
-                            alias, display = marketplace_sources[token]
+                        source_match: tuple[str, str] | None = None
+                        for alias, display, case_sensitive in sorted(
+                            marketplace_sources[token]
+                        ):
+                            candidate_text = (
+                                source_text
+                                if case_sensitive
+                                else source_text.lower()
+                            )
+                            if has_token(candidate_text, token):
+                                source_match = (alias, display)
+                                break
+                        if source_match is not None:
+                            alias, display = source_match
                             failures.append(
                                 f"{relative}: required agent asset references "
                                 f"optional Claude marketplace source {display} "

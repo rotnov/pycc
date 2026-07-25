@@ -669,6 +669,102 @@ class AgentAssetValidationTests(unittest.TestCase):
             self.assertIn(f"marketplace source {source_repo}", failures[0])
             self.assertIn(f"({marketplace})", failures[0])
 
+    def test_github_marketplace_coordinates_are_case_insensitive(self) -> None:
+        cases = (
+            (
+                "github",
+                "repo",
+                "wshobson" + "/agents",
+                "WSHOBSON" + "/AGENTS",
+            ),
+            (
+                "url",
+                "url",
+                "https://github.com/" + "wshobson" + "/agents.git",
+                "HTTPS://GITHUB.COM/" + "WSHOBSON" + "/AGENTS",
+            ),
+            (
+                "url",
+                "url",
+                "git@github.com:" + "wshobson" + "/agents.git",
+                "github.com/" + "WSHOBSON" + "/AGENTS",
+            ),
+        )
+        for source_type, source_key, source_value, required_reference in cases:
+            with self.subTest(source=source_value):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        f"Use `{required_reference}` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    marketplace = "github" + "-case-market"
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": source_type,
+                            source_key: source_value,
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn("marketplace source", failures[0])
+                    self.assertIn(f"({marketplace})", failures[0])
+
+    def test_shared_repository_tokens_preserve_every_marketplace_source(
+        self,
+    ) -> None:
+        github_alias = "github" + "-source"
+        hosted_alias = "hosted" + "-source"
+        repository = "exampleowner" + "/toolkit"
+        declarations = {
+            github_alias: {
+                "source": {
+                    "source": "github",
+                    "repo": repository,
+                }
+            },
+            hosted_alias: {
+                "source": {
+                    "source": "url",
+                    "url": "https://example.com/" + repository,
+                }
+            },
+        }
+        for aliases in (
+            (github_alias, hosted_alias),
+            (hosted_alias, github_alias),
+        ):
+            with self.subTest(order=aliases):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        "Use `EXAMPLEOWNER/TOOLKIT` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"].update(
+                        {
+                            alias: declarations[alias]
+                            for alias in aliases
+                        }
+                    )
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(f"({github_alias})", failures[0])
+
     def test_declared_marketplace_url_source_coordinates_are_optional(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1315,6 +1411,382 @@ class AgentAssetValidationTests(unittest.TestCase):
                     self.assertEqual(len(failures), 1)
                     self.assertIn("tools/helper", failures[0])
 
+    def test_workflow_working_directories_resolve_extensionless_scripts(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "defaults:\n"
+                "  run:\n"
+                "    working-directory: tools\n"
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - run: python helper\n",
+                "tools/helper",
+            ),
+            (
+                "jobs:\n"
+                "  check:\n"
+                "    defaults:\n"
+                "      run:\n"
+                "        working-directory: tools\n"
+                "    steps:\n"
+                "      - run: python helper\n",
+                "tools/helper",
+            ),
+            (
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - working-directory: tools\n"
+                "        run: >2\n"
+                "          python helper\n",
+                "tools/helper",
+            ),
+            (
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - working-directory: tools\n"
+                "        run: >2-\n"
+                "          python\n"
+                "          helper\n",
+                "tools/helper",
+            ),
+            (
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - working-directory: tools\n"
+                "        run: |2\n"
+                "          python helper\n",
+                "tools/helper",
+            ),
+            (
+                "jobs:\n"
+                "  check:\n"
+                "    defaults:\n"
+                "      run:\n"
+                "        working-directory: ignored\n"
+                "    steps:\n"
+                "      - working-directory: tools\n"
+                "        run: >+\n"
+                "          python\n"
+                "          helper\n",
+                "tools/helper",
+            ),
+            (
+                "jobs:\n"
+                "  'quoted-check':\n"
+                "    steps:\n"
+                "      - working-directory: tools\n"
+                "        run: python helper\n",
+                "tools/helper",
+            ),
+            (
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      -\n"
+                "        working-directory: tools\n"
+                "        run: python helper\n",
+                "tools/helper",
+            ),
+        )
+        settings = {
+            "enabledPlugins": {
+                f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                "ievo@ievo-skills": True,
+            }
+        }
+        for workflow_text, violating_path in cases:
+            with self.subTest(path=violating_path, workflow=workflow_text):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    workflow = root / ".github" / "workflows" / "check.yml"
+                    workflow.parent.mkdir(parents=True)
+                    workflow.write_text(workflow_text, encoding="utf-8")
+                    helper = root / violating_path
+                    helper.parent.mkdir(parents=True)
+                    helper.write_text(
+                        f"Run /{FEATURE_DEV} before continuing.\n",
+                        encoding="utf-8",
+                    )
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                        [
+                            (workflow, "100644"),
+                            (helper, "100644"),
+                        ],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(violating_path, failures[0])
+
+    def test_workflow_working_directory_is_scoped_to_its_step(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - run: python helper\n"
+                "      - working-directory: tools\n"
+                "        run: echo done\n"
+                "  sibling:\n"
+                "    steps:\n"
+                "      - working-directory: elsewhere\n"
+                "        run: echo done\n",
+                encoding="utf-8",
+            )
+            helper = root / "tools" / "helper"
+            helper.parent.mkdir()
+            helper.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (workflow, "100644"),
+                    (helper, "100644"),
+                ],
+            )
+
+            self.assertEqual(failures, [])
+
+    def test_workflow_working_directory_does_not_select_shadowed_root_script(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - working-directory: tools\n"
+                "        run: python helper\n",
+                encoding="utf-8",
+            )
+            root_helper = root / "helper"
+            root_helper.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+            effective_helper = root / "tools" / "helper"
+            effective_helper.parent.mkdir()
+            effective_helper.write_text(
+                "Use only repository-owned tooling.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (workflow, "100644"),
+                    (root_helper, "100644"),
+                    (effective_helper, "100644"),
+                ],
+            )
+
+            self.assertEqual(failures, [])
+
+    def test_dynamic_working_directory_with_relative_script_fails_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n"
+                "  check:\n"
+                "    strategy:\n"
+                "      matrix:\n"
+                "        directory: [tools]\n"
+                "    steps:\n"
+                "      - working-directory: ${{ matrix.directory }}\n"
+                "        run: python helper\n",
+                encoding="utf-8",
+            )
+            helper = root / "tools" / "helper"
+            helper.parent.mkdir()
+            helper.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (workflow, "100644"),
+                    (helper, "100644"),
+                ],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("dynamic or non-repository", failures[0])
+
+    def test_flow_style_workflow_structure_fails_closed(self) -> None:
+        workflows = (
+            (
+                "jobs:\n"
+                "  check:\n"
+                "    steps: "
+                "[{run: python helper, working-directory: tools}]\n"
+            ),
+            (
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - {run: python helper, working-directory: tools}\n"
+            ),
+            (
+                "jobs: "
+                "{check: {steps: [{run: python helper, "
+                "working-directory: tools}]}}\n"
+            ),
+            (
+                '{"jobs": {"check": {"steps": '
+                '[{"run": "python helper", '
+                '"working-directory": "tools"}]}}}\n'
+            ),
+            (
+                '--- {"jobs": {"check": {"steps": '
+                '[{"run": "python helper", '
+                '"working-directory": "tools"}]}}}\n'
+            ),
+        )
+        for workflow_text in workflows:
+            with self.subTest(workflow=workflow_text):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    workflow = root / ".github" / "workflows" / "check.yml"
+                    workflow.parent.mkdir(parents=True)
+                    workflow.write_text(workflow_text, encoding="utf-8")
+
+                    failures = self.optional_boundary_failures(
+                        self.claude_settings(),
+                        root,
+                        [(workflow, "100644")],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn("flow-style", failures[0])
+
+    def test_workflow_aliases_and_merge_keys_fail_closed(self) -> None:
+        cases = (
+            (
+                "shared: &shared\n"
+                "  run:\n"
+                "    working-directory: tools\n"
+                "defaults: *shared\n"
+                "jobs:\n"
+                "  check:\n"
+                "    steps:\n"
+                "      - run: python helper\n",
+                "aliased",
+            ),
+            (
+                "shared: &shared\n"
+                "  defaults:\n"
+                "    run:\n"
+                "      working-directory: tools\n"
+                "jobs:\n"
+                "  check:\n"
+                "    <<: *shared\n"
+                "    steps:\n"
+                "      - run: python helper\n",
+                "merge keys",
+            ),
+        )
+        for workflow_text, message in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    workflow = root / ".github" / "workflows" / "check.yml"
+                    workflow.parent.mkdir(parents=True)
+                    workflow.write_text(workflow_text, encoding="utf-8")
+
+                    failures = self.optional_boundary_failures(
+                        self.claude_settings(),
+                        root,
+                        [(workflow, "100644")],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(message, failures[0])
+
+    def test_recursive_helper_discovery_inherits_working_directory(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workflow = root / ".github" / "workflows" / "check.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "jobs:\n"
+                "  check:\n"
+                "    defaults:\n"
+                "      run:\n"
+                "        working-directory: tools\n"
+                "    steps:\n"
+                "      - run: python helper\n",
+                encoding="utf-8",
+            )
+            helper = root / "tools" / "helper"
+            helper.parent.mkdir()
+            helper.write_text("python nested\n", encoding="utf-8")
+            nested = root / "tools" / "nested"
+            nested.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (workflow, "100644"),
+                    (helper, "100644"),
+                    (nested, "100644"),
+                ],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("tools/nested", failures[0])
+
     def test_interpreter_script_discovery_is_recursive(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1883,29 +2355,6 @@ class AgentAssetValidationTests(unittest.TestCase):
                 self.assertEqual(
                     validator.referenced_interpreter_scripts(invocation),
                     expected,
-                )
-
-    def test_folded_yaml_run_commands_follow_yaml_newline_semantics(
-        self,
-    ) -> None:
-        for indicator in (">", ">-", ">+"):
-            with self.subTest(indicator=indicator):
-                workflow = (
-                    "jobs:\n"
-                    "  check:\n"
-                    "    steps:\n"
-                    f"      - run: {indicator}\n"
-                    "          python\n"
-                    "          tools/helper\n"
-                    "        shell: bash\n"
-                    "      - run: |\n"
-                    "          python\n"
-                    "          tools/not-folded\n"
-                )
-
-                self.assertEqual(
-                    validator.folded_yaml_run_commands(workflow),
-                    ["python tools/helper"],
                 )
 
     def test_claude_behavioral_settings_reject_optional_plugin_references(

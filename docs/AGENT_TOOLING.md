@@ -139,7 +139,15 @@ backslash paths are normalized to the same Git/POSIX tracked paths without accep
 drive-qualified, UNC, absolute, or parent-traversing targets. Discovery comes from
 `git ls-files`; shell line continuations, escaped spaces, and Markdown or subshell
 closing delimiters are handled without becoming part of a tracked path, and GitHub
-Actions folded `run: >` scalars are scanned with their executed newline semantics.
+Actions folded `run: >` scalars are scanned with their executed newline semantics,
+including valid chomping and explicit indentation indicators such as `>-`, `>+`,
+`>2`, and `>2-`; literal `|` forms receive the corresponding block treatment. Static
+workflow-, job-, and step-level `working-directory` values
+are applied to their effective `run` steps, including recursively invoked extensionless
+helpers, without leaking one step's directory into another step or job. Quoted mapping
+keys and block sequences with standalone `-` entries are supported. Dynamic or
+non-repository working directories, YAML merge keys, aliases in structural positions,
+and flow-style job/step structures fail validation when they cannot be resolved safely.
 Ignored caches and dependency checkouts therefore cannot make local validation
 disagree with a clean CI checkout.
 Required agent assets stored as Git symlinks are rejected rather than followed outside
@@ -158,9 +166,13 @@ configured repository and URL source coordinates are rejected. URL schemes and h
 are normalized case-insensitively, and explicit default ports for Git, HTTP, HTTPS,
 and SSH are treated as their equivalent implicit forms. SCP-style and host/path forms
 receive the same host normalization, including bracketed IPv6 literals, while
-repository paths retain their case-sensitive identity. SCP-style marketplace sources
-must use a fully qualified dotted host; ambiguous single-label hosts are rejected
-instead of case-folding ordinary `owner/repository` or `label:value` text.
+repository paths retain their case-sensitive identity on case-sensitive hosts.
+GitHub owner/repository coordinates are matched case-insensitively for `github`
+marketplace declarations and `github.com` URL or SCP sources, matching GitHub's
+repository resolution without weakening path matching for other hosts. SCP-style
+marketplace sources must use a fully qualified dotted host; ambiguous single-label
+hosts are rejected instead of case-folding ordinary `owner/repository` or
+`label:value` text.
 For a pinned marketplace, only the exact validated baseline identity is exempt; an
 unknown or disabled sibling is still rejected. The exact iEvo exemption applies only
 while
