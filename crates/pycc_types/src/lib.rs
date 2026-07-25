@@ -854,12 +854,15 @@ fn check_stmt_in_function(
     }
 }
 
-/// Type-checks a module and returns HIR whose function signatures contain
-/// only the concrete types resolved by private-helper inference. Consumers
-/// after the type boundary must use this module rather than the unresolved
-/// lowering result so `Ty::Infer` can never leak into MIR or code generation.
+/// Type-checks a module and returns a cloned HIR whose function signatures
+/// contain only the concrete types resolved by private-helper inference.
+/// Consumers after the type boundary must use this module rather than the
+/// unresolved lowering result so `Ty::Infer` can never leak into MIR or code
+/// generation.
 pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     let signatures = infer_function_signatures(hir)?;
+    check_with_signatures(hir, &signatures)?;
+
     let mut resolved_hir = hir.clone();
     for item in &mut resolved_hir.items {
         let HirItem::Function {
@@ -880,13 +883,20 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         *return_ty = *resolved_return;
     }
 
+    Ok(resolved_hir)
+}
+
+fn check_with_signatures(
+    hir: &HirModule,
+    signatures: &HashMap<String, (Vec<Ty>, Ty)>,
+) -> Result<(), Diagnostic> {
     let mut env = Environment::new();
     // Pass 1: register every function's signature before checking any
     // statement body, matching Python's own "a module runs top to bottom,
     // but any def already executed is callable" semantics -- top-level
     // code and other function bodies (D-040) both need to see every
     // function regardless of its position in the file.
-    for item in &resolved_hir.items {
+    for item in &hir.items {
         if let HirItem::Function { name, .. } = item {
             let (param_tys, return_ty) = signatures
                 .get(name)
@@ -898,7 +908,7 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // `env`'s bindings as module-level assignments are encountered --
     // ordinary top-level code is still checked top-to-bottom (a top-level
     // forward reference to a not-yet-assigned name is a genuine error).
-    for item in &resolved_hir.items {
+    for item in &hir.items {
         if let HirItem::TopLevelStmt(stmt) = item {
             check_stmt(&mut env, stmt)?;
         }
@@ -910,17 +920,21 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // assignment in the file, since real Python only evaluates a function
     // body when it's *called*, typically after the module has finished
     // running top to bottom.
-    for item in &resolved_hir.items {
+    for item in &hir.items {
         if let HirItem::Function { .. } = item {
             check_function_in(&env, item)?;
         }
     }
-    Ok(resolved_hir)
+    Ok(())
 }
 
+/// Type-checks a module without materializing a resolved HIR clone.
+///
+/// Use [`check_and_resolve`] when a downstream compiler stage needs concrete
+/// private-helper signatures in the returned HIR.
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
-    check_and_resolve(hir)?;
-    Ok(())
+    let signatures = infer_function_signatures(hir)?;
+    check_with_signatures(hir, &signatures)
 }
 
 #[cfg(test)]
