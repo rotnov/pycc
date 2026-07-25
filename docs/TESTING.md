@@ -111,11 +111,26 @@ checked out the trusted policy implementation from base commit
 `107eccf4d6d4161c26f7257de538cad974bed913`, passed all 31 checker tests and
 70 assertions, and audited all five workflow files at the triggering
 [PR #35](https://github.com/rotnov/pycc/pull/35) head as non-executable data.
-Branch protection is strict and requires both
-`build-test-coverage` and `audit`, bound to the GitHub Actions app. Removing
-either required check, disabling strict mode, or accepting an `audit` context
-from another app is a policy regression; all later policy changes are
-evaluated by the trusted checker from their base revision.
+Branch protection is strict and currently requires `build-test-coverage` and
+`audit`, bound to the GitHub Actions app. `ci-gate` (D-027) is a single
+stable-named job in `ci.yml`, added in the same pull request that landed the
+five-target Tier-1 matrix, that fans in every job in that workflow
+(`build-test-coverage`, all four `native-build-test` Tier-1 legs,
+`cross-compile-build`, `cross-compile-verify`) so branch protection can enforce
+the whole matrix through one required-check name that survives matrix edits,
+rather than naming each matrix leg directly (whose GitHub-generated name bakes
+in the matrix values and would go stale the moment an `os`/`target` entry
+changes). Branch protection's required check is switched from
+`build-test-coverage` to `ci-gate` **once `ci-gate` exists on `main`** --
+flipping it earlier, while other branches are still open against a `main`
+without this job, would leave those PRs waiting on a required check they have
+no way to satisfy. Until that switch happens, `native-build-test`,
+`cross-compile-build`, and `cross-compile-verify` failing or staying pending
+does not by itself block a merge -- a real, tracked gap, not a silent one.
+Removing either required check, disabling strict mode, accepting an `audit`
+context from another app, or (once switched) dropping a job from `ci-gate`'s
+`needs:` list is a policy regression; all later policy changes are evaluated
+by the trusted checker from their base revision.
 
 ## Code coverage (D-014)
 

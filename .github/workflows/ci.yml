@@ -262,3 +262,41 @@ jobs:
             exit 1
           fi
           echo "cross-compiled binary verified on its native x86_64 runner"
+
+  # Single stable required-status-check name fanning in every job in this
+  # workflow (D-027): branch protection previously required only
+  # build-test-coverage + audit, so a failing/pending native-build-test leg
+  # or cross-compile-build/verify could not block a merge -- SPEC.md's own
+  # invariant 5 ("a feature doesn't exist until it's green everywhere") was
+  # unenforced for exactly the jobs that prove it. Naming individual matrix
+  # legs directly in branch protection was rejected: GitHub's required-check
+  # name for a matrix job bakes in the matrix values (e.g. "native-build-test
+  # (ubuntu-latest, x86_64-unknown-linux-gnu)"), so renaming an `os`/`target`
+  # entry -- or adding a new Tier-1/Tier-2 target later -- would silently
+  # leave an old, now-nonexistent name required forever (permanently
+  # unsatisfiable) while the new leg goes unenforced. This job's own name
+  # never changes regardless of matrix edits.
+  ci-gate:
+    needs: [build-test-coverage, native-build-test, cross-compile-build, cross-compile-verify]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # Checks each named job's result equals 'success' explicitly, rather
+      # than blocklisting contains(needs.*.result, 'failure' | 'cancelled'):
+      # cross-compile-verify has no `if:` of its own, so when its own
+      # dependency (cross-compile-build) fails, GitHub marks
+      # cross-compile-verify itself 'skipped', not 'failure' -- a
+      # failure-only blocklist would miss that cascade and pass the gate.
+      # Requiring literal 'success' per job catches skipped/cancelled/
+      # timed_out/failure alike without having to enumerate every non-
+      # success state by name.
+      - name: Fail unless every required job succeeded
+        if: >-
+          needs.build-test-coverage.result != 'success' ||
+          needs.native-build-test.result != 'success' ||
+          needs.cross-compile-build.result != 'success' ||
+          needs.cross-compile-verify.result != 'success'
+        run: |
+          echo "one or more required jobs did not succeed:"
+          echo '${{ toJSON(needs) }}'
+          exit 1
