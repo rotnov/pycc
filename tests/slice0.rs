@@ -143,6 +143,21 @@ fn a_syntax_error_is_a_compile_error_exit_code_1() {
 }
 
 #[test]
+fn a_type_error_is_a_compile_error_exit_code_1() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_typeerr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "typeerr.py", "x = undefined\n");
+    let out = dir.join("typeerr");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("T0021"));
+}
+
+#[test]
 fn defining_a_function_under_any_name_without_calling_it_succeeds() {
     // There's no "must be named main" restriction: any function name is
     // legal to define; only calling one runs it (matches CPython, which

@@ -45,7 +45,10 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         ExitCode::from(1)
     })?;
     let hir = pycc_hir::lower(&module);
-    pycc_types::check(&hir).expect("v0.1's type checker is a no-op passthrough; it never fails");
+    pycc_types::check(&hir).map_err(|diag| {
+        eprintln!("error[{}]: {}", diag.code, diag.message);
+        ExitCode::from(1)
+    })?;
     let mir = pycc_mir::build(&hir);
 
     let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));

@@ -1,9 +1,109 @@
-use pycc_diag::Diagnostic;
-use pycc_hir::HirModule;
+use pycc_diag::{Diagnostic, Span};
+use pycc_hir::{BinOpKind, HirExpr, HirItem, HirModule, HirStmt};
+use std::collections::HashMap;
 
-pub fn check(_hir: &HirModule) -> Result<(), Diagnostic> {
-    // v0.1 slice-0: nothing in this HIR subset is rejectable yet.
-    // Real T0001 strictness + local inference land in PR-4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ty {
+    Int,
+    Float,
+    Bool,
+    Str,
+    None,
+}
+
+impl Ty {
+    fn name(self) -> &'static str {
+        match self {
+            Ty::Int => "int",
+            Ty::Float => "float",
+            Ty::Bool => "bool",
+            Ty::Str => "str",
+            Ty::None => "None",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Environment {
+    bindings: HashMap<String, Ty>,
+}
+
+impl Environment {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn lookup(&self, name: &str) -> Option<Ty> {
+        self.bindings.get(name).copied()
+    }
+
+    pub fn bind(&mut self, name: String, ty: Ty) {
+        self.bindings.insert(name, ty);
+    }
+}
+
+pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
+    match expr {
+        HirExpr::IntLiteral(_) => Ok(Ty::Int),
+        HirExpr::FloatLiteral(_) => Ok(Ty::Float),
+        HirExpr::Name(name) => env.lookup(name).ok_or_else(|| {
+            Diagnostic::error(
+                "T0021",
+                format!("name `{name}` is not defined"),
+                Span::new(0, 0), // real span threading through HIR is out of scope for this task -- see Task 15's follow-up note
+            )
+        }),
+        HirExpr::BinOp { op, left, right } => {
+            let left_ty = infer_expr(env, left)?;
+            let right_ty = infer_expr(env, right)?;
+            numeric_result_type(*op, left_ty, right_ty)
+        }
+        HirExpr::Call { .. } => {
+            // Call type-checking (arguments/return) lands in Task 9 alongside
+            // real function signatures; until then, treat any call as
+            // producing an unconstrained placeholder the caller can't yet
+            // misuse, since nothing consumes a call's result type before Task 9.
+            Ok(Ty::None)
+        }
+    }
+}
+
+fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnostic> {
+    match (left, right) {
+        (Ty::Int, Ty::Int) => Ok(Ty::Int),
+        (Ty::Float, Ty::Float) | (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => Ok(Ty::Float),
+        _ => Err(Diagnostic::error(
+            "T0021",
+            format!("operator {op:?} is not defined for `{}` and `{}`", left.name(), right.name()),
+            Span::new(0, 0),
+        )),
+    }
+}
+
+pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
+    match stmt {
+        HirStmt::Assign { target, value } => {
+            let ty = infer_expr(env, value)?;
+            env.bind(target.clone(), ty);
+            Ok(())
+        }
+        HirStmt::ExprStmt(expr) => infer_expr(env, expr).map(|_| ()),
+    }
+}
+
+pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
+    let mut env = Environment::new();
+    for item in &hir.items {
+        match item {
+            HirItem::TopLevelStmt(stmt) => check_stmt(&mut env, stmt)?,
+            HirItem::Function { .. } => {
+                // Function-body checking (its own scope, T0001 on the
+                // signature) lands in Task 9 -- until then, a function's
+                // body is not yet type-checked at all, matching this crate's
+                // pre-existing behavior of never failing.
+            }
+        }
+    }
     Ok(())
 }
 
@@ -15,5 +115,166 @@ mod tests {
     fn v0_1_slice_always_type_checks() {
         let hir = HirModule { items: vec![] };
         assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn infers_an_int_literal_as_int() {
+        let env = Environment::new();
+        assert_eq!(infer_expr(&env, &HirExpr::IntLiteral(1)), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn infers_a_float_literal_as_float() {
+        let env = Environment::new();
+        assert_eq!(infer_expr(&env, &HirExpr::FloatLiteral(1.5)), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn an_assignment_binds_the_inferred_type_in_the_environment() {
+        let mut env = Environment::new();
+        check_stmt(&mut env, &HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(1) })
+            .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_assignment_whose_value_is_undefined_propagates_the_error() {
+        let mut env = Environment::new();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::Assign { target: "x".to_string(), value: HirExpr::Name("undefined".to_string()) },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn referencing_an_assigned_name_infers_its_bound_type() {
+        let mut env = Environment::new();
+        check_stmt(&mut env, &HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(1) })
+            .unwrap();
+        assert_eq!(infer_expr(&env, &HirExpr::Name("x".to_string())), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn adding_two_ints_infers_int() {
+        let env = Environment::new();
+        let expr = HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(HirExpr::IntLiteral(1)),
+            right: Box::new(HirExpr::IntLiteral(2)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn a_binop_with_an_undefined_left_operand_propagates_the_error() {
+        let env = Environment::new();
+        let expr = HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(HirExpr::Name("undefined".to_string())),
+            right: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_binop_with_an_undefined_right_operand_propagates_the_error() {
+        let env = Environment::new();
+        let expr = HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(HirExpr::IntLiteral(1)),
+            right: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn numeric_result_type_covers_every_int_float_combination() {
+        assert_eq!(numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Float), Ok(Ty::Float));
+        assert_eq!(numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Int), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn referencing_an_undefined_name_is_a_clean_error_not_a_panic() {
+        let env = Environment::new();
+        let err = infer_expr(&env, &HirExpr::Name("undefined".to_string())).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("undefined"));
+    }
+
+    #[test]
+    fn numeric_result_type_rejects_a_hypothetical_incompatible_pair() {
+        let err = numeric_result_type(BinOpKind::Add, Ty::Int, Ty::None).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn adding_an_int_and_a_float_promotes_to_float() {
+        let env = Environment::new();
+        let expr = HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(HirExpr::IntLiteral(1)),
+            right: Box::new(HirExpr::FloatLiteral(2.5)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn numeric_result_type_rejects_a_float_and_a_hypothetical_bool() {
+        // `Ty::Bool` isn't reachable through any real HIR node until Task 7,
+        // but `Ty` itself already has all five variants -- exercise `.name()`
+        // for each one now via direct calls, rather than leaving them
+        // uncovered until a later task happens to reach them.
+        let err = numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Bool).unwrap_err();
+        assert!(err.message.contains("float") && err.message.contains("bool"));
+    }
+
+    #[test]
+    fn numeric_result_type_rejects_a_hypothetical_str_operand() {
+        let err = numeric_result_type(BinOpKind::Add, Ty::Bool, Ty::Str).unwrap_err();
+        assert!(err.message.contains("str"));
+    }
+
+    #[test]
+    fn a_top_level_binary_addition_type_checks() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::IntLiteral(1)),
+                right: Box::new(HirExpr::IntLiteral(2)),
+            }))],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_top_level_reference_to_an_undefined_name_is_a_clean_error() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("undefined".to_string())))],
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_function_body_is_not_yet_checked() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+            }],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_bare_call_infers_none() {
+        let env = Environment::new();
+        let expr = HirExpr::Call { callee: "print".to_string(), args: vec![] };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
     }
 }
