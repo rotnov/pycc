@@ -14,7 +14,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
-    "/Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace " \
+    "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
     "--fail-under-lines 100 --fail-under-regions 100"
 
   def coverage_workflow(command = COVERAGE_COMMAND)
@@ -40,12 +40,32 @@ class RoadmapEvidenceCliTest < Minitest::Test
               run: |
                 set -euo pipefail
                 LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
-                export LLVM_SYS_221_PREFIX="$LLVM_SYS_221_PREFIX_VALUE"
-                /Users/runner/.cargo/bin/cargo build --workspace
+                TRUSTED_CARGO="$(rustup which cargo)"
+                TRUSTED_RUSTC="$(rustup which rustc)"
+                TRUSTED_RUSTDOC="$(rustup which rustdoc)"
+                TRUSTED_COV="/Users/runner/.cargo/bin/cargo-llvm-cov"
                 cd "$RUNNER_TEMP"
-                /Users/runner/.cargo/bin/cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+                "$TRUSTED_CARGO" install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+                "$TRUSTED_COV" llvm-cov --version
+                ISOLATED_ROOT="$RUNNER_TEMP/pycc-coverage"
+                mkdir -p "$ISOLATED_ROOT/home" "$ISOLATED_ROOT/tmp" "$ISOLATED_ROOT/cargo-home" "$ISOLATED_ROOT/target"
+                sudo chown -R nobody:nobody "$ISOLATED_ROOT"
+                ISOLATED_ENV=(
+                  "HOME=$ISOLATED_ROOT/home"
+                  "TMPDIR=$ISOLATED_ROOT/tmp/"
+                  "CARGO_HOME=$ISOLATED_ROOT/cargo-home"
+                  "CARGO_TARGET_DIR=$ISOLATED_ROOT/target"
+                  "CARGO=$TRUSTED_CARGO"
+                  "RUSTC=$TRUSTED_RUSTC"
+                  "RUSTDOC=$TRUSTED_RUSTDOC"
+                  "LLVM_SYS_221_PREFIX=$LLVM_SYS_221_PREFIX_VALUE"
+                  "PATH=$(dirname "$TRUSTED_CARGO"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+                )
+                run_isolated() {
+                  sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
+                }
                 cd "$GITHUB_WORKSPACE"
-                /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --version
+                run_isolated "$TRUSTED_CARGO" build --workspace
                 #{command}
                 printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
     YAML
@@ -147,7 +167,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(
       roadmap: roadmap,
       workflow: coverage_workflow(
-        "/Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace " \
+        "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
         "--fail-under-lines 99 --fail-under-regions 100"
       )
     )
@@ -335,5 +355,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes commands,
                     "printf 'LLVM_SYS_221_PREFIX=%s\\n' " \
                     "\"$LLVM_SYS_221_PREFIX_VALUE\" >> \"$GITHUB_ENV\""
+    assert_includes commands, 'sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"'
   end
 end

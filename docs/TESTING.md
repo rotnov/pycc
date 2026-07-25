@@ -82,7 +82,8 @@ The initial `ci-build-test-coverage-100` evidence requires all of the following:
 - the named hard-coverage step using the default shell with no inherited run
   defaults;
 - the exact command
-  `/Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`.
+  `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+  inside a clean environment owned by the unprivileged `nobody` user.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
@@ -161,7 +162,7 @@ evaluated by the trusted checker from their base revision.
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
 
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
-- Gate: `/Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI uses that direct binary so repository aliases and earlier `PATH` mutations cannot replace it. The checker pins the complete environment and step prefix through the hard-gate step; repository scripts run only after the gate. Inside that step, `cargo build --workspace` runs first because the slice-0 end-to-end tests link the normal debug build of `pycc_rt`; without that prerequisite coverage fails at the link step before it can measure. The pinned tool is installed outside the repository configuration context and its version smoke check runs immediately before measurement.
+- Gate: `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI resolves and installs the trusted tool before executing repository code, then runs both the prerequisite build and coverage under `sudo -u nobody env -i` with isolated HOME, Cargo home, temp, and target directories. The workspace and runner-owned toolchain/binary are read-only to that user, so a build script or procedural macro cannot replace the executables or write GitHub command files. The checker pins the complete environment and step prefix through the hard-gate step; regular repository policy/test steps run only afterward. `cargo build --workspace` runs first inside the boundary because the slice-0 end-to-end tests link the normal debug build of `pycc_rt`; without that prerequisite coverage fails at the link step before it can measure. The pinned tool's version smoke check runs immediately before entering the boundary.
 - Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator automatically — the gate measures product code exercised by tests, not tests covering themselves.
 - Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
 
