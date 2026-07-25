@@ -698,6 +698,84 @@ class AgentAssetValidationTests(unittest.TestCase):
 
             self.assertEqual(failures, [])
 
+    def test_url_scheme_and_host_are_normalized_but_path_stays_case_sensitive(
+        self,
+    ) -> None:
+        source_url = "https://example.com/agents"
+        cases = (
+            ("HTTPS://EXAMPLE.COM/agents", True),
+            ("https://example.com/Agents", False),
+        )
+        for required_reference, rejected in cases:
+            with self.subTest(reference=required_reference):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    agents.write_text(
+                        f"Use `{required_reference}` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    marketplace = "case" + "-market"
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": "url",
+                            "url": source_url,
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    if rejected:
+                        self.assertEqual(len(failures), 1)
+                        self.assertIn(
+                            "marketplace source https://example.com/agents",
+                            failures[0],
+                        )
+                    else:
+                        self.assertEqual(failures, [])
+
+    def test_url_identity_normalization_handles_authority_edges(self) -> None:
+        cases = (
+            (
+                "HTTPS://EXAMPLE.COM:8443/Path",
+                "https://example.com:8443/Path",
+            ),
+            (
+                "HTTPS://[2001:DB8::1]:8443/Path",
+                "https://[2001:db8::1]:8443/Path",
+            ),
+            (
+                "HTTPS://user@EXAMPLE.COM/Path",
+                "https://example.com/Path",
+            ),
+            (
+                "https://[invalid/Path",
+                "https://[invalid/Path",
+            ),
+            (
+                "https://EXAMPLE.COM:notaport/Path",
+                "https://EXAMPLE.COM:notaport/Path",
+            ),
+            (
+                "https://:443/Path",
+                "https://:443/Path",
+            ),
+            (
+                "All agents preserve path Case.",
+                "All agents preserve path Case.",
+            ),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(
+                    validator.normalize_url_identity_components(source),
+                    expected,
+                )
+
     def test_malformed_marketplace_url_reports_a_controlled_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

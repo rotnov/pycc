@@ -139,7 +139,9 @@ scanned. Every selected asset is checked regardless of file extension,
 using strict UTF-8 or BOM-tagged UTF-16 decoding; unknown encodings fail closed.
 UTF-32 and NUL-bearing text are rejected explicitly so BOM-less UTF-16 cannot
 masquerade as UTF-8. References to an optional plugin, its marketplace alias, or its
-configured repository and URL source coordinates are rejected.
+configured repository and URL source coordinates are rejected. URL schemes and hosts
+are normalized case-insensitively while repository paths retain their case-sensitive
+identity.
 For a pinned marketplace, only the exact validated baseline identity is exempt; an
 unknown or disabled sibling is still rejected. The exact iEvo exemption applies only
 while

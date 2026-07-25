@@ -93,6 +93,9 @@ SOURCE_SUFFIXES_WITH_INLINE_TESTS = {".c", ".cc", ".cpp", ".h", ".hpp", ".rs"}
 SCP_GIT_REFERENCE = re.compile(
     r"^(?:[^/@:\s]+@)?(?P<host>[A-Za-z0-9.-]+):(?P<path>[^?#]+)$"
 )
+URL_AUTHORITY_REFERENCE = re.compile(
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://(?P<authority>[^/\s?#]+)"
+)
 
 
 class RequiredAssetEncodingError(ValueError):
@@ -426,6 +429,26 @@ def repository_path_reference(
     if len([part for part in normalized.split("/") if part]) < minimum_parts:
         return None
     return normalized
+
+
+def normalize_url_identity_components(text: str) -> str:
+    def normalize(match: re.Match[str]) -> str:
+        try:
+            parsed = urlparse(match.group(0))
+            host = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            return match.group(0)
+        if not host:
+            return match.group(0)
+        public_host = host.lower()
+        if ":" in public_host and not public_host.startswith("["):
+            public_host = f"[{public_host}]"
+        if port is not None:
+            public_host = f"{public_host}:{port}"
+        return f"{parsed.scheme.lower()}://{public_host}"
+
+    return URL_AUTHORITY_REFERENCE.sub(normalize, text)
 
 
 def optional_marketplace_source_references(
@@ -816,11 +839,12 @@ def validate_optional_plugin_boundary(
                         )
                         break
                 else:
+                    source_text = normalize_url_identity_components(fallback_text)
                     for token in sorted(
                         marketplace_sources,
                         key=lambda value: (-len(value), value),
                     ):
-                        if has_token(fallback_text, token):
+                        if has_token(source_text, token):
                             alias, display = marketplace_sources[token]
                             failures.append(
                                 f"{relative}: required agent asset references "
