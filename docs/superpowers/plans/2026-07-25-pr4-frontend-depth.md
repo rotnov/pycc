@@ -1385,7 +1385,7 @@ git commit -m "feat(pycc_hir,pycc_types): comparisons and bool, with bool-is-sub
 **Interfaces:**
 - Produces: `HirStmt` gains `If { test: HirExpr, body: Vec<HirStmt>, orelse: Vec<HirStmt> }`, `While { test: HirExpr, body: Vec<HirStmt> }`, `ForRange { var: String, start: HirExpr, stop: HirExpr, step: HirExpr, body: Vec<HirStmt> }` (only `for x in range(...)` is in v0.1 scope per DELIVERY_PLAN.md's own TDD sequence "if/while/for+range" — iterating any other iterable panics with a clear message).
 
-- [ ] **Step 1: Write the failing HIR tests**
+- [x] **Step 1: Write the failing HIR tests**
 
 ```rust
 #[test]
@@ -1466,12 +1466,12 @@ fn iterating_a_non_range_call_is_not_supported_yet() {
 }
 ```
 
-- [ ] **Step 2: Run to verify these fail**
+- [x] **Step 2: Run to verify these fail**
 
 Run: `cargo test -p pycc_hir lowers_an_if lowers_an_elif lowers_a_while lowers_a_for_range iterating_a_non_range`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Extend `HirStmt`, `lower_stmt`, and add a `lower_body` helper**
+- [x] **Step 3: Extend `HirStmt`, `lower_stmt`, and add a `lower_body` helper**
 
 ```rust
 // HirStmt gains:
@@ -1552,12 +1552,12 @@ fn lower_elif_else_clauses(clauses: &[pycc_ast::ElifElseClause]) -> Vec<HirStmt>
 }
 ```
 
-- [ ] **Step 4: Run to verify pycc_hir tests pass**
+- [x] **Step 4: Run to verify pycc_hir tests pass**
 
 Run: `cargo test -p pycc_hir`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing pycc_types tests**
+- [x] **Step 5: Write the failing pycc_types tests**
 
 ```rust
 #[test]
@@ -1605,12 +1605,12 @@ fn a_for_range_loop_binds_its_variable_as_int_and_checks_its_body() {
 }
 ```
 
-- [ ] **Step 6: Run to verify these fail**
+- [x] **Step 6: Run to verify these fail**
 
 Run: `cargo test -p pycc_types an_if_s_test a_while_loop_s_test a_for_range_loop_binds`
 Expected: FAIL to compile.
 
-- [ ] **Step 7: Implement `check_stmt`'s new arms**
+- [x] **Step 7: Implement `check_stmt`'s new arms**
 
 Add to `check_stmt`'s match in `pycc_types/src/lib.rs`:
 
@@ -1644,17 +1644,17 @@ HirStmt::ForRange { var, start, stop, step, body } => {
 }
 ```
 
-- [ ] **Step 8: Run to verify pycc_types tests pass**
+- [x] **Step 8: Run to verify pycc_types tests pass**
 
 Run: `cargo test -p pycc_types`
 Expected: PASS.
 
-- [ ] **Step 9: Run the full workspace suite, clippy, coverage**
+- [x] **Step 9: Run the full workspace suite, clippy, coverage**
 
 Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS. Every new panic arm (`while/else`, `for/else`, `async for`, non-range-call for-target, non-bare-name for-target, wrong range() arg count) needs its own `#[should_panic]` test — add the missing ones now (this task's Step 1 only wrote one; add at minimum one more covering `while True:\n    pass\nelse:\n    pass\n` for the `while/else` arm, and one for `for i in range(1, 2, 3, 4):` for the wrong-arg-count arm).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_types/src/lib.rs
