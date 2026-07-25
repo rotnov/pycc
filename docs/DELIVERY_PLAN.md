@@ -91,15 +91,6 @@ This policy governs architectural/implementation forks only. Standing safety rul
 
 This plan and its revisions are committed to their own short-lived branch off `main` and opened as a docs-only PR, reviewed before merge like any other change — review weight matched to risk, a read-through for docs rather than the full multi-agent pipeline reserved for compiler code. Every subsequent PR in the table above is its own feature branch off `main`, merged only once CI is green on all Tier-1 targets and that PR's slice of the v0.1 acceptance criteria is demonstrably met.
 
-The Python language-track guard and frontend performance gate are separate
-activations of the same `.github/workflows/ci.yml`, and each must first be
-authorized as an exact reviewed prospective digest. They cannot activate
-independently from stale snapshots: after either activation lands, the other
-must stage a new combined workflow fixture and digest on the updated `main`
-before its activation can proceed. The restaged authorization merges before
-the remaining activation is rebased and audited; an activation PR never adds
-its own workflow digest.
-
 ## Testing scope for v0.1
 
 Of TESTING.md's 7 layers: Layer 1 (per-crate unit tests) from the start, Layer 3 (diagnostic snapshot tests) as soon as `pycc_diag` exists, Layer 5 (runtime property tests) in minimal form for the v0.1 runtime subset. **Out of scope for PR-1/PR-2**: Layer 2 (the real `pycc_testkit` conformance harness — deferred per D-018 to PR-4/PR-6, once there's a PEP matrix for it to check against; `tests/slice0.rs` covers the two named slice-0 fixtures ad hoc until then), Layer 4 (differential fuzzing), Layer 6 (OSS corpus), Layer 7's full cross-compiler comparison suite (vs. Nuitka/Codon/mypyc) — these start at v0.2 per ROADMAP.md. The lightweight per-PR frontend timing check is a different, narrower thing that *does* start in v0.1 — see Performance gate above (resolves #12).

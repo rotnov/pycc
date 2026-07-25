@@ -112,15 +112,12 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The reviewed PR-4 prospective digest also introduces the required frontend
-performance gate. Its cache lifecycle is fail-closed: the current timing is
-promoted and cached only after the benchmark, checker self-test, and comparison
-steps succeed (or the legitimate first-baseline bootstrap succeeds), so a
-failed regression cannot become the baseline for a passing rerun. Checkout and
-cache actions that control this merge invariant use reviewed immutable commit
-pins. The trusted checker validates the exact ordered lifecycle whenever
-`frontend-perf-gate` is present in the candidate workflow, in addition to
-requiring the exact reviewed digest.
+D-047 makes the earlier PR-4 prospective performance workflow obsolete and
+defers a newly designed and reviewed gate to PR-6. This change therefore
+retires the old candidate digest instead of leaving stale workflow bytes
+authorized. The structural cache-lifecycle validator remains fail-closed for
+any future `frontend-perf-gate`, but PR-6 must still stage its exact new
+workflow bytes and digest before activation.
 
 A separate reviewed prospective workflow authorizes the Python language-track
 regression guard without activating it. Its inert
@@ -129,9 +126,9 @@ regression guard without activating it. Its inert
 head-controlled self-test import, and makes the job an explicit `ci-gate`
 dependency. The active workflow on `main` does not yet contain that job; the
 extra allowlist entry is phase-one authorization, not evidence that the guard
-is already live. The open PR-4 activation changes the same `ci.yml`, so the two
-activation changes are serialized: after either workflow lands, the other must
-stage a newly reviewed combined snapshot and digest before activation.
+is already live. No frontend-performance workflow remains allowlisted: under
+D-047, PR-6 must stage a fresh exact candidate that preserves every then-active
+required job before it can activate the deferred performance gate.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
