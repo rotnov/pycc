@@ -520,6 +520,13 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
+  def test_tier1_workflow_allowlist_retires_the_pre_frontend_perf_gate_digest
+    refute_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2"
+    )
+  end
+
   def test_rejects_changed_tier1_matrix_workflow
     repository_root = Pathname(__dir__).parent
     workflow = (repository_root / ".github/workflows/ci.yml").read.sub(
