@@ -54,6 +54,7 @@ mod tests {
     use super::{Cli, Command, ErrorFormat};
     use clap::Parser;
 
+    #[cfg(unix)]
     fn parsed_check_paths(command: Command) -> Option<Vec<std::path::PathBuf>> {
         match command {
             Command::Check { paths, .. } => Some(paths),
