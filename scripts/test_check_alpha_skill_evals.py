@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -133,6 +134,83 @@ class AlphaSkillEvalTests(unittest.TestCase):
             "feedback eval",
         )
         self.assertTrue(any("negated context" in failure for failure in failures))
+
+    def test_feedback_expected_action_guard_is_required(self) -> None:
+        failures = evaluator.case_contract_failures(
+            "Ask for explicit approval.",
+            {
+                "expected_output": (
+                    "Does not wait for explicit approval before any GitHub write."
+                ),
+                "contract": {
+                    "skill_must_contain": ["explicit approval"],
+                    "expected_output_must_contain": ["explicit approval"],
+                },
+            },
+            "pycc-feedback eval 1",
+            require_expected_output=True,
+        )
+        self.assertTrue(
+            any(
+                "expected_output_must_require must be a non-empty list"
+                in failure
+                for failure in failures
+            )
+        )
+
+    def test_feedback_suite_cannot_remove_expected_action_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical = root / ".claude/skills/pycc-feedback"
+            wrapper = root / ".agents/skills/pycc-feedback"
+            (canonical / "evals").mkdir(parents=True)
+            wrapper.mkdir(parents=True)
+            canonical_skill = "Ask for explicit approval."
+            (canonical / "SKILL.md").write_text(
+                canonical_skill,
+                encoding="utf-8",
+            )
+            (wrapper / "SKILL.md").write_text(
+                (
+                    "Load .claude/skills/pycc-feedback/SKILL.md as the "
+                    "canonical workflow."
+                ),
+                encoding="utf-8",
+            )
+            (canonical / "evals/evals.json").write_text(
+                json.dumps(
+                    {
+                        "skill_name": "pycc-feedback",
+                        "evals": [
+                            {
+                                "id": 1,
+                                "prompt": "Report this defect.",
+                                "expected_output": (
+                                    "Does not wait for explicit approval."
+                                ),
+                                "contract": {
+                                    "skill_must_contain": [
+                                        "explicit approval"
+                                    ],
+                                    "expected_output_must_contain": [
+                                        "explicit approval"
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                evaluator,
+                "ALPHA_SKILLS",
+                ("pycc-feedback",),
+            ):
+                failures = evaluator.contract_failures("codex", root)
+        self.assertTrue(
+            any("expected_output_must_require" in failure for failure in failures)
+        )
 
     def test_approval_unacceptable_is_not_a_positive_exception(self) -> None:
         failures = evaluator.case_contract_failures(
@@ -336,6 +414,46 @@ class AlphaSkillEvalTests(unittest.TestCase):
         self.assertTrue(
             any("project_input_sha256 is stale" in item for item in failures)
         )
+
+    @unittest.skipIf(os.name == "nt", "POSIX executable-mode assertion")
+    def test_project_input_fingerprint_detects_file_mode_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "core.filemode", "true"],
+                check=True,
+            )
+            script = root / "tool.sh"
+            script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            script.chmod(0o644)
+            subprocess.run(
+                ["git", "-C", str(root), "add", "tool.sh"],
+                check=True,
+            )
+            before = evaluator.project_input_sha256(root)
+            script.chmod(0o755)
+            after = evaluator.project_input_sha256(root)
+        self.assertNotEqual(before, after)
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink-type assertion")
+    def test_project_input_fingerprint_detects_symlink_type_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            target = root / "target"
+            target.write_text("target", encoding="utf-8")
+            entry = root / "entry"
+            entry.write_text("target", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(root), "add", "entry", "target"],
+                check=True,
+            )
+            before = evaluator.project_input_sha256(root)
+            entry.unlink()
+            entry.symlink_to("target")
+            after = evaluator.project_input_sha256(root)
+        self.assertNotEqual(before, after)
 
     def test_stale_codex_entrypoint_evidence_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

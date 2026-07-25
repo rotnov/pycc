@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
-  "executed_at": "2026-07-25T12:16:29.379802Z",
-  "source_revision": "6de6ce48e6c9dfc9e6fdaef7af99fd4b13145419",
-  "project_input_sha256": "1478a447479a60724c18014e484cadc86a2cdd3c52e85c26aeefa593f6a6afdf",
+  "executed_at": "2026-07-25T13:01:34.345517Z",
+  "source_revision": "b086b8fc986a40bc8d987badb8c7a7b27c5d9787",
+  "project_input_sha256": "0c486586c43f0bd66668c38a4c4ca855c76e727c4375fbe70fd9caaa605bc6b2",
   "artifacts": {
     "pycc": {
       "canonical_tree_sha256": "fbb695def822855c0b3dd10d0fd521dcd08ab26b3143655db470fd54385edf88",

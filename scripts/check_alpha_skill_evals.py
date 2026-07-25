@@ -10,6 +10,7 @@ import json
 import os
 import re
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -123,6 +124,7 @@ def case_contract_failures(
     skill_text: str,
     case: dict,
     label: str,
+    require_expected_output: bool = False,
 ) -> list[str]:
     failures: list[str] = []
     contract = case.get("contract")
@@ -141,6 +143,10 @@ def case_contract_failures(
     ):
         phrases = contract.get(field)
         if field == "expected_output_must_require" and phrases is None:
+            if require_expected_output:
+                failures.append(
+                    f"{label}: contract.{field} must be a non-empty list"
+                )
             continue
         if not isinstance(phrases, list) or not phrases:
             failures.append(f"{label}: contract.{field} must be a non-empty list")
@@ -209,7 +215,14 @@ def contract_failures(client: str, root: Path = ROOT) -> list[str]:
             prompt = case.get("prompt")
             if not isinstance(prompt, str) or not prompt.strip():
                 failures.append(f"{label}: prompt must be non-empty text")
-            failures.extend(case_contract_failures(canonical_text, case, label))
+            failures.extend(
+                case_contract_failures(
+                    canonical_text,
+                    case,
+                    label,
+                    require_expected_output=skill_name == "pycc-feedback",
+                )
+            )
     return failures
 
 
@@ -470,36 +483,130 @@ def tree_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def git_config_bool(root: Path, name: str, default: bool) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(root), "config", "--bool", "--get", name],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if result.returncode != 0:
+        return default
+    return result.stdout.strip() == "true"
+
+
+def worktree_git_mode(
+    candidate: Path,
+    index_mode: bytes,
+    *,
+    filemode: bool,
+    symlinks: bool,
+) -> bytes:
+    if index_mode == b"160000":
+        return index_mode
+    if index_mode == b"120000" and not symlinks and not candidate.is_symlink():
+        return index_mode
+    if index_mode in (b"100644", b"100755") and not filemode:
+        return index_mode
+
+    mode = os.lstat(candidate).st_mode
+    if stat.S_ISLNK(mode):
+        return b"120000"
+    if stat.S_ISREG(mode):
+        return b"100755" if mode & 0o111 else b"100644"
+    raise OSError(f"{candidate}: unsupported tracked worktree file type")
+
+
+def fingerprint_contents(
+    candidate: Path,
+    index_mode: bytes,
+    object_id: bytes,
+) -> bytes:
+    if index_mode == b"160000":
+        return object_id
+    if candidate.is_symlink():
+        return os.fsencode(os.readlink(candidate))
+    return candidate.read_bytes()
+
+
+def update_fingerprint_component(
+    digest: hashlib._Hash,
+    value: bytes,
+) -> None:
+    digest.update(struct.pack(">Q", len(value)))
+    digest.update(value)
+
+
 def project_input_sha256(root: Path = ROOT) -> str:
     if (root / ".git").exists():
         tracked = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z"],
+            ["git", "-C", str(root), "ls-files", "-s", "-z"],
             check=True,
             capture_output=True,
             timeout=10,
         ).stdout.split(b"\0")
-        files = [
-            root / item.decode("utf-8")
-            for item in tracked
-            if item
-            and item.decode("utf-8") != BEHAVIORAL_EVIDENCE.as_posix()
-        ]
+        filemode = git_config_bool(root, "core.filemode", default=True)
+        symlinks = git_config_bool(root, "core.symlinks", default=True)
+        entries: list[tuple[Path, bytes, bytes, bytes]] = []
+        for item in tracked:
+            if not item:
+                continue
+            metadata, encoded_path = item.split(b"\t", 1)
+            index_mode, object_id, stage = metadata.split()
+            if stage != b"0":
+                raise OSError("cannot fingerprint an unmerged Git index")
+            relative = encoded_path.decode("utf-8")
+            if relative == BEHAVIORAL_EVIDENCE.as_posix():
+                continue
+            candidate = root / relative
+            entries.append(
+                (
+                    candidate,
+                    index_mode,
+                    worktree_git_mode(
+                        candidate,
+                        index_mode,
+                        filemode=filemode,
+                        symlinks=symlinks,
+                    ),
+                    fingerprint_contents(candidate, index_mode, object_id),
+                )
+            )
     else:
         files = [
             candidate
             for candidate in root.rglob("*")
-            if candidate.is_file()
+            if (candidate.is_file() or candidate.is_symlink())
             and candidate.relative_to(root) != BEHAVIORAL_EVIDENCE
         ]
+        entries = []
+        for candidate in files:
+            mode = worktree_git_mode(
+                candidate,
+                b"120000" if candidate.is_symlink() else b"100644",
+                filemode=True,
+                symlinks=True,
+            )
+            entries.append(
+                (
+                    candidate,
+                    mode,
+                    mode,
+                    fingerprint_contents(candidate, mode, b""),
+                )
+            )
 
     digest = hashlib.sha256()
-    for candidate in sorted(files):
+    for candidate, index_mode, worktree_mode, contents in sorted(entries):
         relative = candidate.relative_to(root).as_posix().encode("utf-8")
-        contents = candidate.read_bytes()
-        digest.update(struct.pack(">Q", len(relative)))
-        digest.update(relative)
-        digest.update(struct.pack(">Q", len(contents)))
-        digest.update(contents)
+        for component in (
+            relative,
+            index_mode,
+            worktree_mode,
+            contents,
+        ):
+            update_fingerprint_component(digest, component)
     return digest.hexdigest()
 
 

@@ -120,29 +120,30 @@ checks are the documented safe CI fallback, not a substitute for authenticated
 client execution.
 
 On 2026-07-25, the full six-case release-gate set was executed manually against
-the skill sources based on revision
-`6de6ce48e6c9dfc9e6fdaef7af99fd4b13145419` and this change's complete skill
-trees. Claude Code 2.1.219 and Codex CLI 0.145.0 each loaded their own project
-entrypoint, built and ran an inline `print(42)` fixture through both supported
-compiler paths, distinguished the planned `check --fix` contract from the
-unimplemented CLI, reproduced and minimized the feedback fixture's exit-101
-compiler panic, and classified that public CLI panic as a defect even though
-the triggering language feature is not implemented. Both clients searched open
-and closed public `rotnov/pycc` issues with sanitized generic queries, inspected
-the exact duplicate issue #21, rendered an exact comment preview, and stopped
-for approval. They also passed the automatic-upload refusal and
-context-free-consent cases. Neither client made a GitHub write.
+the source revision recorded in `tests/alpha_skill_client_evidence.json` and
+this change's complete skill trees. Claude Code 2.1.219 and Codex CLI 0.145.0
+each loaded their own project entrypoint, built and ran an inline `print(42)`
+fixture through both supported compiler paths, distinguished the planned
+`check --fix` contract from the unimplemented CLI, reproduced and minimized
+the feedback fixture's exit-101 compiler panic, and classified that public CLI
+panic as a defect even though the triggering language feature is not
+implemented. Both clients searched open and closed public `rotnov/pycc` issues
+with sanitized generic queries, inspected the exact duplicate issue #21,
+rendered an exact comment preview, and stopped for approval. They also passed
+the automatic-upload refusal and context-free-consent cases. Neither client
+made a GitHub write.
 
 The sanitized result summaries, hashes of each complete canonical skill tree
 and both client entrypoints, and a fingerprint of every other tracked input
 used by the run are recorded in `tests/alpha_skill_client_evidence.json`. The
-fingerprint excludes only the evidence file itself, avoiding a circular hash;
-CI therefore rejects missing or duplicate eval coverage, invalid gate
-metadata, stale behavior-affecting assets or entrypoints, and any later
-compiler, documentation, or repository-input drift. This local hash-bound
-evidence is regression evidence, not the immutable HTTPS evidence for
-authenticated model evals required by the promotion gate. The asset validator
-therefore prevents `pycc` and `pycc-feedback` from entering
+fingerprint covers path, contents, Git index mode/type, and normalized
+worktree mode/type, and excludes only the evidence file itself to avoid a
+circular hash. CI therefore rejects missing or duplicate eval coverage,
+invalid gate metadata, stale behavior-affecting assets or entrypoints, and any
+later compiler, documentation, or repository-input drift. This local
+hash-bound evidence is regression evidence, not the immutable HTTPS evidence
+for authenticated model evals required by the promotion gate. The asset
+validator therefore prevents `pycc` and `pycc-feedback` from entering
 `skills-lock.json`, `rotnov/skills`, or skills.sh until that external evidence
 exists for both clients. Repeat the full model-based client run and replace the
 local evidence after any tracked input changes. The separate `Agent assets`
