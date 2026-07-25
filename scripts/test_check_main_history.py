@@ -9,6 +9,7 @@ import subprocess
 import unittest
 from collections.abc import Callable
 from contextlib import redirect_stdout
+from pathlib import Path
 from unittest import mock
 
 import check_main_history as audit
@@ -40,6 +41,30 @@ def runner(
 
 
 class MainHistoryAuditTests(unittest.TestCase):
+    def test_workflow_never_executes_the_pushed_checker(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / "main-history-audit.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ref: ${{ github.event.before }}", workflow)
+        self.assertIn(
+            "ref: 2d9fcd1b4135caef19b6ebad7bf96f7111f2258d",
+            workflow,
+        )
+        self.assertIn(
+            "checker=../pre-push-audit-implementation/"
+            "scripts/check_main_history.py",
+            workflow,
+        )
+        self.assertIn(
+            "checker=../bootstrap-audit-implementation/"
+            "scripts/check_main_history.py",
+            workflow,
+        )
+        self.assertNotIn("run: python3 scripts/check_main_history.py", workflow)
+
     def test_zero_sha_fails_closed_without_revision_enumeration(self) -> None:
         commit = "a" * 40
         self.assertEqual(

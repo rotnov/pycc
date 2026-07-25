@@ -26,7 +26,18 @@ jobs:
           # itself is still push-controlled and is verified out of band.
           ref: ${{ github.event.before }}
           fetch-depth: 1
-          path: audit-implementation
+          path: pre-push-audit-implementation
+          sparse-checkout: scripts/check_main_history.py
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the reviewed bootstrap implementation
+        uses: actions/checkout@v4
+        with:
+          # The parent of the first merge lacks the checker. Keep an immutable
+          # reviewed fallback so that first post-merge audit is executable.
+          ref: 2d9fcd1b4135caef19b6ebad7bf96f7111f2258d
+          fetch-depth: 1
+          path: bootstrap-audit-implementation
           sparse-checkout: scripts/check_main_history.py
           sparse-checkout-cone-mode: false
 
@@ -39,4 +50,9 @@ jobs:
           AUDIT_CREATED: ${{ github.event.created }}
           AUDIT_FORCED: ${{ github.event.forced }}
         working-directory: audited-repository
-        run: python3 ../audit-implementation/scripts/check_main_history.py
+        run: |
+          checker=../pre-push-audit-implementation/scripts/check_main_history.py
+          if [ ! -f "$checker" ]; then
+            checker=../bootstrap-audit-implementation/scripts/check_main_history.py
+          fi
+          python3 "$checker"

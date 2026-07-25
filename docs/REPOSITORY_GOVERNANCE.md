@@ -25,16 +25,18 @@ not-yet-emitted context, because that creates an unfulfillable merge gate.
 ## Direct-commit audit
 
 `.github/workflows/main-history-audit.yml` checks out the pre-push `main` revision of
-`scripts/check_main_history.py` after every push to `main`; the pushed repository is
-checked out separately and its checker is never executed. The script enumerates every
-commit introduced by the push and queries GitHub's commit-to-pull-request
-association. Each commit must correlate with a merged PR targeting `main` whose
-`merge_commit_sha` is also in that same push. A historical association from an
-earlier squash or merge therefore cannot launder a later direct push of an old source
-commit. The audit also fails closed when GitHub reports branch creation, a zero
-`before` SHA, a forced/non-fast-forward update, an API failure, or malformed data.
-Its revision enumeration, event-shape, API-failure, malformed-response,
-current-merge, historical-association, and uncorrelated-commit paths are covered by
+`scripts/check_main_history.py` after every push to `main`. When that parent predates
+the checker, the workflow uses immutable reviewed bootstrap commit
+`2d9fcd1b4135caef19b6ebad7bf96f7111f2258d`; the pushed repository is checked
+out separately and its checker is never executed. The script enumerates every commit
+introduced by the push and queries GitHub's commit-to-pull-request association. Each
+commit must correlate with a merged PR targeting `main` whose `merge_commit_sha` is
+also in that same push. A historical association from an earlier squash or merge
+therefore cannot launder a later direct push of an old source commit. The audit also
+fails closed when GitHub reports branch creation, a zero `before` SHA, a
+forced/non-fast-forward update, an API failure, or malformed data. Its revision
+enumeration, event-shape, API-failure, malformed-response, current-merge,
+historical-association, and uncorrelated-commit paths are covered by
 `scripts/test_check_main_history.py`.
 
 This is an alert and forensic control; it does not replace preventive branch
