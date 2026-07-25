@@ -484,6 +484,43 @@ fi
 
 cp "$repo_root/site/python-aot-compilers/index.html" \
   "$fixture_root/site/python-aot-compilers/index.html"
+
+python3 - "$fixture_root/site/python-aot-compilers/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+source = "https://lpython.org/"
+assert source in content
+path.write_text(content.replace(source, "https://example.com/lpython/", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a comparison page without its LPython project source" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/python-aot-compilers/index.html" \
+  "$fixture_root/site/python-aot-compilers/index.html"
+python3 - "$fixture_root/site/python-aot-compilers/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+status = "Alpha; focused on numerical and array-oriented typed Python"
+assert status in content
+path.write_text(content.replace(status, "Available typed Python compiler", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a comparison page without LPython maturity evidence" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/python-aot-compilers/index.html" \
+  "$fixture_root/site/python-aot-compilers/index.html"
 python3 - "$fixture_root/site/python-aot-compilers/index.html" <<'PY'
 from pathlib import Path
 import sys

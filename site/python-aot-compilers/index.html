@@ -7,7 +7,7 @@
     <title>Python AOT compilers compared — where pycc fits</title>
     <meta
       name="description"
-      content="Compare pycc with Codon, Nuitka, mypyc, and Cython using official documentation: input language, output artifact, runtime model, and project status."
+      content="Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from official docs: language contract, output artifact, runtime model, and current positioning."
     >
     <meta
       name="robots"
@@ -25,7 +25,7 @@
     <meta property="og:title" content="Python AOT compilers compared — where pycc fits">
     <meta
       property="og:description"
-      content="A source-backed map of Python AOT tools by language contract, output artifact, runtime model, and present maturity."
+      content="A source-backed map of Python AOT tools by language contract, output artifact, runtime model, and current positioning."
     >
     <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
     <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
@@ -34,7 +34,7 @@
     <meta name="twitter:title" content="Python AOT compilers compared — where pycc fits">
     <meta
       name="twitter:description"
-      content="A source-backed map of Python AOT tools by language contract, output artifact, runtime model, and present maturity."
+      content="A source-backed map of Python AOT tools by language contract, output artifact, runtime model, and current positioning."
     >
     <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
     <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
@@ -48,7 +48,7 @@
             "@id": "https://rotnov.github.io/pycc/python-aot-compilers/#webpage",
             "url": "https://rotnov.github.io/pycc/python-aot-compilers/",
             "name": "Python AOT compilers compared — where pycc fits",
-            "description": "Compare pycc with Codon, Nuitka, mypyc, and Cython using official documentation: input language, output artifact, runtime model, and project status.",
+            "description": "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from official docs: language contract, output artifact, runtime model, and current positioning.",
             "inLanguage": "en",
             "dateModified": "2026-07-25",
             "isPartOf": {
@@ -114,12 +114,13 @@
         <h1>Python AOT tools solve <span>different jobs.</span></h1>
         <p class="page-lede">
           “Python compiler” can mean a compatibility-focused executable, a
-          CPython extension, or a separate static language close to Python.
+          CPython extension, a restricted typed Python subset, or a separate
+          static language close to Python.
           This comparison uses each project's own documentation and keeps
           pycc's pre-alpha design target separate from released capability.
         </p>
         <div class="page-meta" aria-label="Comparison scope">
-          <span><strong>Tools</strong> five models</span>
+          <span><strong>Tools</strong> six projects</span>
           <span><strong>Evidence</strong> official docs</span>
           <span><strong>Benchmarks</strong> none claimed</span>
         </div>
@@ -143,9 +144,10 @@
               Ahead-of-time compilation happens before execution, but the
               resulting artifact can still be a CPython extension, an
               executable that carries CPython runtime components, or native
-              machine code for a different static language model. Those
-              choices affect compatibility, distribution, type behavior, and
-              which Python programs can be accepted.
+              machine code for a restricted Python subset or a different
+              static language model. Those choices affect compatibility,
+              distribution, type behavior, and which Python programs can be
+              accepted.
             </p>
             <p>
               The table below compares those models. It does not rank
@@ -157,7 +159,7 @@
 
           <section id="comparison">
             <p class="section-kicker">Different contracts</p>
-            <h2>Five projects with overlapping output models.</h2>
+            <h2>Six projects with overlapping output models.</h2>
             <div class="table-scroll" tabindex="0" aria-label="Python AOT compiler model comparison">
               <table>
                 <thead>
@@ -174,6 +176,12 @@
                     <td>Typed, standard Python 3.14 is the v1 design target</td>
                     <td>Standalone native executable without CPython is the design target</td>
                     <td>Pre-alpha; only a narrow end-to-end slice works today</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">LPython</th>
+                    <td>Type-annotated Python subset; accepted programs are intended to remain CPython-compatible</td>
+                    <td>AOT binary via LLVM; C, C++, and WASM are also documented backends, with optional CPython interop</td>
+                    <td>Alpha; focused on numerical and array-oriented typed Python</td>
                   </tr>
                   <tr>
                     <th scope="row">Codon</th>
@@ -215,6 +223,10 @@
               <li>
                 <strong>Speed up typed modules inside CPython</strong>
                 <span>mypyc produces C extensions from standard type hints; Cython offers a broader Python-superset and C/C++ integration path.</span>
+              </li>
+              <li>
+                <strong>Compile a typed Python subset to a binary today</strong>
+                <span>LPython is an alpha AOT compiler with LLVM, C, C++, and WASM backends; its accepted subset is intended to remain compatible with CPython.</span>
               </li>
               <li>
                 <strong>Compile performance-oriented Python-like code without CPython</strong>
@@ -262,6 +274,14 @@
             <p class="section-kicker">Primary documentation</p>
             <h2>Check each project's own contract.</h2>
             <ul class="source-list">
+              <li>
+                <a href="https://lpython.org/">LPython project documentation</a>
+                <span>Typed Python subset, AOT compilation, supported backends, project maturity, and CPython interoperability.</span>
+              </li>
+              <li>
+                <a href="https://github.com/lcompilers/lpython">LPython source repository</a>
+                <span>Supported platforms, subset compatibility goal, compiler architecture, and current examples.</span>
+              </li>
               <li>
                 <a href="https://docs.exaloop.io/language/overview/">Codon language overview</a>
                 <span>Python differences, static compilation constraints, and native-code model.</span>

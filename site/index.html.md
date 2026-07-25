@@ -44,8 +44,8 @@ identified as implemented behavior.
   implemented Rust and LLVM stages, current crate boundaries, planned
   typed-Python pipeline, and platform model.
 - [Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/):
-  source-backed differences among pycc, Codon, Nuitka, mypyc, and Cython,
-  including output artifacts, runtime models, and current maturity.
+  source-backed differences among pycc, LPython, Codon, Nuitka, mypyc, and
+  Cython, including output artifacts, runtime models, and current positioning.
 - [AI-native experiment](https://rotnov.github.io/pycc/ai-native/):
   who creates each project artifact, what the human manages, how the agent
   development loop works, and where its public audit evidence lives.

@@ -24,18 +24,25 @@ syntax or dialect.
 
 ## Why
 
-Python tooling solves every piece of this separately, but no tool does the whole job the way `rustc` or `gcc` does:
+Python compiler projects make different tradeoffs between compatibility,
+static semantics, output artifacts, and runtime dependencies. pycc is testing
+one particular combination; this is a model comparison, not a benchmark or a
+claim that pycc is ready to replace released tools:
 
-| | Enforces types at compile time | Standalone binary | Plain Python syntax |
+| | Enforces types at compile time | Native executable without CPython | Standard Python input |
 |---|---|---|---|
-| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ single executable | ✅ standard CPython 3.14 |
-| Codon | ✅ (via inference) | ✅ | ⚠️ Python-like dialect, own stdlib |
-| Nuitka | ❌ | ✅ | ✅ |
-| mypyc | ✅ | ❌ C extension, needs CPython | ✅ |
-| Cython | ⚠️ optional | ❌ needs CPython | ⚠️ own dialect |
+| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ design target | ✅ CPython 3.14 target |
+| LPython | ✅ typed subset | ✅ AOT executable | ⚠️ CPython-compatible subset |
+| Codon | ✅ static language | ✅ | ⚠️ Python-like language with documented differences |
+| Nuitka | ❌ | ❌ packages CPython runtime components | ✅ compatibility-focused |
+| mypyc | ✅ strict compiled subset | ❌ CPython C extension | ✅ type-annotated Python subset |
+| Cython | ⚠️ optional | ❌ extension or embedded CPython | ⚠️ Python superset |
 | mypy / pyright | ✅ | ❌ checker only | ✅ |
 
-**pycc = strict types + native binaries + the Python you already write.**
+See the [source-backed Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/)
+for the language, artifact, runtime, and positioning boundaries behind this
+summary. No performance ranking is claimed without a shared reproducible
+benchmark.
 
 ## Quick start (planned CLI)
 
