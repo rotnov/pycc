@@ -79,8 +79,10 @@ repos:
       - id: pycc-check
 ```
 
-The hook passes all staged Python files to one frontend-only `pycc check`
-process and never modifies them. This is currently a pre-alpha integration:
+The hook passes staged Python files to serial frontend-only `pycc check`
+batches and never modifies them. At most one hook process runs at a time;
+pre-commit may split a large path set to respect platform command-line limits.
+This is currently a pre-alpha integration:
 `pycc check` recognizes only the implemented v0.1 language slice, and
 pre-commit's first `language: rust` installation builds the existing complete
 `pycc` package, so LLVM 22.1.1 is still required even though checking does not

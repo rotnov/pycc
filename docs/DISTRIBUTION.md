@@ -28,14 +28,16 @@ repos:
       - id: pycc-check
 ```
 
-pre-commit passes the selected filenames after the entry, producing one
-`pycc check -- FILE...` invocation. The `--` boundary keeps leading-hyphen
-filenames positional without consuming `-h` or `--help`, and paths remain in
-the operating system's native representation through file access. pycc checks
-every file so one early failure does not hide later diagnostics. Exit `0`
-accepts the commit, `1` rejects it for compile diagnostics, and `2` rejects it
-for invocation or input I/O errors. When both `1`-class and `2`-class failures
-occur, `2` takes precedence.
+pre-commit passes the selected filenames after the entry in one or more serial
+`pycc check -- FILE...` batches. At most one hook process runs at a time;
+pre-commit may split a large path set to respect platform command-line limits.
+The `--` boundary keeps leading-hyphen filenames positional without consuming
+`-h` or `--help`, and paths remain in the operating system's native
+representation through file access. Within each batch, pycc checks every file
+so one early failure does not hide later diagnostics. Exit `0` accepts the
+commit, `1` rejects it for compile diagnostics, and `2` rejects it for
+invocation or input I/O errors. When both `1`-class and `2`-class failures
+occur in one batch, `2` takes precedence.
 
 ## Current installation boundary
 
@@ -58,8 +60,8 @@ A revision advertised for hook use must satisfy all of the following:
 1. `pre-commit validate-manifest .pre-commit-hooks.yaml` succeeds.
 2. A clean pre-commit environment can install the Rust hook from that exact
    revision.
-3. Multiple valid Python files pass in one invocation, including files with a
-   supported Python source-encoding declaration.
+3. One batch containing multiple valid Python files passes, including files
+   with a supported Python source-encoding declaration.
 4. Syntax errors, current-version capability errors, unreadable inputs, and
    mixed failures produce the documented diagnostics and exit codes.
 5. The repository's normal build, tests, documentation, clippy, workflow
