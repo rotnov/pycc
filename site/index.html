@@ -248,7 +248,8 @@
         <div class="section-copy">
           <p class="lead">
             Type checkers stop before runtime. Packagers bundle an interpreter.
-            Python-like compilers ask you to adopt a dialect.
+            Typed-subset compilers trade compatibility breadth for static
+            optimization. Python-like compilers ask you to adopt a dialect.
           </p>
           <p>
             pycc's design target combines hard type errors, standard Python
@@ -268,35 +269,41 @@
             <thead>
               <tr>
                 <th scope="col">Tool</th>
-                <th scope="col">Hard type errors</th>
-                <th scope="col">Standalone binary</th>
-                <th scope="col">Plain Python syntax</th>
+                <th scope="col">Static model</th>
+                <th scope="col">Output artifact</th>
+                <th scope="col">Language contract</th>
               </tr>
             </thead>
             <tbody>
               <tr class="highlight-row">
                 <th scope="row"><span class="mini-mark">&gt;_</span> pycc</th>
-                <td><span class="yes">Yes</span></td>
-                <td><span class="yes">Yes</span></td>
-                <td><span class="yes">Yes</span></td>
+                <td><span class="yes">Hard annotations</span></td>
+                <td><span class="yes">Standalone target</span></td>
+                <td><span class="yes">CPython 3.14 target</span></td>
+              </tr>
+              <tr>
+                <th scope="row">LPython</th>
+                <td>Typed subset</td>
+                <td>AOT executable</td>
+                <td>CPython-compatible subset</td>
               </tr>
               <tr>
                 <th scope="row">Codon</th>
-                <td>Via inference</td>
-                <td>Yes</td>
-                <td>Python-like dialect</td>
+                <td>Static language</td>
+                <td>Native code</td>
+                <td>Python-like language</td>
               </tr>
               <tr>
                 <th scope="row">Nuitka</th>
-                <td>No</td>
-                <td>Yes</td>
-                <td>Yes</td>
+                <td>None required</td>
+                <td>Executable</td>
+                <td>Standard Python</td>
               </tr>
               <tr>
                 <th scope="row">mypyc</th>
-                <td>Yes</td>
+                <td>Strict subset</td>
                 <td>C extension</td>
-                <td>Yes</td>
+                <td>Standard Python subset</td>
               </tr>
             </tbody>
           </table>

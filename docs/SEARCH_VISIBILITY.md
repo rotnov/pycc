@@ -64,6 +64,15 @@ was not recorded. Later snapshots record both returned rows and `Total`.
 | 2026-07-25T11:58:38Z | `AI-native compiler` | 48 | 0 | 50 | 94 |
 | 2026-07-25T11:58:38Z | `topic:aot-compiler` | 14 | -2 | 18 | 18 |
 | 2026-07-25T11:58:38Z | `topic:python-compiler` | 41 | +1 | 44 | 44 |
+| 2026-07-25T13:18:56Z | `pycc` | >50 | — | 50 | 363 |
+| 2026-07-25T13:18:56Z | `Python 3.14 compiler in:description` | 12 | 0 | 16 | 16 |
+| 2026-07-25T13:18:56Z | `ahead-of-time compiler python` | 8 | 0 | 11 | 11 |
+| 2026-07-25T13:18:56Z | `typed Python compiler` | >50 | — | 50 | 316 |
+| 2026-07-25T13:18:56Z | `python aot compiler` | 19 | 0 | 28 | 28 |
+| 2026-07-25T13:18:56Z | `compile python native binary` | 22 | 0 | 38 | 38 |
+| 2026-07-25T13:18:56Z | `AI-native compiler` | 48 | 0 | 50 | 94 |
+| 2026-07-25T13:18:56Z | `topic:aot-compiler` | 14 | 0 | 18 | 18 |
+| 2026-07-25T13:18:56Z | `topic:python-compiler` | 41 | 0 | 44 | 44 |
 
 ## GitHub traffic history
 
@@ -78,6 +87,7 @@ include CI, agents, and other automation and is not treated as human discovery.
 | 2026-07-25T09:08:07Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 | 2026-07-25T10:23:18Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 | 2026-07-25T11:58:38Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
+| 2026-07-25T13:18:56Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 
 ## Google Search Console history
 
@@ -99,19 +109,20 @@ later movement can be correlated without presenting correlation as causation.
 |---|---|---|
 | 2026-07-25T10:28:25Z | GitHub repository metadata | Kept the honest ahead-of-time positioning, added the standard `AOT` abbreviation to the description, and added the focused `typed-python`, `python-314`, and `llvm-compiler` topics |
 | 2026-07-25T12:04:00Z | Public evidence site | Added a crawlable, source-backed Python AOT compiler comparison that distinguishes language, artifact, runtime, and maturity models while warning that pycc is not production-ready |
+| 2026-07-25T13:21:53Z | Public evidence site | Expanded the source-backed comparison to LPython after current public web results exposed a missing typed-Python/AOT model; the new claims cite official project and repository documentation, and the landing-page hero now stays within narrow mobile viewports |
 
 ## Current interpretation
 
-The repository is visible for the specific Python 3.14 description query and
-has entered the measured window for every tracked AOT/native/AI intent:
-`python aot compiler` newly appeared at rank 19 while the established
-ahead-of-time, native-binary, and AI-native positions stayed unchanged. It is
-still outside the top 50 for the ambiguous exact name and broad typed-Python
-query. Topic ranks continue to move in both directions, reinforcing that one
-best-match observation is volatile rather than a stable trend. The latest URL
-Inspection evidence has two timestamps: the four pre-existing canonical URLs
-were on Google at 10:29 UTC, while the new comparison URL was unknown to Google
-at 12:54 UTC and now has an accepted priority indexing request. Google query
-performance is not available, and sitemap processing remains unsuccessful
-after another accepted resubmission. The unchanged traffic window is too
-automation-heavy and low-uniqueness to attribute to SEO.
+All nine measured GitHub positions were unchanged at 13:18 UTC. The repository
+remains visible for the specific Python 3.14 description query and within the
+measured window for every tracked AOT/native/AI intent, including rank 19 for
+`python aot compiler`. It is still outside the top 50 for the ambiguous exact
+name and broad typed-Python query. Current public web research exposed LPython
+as a missing comparison model; that content gap is not a Google rank or
+impression claim. The latest URL Inspection evidence has two timestamps: the
+four pre-existing canonical URLs were on Google at 10:29 UTC, while the new
+comparison URL was unknown to Google at 12:54 UTC and now has an accepted
+priority indexing request. Google query performance is not available, and
+sitemap processing remains unsuccessful after another accepted resubmission.
+The unchanged traffic window remains too automation-heavy and low-uniqueness
+to attribute to SEO.
