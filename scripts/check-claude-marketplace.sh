@@ -50,4 +50,20 @@ PY
 env CLAUDE_CONFIG_DIR="$test_claude_config" \
   claude plugin validate --strict "$marketplace_root"
 
+env CLAUDE_CONFIG_DIR="$test_claude_config" \
+  claude plugin marketplace add "$marketplace_root" --scope user
+(
+  cd "$repo_root"
+  env CLAUDE_CONFIG_DIR="$test_claude_config" \
+    claude plugin install ievo@ievo-skills --scope user
+)
+set -- "$test_claude_config"/plugins/cache/ievo-skills/ievo/*/agents/deep-reviewer.md
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+  echo "error: expected one pinned Claude deep-reviewer artifact" >&2
+  exit 1
+fi
+python3 "$repo_root/scripts/check_review_local_changes.py" \
+  --client claude \
+  --reviewer-manifest "$1"
+
 echo "Claude marketplace: project settings and inline manifest are valid"

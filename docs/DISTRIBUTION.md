@@ -65,7 +65,8 @@ A revision advertised for hook use must satisfy all of the following:
 5. The repository's normal build, tests, documentation, clippy, workflow
    policy, and 100% line/region coverage gates pass.
 
-The checked-in integration tests enforce the manifest contents and the CLI
-success, failure, aggregation, and precedence paths. A release still needs the
+The checked-in integration tests enforce the manifest contents, execute the
+hook's valid-source fixture through `pycc check`, and cover the CLI success,
+failure, aggregation, and precedence paths. A release still needs the
 clean-environment and Tier-1 installation evidence; merging the manifest alone
 does not create or advertise a release tag.

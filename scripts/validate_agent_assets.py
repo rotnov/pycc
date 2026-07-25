@@ -23,6 +23,7 @@ SLASH_SKILL = re.compile(r"`/([a-z][a-z0-9-]+)`")
 ABSOLUTE_OUTPUT = re.compile(
     r"(?i)(?:save|saved|write|written|output|destination).{0,160}`(/[^`]+)`"
 )
+REVIEW_SKILL_NAME = "review-local-changes"
 
 
 def load_json(relative_path: str, failures: list[str]) -> dict:
@@ -259,6 +260,29 @@ def validate_skill_parity(
                     f"{relative}: must preserve the canonical explicit-only "
                     "invocation gate"
                 )
+
+    if REVIEW_SKILL_NAME in canonical or REVIEW_SKILL_NAME in wrappers:
+        validate_review_skill_metadata(canonical_root, codex_root, failures)
+
+
+def validate_review_skill_metadata(
+    canonical_root: Path,
+    codex_root: Path,
+    failures: list[str],
+) -> None:
+    relative = Path(REVIEW_SKILL_NAME) / "agents" / "openai.yaml"
+    canonical = canonical_root / relative
+    codex = codex_root / relative
+    if not canonical.exists():
+        failures.append(f"{canonical}: review skill metadata is required")
+        return
+    if not codex.exists():
+        failures.append(f"{codex}: Codex review skill metadata is required")
+        return
+    if canonical.read_bytes() != codex.read_bytes():
+        failures.append(
+            f"{codex}: review skill metadata must match the canonical Claude metadata"
+        )
 
 
 def fence_error(path: Path) -> str | None:

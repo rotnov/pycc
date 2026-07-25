@@ -102,7 +102,16 @@ fn is_comment_or_blank(line: &[u8]) -> bool {
 
 fn resolve_encoding(label: &str) -> Option<SourceEncoding> {
     let normalized = normalize_python_encoding(label);
-    match normalized.as_str() {
+    resolve_normalized_encoding(&normalized).or_else(|| {
+        normalized
+            .contains('.')
+            .then(|| normalized.replace('.', "-"))
+            .and_then(|fallback| resolve_normalized_encoding(&fallback))
+    })
+}
+
+fn resolve_normalized_encoding(normalized: &str) -> Option<SourceEncoding> {
+    match normalized {
         "utf-8" | "cp65001" | "u8" | "utf" | "utf8" | "utf8-ucs2" | "utf8-ucs4" => {
             Some(SourceEncoding::Utf8)
         }
@@ -279,7 +288,9 @@ mod tests {
         assert_eq!(resolved_kind("cp819"), "latin1");
         assert_eq!(resolved_kind("iso_8859_1"), "latin1");
         assert_eq!(resolved_kind("iso-latin-1"), "latin1");
+        assert_eq!(resolved_kind("iso.8859.1"), "latin1");
         assert_eq!(resolved_kind("646"), "ascii");
         assert_eq!(resolved_kind("iso_646.irv_1991"), "ascii");
+        assert_eq!(resolved_kind("us.ascii"), "ascii");
     }
 }

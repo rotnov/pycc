@@ -4,9 +4,10 @@ mod source;
 use clap::Parser;
 use cli::{Cli, Command};
 use pycc_diag::{Diagnostic, Span};
+use std::fmt::Write;
 use std::path::Path;
 use std::process::ExitCode;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -99,7 +100,7 @@ fn check_paths(paths: &[std::path::PathBuf]) -> ExitCode {
 }
 
 fn report_frontend_failure(path: &Path, failure: FrontendFailure) -> u8 {
-    let path = normalize_diagnostic_path(&path.to_string_lossy());
+    let path = escape_terminal_controls(&normalize_diagnostic_path(&path.to_string_lossy()), false);
     match failure {
         FrontendFailure::Input(message) => {
             eprintln!("error: could not read `{path}`: {message}");
@@ -171,27 +172,54 @@ fn render_source_span(path: &str, source: &str, span: Span, label: &str) -> Stri
     let source_prefix = &source[line_start..start];
     let column = source_prefix.chars().count() + 1;
     let highlight_end = end.max(start).min(line_end);
-    let highlight_width = UnicodeWidthStr::width(&source[start..highlight_end]).max(1);
+    let rendered_source_line = escape_terminal_controls(source_line, true);
+    let rendered_prefix = escape_terminal_controls(source_prefix, true);
+    let rendered_highlight = escape_terminal_controls(&source[start..highlight_end], true);
+    let highlight_width = display_width(&rendered_highlight).max(1);
     let gutter_width = line_number.to_string().len();
     let empty_gutter = " ".repeat(gutter_width);
-    let mut caret_padding = String::new();
-    for character in source_prefix.chars() {
-        if character == '\t' {
-            caret_padding.push('\t');
-        } else {
-            caret_padding.extend(std::iter::repeat_n(
-                ' ',
-                UnicodeWidthChar::width(character).unwrap_or(0),
-            ));
-        }
-    }
+    let caret_padding = display_padding(&rendered_prefix);
 
     format!(
         " --> {path}:{line_number}:{column}\n{empty_gutter} |\n\
-         {line_number:>gutter_width$} | {source_line}\n\
+         {line_number:>gutter_width$} | {rendered_source_line}\n\
          {empty_gutter} | {caret_padding}{} {label}",
         "^".repeat(highlight_width),
     )
+}
+
+fn escape_terminal_controls(text: &str, preserve_tabs: bool) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\t' if preserve_tabs => escaped.push('\t'),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            '\0' => escaped.push_str("\\0"),
+            character if character.is_control() => {
+                write!(escaped, "\\u{{{:x}}}", u32::from(character))
+                    .expect("writing to a string must succeed");
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn display_width(text: &str) -> usize {
+    text.split('\t').map(UnicodeWidthStr::width).sum()
+}
+
+fn display_padding(text: &str) -> String {
+    let mut padding = String::new();
+    for (index, segment) in text.split('\t').enumerate() {
+        if index > 0 {
+            padding.push('\t');
+        }
+        padding.extend(std::iter::repeat_n(' ', UnicodeWidthStr::width(segment)));
+    }
+    padding
 }
 
 fn run(path: &str) -> ExitCode {
@@ -218,7 +246,10 @@ fn find_pycc_rt_lib_dir() -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_diagnostic_path;
+    use super::{
+        display_padding, escape_terminal_controls, normalize_diagnostic_path, render_source_span,
+    };
+    use pycc_diag::Span;
 
     #[test]
     fn diagnostic_paths_are_lexically_normalized() {
@@ -244,5 +275,36 @@ mod tests {
         );
         assert_eq!(normalize_diagnostic_path("."), ".");
         assert_eq!(normalize_diagnostic_path("/"), "/");
+    }
+
+    #[test]
+    fn terminal_controls_are_escaped_without_losing_source_tabs() {
+        assert_eq!(
+            escape_terminal_controls("a\n\r\t\0\u{1b}\u{85}z", false),
+            r"a\n\r\t\0\u{1b}\u{85}z"
+        );
+        assert_eq!(escape_terminal_controls("a\t\u{1b}z", true), "a\t\\u{1b}z");
+    }
+
+    #[test]
+    fn diagnostic_padding_uses_whole_unicode_sequences_and_retains_tabs() {
+        assert_eq!(display_padding("👩‍💻👍🏽"), "    ");
+        assert_eq!(display_padding("\t👩‍💻"), "\t  ");
+    }
+
+    #[test]
+    fn source_rendering_escapes_controls_and_aligns_the_caret_to_rendered_text() {
+        let source = "\u{1b}👩‍💻👍🏽$\n";
+        let start = source.find('$').unwrap();
+        let rendered = render_source_span(
+            "bad.py",
+            source,
+            Span::new(start as u32, (start + 1) as u32),
+            "invalid syntax",
+        );
+
+        assert!(rendered.contains("1 | \\u{1b}👩‍💻👍🏽$"));
+        assert!(rendered.contains("  |           ^ invalid syntax"));
+        assert!(!rendered.contains('\u{1b}'));
     }
 }

@@ -34,6 +34,14 @@ enum PendingItem {
     TopLevelStmt(HirStmt),
 }
 
+#[derive(Default)]
+struct ResolutionState {
+    bodies: HashMap<String, Vec<HirStmt>>,
+    bindings: HashSet<(String, Vec<String>)>,
+    active_calls: HashSet<String>,
+    misses: usize,
+}
+
 /// Lowers a parsed module into the subset of HIR implemented by this pycc
 /// version.
 ///
@@ -44,6 +52,10 @@ enum PendingItem {
 /// to later module functions only when top-level execution reaches the call
 /// after those definitions have run.
 pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
+    lower_with_resolution_misses(module).map(|(module, _)| module)
+}
+
+fn lower_with_resolution_misses(module: &ModModule) -> Result<(HirModule, usize), Diagnostic> {
     let mut function_names = HashSet::new();
     for stmt in &module.body {
         if let Stmt::FunctionDef(function) = stmt {
@@ -59,7 +71,7 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
 
     let mut available_functions = HashSet::new();
     let mut functions = HashMap::<String, &StmtFunctionDef>::new();
-    let mut resolved_bodies = HashMap::<String, Vec<HirStmt>>::new();
+    let mut resolution = ResolutionState::default();
     let mut pending_items = Vec::new();
     for stmt in &module.body {
         match stmt {
@@ -71,13 +83,7 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
                 pending_items.push(PendingItem::Function(name));
             }
             other => {
-                let stmt = lower_stmt(
-                    other,
-                    &available_functions,
-                    &functions,
-                    &mut resolved_bodies,
-                    &mut HashSet::new(),
-                )?;
+                let stmt = lower_stmt(other, &available_functions, &functions, &mut resolution)?;
                 pending_items.push(PendingItem::TopLevelStmt(stmt));
             }
         }
@@ -87,7 +93,7 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
         let PendingItem::Function(name) = item else {
             continue;
         };
-        if !resolved_bodies.contains_key(name) {
+        if !resolution.bodies.contains_key(name) {
             let function = functions
                 .get(name)
                 .expect("every pending function must have a definition");
@@ -96,8 +102,7 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
                 function.name.range(),
                 &available_functions,
                 &functions,
-                &mut resolved_bodies,
-                &mut HashSet::new(),
+                &mut resolution,
             )?;
         }
     }
@@ -106,7 +111,8 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
         .into_iter()
         .map(|item| match item {
             PendingItem::Function(name) => HirItem::Function {
-                body: resolved_bodies
+                body: resolution
+                    .bodies
                     .remove(&name)
                     .expect("every function body must be resolved"),
                 name,
@@ -114,15 +120,14 @@ pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
             PendingItem::TopLevelStmt(stmt) => HirItem::TopLevelStmt(stmt),
         })
         .collect();
-    Ok(HirModule { items })
+    Ok((HirModule { items }, resolution.misses))
 }
 
 fn lower_stmt(
     stmt: &Stmt,
     available_functions: &HashSet<String>,
     functions: &HashMap<String, &StmtFunctionDef>,
-    resolved_bodies: &mut HashMap<String, Vec<HirStmt>>,
-    active_calls: &mut HashSet<String>,
+    resolution: &mut ResolutionState,
 ) -> Result<HirStmt, Diagnostic> {
     let Stmt::Expr(expr_stmt) = stmt else {
         return Err(unsupported(
@@ -168,8 +173,7 @@ fn lower_stmt(
             func.range(),
             available_functions,
             functions,
-            resolved_bodies,
-            active_calls,
+            resolution,
         )?;
         Ok(HirStmt::CallUserFunction {
             name: name.to_string(),
@@ -217,32 +221,30 @@ fn resolve_function(
     invocation_range: TextRange,
     available_functions: &HashSet<String>,
     functions: &HashMap<String, &StmtFunctionDef>,
-    resolved_bodies: &mut HashMap<String, Vec<HirStmt>>,
-    active_calls: &mut HashSet<String>,
+    resolution: &mut ResolutionState,
 ) -> Result<(), Diagnostic> {
-    if !active_calls.insert(name.to_string()) {
+    let mut bindings = available_functions.iter().cloned().collect::<Vec<_>>();
+    bindings.sort_unstable();
+    let resolution_key = (name.to_string(), bindings);
+    if resolution.bindings.contains(&resolution_key) {
         return Ok(());
     }
+    if !resolution.active_calls.insert(name.to_string()) {
+        return Ok(());
+    }
+    resolution.misses += 1;
     let function = functions
         .get(name)
         .expect("every available function must have a definition");
     let body = function
         .body
         .iter()
-        .map(|stmt| {
-            lower_stmt(
-                stmt,
-                available_functions,
-                functions,
-                resolved_bodies,
-                active_calls,
-            )
-        })
+        .map(|stmt| lower_stmt(stmt, available_functions, functions, resolution))
         .collect::<Result<Vec<_>, _>>();
-    active_calls.remove(name);
+    resolution.active_calls.remove(name);
     let body = body?;
 
-    match resolved_bodies.get(name) {
+    let result = match resolution.bodies.get(name) {
         Some(resolved) if resolved != &body => Err(unsupported(
             format!(
                 "calling function `{name}` under different module bindings is not supported so far"
@@ -251,10 +253,14 @@ fn resolve_function(
         )),
         Some(_) => Ok(()),
         None => {
-            resolved_bodies.insert(name.to_string(), body);
+            resolution.bodies.insert(name.to_string(), body);
             Ok(())
         }
+    };
+    if result.is_ok() {
+        resolution.bindings.insert(resolution_key);
     }
+    result
 }
 
 fn validate_function_signature(function: &StmtFunctionDef) -> Result<(), Diagnostic> {
@@ -312,6 +318,7 @@ fn is_python_builtin(name: &str) -> bool {
             | "DeprecationWarning"
             | "EOFError"
             | "EncodingWarning"
+            | "EnvironmentError"
             | "Exception"
             | "ExceptionGroup"
             | "FileExistsError"
@@ -324,6 +331,7 @@ fn is_python_builtin(name: &str) -> bool {
             | "IndentationError"
             | "IndexError"
             | "InterruptedError"
+            | "IOError"
             | "IsADirectoryError"
             | "KeyError"
             | "KeyboardInterrupt"
@@ -433,7 +441,17 @@ fn is_python_builtin(name: &str) -> bool {
             | "type"
             | "vars"
             | "zip"
-    )
+    ) || is_platform_builtin(name)
+}
+
+#[cfg(windows)]
+fn is_platform_builtin(name: &str) -> bool {
+    name == "WindowsError"
+}
+
+#[cfg(not(windows))]
+fn is_platform_builtin(_name: &str) -> bool {
+    false
 }
 
 fn undefined_function(name: &str, range: TextRange) -> Diagnostic {
@@ -779,6 +797,45 @@ first()
     }
 
     #[test]
+    fn unchanged_body_is_reused_when_unrelated_bindings_are_added() {
+        let source = "\
+def first() -> None:
+    print(1)
+
+first()
+
+def later() -> None:
+    print(2)
+
+first()
+";
+        let module = pycc_parser_test_helper::parse(source);
+        let hir = lower(&module).unwrap();
+
+        assert_eq!(hir.items.len(), 4);
+    }
+
+    #[test]
+    fn doubling_call_graph_is_lowered_once_per_function_and_binding_set() {
+        let depth = 20;
+        let mut source = String::from("def f0() -> None:\n    print(0)\n\n");
+        for index in 1..=depth {
+            source.push_str(&format!(
+                "def f{index}() -> None:\n    f{}()\n    f{}()\n\n",
+                index - 1,
+                index - 1,
+            ));
+        }
+        source.push_str(&format!("f{depth}()\n"));
+
+        let module = pycc_parser_test_helper::parse(&source);
+        let (hir, resolution_misses) = lower_with_resolution_misses(&module).unwrap();
+
+        assert_eq!(hir.items.len(), depth + 2);
+        assert_eq!(resolution_misses, depth + 1);
+    }
+
+    #[test]
     fn conflicting_cached_function_bodies_are_rejected() {
         let source = "print(0)\n\ndef first() -> None:\n    print(1)\n";
         let module = pycc_parser_test_helper::parse(source);
@@ -793,20 +850,22 @@ first()
         let mut functions = HashMap::new();
         functions.insert("first".to_string(), function);
         let available_functions = HashSet::from(["first".to_string()]);
-        let mut resolved_bodies = HashMap::from([(
-            "first".to_string(),
-            vec![HirStmt::CallUserFunction {
-                name: "print".to_string(),
-            }],
-        )]);
+        let mut resolution = ResolutionState {
+            bodies: HashMap::from([(
+                "first".to_string(),
+                vec![HirStmt::CallUserFunction {
+                    name: "print".to_string(),
+                }],
+            )]),
+            ..ResolutionState::default()
+        };
 
         let error = resolve_function(
             "first",
             function.name.range(),
             &available_functions,
             &functions,
-            &mut resolved_bodies,
-            &mut HashSet::new(),
+            &mut resolution,
         )
         .unwrap_err();
 
@@ -841,6 +900,8 @@ first()
             "NameError",
             "UnboundLocalError",
             "OSError",
+            "EnvironmentError",
+            "IOError",
             "BlockingIOError",
             "ChildProcessError",
             "ConnectionError",
@@ -888,6 +949,7 @@ first()
         ] {
             assert!(is_python_builtin(name), "missing built-in: {name}");
         }
+        assert_eq!(is_python_builtin("WindowsError"), cfg!(windows));
     }
 
     #[test]

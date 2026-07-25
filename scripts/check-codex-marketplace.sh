@@ -75,7 +75,7 @@ wrappers = sorted(
     path.parent.name for path in (repo_root / ".agents" / "skills").glob("*/SKILL.md")
 )
 assert "grill-with-docs" in wrappers, "Codex skill wrappers are missing"
-assert len(wrappers) == 13, "Codex did not retain every repository skill wrapper"
+assert len(wrappers) == 14, "Codex did not retain every repository skill wrapper"
 prompt = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 model_input = "\n".join(
     content.get("text", "")
@@ -116,5 +116,14 @@ assert "pycc-agent-skills:" not in model_input, (
     "repository skills must not be discovered from a global plugin namespace"
 )
 ' "$prompt_input" "$repo_root"
+
+set -- "$test_codex_home"/plugins/cache/ievo-skills/ievo/*/agents/deep-reviewer.md
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+  echo "error: expected one pinned Codex deep-reviewer artifact" >&2
+  exit 1
+fi
+python3 "$repo_root/scripts/check_review_local_changes.py" \
+  --client codex \
+  --reviewer-manifest "$1"
 
 echo "Codex pinned marketplace and project-scoped skills: valid"

@@ -434,6 +434,29 @@ fn check_preserves_a_literal_backslash_in_a_unix_diagnostic_path() {
     assert!(!stderr.contains(" --> bad/name.py"));
 }
 
+#[cfg(unix)]
+#[test]
+fn check_escapes_terminal_controls_in_diagnostic_paths() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_control_path_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad\n\u{1b}.py", "x = 1\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("bad\\n\\u{1b}.py:1:1"), "stderr: {stderr}");
+    assert!(!stderr.contains('\u{1b}'));
+    assert!(!stderr.contains(&format!(" --> {}", src.display())));
+}
+
 #[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));
@@ -524,11 +547,21 @@ fn check_accepts_python_normalized_encoding_separators() {
     std::fs::write(&utf8, b"# coding: utf--8\nprint(1)\n").unwrap();
     let latin1 = dir.join("latin1.py");
     std::fs::write(&latin1, b"# coding: latin__1\n# caf\xe9\nprint(2)\n").unwrap();
+    let dotted_ascii = dir.join("dotted_ascii.py");
+    std::fs::write(&dotted_ascii, b"# coding: us.ascii\nprint(3)\n").unwrap();
+    let dotted_latin1 = dir.join("dotted_latin1.py");
+    std::fs::write(
+        &dotted_latin1,
+        b"# coding: iso.8859.1\n# caf\xe9\nprint(4)\n",
+    )
+    .unwrap();
 
     let output = Command::new(pycc_bin())
         .arg("check")
         .arg(&utf8)
         .arg(&latin1)
+        .arg(&dotted_ascii)
+        .arg(&dotted_latin1)
         .output()
         .unwrap();
 
@@ -827,7 +860,7 @@ fn build_rejects_a_currently_unsupported_construct_without_panicking() {
 fn repository_publishes_the_pycc_check_pre_commit_hook() {
     let manifest_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".pre-commit-hooks.yaml");
-    let manifest = std::fs::read_to_string(manifest_path).unwrap();
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
 
     assert_eq!(
         manifest,
@@ -841,4 +874,17 @@ fn repository_publishes_the_pycc_check_pre_commit_hook() {
   require_serial: true
 "
     );
+
+    let fixture = manifest_path
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/pre_commit_valid.py");
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(fixture)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
 }

@@ -211,6 +211,35 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
             self.assertEqual(failures, [])
 
+    def test_review_skill_metadata_must_match_between_clients(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canonical_root = root / "canonical"
+            codex_root = root / "codex"
+            canonical = (
+                canonical_root
+                / validator.REVIEW_SKILL_NAME
+                / "agents"
+                / "openai.yaml"
+            )
+            codex = (
+                codex_root
+                / validator.REVIEW_SKILL_NAME
+                / "agents"
+                / "openai.yaml"
+            )
+            canonical.parent.mkdir(parents=True)
+            codex.parent.mkdir(parents=True)
+            canonical.write_text("policy: canonical\n", encoding="utf-8")
+            codex.write_text("policy: different\n", encoding="utf-8")
+            failures: list[str] = []
+            validator.validate_review_skill_metadata(
+                canonical_root,
+                codex_root,
+                failures,
+            )
+            self.assertTrue(any("must match" in failure for failure in failures))
+
     def claude_settings(
         self,
         *,

@@ -80,14 +80,33 @@
 - This repository currently has one maintainer. Do not require an approving pull-request review in branch protection: GitHub does not count an author's approval of their own pull request, so that setting deadlocks solo-maintainer work.
 - Keep required status checks, including the 100% coverage gate, and required conversation resolution enabled. Revisit the approving-review requirement when a second human maintainer is available.
 
-### GitHub Codex review loop
+### Local skill-based review loop
 
-- After opening a pull request, request a GitHub Codex review with the exact comment `@codex review`.
-- Request at most one Codex review per head commit. After fixes produce a new head commit, request another review only when the previous findings may no longer describe the current diff.
-- Monitor the resulting standard GitHub review, inline comments, issue comments, reactions, and unresolved review threads. Treat actionable inline comments as unfinished work.
-- Address every verified P0/P1 finding and every other actionable correctness or contract finding before merge. Keep fixes focused, push them to the pull request branch, and re-run the review and CI gates.
-- Merge only when required checks, including the 100% coverage gate, are green and no unresolved actionable review thread remains.
-- Codex review is an additional high-signal pass, not a replacement for tests, specifications, branch protection, or independent review.
+- Before completing significant work or merging a pull request, run the
+  repository-owned `review-local-changes` skill. It searches only
+  repository-owned and explicitly pinned, security-reviewed reviewer
+  dependencies, then dispatches the most comprehensive eligible read-only
+  reviewer in an independent local context. The current default engine is the
+  pinned iEvo `deep-reviewer`.
+- The skill reviews staged or working-tree changes before commit. For an
+  existing pull request with a clean tree, it reviews the full committed branch
+  diff from its merge base with the refreshed remote default branch, not a
+  two-dot diff against the default-branch tip.
+- Do not select arbitrary globally installed or marketplace review skills.
+  Add a new eligible reviewer only through the repository's agent-tool
+  security-check and pinning process.
+- Do not use a GitHub `@codex review` comment as a required gate. External
+  GitHub reviews remain optional when the user explicitly requests one, but
+  asynchronous review availability must not block the local review loop.
+- Address every verified P0/P1 finding and every other actionable correctness
+  or contract finding before merge. Keep fixes focused and rerun the selected
+  review skill after fixes when its previous findings may no longer describe
+  the current diff.
+- Merge only when required checks, including the 100% coverage gate, are
+  green and no unresolved actionable review finding or pull-request thread
+  remains.
+- Skill-based review is an additional high-signal pass, not a replacement for
+  tests, specifications, branch protection, or independent human review.
 
 ### Review focus
 
@@ -102,3 +121,4 @@ Before finishing a change:
 2. Update the affected docs in the same patch as the implementation.
 3. Check links, examples, commands, status statements, and references to renamed files.
 4. Run the relevant tests and documentation generation or freshness checks.
+5. Run `review-local-changes` for significant changes and address its actionable findings.

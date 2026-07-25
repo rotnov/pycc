@@ -36,10 +36,13 @@ encodings are unreadable-input errors until pycc has a decoder with mappings
 that exactly match Python's codec. A BOM/cookie conflict or malformed encoded
 input is also an unreadable-input error. Runs of `-` and `_` in declared codec
 labels are collapsed before alias resolution, matching Python's ASCII codec
-normalization for the cookie grammar. BOM agreement uses the tokenizer's
-stricter normalization: case is folded, `_` becomes `-`, and repeated
-separators are not collapsed. After decoding, LF, CRLF, and CR physical line
-endings are normalized to LF before parsing and diagnostic span calculation.
+normalization for the cookie grammar. Alias lookup first tries the normalized
+label with dots intact, then retries with dots treated as separators, matching
+Python's codec registry behavior for aliases such as `us.ascii` and
+`iso.8859.1`. BOM agreement uses the tokenizer's stricter normalization: case
+is folded, `_` becomes `-`, and repeated separators are not collapsed. After
+decoding, LF, CRLF, and CR physical line endings are normalized to LF before
+parsing and diagnostic span calculation.
 
 For the other commands, the target contract remains `PATH` = file or project
 directory (using `pycc.toml`), with an omitted path meaning the current
@@ -108,5 +111,9 @@ Displayed diagnostic paths are lexically normalized without filesystem
 canonicalization: native path separators are rendered as `/`, redundant `.`
 components and repeated separators are removed, and `..` components are
 preserved. A literal backslash in a Unix filename remains a backslash.
-Human-format caret padding uses Unicode display width and retains literal tabs
-so markers align with the rendered source in a terminal.
+Control characters in displayed paths and source excerpts are rendered as
+visible escapes so filenames or source text cannot inject terminal control
+sequences. Literal source tabs remain tabs. Human-format caret padding measures
+each complete non-tab Unicode sequence rather than summing individual scalar
+widths, so combining marks, emoji modifiers, and zero-width joiner sequences
+align with the rendered source.

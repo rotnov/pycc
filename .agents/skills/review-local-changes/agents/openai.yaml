@@ -1,0 +1,6 @@
+interface:
+  display_name: "Review Local Changes"
+  short_description: "Run a complete independent local diff review"
+  default_prompt: "Use $review-local-changes to review the complete current diff before I finish."
+policy:
+  allow_implicit_invocation: true
