@@ -145,14 +145,18 @@ administrator-controlled state rather than pull-request content; the gate
 validates this value's exact lowercase 40-hex form and requires it to equal the
 event's head SHA. It separately resolves the live `main` head and requires it
 to equal the event's base SHA, so neither a synchronize event for a new head, a
-stale event, nor a rerun can replay the exception. The first push half requires
-`refs/heads/main`, run attempt 1, an event `after` SHA equal to `github.sha`,
-and that SHA equal to the live `main` head resolved through the API. In both
-cases the predecessor `ci.yml` must have the exact pre-split digest already
-trusted here. Once the split workflow is active, a missing or expired main
-artifact fails closed. Both performance jobs are required by an exact
-fail-closed `ci-gate`; the trusted checker validates all three complete job
-shapes in both prospective workflow digests. The bootstrap-free steady state
+stale event, nor a pull-request rerun can replay the exception. The activation
+push half requires
+`refs/heads/main`, an event `after` SHA equal to `github.sha`, and that SHA
+equal to the live `main` head resolved through the API. A failed or cancelled
+attempt may be rerun while those exact activation-push identities remain true,
+so transient CI failure cannot strand the repository before its first
+baseline; a rerun after `main` advances fails closed. In both cases the
+predecessor `ci.yml` must have the exact pre-split digest already trusted here.
+Once the split workflow is active, a missing or expired main artifact fails
+closed. Both performance jobs are required by an exact fail-closed `ci-gate`;
+the trusted checker validates all three complete job shapes in both
+prospective workflow digests. The bootstrap-free steady state
 requires the exact predecessor artifact unconditionally and compares without a
 skip expression. The activation variable, activation digest, and bootstrap are
 transitional and must be removed after the first successful main artifact

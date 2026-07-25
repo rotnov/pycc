@@ -458,7 +458,8 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.locate_baseline.outputs.run_id }}
 
-      # The activation PR and its first main push cannot have a prior artifact.
+      # The activation PR and activation main push (including retries of that
+      # exact push) cannot have a prior artifact.
       # Permit that bootstrap only when the immediately preceding ci.yml is the
       # exact pre-split workflow already trusted by the main-branch checker.
       - name: Require a main-owned baseline or reviewed activation
@@ -513,10 +514,6 @@ jobs:
             push)
               if [ "$GITHUB_REF" != "refs/heads/main" ]; then
                 echo "reviewed activation push must target refs/heads/main" >&2
-                exit 1
-              fi
-              if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
-                echo "reviewed activation push cannot be replayed" >&2
                 exit 1
               fi
               if [ "$PUSH_AFTER_SHA" != "$GITHUB_SHA" ]; then

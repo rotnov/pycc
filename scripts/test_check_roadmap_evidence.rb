@@ -888,6 +888,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     assert status.success?, stderr
+    assert_empty stderr
     assert_equal "bootstrap=true\n", output
   end
 
@@ -962,7 +963,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_equal "bootstrap=true\n", output
   end
 
-  def test_baseline_validation_rejects_a_replayed_activation_push
+  def test_baseline_validation_accepts_a_retry_of_the_same_activation_push
     _stdout, stderr, status, output = run_perf_baseline_validation(
       event_name: "push",
       github_ref: "refs/heads/main",
@@ -970,9 +971,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
       run_attempt: "2"
     )
 
-    refute status.success?
-    assert_includes stderr, "cannot be replayed"
-    assert_empty output
+    assert status.success?, stderr
+    assert_empty stderr
+    assert_equal "bootstrap=true\n", output
   end
 
   def test_baseline_validation_rejects_a_push_that_is_not_the_live_main_head

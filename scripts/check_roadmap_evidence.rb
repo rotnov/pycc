@@ -34,7 +34,7 @@ EVIDENCE_SECTIONS = {
   ]
 }.freeze
 D48_SPLIT_PERF_CI_WORKFLOW_SHA256 =
-  "5d3b2b8da766134e65d7e19a7ce61be2e68105c7b96f136cdb39f6d1161d62b2"
+  "cbfe4b1bc81f08da84482e89b5ce8ba3a524e1058180ef24cb574e00ec796ecc"
 D48_STEADY_PERF_CI_WORKFLOW_SHA256 =
   "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
 TIER1_CI_WORKFLOW_SHA256S = [
@@ -193,10 +193,6 @@ PERF_BASELINE_VALIDATION_SCRIPT_TEMPLATE = <<~'SHELL'.strip
     push)
       if [ "$GITHUB_REF" != "refs/heads/main" ]; then
         echo "reviewed activation push must target refs/heads/main" >&2
-        exit 1
-      fi
-      if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
-        echo "reviewed activation push cannot be replayed" >&2
         exit 1
       fi
       if [ "$PUSH_AFTER_SHA" != "$GITHUB_SHA" ]; then

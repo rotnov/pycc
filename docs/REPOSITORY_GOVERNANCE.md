@@ -56,9 +56,13 @@ activation sequence is fail-closed:
    Merely changing the variable underneath an open reviewed head is forbidden.
 5. After the activation merge, require the successful `main` `ci.yml` run and
    its non-expired `frontend-perf-current` artifact for that exact merge
-   commit. Then delete the variable, verify that it is absent, and record the
-   deletion evidence in the cleanup PR that replaces `ci.yml` byte-for-byte
-   from `tests/fixtures/d48-steady-ci.yml` and removes every bootstrap path.
+   commit. A failed or cancelled attempt may be rerun while that exact commit
+   remains the live `main` head; the event `after`, checkout, live-main, and
+   pre-split predecessor checks still bind every retry to the same activation
+   transition. Then delete the variable, verify that it is absent, and record
+   the deletion evidence in the cleanup PR that replaces `ci.yml`
+   byte-for-byte from `tests/fixtures/d48-steady-ci.yml` and removes every
+   bootstrap path.
 
 The SHA is public and is not a credential. Its administrative mutability is the
 reason the lifecycle requires explicit before/set/read-back/delete evidence and
