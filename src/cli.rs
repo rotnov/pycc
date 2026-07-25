@@ -13,6 +13,11 @@ pub enum Command {
         path: String,
         #[arg(short = 'o')]
         out: String,
+        /// Cross-compile for a different Tier-1 target triple (e.g.
+        /// x86_64-apple-darwin). Omit to build for the host's own default
+        /// target -- the common case.
+        #[arg(long)]
+        target: Option<String>,
     },
     Run {
         path: String,

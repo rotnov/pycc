@@ -111,11 +111,26 @@ checked out the trusted policy implementation from base commit
 `107eccf4d6d4161c26f7257de538cad974bed913`, passed all 31 checker tests and
 70 assertions, and audited all five workflow files at the triggering
 [PR #35](https://github.com/rotnov/pycc/pull/35) head as non-executable data.
-Branch protection is strict and requires both
-`build-test-coverage` and `audit`, bound to the GitHub Actions app. Removing
-either required check, disabling strict mode, or accepting an `audit` context
-from another app is a policy regression; all later policy changes are
-evaluated by the trusted checker from their base revision.
+Branch protection is strict and currently requires `build-test-coverage` and
+`audit`, bound to the GitHub Actions app. `ci-gate` (D-032) is a single
+stable-named job in `ci.yml`, added in the same pull request that landed the
+five-target Tier-1 matrix, that fans in every job in that workflow
+(`build-test-coverage`, all four `native-build-test` Tier-1 legs,
+`cross-compile-build`, `cross-compile-verify`) so branch protection can enforce
+the whole matrix through one required-check name that survives matrix edits,
+rather than naming each matrix leg directly (whose GitHub-generated name bakes
+in the matrix values and would go stale the moment an `os`/`target` entry
+changes). Branch protection's required check is switched from
+`build-test-coverage` to `ci-gate` **once `ci-gate` exists on `main`** --
+flipping it earlier, while other branches are still open against a `main`
+without this job, would leave those PRs waiting on a required check they have
+no way to satisfy. Until that switch happens, `native-build-test`,
+`cross-compile-build`, and `cross-compile-verify` failing or staying pending
+does not by itself block a merge -- a real, tracked gap, not a silent one.
+Removing either required check, disabling strict mode, accepting an `audit`
+context from another app, or (once switched) dropping a job from `ci-gate`'s
+`needs:` list is a policy regression; all later policy changes are evaluated
+by the trusted checker from their base revision.
 
 ## Code coverage (D-014)
 
@@ -134,8 +149,10 @@ Distinct from the grammar-coverage gate in Meta below (which measures PEP/langua
 
 - **Practical notes on what actually shows up as a coverage gap** (learned building the first few v0.1 crates — verified directly against `cargo llvm-cov`'s HTML report, not assumed):
   - A hand-written `match { expected => ..., _ => panic!("...") }` — in test code or production code — creates its *own* region for the `_`/catch-all arm. If nothing ever exercises that arm, it's a gap, even though the arm is real and reachable. In tests, prefer `#[derive(Debug, PartialEq)]` on the type under test plus `assert_eq!(actual, expected)` over a manual match-and-panic assertion — it needs no catch-all arm at all.
-  - **`.expect()`/`.unwrap()` do *not* have this problem**: their internal panic branch lives inside libcore/libstd, outside the calling crate's instrumented regions, so a call that always succeeds in every test still reads as 100% covered. This is the right choice for an operation that's genuinely infallible given the caller's own invariants (see `pycc_codegen::compile_to_object`'s five `.expect()`s on native-target/IR-verification operations that no input to that function can make fail).
+  - **`.expect()`/`.unwrap()` do *not* have this problem**: their internal panic branch lives inside libcore/libstd, outside the calling crate's instrumented regions, so a call that always succeeds in every test still reads as 100% covered. This is the right choice for an operation that's genuinely infallible given the caller's own invariants (see `pycc_codegen::compile_to_object`'s five `.expect()`s on IR-construction/target-machine-creation operations that no input can make fail once `Target::from_triple` has already validated the requested triple).
   - **A closure passed to a combinator (`.map_err(|e| ...)`, `.and_then(...)`, etc.) is tracked as its own function/region and *does* need to actually run** — if the `Result`/`Option` it's attached to never takes that branch across the whole test suite, the closure body shows as a missed region even though the call site's own line is "covered." Reserve `Result`-returning `.map_err(...)` for failure modes a test can actually trigger (e.g. a bad output path); use `.expect(...)` for the rest instead of threading a `Result` no real input can produce.
+  - **A function generic over `impl Fn(..)` (dependency-injection for testability — e.g. passing in a fake filesystem-existence check) gets monomorphized once per distinct closure type**, and each monomorphized copy is tracked *separately*: a copy that's only ever called with an always-true fake never executes that copy's error branches, and that reads as a real gap even though the *production* closure (or a different test's fake) exercises them. Fix: take a plain `fn(..) -> ..` pointer instead of `impl Fn(..)` when every caller's closure is non-capturing (as is typical for this kind of fake) — one concrete function pointer type means one compiled body, so coverage from every caller (production and every test) accumulates on the same counters. Only reach for `impl Fn`/`Box<dyn Fn>` when a caller genuinely needs to capture state; don't default to it for simple fakes.
+  - **A test that skips itself when an optional local prerequisite is missing (e.g. `tests/slice0.rs`'s cross-compilation test, which skips unless a `--target`'s `pycc_rt` has already been built locally) makes the coverage gate depend on incidental developer-machine state, not on the test suite itself.** A dev machine that accumulated that prerequisite from earlier manual testing shows 100%; a fresh CI runner that never built it sees the test skip and the branch it alone exercises reads as a gap — caught exactly this way when `build-test-coverage`'s CI job (a clean checkout) showed 3 missed regions/1 missed line in `src/main.rs` that a local run right before pushing did not, and reproduced precisely by moving the local prerequisite build aside and rerunning. Fix: give the coverage-gated CI job whatever setup makes the skip-guard's precondition always true there (here, building that one cross-target's `pycc_rt` in the same job), so the gate never rides on whether *this specific* environment happens to have accumulated the right state.
 
 ## Meta
 
