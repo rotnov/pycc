@@ -1025,7 +1025,9 @@ fn build_rejects_a_currently_unsupported_construct_without_panicking() {
 fn repository_publishes_the_pycc_check_pre_commit_hook() {
     let manifest_path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".pre-commit-hooks.yaml");
-    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("\r\n", "\n");
 
     assert_eq!(
         manifest,
