@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>pycc architecture — typed Python to LLVM native binaries</title>
+    <meta
+      name="description"
+      content="Explore pycc's implemented Rust and LLVM compiler pipeline, current crate boundaries, and the planned path from typed Python 3.14 to native binaries."
+    >
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    >
+    <meta name="theme-color" content="#101310">
+    <meta name="color-scheme" content="dark">
+    <link rel="canonical" href="https://rotnov.github.io/pycc/architecture/">
+    <link rel="sitemap" type="application/xml" href="../sitemap.xml">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="pycc">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:url" content="https://rotnov.github.io/pycc/architecture/">
+    <meta property="og:title" content="pycc architecture — Python through Rust and LLVM">
+    <meta
+      property="og:description"
+      content="The implemented compiler slice, present crate boundaries, and planned strict typed-Python pipeline—clearly separated."
+    >
+    <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
+    <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="pycc architecture — Python through Rust and LLVM">
+    <meta
+      name="twitter:description"
+      content="The implemented compiler slice, present crate boundaries, and planned strict typed-Python pipeline—clearly separated."
+    >
+    <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
+    <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebPage",
+            "@id": "https://rotnov.github.io/pycc/architecture/#webpage",
+            "url": "https://rotnov.github.io/pycc/architecture/",
+            "name": "pycc architecture — typed Python to LLVM native binaries",
+            "description": "Explore pycc's implemented Rust and LLVM compiler pipeline, current crate boundaries, and the planned path from typed Python 3.14 to native binaries.",
+            "inLanguage": "en",
+            "dateModified": "2026-07-25",
+            "isPartOf": {
+              "@id": "https://rotnov.github.io/pycc/#webpage"
+            },
+            "about": {
+              "@id": "https://rotnov.github.io/pycc/#project"
+            },
+            "breadcrumb": {
+              "@id": "https://rotnov.github.io/pycc/architecture/#breadcrumb"
+            }
+          },
+          {
+            "@type": "BreadcrumbList",
+            "@id": "https://rotnov.github.io/pycc/architecture/#breadcrumb",
+            "itemListElement": [
+              {
+                "@type": "ListItem",
+                "position": 1,
+                "name": "pycc",
+                "item": "https://rotnov.github.io/pycc/"
+              },
+              {
+                "@type": "ListItem",
+                "position": 2,
+                "name": "Compiler architecture",
+                "item": "https://rotnov.github.io/pycc/architecture/"
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+
+    <link rel="stylesheet" href="../styles.css">
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="../" aria-label="pycc home">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>pycc</span>
+      </a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="../status/">Status</a>
+        <a aria-current="page" href="../architecture/">Architecture</a>
+        <a href="../ai-native/">AI experiment</a>
+        <a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../">pycc</a>
+        <span aria-hidden="true">/</span>
+        <span>architecture</span>
+      </nav>
+
+      <header class="page-hero">
+        <p class="eyebrow">Architecture · Updated 2026-07-25</p>
+        <h1>Python source to <span>native code.</span></h1>
+        <p class="page-lede">
+          pycc is a pre-alpha Rust compiler pipeline with an LLVM backend. The
+          narrow vertical slice already runs end to end; the richer typed IR,
+          ownership analysis, runtime, and standard library remain staged
+          roadmap work.
+        </p>
+        <div class="page-meta" aria-label="Architecture summary">
+          <span><strong>Frontend</strong> vendored parser</span>
+          <span><strong>Backend</strong> LLVM 22</span>
+          <span><strong>Output</strong> native executable</span>
+        </div>
+      </header>
+
+      <div class="prose-layout">
+        <aside class="toc" aria-label="On this page">
+          <span>On this page</span>
+          <a href="#implemented-pipeline">Implemented pipeline</a>
+          <a href="#crates">Current crates</a>
+          <a href="#planned-pipeline">Planned architecture</a>
+          <a href="#platforms">Platforms</a>
+        </aside>
+
+        <article class="prose">
+          <section id="implemented-pipeline">
+            <p class="section-kicker">Implemented now</p>
+            <h2>The first compiler path crosses every major stage.</h2>
+            <ol class="pipeline-list">
+              <li>
+                <span>01</span>
+                <div>
+                  <strong>Parse Python</strong>
+                  <p>
+                    <code>pycc_parser</code> wraps the vendored Ruff Python
+                    parser and converts supported syntax into
+                    <code>pycc_ast</code> nodes with source ranges.
+                  </p>
+                </div>
+              </li>
+              <li>
+                <span>02</span>
+                <div>
+                  <strong>Lower to HIR</strong>
+                  <p>
+                    <code>pycc_hir</code> accepts the current small language
+                    slice and makes unsupported boundaries explicit.
+                  </p>
+                </div>
+              </li>
+              <li>
+                <span>03</span>
+                <div>
+                  <strong>Pass through the type stage</strong>
+                  <p>
+                    <code>pycc_types</code> preserves the pipeline boundary,
+                    but its current checker is a no-op. Strict enforcement is
+                    the next frontend milestone.
+                  </p>
+                </div>
+              </li>
+              <li>
+                <span>04</span>
+                <div>
+                  <strong>Lower to MIR</strong>
+                  <p>
+                    <code>pycc_mir</code> represents the operations needed by
+                    the first executable slice.
+                  </p>
+                </div>
+              </li>
+              <li>
+                <span>05</span>
+                <div>
+                  <strong>Generate and link</strong>
+                  <p>
+                    <code>pycc_codegen</code> uses LLVM to emit an object.
+                    The driver invokes the host toolchain to link a native
+                    executable with the minimal runtime.
+                  </p>
+                </div>
+              </li>
+            </ol>
+          </section>
+
+          <section id="crates">
+            <p class="section-kicker">Repository boundaries</p>
+            <h2>Nine implementation crates exist today.</h2>
+            <div class="crate-grid">
+              <div><code>pycc</code><span>CLI and orchestration</span></div>
+              <div><code>pycc_ast</code><span>Current source model</span></div>
+              <div><code>pycc_parser</code><span>Parser adapter</span></div>
+              <div><code>pycc_hir</code><span>High-level IR</span></div>
+              <div><code>pycc_types</code><span>Type-stage boundary</span></div>
+              <div><code>pycc_mir</code><span>Mid-level IR</span></div>
+              <div><code>pycc_codegen</code><span>LLVM backend</span></div>
+              <div><code>pycc_rt</code><span>Minimal runtime</span></div>
+              <div><code>pycc_diag</code><span>Diagnostic data</span></div>
+            </div>
+            <p>
+              The architecture specification also reserves
+              <code>pycc_lexer</code>, <code>pycc_own</code>,
+              <code>pycc_std</code>, and <code>pycc_testkit</code>. Those
+              boundaries are deliberate future work, not current modules
+              hidden behind marketing language.
+            </p>
+          </section>
+
+          <section id="planned-pipeline">
+            <p class="section-kicker">Design contract</p>
+            <h2>The target pipeline is richer than the current slice.</h2>
+            <p>
+              The planned architecture resolves names and scopes in HIR,
+              produces a fully typed IR, performs ownership and escape
+              analysis, lowers to typed SSA MIR, applies optimizations such as
+              reference-count elision and monomorphization, and links runtime
+              and standard-library components into the final binary.
+            </p>
+            <div class="callout">
+              <strong>Standard Python, not a compiler dialect.</strong>
+              <p>
+                The v1 language contract is Python 3.14. Static restrictions
+                must be expressed as documented diagnostics rather than new
+                syntax.
+              </p>
+            </div>
+          </section>
+
+          <section id="platforms">
+            <p class="section-kicker">Portability model</p>
+            <h2>Five Tier-1 targets gate the project.</h2>
+            <p>
+              Linux x64 and arm64, macOS x64 and arm64, and Windows x64 are
+              native CI targets. Same-OS, cross-architecture macOS compilation
+              is proven; arbitrary cross-OS builds are not yet supported
+              because target sysroots and link environments are not bundled.
+            </p>
+            <div class="page-links">
+              <a href="../status/">
+                <span>Working behavior and gaps</span>
+                <strong>Current status →</strong>
+              </a>
+              <a href="https://github.com/rotnov/pycc/blob/main/docs/ARCHITECTURE.md">
+                <span>Normative system contract</span>
+                <strong>Full architecture spec ↗</strong>
+              </a>
+            </div>
+          </section>
+        </article>
+      </div>
+
+      <aside class="ai-disclosure" aria-label="Project authorship">
+        <p><strong>Built entirely by AI.</strong> <strong>Managed by a human.</strong></p>
+        <p>
+          AI agents write the specifications, code, tests, documentation,
+          reviews, and automation. No project code is handwritten by a human.
+        </p>
+      </aside>
+    </main>
+
+    <footer>
+      <a class="brand" href="../" aria-label="pycc home">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>pycc</span>
+      </a>
+      <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
+      <div>
+        <a href="../ai-native/">AI experiment</a>
+        <a href="../llms.txt">LLM guide</a>
+        <a href="https://github.com/rotnov/pycc">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>

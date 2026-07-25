@@ -3,11 +3,16 @@
 
 from __future__ import annotations
 
+import codecs
+import hashlib
+import ipaddress
 import json
 import re
+import subprocess
 import sys
-from pathlib import Path
-from urllib.parse import unquote
+from pathlib import Path, PurePosixPath
+from typing import Iterable, NamedTuple
+from urllib.parse import unquote, urlparse, urlunparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,10 +29,224 @@ ABSOLUTE_OUTPUT = re.compile(
     r"(?i)(?:save|saved|write|written|output|destination).{0,160}`(/[^`]+)`"
 )
 REVIEW_SKILL_NAME = "review-local-changes"
+EXPECTED_SKILL_LOCK_ENTRIES = {
+    "i-have-an-issue": {
+        "source": "rotnov/skills",
+        "ref": "i-have-an-issue-v0.1.1",
+        "reviewedCommit": "1bc6bcee3766a7e62b936343a48ebb56a3767470",
+        "sourceType": "github",
+        "skillPath": "skills/i-have-an-issue/SKILL.md",
+        "computedHash": (
+            "99e492ccae20ad3acf02e28dd76c7d74de28c7cf2141bfc7a2942c46c4bf687c"
+        ),
+    }
+}
+FEEDBACK_CONSENT_GUARDS = (
+    "explicit approval",
+    "exact payload",
+    "rotnov/pycc",
+    "search open and closed issues",
+    "make no external change",
+    "sanitize every outbound query",
+    "user-authored code",
+)
+ALPHA_EVAL_RUNNERS = {
+    "pycc": {
+        "build-and-run-self-created-fixture",
+        "capture-parser-failure-without-write",
+        "observe-current-check-fix-rejection",
+    },
+    "pycc-feedback": {
+        "prepare-sanitized-draft-without-write",
+        "refuse-private-automatic-publication",
+        "require-exact-payload-preview",
+    },
+}
+PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
+# Required PR CI has no model credentials. Promotion stays fail-closed until
+# reviewed, stable authenticated runs exist for both supported client surfaces.
+AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
+REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
+PINNED_CLAUDE_PLUGINS = {"ievo@ievo-skills"}
+INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md"}
+CLAUDE_INSTRUCTION_IMPORT = "@AGENTS.md\n"
+CLAUDE_SETTINGS_PATH = Path(".claude/settings.json")
+CLAUDE_MARKETPLACE_DECLARATION_FIELDS = {
+    "enabledPlugins",
+    "extraKnownMarketplaces",
+}
+LOCAL_ACTION_MANIFESTS = {"action.yml", "action.yaml"}
+SCRIPT_SUFFIXES = {
+    ".bash",
+    ".bat",
+    ".cmd",
+    ".cjs",
+    ".fish",
+    ".js",
+    ".mjs",
+    ".pl",
+    ".ps1",
+    ".py",
+    ".rb",
+    ".sh",
+    ".ts",
+    ".zsh",
+}
+SOURCE_SUFFIXES_WITH_INLINE_TESTS = {".c", ".cc", ".cpp", ".h", ".hpp", ".rs"}
+SCP_GIT_REFERENCE = re.compile(
+    r"^(?:(?P<user>[^/@:\s]+)@)?"
+    r"(?P<host>\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):"
+    r"(?P<path>[^?#]+)$"
+)
+DOTTED_HOST_REFERENCE = re.compile(
+    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+"
+)
+SCP_GIT_REFERENCE_IN_TEXT = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?:(?P<user>[^/@:\s]+)@)?"
+    r"(?P<host>"
+    r"\[[0-9A-Fa-f:.]+\]|"
+    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+"
+    r"):"
+    r"(?P<path>[A-Za-z0-9._~%+/-]+)"
+)
+HOST_PATH_REFERENCE_IN_TEXT = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?P<host>"
+    r"\[[0-9A-Fa-f:.]+\]|"
+    r"(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+"
+    r")"
+    r"(?P<port>:\d+)?/"
+    r"(?P<path>[A-Za-z0-9._~%+/-]+)"
+)
+URL_AUTHORITY_REFERENCE = re.compile(
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://"
+    r"(?P<authority>[^/\s?#]+)(?P<path>/[^\s?#]*)?"
+)
+DEFAULT_URL_PORTS = {
+    "git": 9418,
+    "http": 80,
+    "https": 443,
+    "ssh": 22,
+}
+INTERPRETER_REFERENCE = re.compile(
+    r"(?<![A-Za-z0-9_.-])"
+    r"(?P<interpreter>"
+    r"python(?:\d+(?:\.\d+)*)?|ruby|node|perl|bash|sh|zsh|fish|"
+    r"pwsh|powershell"
+    r")(?:\.exe)?(?![A-Za-z0-9_.-])",
+    re.IGNORECASE,
+)
+WORKFLOW_MAPPING_ENTRY = re.compile(
+    r"^(?P<indent>[ ]*)(?P<sequence>-\s+)?"
+    r"(?P<key>"
+    r'"(?:\\.|[^"])*"|'
+    r"'(?:''|[^'])*'|"
+    r"[A-Za-z0-9_-]+"
+    r")[ ]*:(?P<value>.*)$"
+)
+WORKFLOW_SEQUENCE_ENTRY = re.compile(
+    r"^(?P<indent>[ ]*)-\s*(?:#.*)?$"
+)
+INTERPRETER_VALUE_OPTIONS = {
+    "bash": {"--init-file", "--rcfile", "-O", "-o"},
+    "fish": {
+        "--debug",
+        "--debug-output",
+        "--features",
+        "--init-command",
+        "-C",
+        "-D",
+        "-d",
+        "-f",
+    },
+    "node": {
+        "--conditions",
+        "--diagnostic-dir",
+        "--experimental-loader",
+        "--icu-data-dir",
+        "--import",
+        "--input-type",
+        "--inspect-port",
+        "--loader",
+        "--openssl-config",
+        "--require",
+        "--title",
+        "-C",
+        "-r",
+    },
+    "perl": {"-F", "-I", "-M", "-m"},
+    "python": {"--check-hash-based-pycs", "-W", "-X"},
+    "ruby": {
+        "--disable",
+        "--dump",
+        "--enable",
+        "--encoding",
+        "--external-encoding",
+        "--internal-encoding",
+        "-C",
+        "-E",
+        "-F",
+        "-I",
+        "-K",
+        "-r",
+    },
+    "sh": {"-o"},
+    "zsh": {"-o"},
+}
+INTERPRETER_REQUIRED_FILE_OPTIONS = {
+    "bash": {"--init-file", "--rcfile"},
+    "node": {
+        "--experimental-loader",
+        "--import",
+        "--loader",
+        "--require",
+        "-r",
+    },
+    "ruby": {"-r"},
+}
+POWERSHELL_VALUE_OPTIONS = {
+    "-configurationfile",
+    "-configurationname",
+    "-custompipename",
+    "-executionpolicy",
+    "-inputformat",
+    "-outputformat",
+    "-settingsfile",
+    "-version",
+    "-windowstyle",
+    "-workingdirectory",
+}
 
 
-def load_json(relative_path: str, failures: list[str]) -> dict:
-    path = ROOT / relative_path
+class RequiredAssetEncodingError(ValueError):
+    """Raised when a required agent asset uses an unsupported text encoding."""
+
+
+class WorkflowMappingEntry(NamedTuple):
+    """A simple-key workflow mapping entry with its effective indentation."""
+
+    line_index: int
+    indent: int
+    sequence: bool
+    key: str
+    value: str
+
+
+class AgentScriptReference(NamedTuple):
+    """A repository script reference and the cwd inherited by that script."""
+
+    reference: str
+    resolution_directory: str
+    execution_directory: str
+
+
+def load_json(
+    relative_path: str,
+    failures: list[str],
+    root: Path = ROOT,
+) -> dict:
+    path = root / relative_path
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -39,12 +258,135 @@ def load_json(relative_path: str, failures: list[str]) -> dict:
     return value
 
 
+def compute_skill_folder_hash(skill_root: Path) -> str:
+    """Match skills CLI 1.5.20's path-plus-content SHA-256."""
+    files = [
+        path
+        for path in skill_root.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
+    ]
+    files.sort(
+        key=lambda path: path.relative_to(skill_root).as_posix().casefold()
+    )
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.relative_to(skill_root).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def validate_skill_lock(
+    failures: list[str],
+    root: Path = ROOT,
+    skills_root: Path = SKILLS_ROOT,
+) -> None:
+    lock = load_json("skills-lock.json", failures, root)
+    if lock.get("version") != 1:
+        failures.append("skills-lock.json: version must be 1")
+    entries = lock.get("skills")
+    if not isinstance(entries, dict) or not entries:
+        failures.append("skills-lock.json: skills must be a non-empty object")
+        return
+
+    expected_names = set(EXPECTED_SKILL_LOCK_ENTRIES)
+    actual_names = set(entries)
+    validate_alpha_promotion_gate(entries, failures)
+    if actual_names != expected_names:
+        failures.append(
+            "skills-lock.json: locked skill set must be exactly "
+            + ", ".join(sorted(expected_names))
+        )
+
+    policy_path = root / "docs" / "AGENT_TOOLING.md"
+    try:
+        policy = policy_path.read_text(encoding="utf-8")
+    except OSError as error:
+        failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
+        policy = ""
+
+    for name, expected_entry in EXPECTED_SKILL_LOCK_ENTRIES.items():
+        entry = entries.get(name)
+        label = f"skills-lock.json: skills.{name}"
+        if not isinstance(entry, dict):
+            failures.append(f"{label} must be an object")
+            continue
+        for field, expected_value in expected_entry.items():
+            if entry.get(field) != expected_value:
+                failures.append(
+                    f"{label}.{field} must be {expected_value!r}"
+                )
+        reviewed_commit = entry.get("reviewedCommit")
+        if (
+            not isinstance(reviewed_commit, str)
+            or IMMUTABLE_SHA.fullmatch(reviewed_commit) is None
+        ):
+            failures.append(
+                f"{label}.reviewedCommit must be a full immutable commit SHA"
+            )
+
+        skill_root = skills_root / name
+        if not (skill_root / "SKILL.md").is_file():
+            failures.append(f"{label} has no canonical .claude skill")
+            continue
+        expected_hash = expected_entry["computedHash"]
+        locked_hash = entry.get("computedHash")
+        if (
+            not isinstance(locked_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", locked_hash) is None
+        ):
+            failures.append(f"{label}.computedHash must be a SHA-256 digest")
+            continue
+        actual = compute_skill_folder_hash(skill_root)
+        if actual != expected_hash:
+            failures.append(
+                f"{label}.computedHash does not match the reviewed vendored skill: "
+                f"expected {expected_hash}, got {actual}"
+            )
+        for field in ("ref", "reviewedCommit", "computedHash"):
+            value = expected_entry[field]
+            if value not in policy:
+                failures.append(
+                    f"docs/AGENT_TOOLING.md: missing {field} for {name}"
+                )
+
+
+def validate_alpha_promotion_gate(
+    locked_skills: dict[str, object],
+    failures: list[str],
+) -> None:
+    for name in sorted(PROJECT_ALPHA_SKILLS & set(locked_skills)):
+        evidence = AUTHENTICATED_MODEL_EVAL_EVIDENCE.get(name)
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence) != REQUIRED_MODEL_EVAL_CLIENTS
+            or not all(
+                isinstance(url, str) and url.startswith("https://")
+                for url in evidence.values()
+            )
+        ):
+            failures.append(
+                f"skills-lock.json: {name} cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+            )
+
+
 def validate_claude_ievo_marketplace(
     settings: dict,
     codex_ievo_ref: str | None,
     failures: list[str],
     settings_path: str = ".claude/settings.json",
 ) -> None:
+    enabled_plugins = settings.get("enabledPlugins")
+    if (
+        not isinstance(enabled_plugins, dict)
+        or enabled_plugins.get("ievo@ievo-skills") is not True
+    ):
+        failures.append(
+            f"{settings_path}: enabledPlugins must enable ievo@ievo-skills"
+        )
+
     marketplaces = settings.get("extraKnownMarketplaces")
     if not isinstance(marketplaces, dict):
         failures.append(f"{settings_path}: extraKnownMarketplaces must be an object")
@@ -74,18 +416,20 @@ def validate_claude_ievo_marketplace(
             f"{settings_path}: inline marketplace plugins must be a non-empty array"
         )
         return
-    ievo_plugins = [
-        plugin
-        for plugin in plugins
-        if isinstance(plugin, dict) and plugin.get("name") == "ievo"
-    ]
-    if len(ievo_plugins) != 1:
+    if len(plugins) != 1:
         failures.append(
-            f"{settings_path}: inline marketplace must contain exactly one ievo plugin"
+            f"{settings_path}: inline marketplace must contain only the pinned "
+            "ievo plugin"
+        )
+        return
+    ievo_plugin = plugins[0]
+    if not isinstance(ievo_plugin, dict) or ievo_plugin.get("name") != "ievo":
+        failures.append(
+            f"{settings_path}: inline marketplace plugin must be the pinned ievo plugin"
         )
         return
 
-    plugin_source = ievo_plugins[0].get("source")
+    plugin_source = ievo_plugin.get("source")
     if not isinstance(plugin_source, dict):
         failures.append(f"{settings_path}: ievo plugin source must be an object")
         return
@@ -169,7 +513,1545 @@ def validate_marketplaces(failures: list[str]) -> None:
         failures,
         claude_path,
     )
+    validate_optional_plugin_boundary(settings, failures)
     validate_skill_parity(SKILLS_ROOT, CODEX_SKILLS_ROOT, failures)
+
+
+def optional_claude_plugins(settings: dict) -> dict[str, str]:
+    enabled_plugins = settings.get("enabledPlugins")
+    if not isinstance(enabled_plugins, dict):
+        enabled_plugins = {}
+
+    optional: dict[str, str] = {}
+    for identity in enabled_plugins:
+        if not isinstance(identity, str):
+            continue
+        name, separator, marketplace = identity.rpartition("@")
+        if (
+            separator
+            and name
+            and marketplace
+            and identity not in PINNED_CLAUDE_PLUGINS
+        ):
+            optional[identity] = marketplace
+    for identity in PINNED_CLAUDE_PLUGINS:
+        if enabled_plugins.get(identity) is True:
+            continue
+        name, separator, marketplace = identity.rpartition("@")
+        if separator and name and marketplace:
+            optional[identity] = marketplace
+    return optional
+
+
+def declared_claude_marketplaces(settings: dict) -> set[str]:
+    marketplaces = settings.get("extraKnownMarketplaces")
+    if not isinstance(marketplaces, dict):
+        return set()
+    return {
+        name
+        for name in marketplaces
+        if isinstance(name, str) and name
+    }
+
+
+def strip_git_suffix(reference: str) -> str:
+    normalized = reference.strip().rstrip("/")
+    if normalized.lower().endswith(".git"):
+        normalized = normalized[:-4]
+    return normalized.rstrip("/")
+
+
+def repository_path_reference(
+    path: str,
+    *,
+    minimum_parts: int = 2,
+) -> str | None:
+    normalized = strip_git_suffix(unquote(path).strip("/"))
+    if len([part for part in normalized.split("/") if part]) < minimum_parts:
+        return None
+    return normalized
+
+
+def normalized_public_url_host(
+    scheme: str,
+    host: str,
+    port: int | None,
+) -> str:
+    normalized_scheme = scheme.lower()
+    public_host = host.lower()
+    if ":" in public_host and not public_host.startswith("["):
+        public_host = f"[{public_host}]"
+    if port is not None and DEFAULT_URL_PORTS.get(normalized_scheme) != port:
+        public_host = f"{public_host}:{port}"
+    return public_host
+
+
+def normalize_url_identity_components(text: str) -> str:
+    def normalize(match: re.Match[str]) -> str:
+        try:
+            parsed = urlparse(match.group(0))
+            host = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            return match.group(0)
+        if not host:
+            return match.group(0)
+        scheme = parsed.scheme.lower()
+        public_host = normalized_public_url_host(scheme, host, port)
+        path = unquote(match.group("path") or "")
+        return f"{scheme}://{public_host}{path}"
+
+    return URL_AUTHORITY_REFERENCE.sub(normalize, text)
+
+
+def normalize_scp_identity_components(text: str) -> str:
+    def normalize(match: re.Match[str]) -> str:
+        user = match.group("user")
+        prefix = f"{user}@" if user else ""
+        return (
+            f"{prefix}{match.group('host').lower()}:"
+            f"{unquote(match.group('path'))}"
+        )
+
+    return SCP_GIT_REFERENCE_IN_TEXT.sub(normalize, text)
+
+
+def normalize_host_path_identity_components(text: str) -> str:
+    return HOST_PATH_REFERENCE_IN_TEXT.sub(
+        lambda match: (
+            f"{match.group('host').lower()}"
+            f"{match.group('port') or ''}/"
+            f"{unquote(match.group('path'))}"
+        ),
+        text,
+    )
+
+
+def is_github_repository_host(host: str) -> bool:
+    return host.lower() == "github.com"
+
+
+def is_qualified_scp_host(host: str) -> bool:
+    if DOTTED_HOST_REFERENCE.fullmatch(host) is not None:
+        return True
+    if not (host.startswith("[") and host.endswith("]")):
+        return False
+    try:
+        ipaddress.IPv6Address(host[1:-1])
+    except ipaddress.AddressValueError:
+        return False
+    return True
+
+
+def optional_marketplace_source_references(
+    settings: dict,
+    pinned_marketplaces: set[str],
+    failures: list[str],
+) -> dict[str, set[tuple[str, str, bool]]]:
+    marketplaces = settings.get("extraKnownMarketplaces")
+    if not isinstance(marketplaces, dict):
+        return {}
+
+    references: dict[str, set[tuple[str, str, bool]]] = {}
+
+    def add_reference(
+        token: str,
+        alias: str,
+        display: str,
+        case_sensitive: bool,
+    ) -> None:
+        normalized_token = token if case_sensitive else token.lower()
+        if normalized_token:
+            references.setdefault(normalized_token, set()).add(
+                (alias, display, case_sensitive)
+            )
+
+    for alias, declaration in marketplaces.items():
+        if (
+            not isinstance(alias, str)
+            or alias in pinned_marketplaces
+            or not isinstance(declaration, dict)
+        ):
+            continue
+        source = declaration.get("source")
+        if not isinstance(source, dict):
+            continue
+        for key in ("repo", "url"):
+            value = source.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            raw = value.strip()
+            if key == "repo":
+                repository = repository_path_reference(raw)
+                if repository is None:
+                    failures.append(
+                        f".claude/settings.json: optional marketplace {alias} "
+                        "source.repo must identify at least an owner and repository"
+                    )
+                    continue
+                source_kind = source.get("source")
+                case_sensitive = not (
+                    isinstance(source_kind, str)
+                    and source_kind.lower() == "github"
+                )
+                add_reference(
+                    raw,
+                    alias,
+                    repository,
+                    case_sensitive,
+                )
+                add_reference(
+                    repository,
+                    alias,
+                    repository,
+                    case_sensitive,
+                )
+                continue
+
+            scp_match = (
+                SCP_GIT_REFERENCE.fullmatch(raw)
+                if "://" not in raw
+                else None
+            )
+            if scp_match is not None:
+                if not is_qualified_scp_host(scp_match.group("host")):
+                    failures.append(
+                        f".claude/settings.json: optional marketplace {alias} "
+                        "source.url must use a fully qualified dotted or "
+                        "bracketed IPv6 SCP host"
+                    )
+                    continue
+                repository = repository_path_reference(
+                    scp_match.group("path"),
+                    minimum_parts=1,
+                )
+                if repository is None:
+                    failures.append(
+                        f".claude/settings.json: optional marketplace {alias} "
+                        "source.url must include a repository path"
+                    )
+                    continue
+                host = scp_match.group("host").lower()
+                case_sensitive = not is_github_repository_host(host)
+                if not case_sensitive:
+                    repository = repository.lower()
+                user = scp_match.group("user")
+                prefix = f"{user}@" if user else ""
+                host_reference = f"{host}/{repository}"
+                canonical_scp = f"{prefix}{host}:{repository}"
+                source_tokens = {
+                    raw,
+                    strip_git_suffix(raw),
+                    canonical_scp,
+                    f"{canonical_scp}.git",
+                    host_reference,
+                }
+                for token in source_tokens:
+                    add_reference(
+                        token,
+                        alias,
+                        host_reference,
+                        case_sensitive,
+                    )
+                if len(repository.split("/")) >= 2:
+                    add_reference(
+                        repository,
+                        alias,
+                        repository,
+                        case_sensitive,
+                    )
+                continue
+
+            try:
+                parsed = urlparse(raw)
+                host = parsed.hostname
+                port = parsed.port
+            except ValueError:
+                parsed = None
+                host = None
+                port = None
+            if parsed is None or not parsed.scheme or not parsed.netloc or not host:
+                failures.append(
+                    f".claude/settings.json: optional marketplace {alias} "
+                    "source.url must be a valid absolute or scp-style Git URL"
+                )
+                continue
+
+            repository = repository_path_reference(
+                parsed.path,
+                minimum_parts=1,
+            )
+            if repository is None:
+                failures.append(
+                    f".claude/settings.json: optional marketplace {alias} "
+                    "source.url must include a repository path"
+                )
+                continue
+
+            scheme = parsed.scheme.lower()
+            public_host = normalized_public_url_host(scheme, host, port)
+            case_sensitive = not is_github_repository_host(host)
+            if not case_sensitive:
+                repository = repository.lower()
+            host_reference = f"{public_host}/{repository}"
+            canonical_url = urlunparse(
+                (scheme, public_host, f"/{repository}", "", "", "")
+            )
+            source_tokens = {
+                raw,
+                strip_git_suffix(raw),
+                canonical_url,
+                host_reference,
+            }
+            for token in source_tokens:
+                normalized_token = token if case_sensitive else token.lower()
+                display = (
+                    host_reference
+                    if token == host_reference
+                    else canonical_url
+                )
+                add_reference(
+                    normalized_token,
+                    alias,
+                    display,
+                    case_sensitive,
+                )
+            default_port = DEFAULT_URL_PORTS.get(scheme)
+            if default_port is not None and port in {None, default_port}:
+                default_port_token = (
+                    f"{public_host}:{default_port}/{repository}"
+                )
+                add_reference(
+                    default_port_token,
+                    alias,
+                    host_reference,
+                    case_sensitive,
+                )
+            if len(repository.split("/")) >= 2:
+                add_reference(
+                    repository,
+                    alias,
+                    repository,
+                    case_sensitive,
+                )
+    return {
+        token: metadata
+        for token, metadata in references.items()
+        if token
+    }
+
+
+def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--stage", "-z"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or "git ls-files failed")
+
+    files: list[tuple[Path, str]] = []
+    for record in result.stdout.split(b"\0"):
+        if not record:
+            continue
+        metadata, separator, encoded_path = record.partition(b"\t")
+        fields = metadata.split()
+        if not separator or len(fields) != 3:
+            raise RuntimeError("git ls-files returned an invalid staged record")
+        mode = fields[0]
+        if mode not in {b"100644", b"100755", b"120000"}:
+            continue
+        relative = Path(encoded_path.decode("utf-8", errors="surrogateescape"))
+        files.append((root / relative, mode.decode("ascii")))
+    return files
+
+
+def is_test_asset(relative: Path) -> bool:
+    name = relative.name
+    return (
+        "tests" in relative.parts
+        or name.startswith("test_")
+        or name.startswith("test-")
+        or name.endswith("_test.py")
+        or name.endswith("-test.sh")
+    )
+
+
+def is_required_agent_asset(relative: Path, executable: bool) -> bool:
+    parts = relative.parts
+    return (
+        relative.name in INSTRUCTION_FILES
+        or relative.name in LOCAL_ACTION_MANIFESTS
+        or (parts and parts[0] in {".agents", ".claude", "agents"})
+        or parts[:2] == (".ievo", "evolution")
+        or parts[:2] == (".github", "workflows")
+        or parts[:2] == (".github", "actions")
+        or (parts and parts[0] == "scripts")
+        or is_test_asset(relative)
+        or relative.suffix.lower() in SCRIPT_SUFFIXES
+        or relative.suffix.lower() in SOURCE_SUFFIXES_WITH_INLINE_TESTS
+        or executable
+    )
+
+
+def interpreter_arguments(text: str, start: int) -> list[str]:
+    arguments: list[str] = []
+    index = start
+    while index < len(text):
+        while index < len(text):
+            if text[index] in " \t":
+                index += 1
+                continue
+            if text.startswith("\\\r\n", index):
+                index += 3
+                continue
+            if text.startswith("\\\n", index):
+                index += 2
+                continue
+            break
+        if index >= len(text) or text[index] in "\r\n;&|`)":
+            break
+        if text[index] == "#":
+            break
+        if (
+            text[index] in "\"'"
+            and index + 1 < len(text)
+            and text[index + 1] in ",}]"
+        ):
+            break
+        if (
+            text.startswith("0<", index)
+            and index + 2 < len(text)
+            and text[index + 2] not in "<>&("
+        ):
+            arguments.append("<")
+            index += 2
+            continue
+        if (
+            text[index] == "<"
+            and index + 1 < len(text)
+            and text[index + 1] not in "<>&("
+        ):
+            arguments.append("<")
+            index += 1
+            continue
+
+        escaped_quote = (
+            text[index] == "\\"
+            and index + 1 < len(text)
+            and text[index + 1] in "\"'"
+        )
+        if escaped_quote or text[index] in "\"'":
+            quote = text[index + 1] if escaped_quote else text[index]
+            index += 2 if escaped_quote else 1
+            value: list[str] = []
+            while index < len(text):
+                if escaped_quote and text.startswith(f"\\{quote}", index):
+                    index += 2
+                    break
+                if not escaped_quote and text[index] == quote:
+                    index += 1
+                    break
+                if text.startswith("\\\r\n", index):
+                    index += 3
+                    continue
+                if text.startswith("\\\n", index):
+                    index += 2
+                    continue
+                if text[index] == "\\" and index + 1 < len(text):
+                    if text[index + 1] in {quote, "\\"}:
+                        value.append(text[index + 1])
+                        index += 2
+                        continue
+                    value.append("\\")
+                    index += 1
+                    continue
+                value.append(text[index])
+                index += 1
+            arguments.append("".join(value))
+            continue
+
+        value = []
+        command_ended = False
+        while index < len(text):
+            if text.startswith("\\\r\n", index):
+                index += 3
+                continue
+            if text.startswith("\\\n", index):
+                index += 2
+                continue
+            if text[index] in " \t\r\n;&|`)":
+                command_ended = text[index] in "\r\n;&|`)"
+                break
+            if text[index] in "\"'":
+                command_ended = True
+                break
+            if text[index] in ",}]":
+                command_ended = True
+                break
+            if text[index] == "\\" and index + 1 < len(text):
+                if text[index + 1] in " \t`)'\"\\":
+                    value.append(text[index + 1])
+                    index += 2
+                    continue
+                value.append("\\")
+                index += 1
+                continue
+            value.append(text[index])
+            index += 1
+        if value:
+            arguments.append("".join(value))
+        if command_ended:
+            break
+    return arguments
+
+
+def workflow_mapping_entries(lines: list[str]) -> list[WorkflowMappingEntry]:
+    entries: list[WorkflowMappingEntry] = []
+    for line_index, line in enumerate(lines):
+        match = WORKFLOW_MAPPING_ENTRY.match(line)
+        if match is None:
+            sequence_match = WORKFLOW_SEQUENCE_ENTRY.match(line)
+            if sequence_match is not None:
+                entries.append(
+                    WorkflowMappingEntry(
+                        line_index=line_index,
+                        indent=len(sequence_match.group("indent")) + 2,
+                        sequence=True,
+                        key="",
+                        value="",
+                    )
+                )
+            continue
+        sequence = match.group("sequence") or ""
+        entries.append(
+            WorkflowMappingEntry(
+                line_index=line_index,
+                indent=len(match.group("indent")) + len(sequence),
+                sequence=bool(sequence),
+                key=yaml_inline_scalar(match.group("key")),
+                value=match.group("value"),
+            )
+        )
+    return entries
+
+
+def workflow_entry_end(
+    entries: list[WorkflowMappingEntry],
+    entry_index: int,
+) -> int:
+    parent_indent = entries[entry_index].indent
+    for candidate_index in range(entry_index + 1, len(entries)):
+        if entries[candidate_index].indent <= parent_indent:
+            return candidate_index
+    return len(entries)
+
+
+def workflow_direct_children(
+    entries: list[WorkflowMappingEntry],
+    entry_index: int,
+) -> list[int]:
+    end = workflow_entry_end(entries, entry_index)
+    nested = [
+        candidate_index
+        for candidate_index in range(entry_index + 1, end)
+        if entries[candidate_index].indent > entries[entry_index].indent
+    ]
+    if not nested:
+        return []
+    child_indent = min(entries[index].indent for index in nested)
+    return [
+        index
+        for index in nested
+        if entries[index].indent == child_indent
+    ]
+
+
+def workflow_child_entry(
+    entries: list[WorkflowMappingEntry],
+    entry_index: int,
+    key: str,
+) -> int | None:
+    return next(
+        (
+            child
+            for child in workflow_direct_children(entries, entry_index)
+            if entries[child].key == key
+        ),
+        None,
+    )
+
+
+def workflow_descendant_entry(
+    entries: list[WorkflowMappingEntry],
+    entry_index: int,
+    keys: Iterable[str],
+) -> int | None:
+    current = entry_index
+    for key in keys:
+        child = workflow_child_entry(entries, current, key)
+        if child is None:
+            return None
+        current = child
+    return current
+
+
+def yaml_inline_scalar(value: str) -> str:
+    quote: str | None = None
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if quote == "'" and character == "'" and value[index : index + 2] == "''":
+            index += 2
+            continue
+        if character in {"'", '"'}:
+            if quote is None:
+                quote = character
+            elif quote == character:
+                quote = None
+            index += 1
+            continue
+        if (
+            character == "#"
+            and quote is None
+            and (index == 0 or value[index - 1].isspace())
+        ):
+            value = value[:index]
+            break
+        index += 1
+
+    scalar = value.strip()
+    if len(scalar) >= 2 and scalar[0] == scalar[-1] == "'":
+        return scalar[1:-1].replace("''", "'")
+    if len(scalar) >= 2 and scalar[0] == scalar[-1] == '"':
+        try:
+            decoded = json.loads(scalar)
+        except json.JSONDecodeError:
+            return scalar[1:-1]
+        return decoded if isinstance(decoded, str) else scalar
+    return scalar
+
+
+def reject_unsupported_workflow_structure(
+    lines: list[str],
+    entries: list[WorkflowMappingEntry],
+    jobs_entry: int | None,
+    additional_structural_entries: Iterable[int] = (),
+) -> None:
+    for line_index, line in enumerate(lines, start=1):
+        if (
+            re.match(r"^[ ]*-\s*[\[{]", line) is not None
+            or re.match(r"^[\[{]", line) is not None
+            or re.match(r"^[ ]*---[ ]+[\[{]", line) is not None
+        ):
+            raise RuntimeError(
+                f"workflow line {line_index}: flow-style step mappings are "
+                "not supported by agent asset discovery"
+            )
+        if re.match(r"^[ ]*(?:-\s+)?<<[ ]*:", line) is not None:
+            raise RuntimeError(
+                f"workflow line {line_index}: YAML merge keys are not "
+                "supported by agent asset discovery"
+            )
+
+    structural_keys = {
+        "defaults",
+        "jobs",
+        "run",
+        "runs",
+        "steps",
+        "using",
+        "working-directory",
+    }
+    job_entries = (
+        set(workflow_direct_children(entries, jobs_entry))
+        if jobs_entry is not None
+        else set()
+    )
+    structural_entries = set(additional_structural_entries)
+    for entry_index, entry in enumerate(entries):
+        value = entry.value.lstrip()
+        if not value or value[0] not in {"{", "[", "*"}:
+            continue
+        if (
+            entry.key in structural_keys
+            or entry_index in job_entries
+            or entry_index in structural_entries
+        ):
+            raise RuntimeError(
+                f"workflow line {entry.line_index + 1}: flow-style or aliased "
+                "workflow structure is not supported by agent asset discovery"
+            )
+
+
+def workflow_entry_commands(
+    lines: list[str],
+    entry: WorkflowMappingEntry,
+) -> list[str]:
+    scalar = yaml_inline_scalar(entry.value)
+    block_match = re.fullmatch(
+        r"(?P<style>[>|])"
+        r"(?:(?:[+-][1-9]?)|(?:[1-9][+-]?))?",
+        scalar,
+    )
+    if block_match is None:
+        command = scalar
+        line_index = entry.line_index + 1
+        while line_index < len(lines):
+            line = lines[line_index]
+            if not line.strip():
+                if command:
+                    command += "\n"
+                line_index += 1
+                continue
+            indentation = len(line) - len(line.lstrip(" "))
+            if indentation <= entry.indent:
+                break
+            content = line.strip()
+            separator = "\n" if command.endswith("\\") else " "
+            command = f"{command}{separator}{content}".strip()
+            line_index += 1
+        return [command] if command else []
+
+    body: list[str] = []
+    line_index = entry.line_index + 1
+    while line_index < len(lines):
+        line = lines[line_index]
+        if not line.strip():
+            body.append("")
+            line_index += 1
+            continue
+        indentation = len(line) - len(line.lstrip(" "))
+        if indentation <= entry.indent:
+            break
+        body.append(line)
+        line_index += 1
+
+    content_indents = [
+        len(line) - len(line.lstrip(" "))
+        for line in body
+        if line.strip()
+    ]
+    if not content_indents:
+        return []
+    content_indent = min(content_indents)
+    content = [
+        line[content_indent:].strip() if line.strip() else ""
+        for line in body
+    ]
+    if block_match.group("style") == "|":
+        return ["\n".join(content)]
+
+    commands: list[str] = []
+    paragraph: list[str] = []
+    for line in content:
+        if line:
+            paragraph.append(line)
+            continue
+        if paragraph:
+            commands.append(" ".join(paragraph))
+            paragraph = []
+    if paragraph:
+        commands.append(" ".join(paragraph))
+    return commands
+
+
+def static_working_directory(entry: WorkflowMappingEntry) -> str | None:
+    value = yaml_inline_scalar(entry.value)
+    if not value or "${{" in value or value.startswith("$"):
+        return None
+    if value in {".", "./"}:
+        return ""
+    return local_script_reference(value)
+
+
+def step_working_directory_references(
+    lines: list[str],
+    entries: list[WorkflowMappingEntry],
+    steps_entry: int,
+    inherited_default: int | None,
+    document_kind: str,
+) -> set[AgentScriptReference]:
+    references: set[AgentScriptReference] = set()
+    step_entries = workflow_direct_children(entries, steps_entry)
+    item_starts = [
+        index
+        for index in step_entries
+        if entries[index].sequence
+    ]
+    steps_end = workflow_entry_end(entries, steps_entry)
+    for position, item_start in enumerate(item_starts):
+        item_end = (
+            item_starts[position + 1]
+            if position + 1 < len(item_starts)
+            else steps_end
+        )
+        item_indent = entries[item_start].indent
+        item_entries = [
+            index
+            for index in range(item_start, item_end)
+            if entries[index].indent == item_indent
+        ]
+        step_default = next(
+            (
+                index
+                for index in item_entries
+                if entries[index].key == "working-directory"
+            ),
+            None,
+        )
+        effective_default = (
+            step_default
+            if step_default is not None
+            else inherited_default
+        )
+        run_references: set[str] = set()
+        for run_entry in (
+            index
+            for index in item_entries
+            if entries[index].key == "run"
+        ):
+            for command in workflow_entry_commands(
+                lines,
+                entries[run_entry],
+            ):
+                run_references.update(
+                    referenced_interpreter_scripts(command)
+                )
+        if not run_references:
+            continue
+        working_directory = ""
+        if effective_default is not None:
+            resolved_directory = static_working_directory(
+                entries[effective_default]
+            )
+            if resolved_directory is None:
+                raise RuntimeError(
+                    f"{document_kind} line "
+                    f"{entries[effective_default].line_index + 1}: "
+                    "dynamic or non-repository working-directory cannot "
+                    "be resolved for a relative interpreter script"
+                )
+            working_directory = resolved_directory
+        references.update(
+            AgentScriptReference(
+                reference,
+                working_directory,
+                working_directory,
+            )
+            for reference in run_references
+        )
+    return references
+
+
+def workflow_working_directory_references(
+    text: str,
+) -> set[AgentScriptReference]:
+    lines = text.splitlines()
+    entries = workflow_mapping_entries(lines)
+    top_level = [
+        index
+        for index, entry in enumerate(entries)
+        if entry.indent == 0 and not entry.sequence
+    ]
+    jobs_entry = next(
+        (
+            index
+            for index in top_level
+            if entries[index].key == "jobs"
+        ),
+        None,
+    )
+    reject_unsupported_workflow_structure(lines, entries, jobs_entry)
+    if jobs_entry is None:
+        return set()
+
+    workflow_default: int | None = None
+    workflow_defaults = next(
+        (
+            index
+            for index in top_level
+            if entries[index].key == "defaults"
+        ),
+        None,
+    )
+    if workflow_defaults is not None:
+        workflow_default = workflow_descendant_entry(
+            entries,
+            workflow_defaults,
+            ("run", "working-directory"),
+        )
+
+    references: set[AgentScriptReference] = set()
+    for job_entry in workflow_direct_children(entries, jobs_entry):
+        job_default = workflow_descendant_entry(
+            entries,
+            job_entry,
+            ("defaults", "run", "working-directory"),
+        )
+        steps_entry = workflow_child_entry(entries, job_entry, "steps")
+        if steps_entry is None:
+            continue
+        effective_default = (
+            job_default
+            if job_default is not None
+            else workflow_default
+        )
+        references.update(
+            step_working_directory_references(
+                lines,
+                entries,
+                steps_entry,
+                effective_default,
+                "workflow",
+            )
+        )
+    return references
+
+
+def action_execution_references(
+    text: str,
+    action_directory: str,
+) -> set[AgentScriptReference]:
+    lines = text.splitlines()
+    entries = workflow_mapping_entries(lines)
+    top_level = [
+        index
+        for index, entry in enumerate(entries)
+        if entry.indent == 0 and not entry.sequence
+    ]
+    runs_entry = next(
+        (
+            index
+            for index in top_level
+            if entries[index].key == "runs"
+        ),
+        None,
+    )
+    action_execution_entries = (
+        {
+            index
+            for index in workflow_direct_children(entries, runs_entry)
+            if entries[index].key in {"main", "pre", "post", "image"}
+        }
+        if runs_entry is not None
+        else set()
+    )
+    reject_unsupported_workflow_structure(
+        lines,
+        entries,
+        None,
+        action_execution_entries,
+    )
+    if runs_entry is None:
+        return set()
+
+    references: set[AgentScriptReference] = set()
+    steps_entry = workflow_child_entry(entries, runs_entry, "steps")
+    if steps_entry is not None:
+        references.update(
+            step_working_directory_references(
+                lines,
+                entries,
+                steps_entry,
+                None,
+                "action",
+            )
+        )
+
+    for key in ("main", "pre", "post", "image"):
+        entry_index = workflow_child_entry(entries, runs_entry, key)
+        if entry_index is None:
+            continue
+        reference = local_script_reference(
+            yaml_inline_scalar(entries[entry_index].value)
+        )
+        if reference is not None:
+            references.add(
+                AgentScriptReference(
+                    reference,
+                    action_directory,
+                    "",
+                )
+            )
+    return references
+
+
+def resolve_working_directory_reference(
+    reference: str,
+    working_directory: str,
+) -> str | None:
+    parts: list[str] = []
+    for part in PurePosixPath(working_directory, reference).parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                raise RuntimeError(
+                    "relative interpreter script path escapes the repository"
+                )
+            parts.pop()
+            continue
+        parts.append(part)
+    if not parts:
+        return None
+    return PurePosixPath(*parts).as_posix()
+
+
+def interpreter_family(interpreter: str) -> str:
+    normalized = interpreter.lower().removesuffix(".exe")
+    if normalized.startswith("python"):
+        return "python"
+    if normalized in {"powershell", "pwsh"}:
+        return "powershell"
+    return normalized
+
+
+def is_inline_interpreter_option(family: str, option: str) -> bool:
+    if family == "powershell":
+        normalized = option.lower()
+        return (
+            normalized in {
+                "--command",
+                "--commandwithargs",
+                "--encodedcommand",
+                "-c",
+                "-command",
+                "-commandwithargs",
+                "-e",
+                "-ec",
+                "-encodedcommand",
+            }
+            or normalized.startswith("--command=")
+            or normalized.startswith("--command:")
+            or normalized.startswith("--encodedcommand=")
+            or normalized.startswith("--encodedcommand:")
+            or normalized.startswith("-command=")
+            or normalized.startswith("-command:")
+            or normalized.startswith("-encodedcommand=")
+            or normalized.startswith("-encodedcommand:")
+        )
+    if family == "python":
+        return (
+            option in {"-c", "-m"}
+            or (option.startswith("-c") and not option.startswith("--"))
+            or (option.startswith("-m") and not option.startswith("--"))
+        )
+    if family == "node":
+        return (
+            option in {"--eval", "--print", "-e", "-p"}
+            or option.startswith("--eval=")
+            or option.startswith("--print=")
+            or (
+                not option.startswith("--")
+                and option.startswith(("-e", "-p"))
+            )
+        )
+    if family == "perl":
+        return (
+            option in {"-E", "-e"}
+            or (
+                not option.startswith("--")
+                and option.startswith(("-E", "-e"))
+            )
+        )
+    if family == "ruby":
+        return option == "-e" or (
+            not option.startswith("--") and option.startswith("-e")
+        )
+    if family == "fish":
+        return (
+            option in {"--command", "-c"}
+            or option.startswith("--command=")
+            or (
+                not option.startswith("--")
+                and option.startswith("-c")
+            )
+        )
+    if family in {"bash", "sh", "zsh"}:
+        return option == "-c" or (
+            not option.startswith("--") and option.startswith("-c")
+        )
+    return False
+
+
+def option_value(
+    family: str,
+    option: str,
+) -> tuple[str, str | None] | None:
+    options = INTERPRETER_VALUE_OPTIONS.get(family, set())
+    if family == "powershell":
+        normalized = option.lower()
+        for candidate in POWERSHELL_VALUE_OPTIONS:
+            if normalized == candidate:
+                return candidate, None
+            for separator in ("=", ":"):
+                prefix = f"{candidate}{separator}"
+                if normalized.startswith(prefix):
+                    return candidate, option[len(prefix) :]
+        return None
+
+    for candidate in sorted(options, key=len, reverse=True):
+        if option == candidate:
+            return candidate, None
+        if candidate.startswith("--"):
+            prefix = f"{candidate}="
+            if option.startswith(prefix):
+                return candidate, option[len(prefix) :]
+        elif option.startswith(candidate) and len(option) > len(candidate):
+            return candidate, option[len(candidate) :]
+    return None
+
+
+def local_script_reference(argument: str) -> str | None:
+    normalized = argument.replace("\\", "/")
+    if (
+        not normalized
+        or normalized == "-"
+        or normalized.startswith(("/", "$"))
+        or re.match(r"^[A-Za-z]:", normalized) is not None
+        or "://" in normalized
+    ):
+        return None
+    reference = normalized.removeprefix("./")
+    parts = PurePosixPath(reference).parts
+    if not parts or any(part in {"", "."} for part in parts):
+        return None
+    return PurePosixPath(*parts).as_posix()
+
+
+def ambiguous_option_references(
+    family: str,
+    option: str,
+    remaining_arguments: Iterable[str],
+) -> set[str]:
+    candidates: list[str] = []
+    if option.startswith("-"):
+        for separator in ("=", ":"):
+            if separator in option:
+                candidates.append(option.split(separator, 1)[1])
+                break
+    terminated = False
+    for argument in remaining_arguments:
+        if argument == "--" and not terminated:
+            terminated = True
+            continue
+        if not terminated and argument.startswith("-"):
+            value_option = option_value(family, argument)
+            if value_option is not None:
+                parsed_option, attached_value = value_option
+                if (
+                    attached_value is not None
+                    and parsed_option
+                    in INTERPRETER_REQUIRED_FILE_OPTIONS.get(family, set())
+                ):
+                    candidates.append(attached_value)
+            for separator in ("=", ":"):
+                if separator in argument:
+                    candidates.append(argument.split(separator, 1)[1])
+                    break
+            continue
+        candidates.append(argument)
+    return {
+        reference
+        for candidate in candidates
+        if (reference := local_script_reference(candidate)) is not None
+    }
+
+
+def referenced_interpreter_scripts(text: str) -> set[str]:
+    references: set[str] = set()
+    for match in INTERPRETER_REFERENCE.finditer(text):
+        family = interpreter_family(match.group("interpreter"))
+        arguments = interpreter_arguments(text, match.end())
+        index = 0
+        while index < len(arguments):
+            argument = arguments[index]
+            if argument == "<":
+                index += 1
+                if index < len(arguments):
+                    reference = local_script_reference(arguments[index])
+                    if reference is not None:
+                        references.add(reference)
+                break
+            if argument == "--":
+                index += 1
+                if index < len(arguments) and arguments[index] == "<":
+                    index += 1
+                if index < len(arguments):
+                    reference = local_script_reference(arguments[index])
+                    if reference is not None:
+                        references.add(reference)
+                break
+            if is_inline_interpreter_option(family, argument):
+                break
+            if family == "powershell":
+                normalized = argument.lower()
+                if normalized in {"-f", "-file"}:
+                    index += 1
+                    if index < len(arguments):
+                        reference = local_script_reference(arguments[index])
+                        if reference is not None:
+                            references.add(reference)
+                    break
+                if normalized.startswith(("-file=", "-file:")):
+                    reference = local_script_reference(argument[6:])
+                    if reference is not None:
+                        references.add(reference)
+                    break
+            value_option = option_value(family, argument)
+            if value_option is not None:
+                option, attached_value = value_option
+                value = attached_value
+                if value is None:
+                    index += 1
+                    if index < len(arguments):
+                        value = arguments[index]
+                if (
+                    value is not None
+                    and option
+                    in INTERPRETER_REQUIRED_FILE_OPTIONS.get(family, set())
+                ):
+                    reference = local_script_reference(value)
+                    if reference is not None:
+                        references.add(reference)
+                index += 1
+                continue
+            if argument.startswith("-"):
+                references.update(
+                    ambiguous_option_references(
+                        family,
+                        argument,
+                        arguments[index + 1 :],
+                    )
+                )
+                break
+            reference = local_script_reference(argument)
+            if reference is not None:
+                references.add(reference)
+            break
+    return references
+
+
+def required_agent_files(
+    root: Path,
+    repository_files: Iterable[tuple[Path, str]] | None = None,
+) -> list[Path]:
+    if repository_files is None:
+        repository_files = tracked_repository_files(root)
+    entries = list(repository_files)
+    tracked = {
+        path.relative_to(root).as_posix(): (path, mode)
+        for path, mode in entries
+    }
+    paths: set[Path] = set()
+    for path, mode in entries:
+        relative = path.relative_to(root)
+        if not is_required_agent_asset(relative, mode == "100755"):
+            continue
+        if mode == "120000":
+            raise RuntimeError(
+                f"{relative.as_posix()}: required agent assets must not be symlinks"
+            )
+        paths.add(path)
+
+    pending = [(path, "") for path in paths]
+    visited: set[tuple[Path, str]] = set()
+    while pending:
+        source, working_directory = pending.pop()
+        context = (source, working_directory)
+        if context in visited:
+            continue
+        visited.add(context)
+        try:
+            text = decode_required_asset(source.read_bytes())
+        except (OSError, UnicodeDecodeError, RequiredAssetEncodingError):
+            continue
+        relative = source.relative_to(root)
+        text = required_asset_body(relative, text)
+        if relative.parts[:2] == (".github", "workflows"):
+            references = workflow_working_directory_references(text)
+        elif relative.name in LOCAL_ACTION_MANIFESTS:
+            action_directory = relative.parent.as_posix()
+            if action_directory == ".":
+                action_directory = ""
+            references = action_execution_references(
+                text,
+                action_directory,
+            )
+        else:
+            references = {
+                AgentScriptReference(
+                    reference,
+                    working_directory,
+                    working_directory,
+                )
+                for reference in referenced_interpreter_scripts(text)
+            }
+        for script_reference in references:
+            try:
+                resolved_reference = resolve_working_directory_reference(
+                    script_reference.reference,
+                    script_reference.resolution_directory,
+                )
+            except RuntimeError as error:
+                raise RuntimeError(
+                    f"{relative.as_posix()}: {error}"
+                ) from error
+            if resolved_reference is None:
+                continue
+            tracked_entry = tracked.get(resolved_reference)
+            if tracked_entry is None:
+                continue
+            target, mode = tracked_entry
+            if mode == "120000":
+                raise RuntimeError(
+                    f"{resolved_reference}: required agent assets must not be symlinks"
+                )
+            paths.add(target)
+            pending.append(
+                (target, script_reference.execution_directory)
+            )
+    return sorted(paths)
+
+
+def has_token(text: str, token: str) -> bool:
+    boundary = r"[A-Za-z0-9_-]"
+    return (
+        re.search(
+            rf"(?<!{boundary}){re.escape(token)}(?!{boundary})",
+            text,
+        )
+        is not None
+    )
+
+
+def mask_token(text: str, token: str) -> str:
+    boundary = r"[A-Za-z0-9_-]"
+    return re.sub(
+        rf"(?<!{boundary}){re.escape(token)}(?!{boundary})",
+        lambda match: " " * len(match.group(0)),
+        text,
+    )
+
+
+def required_asset_body(relative: Path, text: str) -> str:
+    if relative == CLAUDE_SETTINGS_PATH:
+        try:
+            settings = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        if not isinstance(settings, dict):
+            return text
+        behavioral_settings = {
+            key: value
+            for key, value in settings.items()
+            if key not in CLAUDE_MARKETPLACE_DECLARATION_FIELDS
+        }
+        return json.dumps(
+            behavioral_settings,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    if relative.parts[:2] != (".ievo", "evolution"):
+        return text
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.startswith("---\n"):
+        return normalized
+    end = normalized.find("\n---\n", 4)
+    if end == -1:
+        return normalized
+    frontmatter = normalized[4:end]
+    body = normalized[end + len("\n---\n") :]
+
+    source_repository: str | None = None
+    in_source = False
+    source_child_indent: int | None = None
+    for line in frontmatter.splitlines():
+        if line == "source:":
+            in_source = True
+            continue
+        if not in_source or not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indentation = len(line) - len(line.lstrip(" "))
+        if indentation == 0:
+            break
+        if source_child_indent is None:
+            source_child_indent = indentation
+        if indentation != source_child_indent:
+            continue
+        match = re.fullmatch(r"repo:\s+([^\s#]+)\s*", line.strip())
+        if match is not None:
+            source_repository = match.group(1).strip("'\"")
+            break
+    if source_repository is None:
+        return body
+
+    provenance_heading = re.compile(
+        r"(?m)^(## \d{4}-\d{2}-\d{2} — Vendored from )"
+        rf"({re.escape(source_repository)})([ \t]*)$"
+    )
+    return provenance_heading.sub(
+        lambda match: (
+            match.group(1)
+            + (" " * len(match.group(2)))
+            + match.group(3)
+        ),
+        body,
+        count=1,
+    )
+
+
+def decode_required_asset(data: bytes) -> str:
+    if data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        raise RequiredAssetEncodingError("UTF-32 is not supported")
+    if data.startswith(codecs.BOM_UTF8):
+        text = data.decode("utf-8-sig")
+    elif data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        text = data.decode("utf-16")
+    else:
+        text = data.decode("utf-8")
+    if "\0" in text:
+        raise RequiredAssetEncodingError("NUL bytes are not allowed")
+    return text
+
+
+def validate_optional_plugin_boundary(
+    settings: dict,
+    failures: list[str],
+    root: Path = ROOT,
+    repository_files: Iterable[tuple[Path, str]] | None = None,
+) -> None:
+    optional = optional_claude_plugins(settings)
+
+    names: dict[str, list[str]] = {}
+    for identity, marketplace in optional.items():
+        name = identity.rpartition("@")[0]
+        names.setdefault(name, []).append(identity)
+    marketplaces = set(optional.values())
+    pinned_marketplaces = {
+        identity.rpartition("@")[2]
+        for identity in PINNED_CLAUDE_PLUGINS
+        if "@" in identity
+    }
+    marketplaces.update(
+        declared_claude_marketplaces(settings).difference(pinned_marketplaces)
+    )
+    marketplace_sources = optional_marketplace_source_references(
+        settings,
+        pinned_marketplaces,
+        failures,
+    )
+    enabled_pinned = PINNED_CLAUDE_PLUGINS.difference(optional)
+
+    try:
+        paths = required_agent_files(root, repository_files)
+    except (OSError, RuntimeError, ValueError) as error:
+        failures.append(f"agent asset discovery failed: {error}")
+        return
+
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        try:
+            text = decode_required_asset(path.read_bytes())
+        except OSError as error:
+            failures.append(
+                f"{relative}: unable to read tracked required agent asset: {error}"
+            )
+            continue
+        except (UnicodeDecodeError, RequiredAssetEncodingError) as error:
+            failures.append(
+                f"{relative}: required agent asset must be UTF-8 or BOM-tagged "
+                f"UTF-16: {error}"
+            )
+            continue
+        text = required_asset_body(Path(relative), text)
+        pinned_violation: str | None = None
+        boundary = r"[A-Za-z0-9_-]"
+        for marketplace in pinned_marketplaces:
+            pattern = re.compile(
+                rf"(?<!{boundary})([A-Za-z0-9_-]+)@"
+                rf"{re.escape(marketplace)}(?!{boundary})"
+            )
+            for match in pattern.finditer(text):
+                identity = f"{match.group(1)}@{marketplace}"
+                if identity not in enabled_pinned:
+                    pinned_violation = identity
+                    break
+            if pinned_violation is not None:
+                break
+        if pinned_violation is not None:
+            failures.append(
+                f"{relative}: required agent asset references unvalidated Claude "
+                f"plugin {pinned_violation}; pin it and provide Codex parity first"
+            )
+            continue
+
+        for identity in sorted(optional, key=lambda value: (-len(value), value)):
+            if has_token(text, identity):
+                failures.append(
+                    f"{relative}: required agent asset references optional Claude "
+                    f"plugin {identity}; pin it and provide Codex parity first"
+                )
+                break
+        else:
+            fallback_text = text
+            for identity in enabled_pinned:
+                fallback_text = mask_token(fallback_text, identity)
+            for name in sorted(names, key=lambda value: (-len(value), value)):
+                if has_token(fallback_text, name):
+                    identities = ", ".join(sorted(names[name]))
+                    failures.append(
+                        f"{relative}: required agent asset references optional "
+                        f"Claude plugin name {name} ({identities}); pin it and "
+                        "provide Codex parity first"
+                    )
+                    break
+            else:
+                for marketplace in sorted(
+                    marketplaces,
+                    key=lambda value: (-len(value), value),
+                ):
+                    if has_token(fallback_text, marketplace):
+                        failures.append(
+                            f"{relative}: required agent asset references optional "
+                            f"Claude marketplace {marketplace}; pin the dependency "
+                            "and provide Codex parity first"
+                        )
+                        break
+                else:
+                    source_text = normalize_host_path_identity_components(
+                        normalize_scp_identity_components(
+                            normalize_url_identity_components(fallback_text)
+                        )
+                    )
+                    for token in sorted(
+                        marketplace_sources,
+                        key=lambda value: (-len(value), value),
+                    ):
+                        source_match: tuple[str, str] | None = None
+                        for alias, display, case_sensitive in sorted(
+                            marketplace_sources[token]
+                        ):
+                            candidate_text = (
+                                source_text
+                                if case_sensitive
+                                else source_text.lower()
+                            )
+                            if has_token(candidate_text, token):
+                                source_match = (alias, display)
+                                break
+                        if source_match is not None:
+                            alias, display = source_match
+                            failures.append(
+                                f"{relative}: required agent asset references "
+                                f"optional Claude marketplace source {display} "
+                                f"({alias}); pin the dependency and provide Codex "
+                                "parity first"
+                            )
+                            break
 
 
 def frontmatter_scalar(path: Path, key: str) -> str | None:
@@ -285,6 +2167,27 @@ def validate_review_skill_metadata(
         )
 
 
+def validate_instruction_parity(
+    failures: list[str],
+    root: Path = ROOT,
+) -> None:
+    agents_path = root / "AGENTS.md"
+    if not agents_path.is_file():
+        failures.append("AGENTS.md: canonical shared instructions are required")
+
+    claude_path = root / "CLAUDE.md"
+    try:
+        claude_import = claude_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        failures.append(f"CLAUDE.md: could not read instruction import: {error}")
+        return
+    if claude_import != CLAUDE_INSTRUCTION_IMPORT:
+        failures.append(
+            "CLAUDE.md: must contain exactly @AGENTS.md as the shared "
+            "instruction import"
+        )
+
+
 def fence_error(path: Path) -> str | None:
     active_character: str | None = None
     active_length = 0
@@ -324,6 +2227,81 @@ def link_target(raw_target: str) -> str:
     else:
         target = target.split(maxsplit=1)[0]
     return unquote(target.split("#", 1)[0])
+
+
+def display_path(path: Path, root: Path) -> Path:
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
+
+
+def validate_alpha_skill_contracts(
+    skills_root: Path,
+    failures: list[str],
+    root: Path = ROOT,
+) -> None:
+    for name in ("pycc", "pycc-feedback"):
+        path = skills_root / name / "SKILL.md"
+        relative = display_path(path, root)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as error:
+            failures.append(f"{relative}: could not read alpha skill: {error}")
+            continue
+        if "alpha" not in text.lower():
+            failures.append(f"{relative}: must remain visibly alpha")
+
+        evals_path = skills_root / name / "evals" / "evals.json"
+        evals_relative = display_path(evals_path, root)
+        try:
+            evals = json.loads(evals_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            failures.append(f"{evals_relative}: invalid evals: {error}")
+            continue
+        cases = evals.get("evals") if isinstance(evals, dict) else None
+        skill_name = evals.get("skill_name") if isinstance(evals, dict) else None
+        if skill_name != name or not isinstance(cases, list) or len(cases) < 2:
+            failures.append(
+                f"{evals_relative}: must define at least two evals for {name}"
+            )
+            continue
+        if not all(
+            isinstance(case, dict)
+            and isinstance(case.get("id"), int)
+            and isinstance(case.get("prompt"), str)
+            and bool(case["prompt"].strip())
+            and isinstance(case.get("expected_output"), str)
+            and bool(case["expected_output"].strip())
+            for case in cases
+        ):
+            failures.append(f"{evals_relative}: contains a malformed eval")
+            continue
+        identifiers = [case["id"] for case in cases]
+        if len(identifiers) != len(set(identifiers)):
+            failures.append(f"{evals_relative}: eval ids must be unique")
+        runners = {
+            case["runner"]
+            for case in cases
+            if isinstance(case.get("runner"), str)
+        }
+        if runners != ALPHA_EVAL_RUNNERS[name]:
+            failures.append(
+                f"{evals_relative}: must bind the complete executable runner set"
+            )
+
+    feedback_path = skills_root / "pycc-feedback" / "SKILL.md"
+    try:
+        feedback = feedback_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    normalized_feedback = " ".join(feedback.split())
+    for required in FEEDBACK_CONSENT_GUARDS:
+        if required not in normalized_feedback:
+            failures.append(
+                f"{display_path(feedback_path, root)}: missing consent guard "
+                f"{required!r}"
+            )
 
 
 def validate_skill_documents(failures: list[str]) -> None:
@@ -391,10 +2369,14 @@ def validate_skill_documents(failures: list[str]) -> None:
             "the canonical decision log"
         )
 
+    validate_alpha_skill_contracts(SKILLS_ROOT, failures)
+
 
 def main() -> int:
     failures: list[str] = []
+    validate_instruction_parity(failures)
     validate_marketplaces(failures)
+    validate_skill_lock(failures)
     validate_skill_documents(failures)
     if failures:
         for failure in failures:

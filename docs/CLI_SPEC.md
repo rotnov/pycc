@@ -52,7 +52,7 @@ directory once project mode exists.
 
 ```
 --release           optimizations on (LTO, RC elision aggressive), asserts kept per config
---target TRIPLE     cross-compile (bundled lld): x86_64-pc-windows-msvc from a Mac just works
+--target TRIPLE     cross-compile: currently proven same-OS/cross-arch only (e.g. macOS x64⟷arm64, D-026); cross-OS targets not yet supported
 --emit mir|llvm-ir|obj|asm
 --int hybrid|native|bigint    int repr override (default hybrid, D-001) — native = documented CPython deviation
 --lib               emit C-ABI library + header instead of executable

@@ -51,7 +51,7 @@ assert len(matches) == 1, "ievo@ievo-skills was not installed exactly once"
 assert matches[0].get("installed") is True, "ievo@ievo-skills is not installed"
 assert matches[0].get("enabled") is True, "ievo@ievo-skills is not enabled"
 assert not any(
-    entry.get("pluginId") == "pycc-agent-skills@ievo-skills"
+    entry.get("pluginId") == "pycc-agent-skills@" "ievo-skills"
     for entry in entries
 ), "repository skills must not be installed globally"
 ' <<EOF
@@ -75,7 +75,11 @@ wrappers = sorted(
     path.parent.name for path in (repo_root / ".agents" / "skills").glob("*/SKILL.md")
 )
 assert "grill-with-docs" in wrappers, "Codex skill wrappers are missing"
-assert len(wrappers) == 14, "Codex did not retain every repository skill wrapper"
+assert "i-have-an-issue" in wrappers, "installed issue-research skill is missing"
+assert "pycc" in wrappers, "project-local pycc alpha skill is missing"
+assert "pycc-feedback" in wrappers, "project-local feedback alpha skill is missing"
+assert "review-local-changes" in wrappers, "local review skill is missing"
+assert len(wrappers) == 17, "Codex did not retain every repository skill wrapper"
 prompt = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 model_input = "\n".join(
     content.get("text", "")
@@ -125,5 +129,8 @@ fi
 python3 "$repo_root/scripts/check_review_local_changes.py" \
   --client codex \
   --reviewer-manifest "$1"
+
+skill_dir="$repo_root/.claude/skills/i-have-an-issue"
+python3 "$skill_dir/scripts/search_github.py" --help >/dev/null
 
 echo "Codex pinned marketplace and project-scoped skills: valid"

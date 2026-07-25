@@ -66,4 +66,59 @@ python3 "$repo_root/scripts/check_review_local_changes.py" \
   --client claude \
   --reviewer-manifest "$1"
 
-echo "Claude marketplace: project settings and inline manifest are valid"
+skill_debug="$test_claude_config/skill-discovery.log"
+known_skill_output="$test_claude_config/known-skill.out"
+unknown_skill_output="$test_claude_config/unknown-skill.out"
+
+# An unauthenticated print session still resolves slash commands before it
+# reaches the model. This checks project-skill discovery without credentials or
+# a paid API call.
+set +e
+env -u ANTHROPIC_API_KEY \
+  -u ANTHROPIC_AUTH_TOKEN \
+  -u CLAUDE_CODE_OAUTH_TOKEN \
+  CLAUDE_CONFIG_DIR="$test_claude_config" \
+  claude -p --no-session-persistence --debug-file "$skill_debug" \
+  "/i-have-an-issue" >"$known_skill_output" 2>&1
+known_skill_rc=$?
+set -e
+
+if [ "$known_skill_rc" -eq 0 ] ||
+  grep -q "Unknown command: /i-have-an-issue" "$known_skill_output"; then
+  echo "error: Claude Code did not resolve /i-have-an-issue as a project skill" >&2
+  cat "$known_skill_output" >&2
+  exit 1
+fi
+
+skill_count=$(
+  find "$repo_root/.claude/skills" -mindepth 2 -maxdepth 2 \
+    -name SKILL.md -type f | wc -l | tr -d ' '
+)
+if ! grep -Fq \
+  "project: $skill_count, additional: 0, legacy commands: 0)" \
+  "$skill_debug"; then
+  echo "error: Claude Code did not load every project skill" >&2
+  exit 1
+fi
+
+set +e
+env -u ANTHROPIC_API_KEY \
+  -u ANTHROPIC_AUTH_TOKEN \
+  -u CLAUDE_CODE_OAUTH_TOKEN \
+  CLAUDE_CONFIG_DIR="$test_claude_config" \
+  claude -p --no-session-persistence \
+  "/pycc-definitely-not-a-skill" >"$unknown_skill_output" 2>&1
+unknown_skill_rc=$?
+set -e
+
+if ! grep -q "Unknown command: /pycc-definitely-not-a-skill" \
+  "$unknown_skill_output"; then
+  echo "error: Claude Code unknown-skill failure path changed (status $unknown_skill_rc)" >&2
+  cat "$unknown_skill_output" >&2
+  exit 1
+fi
+
+skill_dir="$repo_root/.claude/skills/i-have-an-issue"
+python3 "$skill_dir/scripts/search_github.py" --help >/dev/null
+
+echo "Claude marketplace and project-scoped skills: valid"

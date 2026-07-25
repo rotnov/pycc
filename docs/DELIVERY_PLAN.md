@@ -17,7 +17,7 @@ Every ROADMAP.md milestone is its own sub-project: its own brainstorm → plan �
 | v0.7 interop escape hatch | `pycc.interop.cpython` typed boundary | v0.6 | ~4-5 |
 | v0.8 corpus at scale + bot | `corpus-bot` GitHub Action, `socket`/`http.client`/compression stdlib | v0.7 | ~4 |
 | v0.9 async & packaging | `asyncio` subset on state machines, `--lib` C-ABI | v0.8 | ~4-5 |
-| v1.0 spec freeze | PYTHON_STANDARDS matrix complete, semantics deviations doc, benchmarks published, diagnostics/JSON frozen semver | v0.9 | ~3-4 |
+| v1.0 spec freeze | PYTHON_STANDARDS Python 3.0–3.14 matrix complete, semantics deviations doc, benchmarks published, diagnostics/JSON frozen semver | v0.9 | ~3-4 |
 
 ## Environment baseline (verified, not assumed)
 
@@ -27,11 +27,16 @@ Verified empirically on the primary dev host (macOS, aarch64-apple-darwin) befor
 |---|---|---|
 | Rust | `rustc 1.97.1` (stable, updated via `rustup update stable`; matches README's "1.97+" exactly) | Toolchain pinned via `rust-toolchain.toml` inside the repo — **not** a global `rustup default` change, since this machine has other toolchains (incl. a `solana` one) that must stay untouched |
 | LLVM | `22.1.1` (single Homebrew keg; the `llvm@17`..`llvm@22` opt-paths are stale symlinks to the same keg, not distinct installs) | `inkwell = "0.9"` with feature `llvm22-1` — clean match, no version fudging needed |
-| CPython oracle | `python3.14` → `3.14.3` at `/opt/homebrew/bin/python3.14` | Satisfies TESTING.md's differential requirement (`stdout == CPython 3.14 stdout`) |
-| Local linker | Apple clang 21 / Xcode CLT `ld64` | Sufficient for the first vertical slice on native host; bundled `lld` for cross-compilation is wired when `--target` work starts, not before |
+| CPython oracle | `python3.14` → `3.14.3` at `/opt/homebrew/bin/python3.14` | Matches the v1 language line but is behind the current 3.14.6 patch target; upgrade before PR-6. |
+| Local linker | Apple clang 21 / Xcode CLT `ld64` | Sufficient for the first vertical slice on native host; PR-3's `--target` work (D-026/D-028/D-031) routes through each host's own driver -- system `cc` (Apple clang) on macOS, bundled clang on Windows/Linux when `--target` is given -- not a universally bundled `lld` binary, which none of the three LLVM distributions this project installs actually ships |
 | crates.io | Reachable (a bare `curl -I` 403s on crates.io's anti-bot filter — mundane, not a sandbox restriction; a real UA gets 200) | `cargo build` can fetch `ruff_python_parser`, `inkwell`, `rayon`, `mimalloc` |
 | `gh` CLI | Authenticated, `repo`+`workflow` scopes | Can open PRs and push `.github/workflows` |
-| `cargo-llvm-cov` | **Not** part of the rustup `llvm-tools` component — it is a separately distributed binary (own crate/release) that *uses* `llvm-tools-preview`'s `llvm-cov`/`llvm-profdata` at runtime. An earlier version of this plan conflated the two (caught by repo audit, issue #13); a spec that just says "install llvm-tools" fails in CI with "no such command: llvm-cov" | PR-1's CI skeleton installs both, explicitly and pinned: `rustup component add llvm-tools-preview` **and** a pinned `cargo-llvm-cov` install (e.g. a pinned version of `taiki-e/install-action` or `cargo install cargo-llvm-cov --locked --version <pinned>`) — never a bare "latest," per D-014's own no-unreviewed-drift spirit. A smoke step prints `cargo llvm-cov --version` before the gate runs, so a broken install fails loudly instead of silently reporting 0% |
+| `cargo-llvm-cov` | **Not** part of the rustup `llvm-tools` component — it is a separately distributed binary (own crate/release) that *uses* `llvm-tools-preview`'s `llvm-cov`/`llvm-profdata` at runtime. An earlier version of this plan conflated the two (caught by repo audit, issue #13); a spec that just says "install llvm-tools" fails in CI with "no such command: llvm-cov" | PR-1's CI skeleton installs both, explicitly and pinned: `rustup component add llvm-tools-preview` **and** a pinned `cargo-llvm-cov` install — never a bare "latest," per D-014's own no-unreviewed-drift spirit. CI smoke-checks the direct binary, then invokes it with the explicit `llvm-cov` subcommand under a clean unprivileged `nobody` environment whose workspace and trusted executables are read-only. A repository alias, `PATH` mutation, build script, or procedural macro therefore cannot replace the gate executable. |
+
+Release review on 2026-07-24 found upstream Python 3.14.6 while the verified
+local oracle above remains 3.14.3. The table records the actual host state, not
+the desired PR-6 pin. Before PR-6, install and pin 3.14.6 locally and in CI,
+re-verify the executable path/version, and re-record all differential outputs.
 
 Only macOS is locally verifiable. Linux x64/arm64 and Windows MSVC exist only via CI — so CI must be wired right after the first local slice works, not as a v0.1 finishing touch (see PR-3 below).
 
@@ -39,7 +44,7 @@ Only macOS is locally verifiable. Linux x64/arm64 and Windows MSVC exist only vi
 
 Not all 11 crates in [ARCHITECTURE.md](./ARCHITECTURE.md) are needed on day one.
 
-**Built now:** `pycc` (CLI/driver), `pycc_parser`/`pycc_ast` (thin wrapper over vendored `ruff_python_parser`), `pycc_hir`, `pycc_types` (T0001 strictness + local inference over the v0.1 type subset only), `pycc_mir`, `pycc_codegen` (LLVM via `inkwell`), `pycc_rt` (minimal runtime), `pycc_diag`.
+**Built now:** `pycc` (CLI/driver), `pycc_parser`/`pycc_ast` (thin wrapper over vendored `ruff_python_parser`), `pycc_hir`, `pycc_types` (currently a passthrough stub; PR-4 adds T0001 strictness and local inference over the v0.1 type subset), `pycc_mir`, `pycc_codegen` (LLVM via `inkwell`), `pycc_rt` (minimal runtime), `pycc_diag`.
 
 **Deliberately deferred:** `pycc_own` (ownership/escape analysis is a v0.5 item — semantics-preserving, perf-only, so v0.1 just uses RC/heap without ownership inference), `pycc_std` (real importable modules start v0.2; the Tier-0 builtins v0.1 needs — `print`, `range`, etc. — live as intrinsics directly in `pycc_rt`/`pycc_codegen`), `pycc_lexer` (D-017 — the vendored parser bundles lexing internally, nothing consumes a standalone token stream yet), `pycc_testkit` (D-018 — no PEP conformance matrix exists yet for a real harness to check against; `tests/slice0.rs` covers PR-2's two named fixtures ad hoc in the meantime).
 
@@ -60,10 +65,10 @@ Three approaches were weighed: (A) thin end-to-end slice first, then grow featur
 |---|---|
 | 1 | Workspace scaffold (all crate stubs), `rust-toolchain.toml` (1.97.1), CLI skeleton, CI skeleton **with the coverage gate wired in from the first commit** (D-014): pinned `cargo-llvm-cov` installer (it is a separate binary, not part of `llvm-tools` — see the Environment baseline note below) + the `llvm-tools-preview` rustup component, `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100`. New ADRs appended to DECISIONS.md: LLVM 22.1/inkwell 0.9 pin, vendored `ruff_python_parser` version |
 | 2 | Slice 0: parser → HIR → types (passthrough) → MIR → LLVM codegen → link; "hello binary" runs locally. Covers **both** entry shapes named in ROADMAP.md's v0.1 scope: a `main()`-defining module, and a module with only top-level statements and no `main()` — module-level execution is a named conformance case here, not an incidental side effect of the `main()` path |
-| 3 | CI matrix live on all 5 Tier-1 targets for slice 0, **plus one cross-compiled build**: at least one Tier-1 target built via `pycc build --target <triple>` with bundled `lld` from a *different* host, with the resulting binary executed and verified on its native runner. Cross-compilation is a v0.1 requirement from D-011/README/ARCHITECTURE/CLI_SPEC, not a nice-to-have — it does not get to hide behind "CI matrix live" meaning same-host-per-target builds only |
+| 3 | CI matrix live on all 5 Tier-1 targets for slice 0, **plus one cross-compiled build**: `pycc build --target x86_64-apple-darwin` from the `macos-14` (arm64) runner, executed and verified on `macos-15-intel` (x64) — same-OS/cross-arch, per D-026, since true cross-OS needs a target sysroot this project doesn't bundle yet (verified empirically, not assumed). Cross-compilation is a v0.1 requirement from D-011/README/ARCHITECTURE/CLI_SPEC, not a nice-to-have — it does not get to hide behind "CI matrix live" meaning same-host-per-target builds only |
 | 4 | Frontend depth: full v0.1 grammar, real T0001 + local inference, first diagnostic codes with snapshot tests. First per-PR frontend benchmark baseline recorded here (see Performance gate below) since this is the first PR with a non-trivial frontend to measure |
 | 5 | Codegen depth: full v0.1 feature set (int/float/str/bool, arithmetic, control flow, recursion, f-strings); runtime fleshed out (overflow→bigint per D-001, small-string opt per D-007). `--debug` profile only — `--release`/LTO is a v0.2 item (see Testing scope below), not built here |
-| 6 | `pycc_testkit`: fib + mandelbrot-ascii vs. CPython 3.14.3 on all 5 targets, `--debug` profile; `pycc check` benchmark <50ms/1k LOC; diagnostic output matches CLI_SPEC.md's example byte-for-byte |
+| 6 | `pycc_testkit`: fib + mandelbrot-ascii vs. pinned CPython 3.14.6 on all 5 targets, `--debug` profile; `pycc check` benchmark <50ms/1k LOC; diagnostic output matches CLI_SPEC.md's example byte-for-byte |
 | 7 | Buffer: close whatever's left so all v0.1 ROADMAP.md acceptance bullets are simultaneously green |
 
 Each row above absorbs one gap an automated repo audit found in the original version of this plan (tracked as GitHub issues #9–#13): the cross-compilation gap (#9, → PR-3), the debug/release conformance contradiction (#10, → PR-5/PR-6 and Testing scope below), the missing module-level-execution case (#11, → PR-2), the missing early performance gate (#12, → PR-4 and Performance gate below), and the `cargo-llvm-cov` installation error (#13, → PR-1 and Environment baseline below). Issue #14 (measure platform-specific code per-platform rather than exempting it) is deferred — there is no platform-specific code yet for the question to apply to; it rides along whenever D-014 next gets touched.

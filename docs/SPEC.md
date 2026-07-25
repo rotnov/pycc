@@ -5,7 +5,7 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 | Doc | Contents | Drives |
 |---|---|---|
 | [README.md](../README.md) | Vision, positioning vs Codon/Nuitka/mypyc, quick start | everything |
-| [PYTHON_STANDARDS.md](./PYTHON_STANDARDS.md) | All language PEPs 3.0→3.14, one conformance test each; rejected-by-design list; OSS corpus tiers | `tests/conformance`, `tests/diagnostics` |
+| [PYTHON_STANDARDS.md](./PYTHON_STANDARDS.md) | Language PEPs 3.0→3.14 plus the Python 3.15 preview track, one conformance test each; rejected-by-design list; OSS corpus tiers | `tests/conformance`, `tests/diagnostics` |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | Pipeline, crates, incremental/parallel design, **cross-platform Tier-1 matrix** | workspace layout, CI matrix |
 | [TYPE_SYSTEM.md](./TYPE_SYSTEM.md) | Strictness rules, type↔representation table, generics, narrowing | `pycc_types` |
 | [MEMORY_OWNERSHIP.md](./MEMORY_OWNERSHIP.md) | Inferred ownership, RC elision, cycles, GIL-free thread safety | `pycc_own`, `pycc_rt` |
@@ -14,16 +14,21 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 | [DIAGNOSTICS.md](./DIAGNOSTICS.md) | Error-code registry, quality bar, stability rules | `pycc_diag` |
 | [STDLIB_PLAN.md](./STDLIB_PLAN.md) | Builtins + module tiers with target versions, compat policy | `pycc_std` |
 | [TESTING.md](./TESTING.md) | 7 test layers, conformance harness, differential fuzzing, corpus bot | CI, `pycc_testkit` |
-| [ROADMAP.md](./ROADMAP.md) | v0.1→v1.0 milestones with binary acceptance criteria | releases |
-| [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-020 (int repr, LLVM, UTF-8 str, no-GIL model, coverage, agent surfaces, CI trust…) | irreversible calls |
+| [ROADMAP.md](./ROADMAP.md) | Delivery status for the repository tree in the containing commit plus v0.1→v1.0 milestones with binary acceptance criteria | releases |
+| [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-034 (int repr, LLVM, UTF-8 str, no-GIL model, coverage, agent surfaces, CI trust, iEvo, repository governance, Windows CI…) | irreversible calls |
 | [DELIVERY_PLAN.md](./DELIVERY_PLAN.md) | Milestone decomposition, verified environment baseline, v0.1 crate scope + PR breakdown, autonomy policy | execution order, PR sequencing |
+| [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md) | Protected-branch contract, required controls, emergency bypass, and audit response | GitHub settings, governance workflows |
 | [AGENT_TOOLING.md](./AGENT_TOOLING.md) | Agent plugin pins, reviewed update process, validation, and rollback | `.agents/`, `.claude/`, agent-asset CI |
 | [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
 | [DISTRIBUTION.md](./DISTRIBUTION.md) | Source-based pre-commit publication, hook contract, installation limits | `.pre-commit-hooks.yaml`, `pycc check`, release tags |
+| [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) | Chronological search-query measurements and ranking methodology | discoverability monitoring |
 
 ## Invariants (short version)
 
-1. **Standard Python 3.14 in, native binary out.** No dialect, no new syntax — ever.
+1. **Standard Python in, native binary out.** pycc never adds its own dialect or
+   syntax. The v1.0 language level is exactly CPython 3.14; admitting a later
+   standard Python language level requires its versioned roadmap gate and a
+   superseding ADR.
 2. **Strict types are the only mode.** Untyped public API doesn't compile.
 3. **Ownership is inferred, never written.** Semantics-preserving; only performance changes.
 4. **No GIL; safety proven at compile time.**

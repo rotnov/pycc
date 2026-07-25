@@ -1,14 +1,34 @@
 # pycc
 
-> pycc is a strict ahead-of-time compiler for typed, standard Python 3.14. Its
-> design target is a standalone native binary produced through Rust and LLVM.
+> pycc is a fully AI-created, human-managed pre-alpha project building a strict
+> ahead-of-time compiler for typed, standard Python 3.14. Its design target is
+> a standalone native binary produced through Rust and LLVM.
 
-Project status: pre-alpha. The first end-to-end compiler slice exists; broad
-language coverage and production readiness are roadmap work.
+AI agents create the specifications, code, tests, documentation, reviews, and
+release automation. A human only manages goals, constraints, priorities, and
+product decisions. No project code is handwritten by a human.
 
-Canonical website: https://rotnov.github.io/pycc/
-Source repository: https://github.com/rotnov/pycc
-Specification index: https://github.com/rotnov/pycc/blob/main/docs/SPEC.md
-Language standards matrix: https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md
-Roadmap: https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md
-License: MIT
+Project status is pre-alpha. The first end-to-end compiler slice exists; broad
+language coverage and production readiness remain roadmap work. Design targets
+must not be interpreted as released features.
+
+## Project
+
+- [Canonical website](https://rotnov.github.io/pycc/): Human-readable project overview and current status.
+- [Markdown website](https://rotnov.github.io/pycc/index.html.md): Clean text equivalent of the landing page for agents and constrained clients.
+- [Current implementation status](https://rotnov.github.io/pycc/status/): Commit-relative account of working behavior, missing v0.1 features, CI, and coverage evidence.
+- [Compiler architecture](https://rotnov.github.io/pycc/architecture/): Implemented Rust and LLVM pipeline separated from the target architecture.
+- [AI-native experiment](https://rotnov.github.io/pycc/ai-native/): Authorship boundary, operating loop, governance, and public evidence for the fully AI-created, human-managed development model.
+- [Source repository](https://github.com/rotnov/pycc): Public source, tests, issues, pull requests, and development history.
+- [README](https://github.com/rotnov/pycc/blob/main/README.md): Project positioning, current capabilities, build instructions, and quality policy.
+
+## Specifications
+
+- [Specification index](https://github.com/rotnov/pycc/blob/main/docs/SPEC.md): Map of the documents that define project behavior.
+- [Compiler architecture](https://github.com/rotnov/pycc/blob/main/docs/ARCHITECTURE.md): Pipeline, crate boundaries, and platform model.
+- [Python standards matrix](https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md): Targeted Python 3.14 language standards and implementation status.
+- [Roadmap](https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md): Delivery stages and acceptance criteria toward v1.0.
+
+## Optional
+
+- [MIT license](https://github.com/rotnov/pycc/blob/main/LICENSE): Terms for using and contributing to pycc.
