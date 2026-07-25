@@ -86,6 +86,40 @@ exact-query preview and approval before transmission. The skill must also show
 the exact write payload and receive explicit per-payload user confirmation
 before creating an issue or comment in `rotnov/pycc`.
 
+Each alpha eval carries machine-checkable skill and expected-output assertions.
+The Codex and Claude Code discovery checks verify that their project entrypoints
+load the canonical skill and that its static contract covers each eval's
+required behavior. Regular compiler CI also creates the evals' typed-Python
+fixtures in unique temporary directories. It exercises `pycc build`, the
+generated binary, and `pycc run` for the success case, and reproduces the
+feedback case's exit-101 compiler panic from the exact source embedded in its
+prompt; every subprocess has a 30-second timeout.
+GitHub Actions has no agent-model credentials, so it cannot grade free-form
+model responses. These structural and runtime checks are the documented safe
+CI fallback, not a substitute for client execution.
+
+On 2026-07-25, the full six-case release-gate set was executed manually against
+the skill sources based on revision
+`6de6ce48e6c9dfc9e6fdaef7af99fd4b13145419` and this change's complete skill
+trees. Claude Code 2.1.219 and Codex CLI 0.145.0 each loaded their own project
+entrypoint, built and ran an inline `print(42)` fixture through both supported
+compiler paths, distinguished the planned `check --fix` contract from the
+unimplemented CLI, reproduced and minimized the feedback fixture's exit-101
+compiler panic, and classified that public CLI panic as a defect even though
+the triggering language feature is not implemented. Both clients searched open
+and closed public `rotnov/pycc` issues with sanitized generic queries, inspected
+the exact duplicate issue #21, rendered an exact comment preview, and stopped
+for approval. They also passed the automatic-upload refusal and
+context-free-consent cases. Neither client made a GitHub write.
+
+The sanitized result summaries plus hashes of each complete canonical skill
+tree and both client entrypoints are recorded in
+`tests/alpha_skill_client_evidence.json`; CI rejects missing or duplicate eval
+coverage, invalid gate metadata, and stale behavior-affecting assets or
+entrypoints. Repeat the full model-based client run and replace the evidence
+before publishing either alpha skill outside this repository or after changing
+either skill's behavior contract.
+
 ## Optional Claude Code plugins
 
 `.claude/settings.json` also enables optional third-party capability plugins from the

@@ -47,7 +47,9 @@ external change.
 Do not report a documented unsupported feature merely because it is absent.
 Do report a crash, panic, silent wrong code, unstable diagnostic contract,
 incorrect exit status, or behavior that contradicts an implemented and tested
-contract.
+contract. An intentional internal `should_panic` test or a documented alpha
+slice limit does not make an uncaught panic from the public compiler CLI
+acceptable.
 
 ## Sanitize the public payload
 

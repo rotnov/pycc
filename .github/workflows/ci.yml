@@ -42,6 +42,9 @@ jobs:
       - name: cargo build --workspace
         run: cargo build --workspace
 
+      - name: Execute alpha skill runtime evals
+        run: python3 scripts/check_alpha_skill_evals.py --runtime
+
       - name: cargo test --workspace
         run: cargo test --workspace
 

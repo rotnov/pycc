@@ -10,6 +10,11 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote
 
+from check_alpha_skill_evals import (
+    behavioral_evidence_failures,
+    contract_failures,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / ".claude" / "skills"
@@ -540,11 +545,20 @@ def validate_skill_documents(failures: list[str]) -> None:
     validate_alpha_skill_contracts(SKILLS_ROOT, failures)
 
 
+def validate_alpha_skill_evals(failures: list[str]) -> None:
+    for client in ("codex", "claude"):
+        for failure in contract_failures(client):
+            failures.append(f"alpha evals ({client}): {failure}")
+    for failure in behavioral_evidence_failures():
+        failures.append(f"alpha behavioral evidence: {failure}")
+
+
 def main() -> int:
     failures: list[str] = []
     validate_marketplaces(failures)
     validate_skill_lock(failures)
     validate_skill_documents(failures)
+    validate_alpha_skill_evals(failures)
     if failures:
         for failure in failures:
             print(f"error: {failure}", file=sys.stderr)
