@@ -627,10 +627,14 @@ expected_locations = {
     f"{canonical}architecture/",
     f"{canonical}ai-native/",
 }
-locations = [
-    entry.findtext("s:loc", namespaces=namespace)
-    for entry in urls
-]
+locations = []
+for entry in urls:
+    location_nodes = entry.findall("s:loc", namespace)
+    if len(location_nodes) != 1:
+        raise SystemExit(
+            "Each sitemap URL entry must contain exactly one loc"
+        )
+    locations.append((location_nodes[0].text or "").strip())
 if len(locations) != len(expected_locations):
     raise SystemExit(
         f"Expected {len(expected_locations)} sitemap URLs; "
@@ -702,17 +706,43 @@ fi
 notify_script="$repo_root/scripts/notify-indexnow.sh"
 test -x "$notify_script"
 sh -n "$notify_script"
-expected_notification=$(printf \
-  'url=%s\nkey=%s\nkeyLocation=%s%s.txt' \
+actual_notification=$(
+  INDEXNOW_DRY_RUN=1 \
+    INDEXNOW_SITEMAP="$site_dir/sitemap.xml" \
+    "$notify_script"
+)
+python3 - \
+  "$site_dir/sitemap.xml" \
   "$canonical" \
   "$indexnow_key" \
-  "$canonical" \
-  "$indexnow_key")
-actual_notification=$(INDEXNOW_DRY_RUN=1 "$notify_script")
-if [ "$actual_notification" != "$expected_notification" ]; then
-  echo "IndexNow notifier does not match the published canonical URL and key" >&2
-  exit 1
-fi
+  "$actual_notification" <<'PY'
+import json
+from pathlib import Path
+import sys
+from urllib.parse import urlsplit
+import xml.etree.ElementTree as ET
+
+sitemap_path = Path(sys.argv[1])
+canonical = sys.argv[2]
+key = sys.argv[3]
+payload = json.loads(sys.argv[4])
+namespace = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+root = ET.parse(sitemap_path).getroot()
+expected_urls = [
+    (node.text or "").strip()
+    for node in root.findall("s:url/s:loc", namespace)
+]
+expected = {
+    "host": urlsplit(canonical).hostname,
+    "key": key,
+    "keyLocation": f"{canonical}{key}.txt",
+    "urlList": expected_urls,
+}
+if payload != expected:
+    raise SystemExit(
+        "IndexNow notifier payload does not match the canonical sitemap set"
+    )
+PY
 
 if grep -R -nE '(localhost|127\.0\.0\.1|file://)' "$site_dir"; then
   echo "Website contains a local-only URL" >&2
