@@ -71,6 +71,12 @@ Three approaches were weighed: (A) thin end-to-end slice first, then grow featur
 | 6 | `pycc_testkit`: fib + mandelbrot-ascii vs. pinned CPython 3.14.6 on all 5 targets, `--debug` profile; `pycc check` benchmark <50ms/1k LOC; diagnostic output matches CLI_SPEC.md's example byte-for-byte |
 | 7 | Buffer: close whatever's left so all v0.1 ROADMAP.md acceptance bullets are simultaneously green |
 
+A separate language-policy governance activation is ordered after PR-4 and
+before PR-5. It replaces `.github/workflows/ci.yml` only with the exact bytes
+staged by a preceding authorization change on protected `main`; it is not part
+of the PR-5 codegen slice. If the active workflow changes first, the resulting
+combined bytes must be staged and reviewed again before activation.
+
 Each row above absorbs one gap an automated repo audit found in the original version of this plan (tracked as GitHub issues #9–#13): the cross-compilation gap (#9, → PR-3), the debug/release conformance contradiction (#10, → PR-5/PR-6 and Testing scope below), the missing module-level-execution case (#11, → PR-2), the missing early performance gate (#12, → PR-4 and Performance gate below), and the `cargo-llvm-cov` installation error (#13, → PR-1 and Environment baseline below). Issue #14 (measure platform-specific code per-platform rather than exempting it) is deferred — there is no platform-specific code yet for the question to apply to; it rides along whenever D-014 next gets touched.
 
 ### Performance gate (resolves #12)
