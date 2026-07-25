@@ -68,6 +68,7 @@ AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
 REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
 PINNED_CLAUDE_PLUGINS = {"ievo@ievo-skills"}
 INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md"}
+CLAUDE_INSTRUCTION_IMPORT = "@AGENTS.md\n"
 CLAUDE_SETTINGS_PATH = Path(".claude/settings.json")
 CLAUDE_MARKETPLACE_DECLARATION_FIELDS = {
     "enabledPlugins",
@@ -919,6 +920,22 @@ def interpreter_arguments(text: str, start: int) -> list[str]:
             and text[index + 1] in ",}]"
         ):
             break
+        if (
+            text.startswith("0<", index)
+            and index + 2 < len(text)
+            and text[index + 2] not in "<>&("
+        ):
+            arguments.append("<")
+            index += 2
+            continue
+        if (
+            text[index] == "<"
+            and index + 1 < len(text)
+            and text[index + 1] not in "<>&("
+        ):
+            arguments.append("<")
+            index += 1
+            continue
 
         escaped_quote = (
             text[index] == "\\"
@@ -1651,8 +1668,17 @@ def referenced_interpreter_scripts(text: str) -> set[str]:
         index = 0
         while index < len(arguments):
             argument = arguments[index]
+            if argument == "<":
+                index += 1
+                if index < len(arguments):
+                    reference = local_script_reference(arguments[index])
+                    if reference is not None:
+                        references.add(reference)
+                break
             if argument == "--":
                 index += 1
+                if index < len(arguments) and arguments[index] == "<":
+                    index += 1
                 if index < len(arguments):
                     reference = local_script_reference(arguments[index])
                     if reference is not None:
@@ -2117,6 +2143,27 @@ def validate_skill_parity(
                 )
 
 
+def validate_instruction_parity(
+    failures: list[str],
+    root: Path = ROOT,
+) -> None:
+    agents_path = root / "AGENTS.md"
+    if not agents_path.is_file():
+        failures.append("AGENTS.md: canonical shared instructions are required")
+
+    claude_path = root / "CLAUDE.md"
+    try:
+        claude_import = claude_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        failures.append(f"CLAUDE.md: could not read instruction import: {error}")
+        return
+    if claude_import != CLAUDE_INSTRUCTION_IMPORT:
+        failures.append(
+            "CLAUDE.md: must contain exactly @AGENTS.md as the shared "
+            "instruction import"
+        )
+
+
 def fence_error(path: Path) -> str | None:
     active_character: str | None = None
     active_length = 0
@@ -2303,6 +2350,7 @@ def validate_skill_documents(failures: list[str]) -> None:
 
 def main() -> int:
     failures: list[str] = []
+    validate_instruction_parity(failures)
     validate_marketplaces(failures)
     validate_skill_lock(failures)
     validate_skill_documents(failures)

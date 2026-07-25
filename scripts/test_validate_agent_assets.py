@@ -387,6 +387,63 @@ class AgentAssetValidationTests(unittest.TestCase):
             )
             self.assertEqual(failures, [])
 
+    def instruction_parity_failures(
+        self,
+        claude_text: str,
+        *,
+        include_agents: bool = True,
+    ) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            if include_agents:
+                (root / "AGENTS.md").write_text(
+                    "# Shared instructions\n",
+                    encoding="utf-8",
+                )
+            (root / "CLAUDE.md").write_text(claude_text, encoding="utf-8")
+            failures: list[str] = []
+            validator.validate_instruction_parity(failures, root)
+            return failures
+
+    def test_claude_instructions_import_the_canonical_agents_file(self) -> None:
+        self.assertEqual(
+            self.instruction_parity_failures("@AGENTS.md\n"),
+            [],
+        )
+
+    def test_divergent_claude_instructions_are_rejected(self) -> None:
+        for claude_text in (
+            "# Independent Claude rules\n",
+            "@AGENTS.md\nAdditional Claude-only rule.\n",
+        ):
+            with self.subTest(claude_text=claude_text):
+                failures = self.instruction_parity_failures(claude_text)
+                self.assertEqual(len(failures), 1)
+                self.assertIn("must contain exactly @AGENTS.md", failures[0])
+
+    def test_claude_import_requires_the_canonical_agents_file(self) -> None:
+        failures = self.instruction_parity_failures(
+            "@AGENTS.md\n",
+            include_agents=False,
+        )
+        self.assertEqual(
+            failures,
+            ["AGENTS.md: canonical shared instructions are required"],
+        )
+
+    def test_invalid_claude_instruction_encoding_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "AGENTS.md").write_text(
+                "# Shared instructions\n",
+                encoding="utf-8",
+            )
+            (root / "CLAUDE.md").write_bytes(b"\xffinvalid")
+            failures: list[str] = []
+            validator.validate_instruction_parity(failures, root)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("could not read instruction import", failures[0])
+
     def claude_settings(
         self,
         *,
@@ -2516,6 +2573,18 @@ class AgentAssetValidationTests(unittest.TestCase):
             (
                 ".github/workflows/check.yml",
                 "jobs:\n  check:\n    steps:\n"
+                "      - run: bash < tools/helper\n",
+                "tools/helper",
+            ),
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
+                "      - run: python -X dev -- < tools/helper\n",
+                "tools/helper",
+            ),
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
                 r"      - run: python tools/my\ helper"
                 "\n",
                 "tools/my helper",
@@ -2668,6 +2737,22 @@ class AgentAssetValidationTests(unittest.TestCase):
                 {"tools/helper"},
             ),
             ("ruby --disable gems tools/helper", {"tools/helper"}),
+        )
+        for invocation, expected in cases:
+            with self.subTest(invocation=invocation):
+                self.assertEqual(
+                    validator.referenced_interpreter_scripts(invocation),
+                    expected,
+                )
+
+    def test_interpreter_stdin_redirection_selects_the_input_script(self) -> None:
+        cases = (
+            ("bash < tools/helper", {"tools/helper"}),
+            ("python <tools/helper", {"tools/helper"}),
+            ('ruby 0<"tools/helper"', {"tools/helper"}),
+            ("node < tools/my\\ helper", {"tools/my helper"}),
+            ("python -- < tools/helper", {"tools/helper"}),
+            ("python -X dev -- < tools/helper", {"tools/helper"}),
         )
         for invocation, expected in cases:
             with self.subTest(invocation=invocation):

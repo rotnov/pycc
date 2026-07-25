@@ -124,15 +124,18 @@ marketplace sources are not pinned, are not installed by the Codex bootstrap, an
 not part of the reproducible cross-platform baseline above. The exemption is the
 exact validated `ievo@ievo-skills` identity, not every plugin that happens to share
 that marketplace name. Repository instructions, tests, and required workflows must
-not depend on optional plugins. The agent-asset validator scans the shared
-instructions (including scoped `AGENTS.md` and `CLAUDE.md` files), every tracked file
+not depend on optional plugins. The agent-asset validator also requires `CLAUDE.md`
+to contain exactly the `@AGENTS.md` import, keeping the shared Codex and Claude
+instruction contract fail-closed instead of relying on documentation alone. It scans
+the shared instructions (including scoped `AGENTS.md` and `CLAUDE.md` files), every tracked file
 under the Codex, Claude, and iEvo evolution trees, tracked tests (including source
 formats that can contain inline tests), required workflows, the repository `scripts/`
 tree, local action manifests anywhere in the repository, every tracked file under the
 conventional `.github/actions/` tree, interpreter-recognized script formats, and
 tracked executables. It follows repository-relative script invocations from those
 required assets through recognized interpreters, including recursively referenced
-extensionless, non-executable scripts. Known interpreter options distinguish ordinary
+extensionless, non-executable scripts and scripts supplied on standard input with
+shell `<` or `0<` redirection. Known interpreter options distinguish ordinary
 values, loaded code files, and inline-code modes; ambiguous future options fail closed
 by selecting every repository-relative operand. Windows `.exe` interpreter names and
 backslash paths are normalized to the same Git/POSIX tracked paths without accepting
