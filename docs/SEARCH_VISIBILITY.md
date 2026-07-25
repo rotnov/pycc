@@ -82,6 +82,15 @@ was not recorded. Later snapshots record both returned rows and `Total`.
 | 2026-07-25T14:54:05Z | `AI-native compiler` | 48 | 0 | 50 | 94 |
 | 2026-07-25T14:54:05Z | `topic:aot-compiler` | 16 | -2 | 18 | 18 |
 | 2026-07-25T14:54:05Z | `topic:python-compiler` | 43 | -2 | 44 | 44 |
+| 2026-07-25T15:43:31Z | `pycc` | >50 | — | 50 | 363 |
+| 2026-07-25T15:43:31Z | `Python 3.14 compiler in:description` | 12 | 0 | 16 | 16 |
+| 2026-07-25T15:43:31Z | `ahead-of-time compiler python` | 8 | 0 | 11 | 11 |
+| 2026-07-25T15:43:31Z | `typed Python compiler` | >50 | — | 50 | 316 |
+| 2026-07-25T15:43:31Z | `python aot compiler` | 19 | 0 | 28 | 28 |
+| 2026-07-25T15:43:31Z | `compile python native binary` | 22 | 0 | 38 | 38 |
+| 2026-07-25T15:43:31Z | `AI-native compiler` | 48 | 0 | 50 | 94 |
+| 2026-07-25T15:43:31Z | `topic:aot-compiler` | 14 | +2 | 18 | 18 |
+| 2026-07-25T15:43:31Z | `topic:python-compiler` | 41 | +2 | 44 | 44 |
 
 ## GitHub traffic history
 
@@ -98,6 +107,7 @@ include CI, agents, and other automation and is not treated as human discovery.
 | 2026-07-25T11:58:38Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 | 2026-07-25T13:18:56Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 | 2026-07-25T14:54:05Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
+| 2026-07-25T15:43:17Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 
 ## Google Search Console history
 
@@ -124,19 +134,19 @@ later movement can be correlated without presenting correlation as causation.
 
 ## Current interpretation
 
-At 14:54 UTC, all five measurable non-topic keyword positions were unchanged:
+At 15:43 UTC, all five measurable non-topic keyword positions were unchanged:
 the repository remains rank 12 for the Python 3.14 description query, rank 8
 for `ahead-of-time compiler python`, and rank 19 for `python aot compiler`.
-The two topic-filtered positions moved away from rank 1 by two places each, to
-16 and 43, while their result totals stayed unchanged. The project remains
+Both topic-filtered positions recovered the two places lost in the preceding
+snapshot, returning to 14 for `topic:aot-compiler` and 41 for
+`topic:python-compiler`; their result totals remained unchanged. This
+same-session reversal reinforces that topic best-match order is volatile and
+does not justify a content or metadata change by itself. The project remains
 outside the top 50 for the ambiguous exact name and broad typed-Python query.
-That pattern does not justify keyword repetition or a rank claim; the next
-repository change instead corrects a semantic evidence gap found after the
-frontend implementation merged: public pages still described the type checker
-as a stub. The latest URL Inspection evidence has two timestamps: the four
-pre-existing canonical URLs were on Google at 10:29 UTC, while the comparison
-URL was unknown to Google at 12:54 UTC and now has an accepted priority
-indexing request. Google query performance is not available, and sitemap
-processing remains unsuccessful after another accepted resubmission. The
-unchanged traffic window remains too automation-heavy and low-uniqueness to
-attribute to SEO.
+The latest URL Inspection evidence has two timestamps: the four pre-existing
+canonical URLs were on Google at 10:29 UTC, while the comparison URL was
+unknown to Google at 12:54 UTC and now has an accepted priority indexing
+request. Google query performance is not available, and sitemap processing
+remains unsuccessful after another accepted resubmission. The unchanged
+traffic window remains too automation-heavy and low-uniqueness to attribute
+to SEO.
