@@ -51,13 +51,15 @@
 - Do not report expected behavior, ordinary project failures, or unverified suspicions. Gather enough evidence to make the report actionable and avoid automated issue spam.
 - Link the upstream issue in the task summary and in the local PR when the reported bug affects the change being delivered.
 
-## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution))
+## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution), [D-025](docs/DECISIONS.md#d-025-registered-contracts-for-shared-hook-targets))
 
 - Shared `.claude/settings.json` entries must not invoke scripts or other targets that are absent from a clean checkout. A hook whose target is gitignored is a clean-clone defect even when the hook failure is non-blocking.
 - iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Wire them only from the gitignored `.claude/settings.local.json`; never commit those hook entries or the generated scripts.
 - After cloning the repository, enable or refresh iEvo locally, then verify the generated hook entries live in `.claude/settings.local.json`. If the current iEvo version writes them to shared settings, relocate the complete `hooks` object to local settings before committing any repository change.
-- Shared hooks must not hide executable targets in inline interpreter forms such as `sh -c`, `python -c`, or `node --eval`; use a tracked wrapper file so clean-clone validation can inspect the target.
-- Before changing shared hook configuration, test the tracked-file view of the repository: every referenced command must either exist in that view or be guarded by a tracked wrapper that exits successfully when its local dependency is absent.
+- Shared hooks must not hide executable targets in inline or stdin interpreter forms such as `sh -c`, `bash -s`, `python -c`, or `node --eval`.
+- Interpreter options are fail-closed unless the validator explicitly models their operands; an option operand must never be mistaken for the executable hook target.
+- Before changing shared hook configuration, test the tracked-file view of the repository. Every referenced filesystem target must be tracked and registered in `FAIL_SILENT_WRAPPER_CONTRACTS` with a tracked `scripts/test_*.py` contract that runs in required CI.
+- A wrapper contract must simulate a clean clone without generated local hooks and prove that an absent local dependency produces a silent successful no-op. Adding a registered wrapper requires the D-025 security review; a merely tracked script is not sufficient.
 
 ## Protect main ([D-024](docs/DECISIONS.md#d-024-protected-main-and-audited-emergency-bypass))
 

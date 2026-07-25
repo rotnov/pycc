@@ -91,9 +91,20 @@ class CodexReviewRetryTests(unittest.TestCase):
         ]
         comments = gate.timeline_comments(events)
         self.assertEqual(comments[0]["headRefOid"], old_head)
+        self.assertEqual(comments[0]["authorAssociation"], "OWNER")
         self.assertEqual(comments[1]["headRefOid"], HEAD)
         self.assertEqual(comments[1]["author"]["login"], gate.CODEX_LOGIN)
-        self.assertEqual(comments[0]["authorAssociation"], "OWNER")
+
+    def test_old_request_does_not_consume_new_head_budget(self) -> None:
+        data = payload()
+        data["comments"] = [
+            comment(
+                "@codex review",
+                "2026-07-24T20:05:00Z",
+                head="b" * 40,
+            )
+        ]
+        self.assertEqual(gate.classify(data, NOW)[0], "REQUEST_ALLOWED")
 
     def test_unauthorized_review_request_does_not_consume_budget(self) -> None:
         data = payload()
@@ -118,17 +129,6 @@ class CodexReviewRetryTests(unittest.TestCase):
             )
         ]
         self.assertEqual(gate.classify(data, NOW)[0], "WAIT")
-
-    def test_old_request_does_not_consume_new_head_budget(self) -> None:
-        data = payload()
-        data["comments"] = [
-            comment(
-                "@codex review",
-                "2026-07-24T20:05:00Z",
-                head="b" * 40,
-            )
-        ]
-        self.assertEqual(gate.classify(data, NOW)[0], "REQUEST_ALLOWED")
 
     def test_unthreaded_failure_comment_does_not_allow_early_retry(self) -> None:
         data = payload()

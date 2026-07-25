@@ -113,11 +113,21 @@ Starts only after both pycc v1.0 and upstream Python 3.15.0 final. Add the 3.15
 grammar, typing rules, import behavior, builtins, and stdlib surface listed in
 the preview matrix while preserving Python 3.14 compatibility.
 
+The gate-opening change must introduce a machine-readable supported-language
+registry consumed by project-configuration validation and conformance CI. For
+each supported level, that registry binds the accepted configuration value,
+cumulative fixture range, and pinned CPython oracle; CI must verify that the
+documented matrix and executable conformance jobs agree with it. Until that
+change lands, the 3.15 rows remain planning inputs rather than
+supported-language claims.
+
 **Accept:** every Python 3.15 matrix row is ✅ or explicitly
 `rejected-by-design` with a negative test; differential conformance runs
-against a pinned current Python 3.15 patch on all Tier-1 targets; the complete
-Python 3.14 suite remains green; a new ADR supersedes D-012 and records the
-supported-version policy.
+the cumulative Python 3.0–3.15 fixture set against a pinned current Python 3.15
+patch on all Tier-1 targets; the independent Python 3.14 configuration keeps
+the complete Python 3.0–3.14 suite green; a new ADR supersedes D-012 and
+records the supported-version policy; the supported-language registry and its
+matrix/oracle consistency check are required and green.
 
 ## Post-1.0 (parking lot)
 

@@ -53,6 +53,54 @@ class AgentPolicyValidationTests(unittest.TestCase):
             [],
         )
 
+    def test_unregistered_tracked_wrapper_is_rejected(self) -> None:
+        target = "scripts/safe-wrapper.sh"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "command": "sh",
+                                "args": [target],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        self.assertEqual(
+            validator.validate_hook_targets(settings, {target}, {}),
+            [f"shared hook target lacks a registered fail-silent contract: {target}"],
+        )
+        self.assertEqual(
+            validator.validate_hook_targets(
+                settings,
+                {target},
+                {target: "scripts/test_safe_wrapper.py"},
+            ),
+            [],
+        )
+
+    def test_wrapper_registry_requires_tracked_discovered_contracts(self) -> None:
+        self.assertEqual(
+            validator.validate_wrapper_contracts(
+                set(),
+                {
+                    "scripts/wrapper.sh": "checks/wrapper.py",
+                    "scripts/other.sh": "scripts/test_other_wrapper.py",
+                },
+            ),
+            [
+                "fail-silent wrapper is not tracked: scripts/other.sh",
+                "fail-silent wrapper contract test is not tracked: "
+                "scripts/test_other_wrapper.py",
+                "fail-silent wrapper is not tracked: scripts/wrapper.sh",
+                "fail-silent wrapper contract must be a discovered Python test: "
+                "checks/wrapper.py",
+            ],
+        )
+
     def test_tracked_ievo_hook_target_is_still_rejected(self) -> None:
         target = ".ievo/hooks/scripts/capture.sh"
         settings = {
@@ -577,7 +625,13 @@ class AgentPolicyValidationTests(unittest.TestCase):
         )
 
     def test_untracked_root_windows_scripts_are_rejected(self) -> None:
-        for target in ("local-hook.bat", "local-hook.cmd", "local-hook.vbs"):
+        for target in (
+            "local-hook.bat",
+            "local-hook.BAT",
+            "local-hook.Cmd",
+            "local-hook.vbs",
+            "local-hook.VBS",
+        ):
             with self.subTest(target=target):
                 settings = {
                     "hooks": {
@@ -1162,6 +1216,18 @@ class AgentPolicyValidationTests(unittest.TestCase):
                 ),
             ),
             (
+                "ruby",
+                [
+                    "--require=/home/alice/.ievo/hooks/capture.rb",
+                    "scripts/tracked.rb",
+                ],
+                {"scripts/tracked.rb"},
+                (
+                    "shared hook target must not be absolute: "
+                    "/home/alice/.ievo/hooks/capture.rb"
+                ),
+            ),
+            (
                 "node",
                 [
                     "-r/home/alice/.ievo/hooks/capture.js",
@@ -1217,6 +1283,14 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     "--require",
                     "./tools/tracked-preload.js",
                     "tools/untracked-main.js",
+                ],
+            ),
+            (
+                "ruby",
+                [
+                    "--require",
+                    "./tools/tracked-preload.rb",
+                    "tools/untracked-main.rb",
                 ],
             ),
             (

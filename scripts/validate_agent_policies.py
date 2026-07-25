@@ -64,6 +64,7 @@ EMBEDDED_PATH_OPTIONS = {
     "--require",
 }
 LOADER_URL_PREFIXES = ("data:", "file:", "http:", "https:")
+FAIL_SILENT_WRAPPER_CONTRACTS: dict[str, str] = {}
 TRUSTED_POSIX_EXECUTABLE_PREFIXES = (
     "/bin/",
     "/usr/bin/",
@@ -329,10 +330,17 @@ def interpreter_invocation_targets(
             return targets, None
 
         candidate: str | None = None
-        separated_options = EMBEDDED_PATH_OPTIONS if kind == "node" else {"-r"}
+        separated_options = (
+            EMBEDDED_PATH_OPTIONS if kind == "node" else {"-r", "--require"}
+        )
         if kind in {"node", "ruby"} and token.startswith("-") and "=" in token:
             option, value = token.split("=", 1)
-            if kind == "node" and option.lower() in EMBEDDED_PATH_OPTIONS:
+            if (
+                kind == "node"
+                and option.lower() in EMBEDDED_PATH_OPTIONS
+                or kind == "ruby"
+                and option == "--require"
+            ):
                 candidate = value
                 if not candidate:
                     return targets, f"loader option {token!r} has no operand"
@@ -526,7 +534,7 @@ def is_relative_script_path(token: str) -> bool:
         and WINDOWS_ABSOLUTE_PATH.match(token) is None
         and not is_home_relative_script_path(token)
         and "://" not in token
-        and ("/" in token or token.endswith(SCRIPT_SUFFIXES))
+        and ("/" in token or token.lower().endswith(SCRIPT_SUFFIXES))
     )
 
 
@@ -537,7 +545,7 @@ def is_absolute_script_path(token: str) -> bool:
             or WINDOWS_ABSOLUTE_PATH.match(token) is not None
         )
         and "://" not in token
-        and ("/" in token or "\\" in token or token.endswith(SCRIPT_SUFFIXES))
+        and ("/" in token or "\\" in token or token.lower().endswith(SCRIPT_SUFFIXES))
     )
 
 
@@ -549,7 +557,7 @@ def is_home_relative_script_path(token: str) -> bool:
             or normalized.startswith(HOME_ENV_PREFIXES)
         )
         and "://" not in token
-        and ("/" in token or "\\" in token or token.endswith(SCRIPT_SUFFIXES))
+        and ("/" in token or "\\" in token or token.lower().endswith(SCRIPT_SUFFIXES))
     )
 
 
@@ -611,6 +619,7 @@ def parse_flag(contents: str) -> dict[str, str]:
 def validate_hook_targets(
     settings: dict[str, Any],
     tracked: Collection[str],
+    wrapper_contracts: Mapping[str, str] | None = None,
 ) -> list[str]:
     failures: list[str] = []
     for (
@@ -717,6 +726,10 @@ def validate_hook_targets(
             failures.append(f"shared hook target must remain machine-local: {target}")
         elif target not in tracked:
             failures.append(f"shared hook target is not tracked: {target}")
+        elif wrapper_contracts is not None and target not in wrapper_contracts:
+            failures.append(
+                f"shared hook target lacks a registered fail-silent contract: {target}"
+            )
     return failures
 
 
@@ -765,6 +778,33 @@ def validate_tracked_hook_modes(
     return failures
 
 
+def validate_wrapper_contracts(
+    tracked: Collection[str],
+    wrapper_contracts: Mapping[str, str] | None = None,
+) -> list[str]:
+    contracts = (
+        FAIL_SILENT_WRAPPER_CONTRACTS
+        if wrapper_contracts is None
+        else wrapper_contracts
+    )
+    failures: list[str] = []
+    for wrapper, contract_test in sorted(contracts.items()):
+        if wrapper not in tracked:
+            failures.append(f"fail-silent wrapper is not tracked: {wrapper}")
+        if not contract_test.startswith("scripts/test_") or not contract_test.endswith(
+            ".py"
+        ):
+            failures.append(
+                "fail-silent wrapper contract must be a discovered Python test: "
+                f"{contract_test}"
+            )
+        elif contract_test not in tracked:
+            failures.append(
+                f"fail-silent wrapper contract test is not tracked: {contract_test}"
+            )
+    return failures
+
+
 def validate_machine_local_files(tracked: Collection[str]) -> list[str]:
     return [
         f"machine-local iEvo hook must not be tracked: {target}"
@@ -780,8 +820,11 @@ def main() -> int:
     )
     tracked = tracked_files()
     failures.extend(validate_hook_schema(settings))
-    failures.extend(validate_hook_targets(settings, tracked))
+    failures.extend(
+        validate_hook_targets(settings, tracked, FAIL_SILENT_WRAPPER_CONTRACTS)
+    )
     failures.extend(validate_tracked_hook_modes(settings, tracked))
+    failures.extend(validate_wrapper_contracts(tracked))
     failures.extend(validate_machine_local_files(tracked))
 
     ignore_check = subprocess.run(

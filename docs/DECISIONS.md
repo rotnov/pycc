@@ -15,7 +15,7 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-009 | Stdlib written in typed Python, compiled by pycc itself; Rust intrinsics only at the syscall/math floor | proposed |
 | D-010 | Diagnostics: codes stable forever, JSON format versioned, `explain` registry mandatory per code | proposed |
 | D-011 | Cross-platform is Tier-1 from v0.1: Windows/MSVC is CI-gated day one, bundled lld, no system toolchain required | proposed |
-| D-012 | Language level: exactly CPython 3.14 in v1 (`python = "3.14"` in pycc.toml). No per-version grammar switches until v1.x | proposed |
+| D-012 | Language level: exactly CPython 3.14 in v1.0 (`python = "3.14"` in pycc.toml). No per-version grammar switches before v1.x; a later standard Python level requires a superseding ADR plus a machine-checked support/cumulative-fixture/oracle mapping. pycc-specific syntax remains forbidden | proposed |
 | D-013 | Development model: AI-first — the compiler is written by AI agents; these specs are the executable contract. Every spec claim must be mechanically checkable (test, benchmark gate, or CI rule), because "the spec" is what agents optimize against | proposed |
 | D-014 | Testing: 100% line+region coverage (`cargo llvm-cov`), CI-gated on every PR from v0.1 on. Exemptions are whole-file only (`--ignore-filename-regex`), each entry justified in TESTING.md — no function-level opt-out exists on stable Rust | accepted |
 | D-015 | Codegen toolchain pin: LLVM 22.1.1 (Homebrew, single keg — the `llvm@17`..`llvm@22` opt-paths on the dev host are stale symlinks to it, not distinct installs) + `inkwell = "0.9"` with feature `llvm22-1` | accepted |
@@ -28,6 +28,7 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-022 | Confirmed iEvo defects may be reported publicly without per-report permission, within strict scope and privacy limits | accepted |
 | D-023 | Auto-evolution intent is shared, but executable hooks and generated scripts remain machine-local | accepted |
 | D-024 | `main` is protected by PR, CI, resolved conversations, and an audited emergency path; independent approval starts when a second maintainer is available | accepted |
+| D-025 | Shared hook targets require a registered, CI-discovered fail-silent clean-clone contract | accepted |
 
 ## Template
 
@@ -133,3 +134,12 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 - Authority and scope: normal agent/bot credentials may open/update PRs but cannot bypass protection. Repository administrators retain the platform ability to edit protection only for the documented emergency procedure; that authority is not delegated to routine tasks.
 - Privacy and failure behavior: the audit publishes only repository-native commit/PR identifiers. A direct or unassociated commit fails the audit, requires a governance incident, and blocks releases until history/protection are reconciled. CI/provider outages delay merge rather than weakening requirements.
 - Rollback: emergency relaxation is time-bounded, linked to an incident, records before/after settings, and restores protection immediately after recovery. Permanently weakening the rule requires a superseding decision and explicit review.
+
+## D-025: Registered contracts for shared hook targets
+
+- Status: accepted
+- Context: D-023 permits a tracked fail-silent wrapper, but merely finding a hook target in Git does not prove that it tolerates an absent machine-local dependency. A tracked script or symlink can still invoke a missing `.ievo/hooks/` file and fail in every clean clone.
+- Decision: this entry supersedes D-023 only for admitting shared hook targets. Every tracked filesystem target referenced by shared hook configuration must appear in `FAIL_SILENT_WRAPPER_CONTRACTS`, paired with a tracked `scripts/test_*.py` contract that is discovered by the required agent-policy test run. The contract must exercise the target from a clean-clone simulation with local generated hooks absent and assert a silent successful no-op. The registry is empty until such a wrapper and its security review are delivered.
+- Authority and scope: registration permits only the named target in shared hook configuration. It does not permit generated hooks, local settings, arbitrary inline code, shell control operators, absolute or home-relative paths, loader URLs, or untracked files.
+- Privacy and failure behavior: wrapper contracts use synthetic paths and inputs and must not access user state, credentials, or the network. A missing target, missing contract test, undiscovered test path, or unregistered target fails CI.
+- Rollback: remove the shared hook entry and registry record together. Weakening the registry or accepting a wrapper without its clean-clone contract requires a superseding decision and security review.
