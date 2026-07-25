@@ -4,13 +4,13 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 
 | ID | Decision | Status |
 |---|---|---|
-| D-001 | `int` = hybrid: `i64` fast path, overflow promotes to heap bigint. CPython semantics preserved; `--int native` opt-in deviation for max speed | proposed |
+| D-001 | `int` = hybrid: `i64` fast path, overflow promotes to heap bigint. CPython semantics preserved; `--int native` opt-in deviation for max speed | accepted |
 | D-002 | Backend: LLVM (inkwell) as the only v1 backend. Cranelift for debug builds = post-1.0 experiment | proposed |
 | D-003 | Parser: vendor `ruff_python_parser` for v0.1–0.5 velocity; replace with own parser in v0.6 (grammar-coverage gate proves parity) | proposed |
 | D-004 | Memory: RC + inferred ownership (moves, borrows, elision) + Bacon-Rajan cycle collector for the residue. No tracing GC, ever | proposed |
 | D-005 | Exceptions: native unwinding (Itanium/SEH), zero-cost happy path — not result-codes | proposed |
 | D-006 | Generics: monomorphization; vtable dispatch only for explicit dynamic-Protocol use and `--opt-size` cold code | proposed |
-| D-007 | `str` = UTF-8 (not PEP 393 UTF-32 arrays). Codepoint indexing via lazy offset index. Rationale: memory, SIMD, FFI; deviation invisible except perf profile | proposed |
+| D-007 | `str` = UTF-8 (not PEP 393 UTF-32 arrays). Codepoint indexing via lazy offset index. Rationale: memory, SIMD, FFI; deviation invisible except perf profile | accepted |
 | D-008 | No GIL in binaries; thread safety = compile-time Shareable/move checks (Rust Send/Sync analog), not runtime locks | proposed |
 | D-009 | Stdlib written in typed Python, compiled by pycc itself; Rust intrinsics only at the syscall/math floor | proposed |
 | D-010 | Diagnostics: codes stable forever, JSON format versioned, `explain` registry mandatory per code | proposed |
@@ -50,6 +50,10 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-044 | `frontend-perf-gate` is a required `ci-gate` dependency from its first merge; this supersedes D-042's informational-only consequence because ARCHITECTURE.md and DELIVERY_PLAN.md already make a >2% regression merge-blocking | accepted |
 | D-045 | Unannotated private helpers use explicit inference variables and a module-local monomorphic constraint solver; `None` is never reused as an unknown-type sentinel | accepted |
 | D-046 | Pull requests restore but never publish frontend-performance caches; only a successful `push` to `main` advances the canonical baseline, preventing PR-head ratcheting | accepted |
+| D-048 | PR-5's MIR stays a typed structural mirror of HIR (not real SSA); LLVM codegen uses one `alloca` per local/parameter + `load`/`store`, relying on no optimization pass (correct and simplest for a `--debug`-only v0.1 profile per D-034/DELIVERY_PLAN.md) | accepted |
+| D-049 | `int` overflow-to-bigint (D-001) is a minimal hand-rolled sign-magnitude `Vec<u32>` limb representation in `pycc_rt`, not an external bigint crate — v0.1 only needs overflow-safe arithmetic + `print`, not a general-purpose bignum API surface | accepted |
+| D-050 | `str` small-string optimization (D-007) inlines up to 22 UTF-8 bytes directly in the runtime string header (no heap allocation); longer strings heap-allocate with a refcount, no interning, no rope/cow structure -- the simplest representation matching D-007's own stated `≤ 22 bytes inline` threshold | accepted |
+| D-051 | `pycc_own` (ownership/escape/RC-elision) is confirmed out of scope for PR-5, per DELIVERY_PLAN.md's v0.1 crate scope; every heap-allocated `str` this PR creates is unconditionally refcounted and freed on refcount reaching zero, with no cycle collector (D-004) since no v0.1 construct can form a reference cycle without classes/containers | accepted |
 
 ## Template
 
