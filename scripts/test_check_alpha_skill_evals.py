@@ -92,6 +92,48 @@ class AlphaSkillEvalTests(unittest.TestCase):
         )
         self.assertTrue(any("negated context" in failure for failure in failures))
 
+    def test_contracted_negations_are_rejected(self) -> None:
+        for skill_text in (
+            "Don't request explicit approval.",
+            "Explicit approval isn't required.",
+            "Ask for explicit approval. Don't ask for explicit approval.",
+            "Explicit approval isn’t required.",
+        ):
+            with self.subTest(skill_text=skill_text):
+                failures = evaluator.case_contract_failures(
+                    skill_text,
+                    {
+                        "expected_output": "Waits for explicit approval.",
+                        "contract": {
+                            "skill_must_contain": ["explicit approval"],
+                            "expected_output_must_contain": [
+                                "explicit approval"
+                            ],
+                        },
+                    },
+                    "feedback eval",
+                )
+                self.assertTrue(
+                    any("negated context" in failure for failure in failures)
+                )
+
+    def test_negated_expected_action_is_rejected(self) -> None:
+        failures = evaluator.case_contract_failures(
+            "Ask for explicit approval.",
+            {
+                "expected_output": (
+                    "Does not wait for explicit approval before any GitHub write."
+                ),
+                "contract": {
+                    "skill_must_contain": ["explicit approval"],
+                    "expected_output_must_contain": ["explicit approval"],
+                    "expected_output_must_require": ["explicit approval"],
+                },
+            },
+            "feedback eval",
+        )
+        self.assertTrue(any("negated context" in failure for failure in failures))
+
     def test_approval_unacceptable_is_not_a_positive_exception(self) -> None:
         failures = evaluator.case_contract_failures(
             "A preview does not make explicit approval acceptable.",
@@ -263,6 +305,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 evaluator.ROOT / ".agents" / "skills" / skill_name / "SKILL.md",
                 codex_target / "SKILL.md",
             )
+        evidence["project_input_sha256"] = evaluator.project_input_sha256(root)
         target.write_text(json.dumps(evidence), encoding="utf-8")
         return evidence
 
@@ -275,6 +318,23 @@ class AlphaSkillEvalTests(unittest.TestCase):
             failures = evaluator.behavioral_evidence_failures(root)
         self.assertTrue(
             any("canonical_tree_sha256 is stale" in item for item in failures)
+        )
+        self.assertTrue(
+            any("project_input_sha256 is stale" in item for item in failures)
+        )
+
+    def test_project_input_fingerprint_detects_non_skill_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_evidence_fixture(root)
+            (root / "src").mkdir()
+            (root / "src" / "compiler.rs").write_text(
+                "changed compiler input\n",
+                encoding="utf-8",
+            )
+            failures = evaluator.behavioral_evidence_failures(root)
+        self.assertTrue(
+            any("project_input_sha256 is stale" in item for item in failures)
         )
 
     def test_stale_codex_entrypoint_evidence_is_rejected(self) -> None:

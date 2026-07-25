@@ -26,7 +26,7 @@ CLIENT_ROOTS = {
     "codex": Path(".agents/skills"),
 }
 BEHAVIORAL_EVIDENCE = Path("tests/alpha_skill_client_evidence.json")
-EVIDENCE_SCHEMA_VERSION = 1
+EVIDENCE_SCHEMA_VERSION = 2
 CLIENT_EVIDENCE_CONTRACTS = {
     "claude": {
         "version": "Claude Code 2.1.219",
@@ -44,6 +44,8 @@ class EvalCommandTimeout(RuntimeError):
 
 
 def has_unnegated_occurrence(haystack: str, phrase: str) -> bool:
+    haystack = haystack.replace("’", "'")
+    phrase = phrase.replace("’", "'")
     matches = list(re.finditer(re.escape(phrase), haystack))
     if not matches:
         return False
@@ -51,22 +53,38 @@ def has_unnegated_occurrence(haystack: str, phrase: str) -> bool:
         "never",
         "no",
         "not",
+        "cannot",
         "without",
         "forbid",
         "forbidden",
         "refuse",
         "skip",
         "omit",
+        "don't",
+        "doesn't",
+        "didn't",
+        "isn't",
+        "aren't",
+        "wasn't",
+        "weren't",
+        "won't",
+        "wouldn't",
+        "shouldn't",
+        "couldn't",
+        "can't",
+        "mustn't",
+        "needn't",
     }
     found_unnegated = False
+    clause_separators = (".", "!", "?", "\n", ",", ";", ":")
     for match in matches:
         sentence_start = max(
             haystack.rfind(separator, 0, match.start())
-            for separator in (".", "!", "?", "\n")
+            for separator in clause_separators
         )
         sentence_ends = [
             position
-            for separator in (".", "!", "?", "\n")
+            for separator in clause_separators
             if (position := haystack.find(separator, match.end())) >= 0
         ]
         sentence_end = min(sentence_ends, default=len(haystack))
@@ -116,11 +134,14 @@ def case_contract_failures(
         failures.append(f"{label}: expected_output must be non-empty text")
         expected_output = ""
 
-    for field, haystack in (
-        ("skill_must_contain", skill_text),
-        ("expected_output_must_contain", expected_output),
+    for field, haystack, reject_negation in (
+        ("skill_must_contain", skill_text, True),
+        ("expected_output_must_contain", expected_output, False),
+        ("expected_output_must_require", expected_output, True),
     ):
         phrases = contract.get(field)
+        if field == "expected_output_must_require" and phrases is None:
+            continue
         if not isinstance(phrases, list) or not phrases:
             failures.append(f"{label}: contract.{field} must be a non-empty list")
             continue
@@ -135,7 +156,7 @@ def case_contract_failures(
                         f"{label}: {field} phrase {phrase!r} is not enforced"
                     )
                 elif (
-                    field == "skill_must_contain"
+                    reject_negation
                     and not has_unnegated_occurrence(
                         folded_haystack,
                         folded_phrase,
@@ -283,7 +304,10 @@ def run_runtime_command(
         return None
 
 
-def runtime_failures(root: Path = ROOT) -> list[str]:
+def runtime_failures(
+    root: Path = ROOT,
+    pycc_bin: Path | None = None,
+) -> list[str]:
     failures: list[str] = []
     evals = load_evals(root, "pycc")
     runtime_cases = [
@@ -295,7 +319,8 @@ def runtime_failures(root: Path = ROOT) -> list[str]:
         return ["pycc evals: no executable runtime case"]
 
     executable = "pycc.exe" if os.name == "nt" else "pycc"
-    pycc_bin = root / "target" / "debug" / executable
+    if pycc_bin is None:
+        pycc_bin = root / "target" / "debug" / executable
     if not pycc_bin.is_file():
         return [
             f"{pycc_bin}: missing compiler; run cargo build --workspace first"
@@ -360,7 +385,10 @@ def runtime_failures(root: Path = ROOT) -> list[str]:
     return failures
 
 
-def feedback_reproduction_failures(root: Path = ROOT) -> list[str]:
+def feedback_reproduction_failures(
+    root: Path = ROOT,
+    pycc_bin: Path | None = None,
+) -> list[str]:
     failures: list[str] = []
     evals = load_evals(root, "pycc-feedback")
     cases = [
@@ -373,7 +401,8 @@ def feedback_reproduction_failures(root: Path = ROOT) -> list[str]:
         return ["pycc-feedback evals: no executable reproduction case"]
 
     executable = "pycc.exe" if os.name == "nt" else "pycc"
-    pycc_bin = root / "target" / "debug" / executable
+    if pycc_bin is None:
+        pycc_bin = root / "target" / "debug" / executable
     if not pycc_bin.is_file():
         return [
             f"{pycc_bin}: missing compiler; run cargo build --workspace first"
@@ -433,6 +462,39 @@ def tree_sha256(path: Path) -> str:
     files = sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
     for candidate in files:
         relative = candidate.relative_to(path).as_posix().encode("utf-8")
+        contents = candidate.read_bytes()
+        digest.update(struct.pack(">Q", len(relative)))
+        digest.update(relative)
+        digest.update(struct.pack(">Q", len(contents)))
+        digest.update(contents)
+    return digest.hexdigest()
+
+
+def project_input_sha256(root: Path = ROOT) -> str:
+    if (root / ".git").exists():
+        tracked = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout.split(b"\0")
+        files = [
+            root / item.decode("utf-8")
+            for item in tracked
+            if item
+            and item.decode("utf-8") != BEHAVIORAL_EVIDENCE.as_posix()
+        ]
+    else:
+        files = [
+            candidate
+            for candidate in root.rglob("*")
+            if candidate.is_file()
+            and candidate.relative_to(root) != BEHAVIORAL_EVIDENCE
+        ]
+
+    digest = hashlib.sha256()
+    for candidate in sorted(files):
+        relative = candidate.relative_to(root).as_posix().encode("utf-8")
         contents = candidate.read_bytes()
         digest.update(struct.pack(">Q", len(relative)))
         digest.update(relative)
@@ -532,6 +594,16 @@ def behavioral_evidence_failures(root: Path = ROOT) -> list[str]:
             )
     if not valid_execution_timestamp(evidence.get("executed_at")):
         failures.append(f"{path}: executed_at must be a valid non-future timestamp")
+    try:
+        expected_project_input = project_input_sha256(root)
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as error:
+        failures.append(f"{path}: could not fingerprint project input: {error}")
+    else:
+        if evidence.get("project_input_sha256") != expected_project_input:
+            failures.append(
+                f"{path}: project_input_sha256 is stale; "
+                "rerun both manual client gates"
+            )
 
     artifacts = evidence.get("artifacts")
     if not isinstance(artifacts, dict):

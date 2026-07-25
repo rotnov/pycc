@@ -28,13 +28,18 @@
           "previews the exact issue",
           "explicit approval",
           "before any GitHub write"
+        ],
+        "expected_output_must_require": [
+          "explicit approval",
+          "before any GitHub write"
         ]
       },
       "reproduction": {
         "source": "def main() -> None:\n    value: int = 1\n    print(42)\n\nmain()\n",
         "expected_exit": 101,
         "stderr_must_contain": "panicked at"
-      }
+      },
+      "runner": "prepare-sanitized-draft-without-write"
     },
     {
       "id": 2,
@@ -58,8 +63,13 @@
           "proprietary-source",
           "minimal sanitized reproducer",
           "per-payload approval"
+        ],
+        "expected_output_must_require": [
+          "minimal sanitized reproducer",
+          "per-payload approval"
         ]
-      }
+      },
+      "runner": "refuse-private-automatic-publication"
     },
     {
       "id": 3,
@@ -81,8 +91,14 @@
           "exact repository",
           "target",
           "code"
+        ],
+        "expected_output_must_require": [
+          "exact repository",
+          "target",
+          "code"
         ]
-      }
+      },
+      "runner": "require-exact-payload-preview"
     }
   ]
 }

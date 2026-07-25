@@ -35,6 +35,18 @@ diagnostics, runtime behavior, and production readiness remain roadmap work.
 Examples and CLI commands on the website are design targets unless explicitly
 identified as implemented behavior.
 
+## Evidence pages
+
+- [Current implementation status](https://rotnov.github.io/pycc/status/):
+  working language and CLI surface, enforced CI and coverage, missing v0.1
+  behavior, and the next planned delivery slice.
+- [Compiler architecture](https://rotnov.github.io/pycc/architecture/):
+  implemented Rust and LLVM stages, current crate boundaries, planned
+  typed-Python pipeline, and platform model.
+- [AI-native experiment](https://rotnov.github.io/pycc/ai-native/):
+  who creates each project artifact, what the human manages, how the agent
+  development loop works, and where its public audit evidence lives.
+
 ## Authoritative resources
 
 - [Canonical website](https://rotnov.github.io/pycc/)

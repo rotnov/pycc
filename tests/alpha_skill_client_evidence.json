@@ -1,15 +1,16 @@
 {
-  "schema_version": 1,
-  "executed_at": "2026-07-25T01:14:44.592923Z",
+  "schema_version": 2,
+  "executed_at": "2026-07-25T12:16:29.379802Z",
   "source_revision": "6de6ce48e6c9dfc9e6fdaef7af99fd4b13145419",
+  "project_input_sha256": "1478a447479a60724c18014e484cadc86a2cdd3c52e85c26aeefa593f6a6afdf",
   "artifacts": {
     "pycc": {
-      "canonical_tree_sha256": "c9e1cf87147f881425dcbb9784e8e04f5b33db4fb26a2c44c6aff66e3f7471ea",
+      "canonical_tree_sha256": "fbb695def822855c0b3dd10d0fd521dcd08ab26b3143655db470fd54385edf88",
       "claude_entrypoint_sha256": "f4953f05fba0ac7b1d206caa7692bbde5f41d93cab8a54305ffecf19a63d178f",
       "codex_entrypoint_sha256": "00f474646076187dc3cfdd6d5fa9b48c8dff45621449201a310a9b3b55a6b7ce"
     },
     "pycc-feedback": {
-      "canonical_tree_sha256": "79ea641d82446a13f42a4ea9a255051076954be093a4e50a391277676c09a335",
+      "canonical_tree_sha256": "8cfe571b52c09f0b8ff6907ad16f8c57300963de6a944f82a013af0ec76f267c",
       "claude_entrypoint_sha256": "e408a076ee8564107aabb5b75ba1a5951dfbaa76c4053809f117798931a30610",
       "codex_entrypoint_sha256": "aca006d957d8cf68e014d18aeaaf3709d94bd32b6a11032a8636f75a6d2cedc5"
     }
