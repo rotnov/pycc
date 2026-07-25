@@ -673,11 +673,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_staged_language_track_workflow_fixture_is_not_the_active_workflow
-    active_workflow =
-      (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
+  def test_staged_language_track_workflow_fixture_is_inert
+    repository_root = Pathname(__dir__).parent
+    workflow_directory = repository_root / ".github/workflows"
 
-    refute_equal active_workflow, STAGED_TIER1_CI_WORKFLOW_FIXTURE.read
+    assert_equal Pathname(__dir__) / "fixtures", STAGED_TIER1_CI_WORKFLOW_FIXTURE.dirname
+    refute_includes workflow_directory.children, STAGED_TIER1_CI_WORKFLOW_FIXTURE
   end
 
   def test_rejects_changed_tier1_matrix_workflow
