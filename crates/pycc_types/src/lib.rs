@@ -31,6 +31,13 @@ impl Environment {
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
         self.functions.get(name)
     }
+
+    /// A fresh scope for a function body: starts with no local bindings (a
+    /// function body never sees its caller's or the module's variables),
+    /// but inherits the full function registry so sibling calls resolve.
+    fn child_for_function(&self) -> Self {
+        Self { bindings: HashMap::new(), functions: self.functions.clone() }
+    }
 }
 
 pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
@@ -169,10 +176,17 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
 }
 
 pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
+    check_function_in(&Environment::new(), function)
+}
+
+/// Checks one function's body, resolving sibling calls against
+/// `module_env`'s function registry (see D-039) instead of an isolated,
+/// self-only scope.
+fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(), Diagnostic> {
     let HirItem::Function { name, params, return_ty, body } = function else {
         panic!("check_function called with a non-Function HirItem");
     };
-    let mut env = Environment::new();
+    let mut env = module_env.child_for_function();
     env.bind_function(name.clone(), params.iter().map(|(_, ty)| *ty).collect(), *return_ty);
     for (param_name, param_ty) in params {
         env.bind(param_name.clone(), *param_ty);
@@ -240,9 +254,10 @@ fn check_stmt_in_function(env: &mut Environment, stmt: &HirStmt, return_ty: Ty) 
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     let mut env = Environment::new();
     // Register every function's signature before checking any statement
-    // body, matching Python's own "call it before its def runs" semantics --
-    // top-level code (and, once sibling calls are in scope, other function
-    // bodies) must be able to see a function defined later in the file.
+    // body, matching Python's own "a module runs top to bottom, but any def
+    // already executed is callable" semantics -- top-level code and other
+    // function bodies (D-039) both need to see every function regardless of
+    // its position in the file.
     for item in &hir.items {
         if let HirItem::Function { name, params, return_ty, .. } = item {
             env.bind_function(name.clone(), params.iter().map(|(_, ty)| *ty).collect(), *return_ty);
@@ -251,7 +266,7 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     for item in &hir.items {
         match item {
             HirItem::TopLevelStmt(stmt) => check_stmt(&mut env, stmt)?,
-            HirItem::Function { .. } => check_function(item)?,
+            HirItem::Function { .. } => check_function_in(&env, item)?,
         }
     }
     Ok(())
@@ -677,6 +692,90 @@ mod tests {
             ],
         };
         assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_can_call_a_sibling_function_defined_before_it() {
+        // Regression test for D-039: `check_function`'s own env used to be
+        // seeded empty, so `main` couldn't see `helper` even though both are
+        // ordinary module-level functions -- a valid, non-recursive call
+        // between two sibling functions was wrongly rejected with T0021.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(HirExpr::Name("x".to_string())),
+                        right: Box::new(HirExpr::IntLiteral(1)),
+                    }))],
+                },
+                HirItem::Function {
+                    name: "main".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::Call {
+                            callee: "helper".to_string(),
+                            args: vec![HirExpr::IntLiteral(5)],
+                        }],
+                    })],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_can_call_a_sibling_function_defined_after_it() {
+        // Same gap as above, but exercising the pre-registration pass (D-038)
+        // from the *other* direction: `main` is checked first (it's first in
+        // the module) yet still must see `helper`, which is defined later.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "main".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::Call {
+                            callee: "helper".to_string(),
+                            args: vec![HirExpr::IntLiteral(5)],
+                        }],
+                    })],
+                },
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(HirExpr::Name("x".to_string())),
+                        right: Box::new(HirExpr::IntLiteral(1)),
+                    }))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn check_function_the_public_api_still_has_no_sibling_visibility() {
+        // `check_function` is a standalone entry point with no module
+        // context, so it must keep working exactly as before: it only ever
+        // sees its own signature (needed for recursion), never a sibling's.
+        let function = HirItem::Function {
+            name: "main".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ExprStmt(HirExpr::Call { callee: "helper".to_string(), args: vec![] })],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0021");
     }
 
     #[test]

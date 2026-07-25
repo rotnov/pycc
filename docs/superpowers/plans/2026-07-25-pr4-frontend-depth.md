@@ -2842,6 +2842,8 @@ Expected: all three pass — the new job inherits the workflow's top-level `cont
 
 `.github/workflows/ci.yml`'s `ci-gate` job (D-032) currently `needs: [build-test-coverage, native-build-test, cross-compile-build, cross-compile-verify]` — decide whether `frontend-perf-gate` should also gate merges (add it to `ci-gate`'s `needs:` and its `if:` condition's explicit checks) or stay informational-only for now (since its regression-detection mechanism is unproven per Step 4's caveat). Given the mechanism isn't yet verified to actually fail correctly, the conservative choice is: do **not** add it to `ci-gate` in this task — record that decision explicitly:
 
+Note: this snippet's `D-038` label is a stale placeholder from when this plan was written — D-038 and D-039 are both already taken (D-039 closed the sibling-function-call gap D-038 itself deferred). Re-check `docs/DECISIONS.md`'s actual highest existing ID when Task 14 is executed and use the next free one instead.
+
 ```markdown
 ## D-038: `frontend-perf-gate` is not yet a required check
 
@@ -2863,7 +2865,7 @@ Expected: PASS. `benches/check_bench.rs` is a `[[bench]]` target, not a `[[test]
 
 ```bash
 git add benches/check_bench.rs Cargo.toml .github/workflows/ci.yml docs/DECISIONS.md docs/TESTING.md
-git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc check, D-038)"
+git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc check, D-0NN)"  # use the actual next-free ADR ID, not a hardcoded D-038 -- see the note above Step 6's snippet
 ```
 
 ---
@@ -2877,10 +2879,10 @@ git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc
 - TYPE_SYSTEM.md rule 4 (no implicit Optional/narrowing/untyped containers) — **not covered by this plan.** v0.1's grammar subset (per DELIVERY_PLAN.md's own TDD sequence: arithmetic → comparisons → if/while/for+range → functions/recursion → f-strings) never introduces `Optional`, containers, or narrowing constructs at all, so this rule has no surface to violate yet — not a gap in this plan, a gap in what v0.1's grammar itself includes. Flag this explicitly rather than silently passing over it.
 - TYPE_SYSTEM.md rule 5 (unreachable-after-`match`/`Never`) — **not covered.** `match` isn't in v0.1's grammar per DELIVERY_PLAN.md's own scope (PEP 634 `match` is PR-... actually, checking ROADMAP.md's v0.1 accept criteria again: only `if/while/for+range`, no `match` — confirmed out of scope, not a gap).
 - Type↔representation table (int/float/bool/str/None) — Task 6, 7, 10. ✅ (class/Protocol/enum/generics explicitly out of v0.1 scope, correctly excluded)
-- DIAGNOSTICS.md quality bar (span, label, help) — Task 3 covers span; **`help` suggestions are never populated** (every `render_human` call renders an empty help section implicitly, since no task ever constructs one) — flagged as a real, tracked gap, not fixed in this plan; add a follow-up task or DECISIONS.md note if this matters before PR-4 ships. **Action: add this as a documented, explicit follow-up in Task 14's own D-038-style entry, or a new D-039.**
+- DIAGNOSTICS.md quality bar (span, label, help) — Task 3 covers span; **`help` suggestions are never populated** (every `render_human` call renders an empty help section implicitly, since no task ever constructs one) — flagged as a real, tracked gap, not fixed in this plan; add a follow-up task or DECISIONS.md note if this matters before PR-4 ships. **Action: add this as a documented, explicit follow-up in Task 14's own ADR entry (next free ID, not literally D-038 — that and D-039 are both already taken).**
 - CLI_SPEC.md human/JSON format — Task 3. ✅
 - PYTHON_STANDARDS.md `tests/diagnostics/` convention — Task 13. ✅
-- DELIVERY_PLAN.md Performance gate — Task 14. ✅ (with the honest D-038 caveat about its unverified regression-detection mechanism)
+- DELIVERY_PLAN.md Performance gate — Task 14. ✅ (with the honest caveat, recorded under whatever ADR ID is next-free at that time, about its unverified regression-detection mechanism)
 - DELIVERY_PLAN.md's exact TDD sequence "arithmetic → comparisons → if/while/for+range → functions/recursion → basic f-strings" — Tasks 6, 7, 8, 9, 11 in that exact order. ✅
 
 **Gap found during self-review, fixed inline:** TYPE_SYSTEM.md rule 4 and the missing `help:` suggestions are real, named gaps this plan doesn't close. Add one more task before considering PR-4 complete:
