@@ -14,12 +14,11 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > private-helper signatures, and rendering human or JSON diagnostics.
 > `pycc build` and `pycc run` still compile only the original narrow native
 > slice; code-generation and runtime breadth are the next delivery step.
-> D-048's performance transition is independent of that compiler sequence:
-> the tracked CI workflow selects pre-split activation pending, required
-> measurement/gating with the activation-only bootstrap path for the first
-> main-owned baseline retained both before and after that artifact is
-> published, or bootstrap-free steady state. Cleanup replaces this
-> transitional wording with the direct steady-state claim.
+> The frontend performance measurement and isolated greater-than-2% regression
+> gate are required through `ci-gate` independently of that compiler sequence.
+> The gate is bootstrap-free: it requires the non-expired
+> `frontend-perf-current` artifact from the exact successful `main`
+> predecessor and fails closed when that baseline is unavailable.
 > See the [current status](https://rotnov.github.io/pycc/status/) and
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 
