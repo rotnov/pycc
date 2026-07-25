@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse, urlunparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +85,9 @@ SCRIPT_SUFFIXES = {
     ".zsh",
 }
 SOURCE_SUFFIXES_WITH_INLINE_TESTS = {".c", ".cc", ".cpp", ".h", ".hpp", ".rs"}
+SCP_GIT_REFERENCE = re.compile(
+    r"^(?:[^/@:\s]+@)?(?P<host>[A-Za-z0-9.-]+):(?P<path>[^?#]+)$"
+)
 
 
 class RequiredAssetEncodingError(ValueError):
@@ -402,6 +405,133 @@ def declared_claude_marketplaces(settings: dict) -> set[str]:
     }
 
 
+def strip_git_suffix(reference: str) -> str:
+    normalized = reference.strip().rstrip("/")
+    if normalized.lower().endswith(".git"):
+        normalized = normalized[:-4]
+    return normalized.rstrip("/")
+
+
+def repository_path_reference(
+    path: str,
+    *,
+    minimum_parts: int = 2,
+) -> str | None:
+    normalized = strip_git_suffix(unquote(path).strip("/"))
+    if len([part for part in normalized.split("/") if part]) < minimum_parts:
+        return None
+    return normalized
+
+
+def optional_marketplace_source_references(
+    settings: dict,
+    pinned_marketplaces: set[str],
+    failures: list[str],
+) -> dict[str, tuple[str, str]]:
+    marketplaces = settings.get("extraKnownMarketplaces")
+    if not isinstance(marketplaces, dict):
+        return {}
+
+    references: dict[str, tuple[str, str]] = {}
+    for alias, declaration in marketplaces.items():
+        if (
+            not isinstance(alias, str)
+            or alias in pinned_marketplaces
+            or not isinstance(declaration, dict)
+        ):
+            continue
+        source = declaration.get("source")
+        if not isinstance(source, dict):
+            continue
+        for key in ("repo", "url"):
+            value = source.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            raw = value.strip()
+            if key == "repo":
+                repository = repository_path_reference(raw)
+                if repository is None:
+                    failures.append(
+                        f".claude/settings.json: optional marketplace {alias} "
+                        "source.repo must identify at least an owner and repository"
+                    )
+                    continue
+                references[raw] = (alias, repository)
+                references[repository] = (alias, repository)
+                continue
+
+            scp_match = (
+                SCP_GIT_REFERENCE.fullmatch(raw)
+                if "://" not in raw
+                else None
+            )
+            if scp_match is not None:
+                repository = repository_path_reference(
+                    scp_match.group("path"),
+                    minimum_parts=1,
+                )
+                if repository is None:
+                    failures.append(
+                        f".claude/settings.json: optional marketplace {alias} "
+                        "source.url must include a repository path"
+                    )
+                    continue
+                host_reference = f"{scp_match.group('host')}/{repository}"
+                references[raw] = (alias, host_reference)
+                references[strip_git_suffix(raw)] = (alias, host_reference)
+                references[host_reference] = (alias, host_reference)
+                if len(repository.split("/")) >= 2:
+                    references[repository] = (alias, repository)
+                continue
+
+            try:
+                parsed = urlparse(raw)
+                host = parsed.hostname
+                port = parsed.port
+            except ValueError:
+                parsed = None
+                host = None
+                port = None
+            if parsed is None or not parsed.scheme or not parsed.netloc or not host:
+                failures.append(
+                    f".claude/settings.json: optional marketplace {alias} "
+                    "source.url must be a valid absolute or scp-style Git URL"
+                )
+                continue
+
+            repository = repository_path_reference(
+                parsed.path,
+                minimum_parts=1,
+            )
+            if repository is None:
+                failures.append(
+                    f".claude/settings.json: optional marketplace {alias} "
+                    "source.url must include a repository path"
+                )
+                continue
+
+            public_host = host
+            if ":" in public_host and not public_host.startswith("["):
+                public_host = f"[{public_host}]"
+            if port is not None:
+                public_host = f"{public_host}:{port}"
+            host_reference = f"{public_host}/{repository}"
+            canonical_url = urlunparse(
+                (parsed.scheme, public_host, f"/{repository}", "", "", "")
+            )
+            references[raw] = (alias, canonical_url)
+            references[strip_git_suffix(raw)] = (alias, canonical_url)
+            references[canonical_url] = (alias, canonical_url)
+            references[host_reference] = (alias, host_reference)
+            if len(repository.split("/")) >= 2:
+                references[repository] = (alias, repository)
+    return {
+        token: metadata
+        for token, metadata in references.items()
+        if token
+    }
+
+
 def tracked_repository_files(root: Path) -> list[tuple[Path, str]]:
     result = subprocess.run(
         ["git", "-C", str(root), "ls-files", "--stage", "-z"],
@@ -506,7 +636,45 @@ def required_asset_body(relative: Path, text: str) -> str:
     end = normalized.find("\n---\n", 4)
     if end == -1:
         return normalized
-    return normalized[end + len("\n---\n") :]
+    frontmatter = normalized[4:end]
+    body = normalized[end + len("\n---\n") :]
+
+    source_repository: str | None = None
+    in_source = False
+    source_child_indent: int | None = None
+    for line in frontmatter.splitlines():
+        if line == "source:":
+            in_source = True
+            continue
+        if not in_source or not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indentation = len(line) - len(line.lstrip(" "))
+        if indentation == 0:
+            break
+        if source_child_indent is None:
+            source_child_indent = indentation
+        if indentation != source_child_indent:
+            continue
+        match = re.fullmatch(r"repo:\s+([^\s#]+)\s*", line.strip())
+        if match is not None:
+            source_repository = match.group(1).strip("'\"")
+            break
+    if source_repository is None:
+        return body
+
+    provenance_heading = re.compile(
+        r"(?m)^(## \d{4}-\d{2}-\d{2} — Vendored from )"
+        rf"({re.escape(source_repository)})([ \t]*)$"
+    )
+    return provenance_heading.sub(
+        lambda match: (
+            match.group(1)
+            + (" " * len(match.group(2)))
+            + match.group(3)
+        ),
+        body,
+        count=1,
+    )
 
 
 def decode_required_asset(data: bytes) -> str:
@@ -543,6 +711,11 @@ def validate_optional_plugin_boundary(
     }
     marketplaces.update(
         declared_claude_marketplaces(settings).difference(pinned_marketplaces)
+    )
+    marketplace_sources = optional_marketplace_source_references(
+        settings,
+        pinned_marketplaces,
+        failures,
     )
     enabled_pinned = PINNED_CLAUDE_PLUGINS.difference(optional)
 
@@ -621,6 +794,20 @@ def validate_optional_plugin_boundary(
                             "and provide Codex parity first"
                         )
                         break
+                else:
+                    for token in sorted(
+                        marketplace_sources,
+                        key=lambda value: (-len(value), value),
+                    ):
+                        if has_token(fallback_text, token):
+                            alias, display = marketplace_sources[token]
+                            failures.append(
+                                f"{relative}: required agent asset references "
+                                f"optional Claude marketplace source {display} "
+                                f"({alias}); pin the dependency and provide Codex "
+                                "parity first"
+                            )
+                            break
 
 
 def frontmatter_scalar(path: Path, key: str) -> str | None:

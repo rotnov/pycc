@@ -571,6 +571,187 @@ class AgentAssetValidationTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn(f"marketplace {marketplace}", failures[0])
 
+    def test_declared_marketplace_repository_source_is_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            marketplace = "new" + "-market"
+            source_repo = "wshobson" + "/agents"
+            agents.write_text(
+                f"Use workflows from `{source_repo}` for every task.\n",
+                encoding="utf-8",
+            )
+            settings = self.claude_settings()
+            settings["extraKnownMarketplaces"][marketplace] = {
+                "source": {
+                    "source": "github",
+                    "repo": source_repo,
+                }
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(f"marketplace source {source_repo}", failures[0])
+            self.assertIn(f"({marketplace})", failures[0])
+
+    def test_declared_marketplace_url_source_coordinates_are_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            marketplace = "url" + "-market"
+            source_repo = "example" + "/agent-tools"
+            source_url = "https://github.com/" + source_repo + ".git"
+            normalized_source = "github.com/" + source_repo
+            agents.write_text(
+                f"Use workflows from `{normalized_source}` for every task.\n",
+                encoding="utf-8",
+            )
+            settings = self.claude_settings()
+            settings["extraKnownMarketplaces"][marketplace] = {
+                "source": {
+                    "source": "url",
+                    "url": source_url,
+                }
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(f"marketplace source {normalized_source}", failures[0])
+            self.assertIn(f"({marketplace})", failures[0])
+
+    def test_marketplace_source_coordinates_are_canonicalized(self) -> None:
+        cases = (
+            (
+                "repo",
+                "example/agent-tools" + ".git/",
+                "example/agent-tools",
+            ),
+            (
+                "url",
+                "https://github.com/example/agent%2Dtools.git",
+                "example/agent-tools",
+            ),
+            (
+                "url",
+                "git@github.com:example/agent-tools.git",
+                "example/agent-tools",
+            ),
+        )
+        for source_key, source_value, required_reference in cases:
+            with self.subTest(source=source_value):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    agents = root / "AGENTS.md"
+                    marketplace = "normalized" + "-market"
+                    agents.write_text(
+                        f"Use `{required_reference}` for every task.\n",
+                        encoding="utf-8",
+                    )
+                    settings = self.claude_settings()
+                    settings["extraKnownMarketplaces"][marketplace] = {
+                        "source": {
+                            "source": source_key,
+                            source_key: source_value,
+                        }
+                    }
+
+                    failures = self.optional_boundary_failures(
+                        settings,
+                        root,
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(
+                        f"marketplace source {required_reference}",
+                        failures[0],
+                    )
+
+    def test_single_segment_url_path_does_not_create_a_generic_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text(
+                "All agents must preserve user changes.\n",
+                encoding="utf-8",
+            )
+            marketplace = "single" + "-segment"
+            settings = self.claude_settings()
+            settings["extraKnownMarketplaces"][marketplace] = {
+                "source": {
+                    "source": "url",
+                    "url": "https://example.com/agents",
+                }
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+            )
+
+            self.assertEqual(failures, [])
+
+    def test_malformed_marketplace_url_reports_a_controlled_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            agents.write_text("Use repository-owned tools.\n", encoding="utf-8")
+            marketplace = "malformed" + "-market"
+            settings = self.claude_settings()
+            settings["extraKnownMarketplaces"][marketplace] = {
+                "source": {
+                    "source": "url",
+                    "url": "https://[invalid/repo.git",
+                }
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(marketplace, failures[0])
+            self.assertIn("source.url", failures[0])
+            self.assertNotIn("[invalid", failures[0])
+
+    def test_pinned_marketplace_source_is_not_treated_as_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agents = root / "AGENTS.md"
+            source_repo = "example" + "/pinned-tools"
+            agents.write_text(
+                f"Use the reviewed `{source_repo}` baseline.\n",
+                encoding="utf-8",
+            )
+            settings = {
+                "enabledPlugins": {
+                    "ievo@ievo-skills": True,
+                },
+                "extraKnownMarketplaces": {
+                    "ievo-skills": {
+                        "source": {
+                            "source": "github",
+                            "repo": source_repo,
+                        }
+                    }
+                },
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+            )
+
+            self.assertEqual(failures, [])
+
     def test_unvalidated_sibling_in_pinned_marketplace_is_optional(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -770,6 +951,92 @@ class AgentAssetValidationTests(unittest.TestCase):
                         overlay.relative_to(root).as_posix(),
                         failures[0],
                     )
+
+    def test_dated_ievo_vendoring_heading_is_provenance_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            overlay = root / ".ievo" / "evolution" / "skills" / "demo.md"
+            overlay.parent.mkdir(parents=True)
+            source_repo = "example" + "/agent-tools"
+            heading = f"## 2026-07-24 — Vendored from {source_repo}\n"
+            provenance = (
+                "---\n"
+                "source:\n"
+                f"  repo: {source_repo}\n"
+                "  commit_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+                "---\n\n"
+            )
+            overlay.write_text(
+                provenance + "# demo\n\n" + heading + "Initial copy.\n",
+                encoding="utf-8",
+            )
+            marketplace = "overlay" + "-source"
+            settings = self.claude_settings()
+            settings["extraKnownMarketplaces"][marketplace] = {
+                "source": {
+                    "source": "github",
+                    "repo": source_repo,
+                }
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+                [(overlay, "100644")],
+            )
+
+            self.assertEqual(failures, [])
+
+            overlay.write_text(
+                provenance
+                + "# demo\n\n"
+                + heading
+                + f"Use {source_repo} at runtime.\n",
+                encoding="utf-8",
+            )
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+                [(overlay, "100644")],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(f"marketplace source {source_repo}", failures[0])
+
+    def test_nested_ievo_repo_metadata_does_not_authorize_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            overlay = root / ".ievo" / "evolution" / "skills" / "demo.md"
+            overlay.parent.mkdir(parents=True)
+            source_repo = "example" + "/agent-tools"
+            overlay.write_text(
+                "---\n"
+                "source:\n"
+                "  metadata:\n"
+                f"    repo: {source_repo}\n"
+                "---\n\n"
+                "# demo\n\n"
+                f"## 2026-07-24 — Vendored from {source_repo}\n"
+                "Initial copy.\n",
+                encoding="utf-8",
+            )
+            marketplace = "nested" + "-source"
+            settings = self.claude_settings()
+            settings["extraKnownMarketplaces"][marketplace] = {
+                "source": {
+                    "source": "github",
+                    "repo": source_repo,
+                }
+            }
+
+            failures = self.optional_boundary_failures(
+                settings,
+                root,
+                [(overlay, "100644")],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn(f"marketplace source {source_repo}", failures[0])
 
     def test_required_agent_asset_symlink_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

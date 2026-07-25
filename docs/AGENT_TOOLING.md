@@ -130,11 +130,14 @@ agent assets stored as Git symlinks are rejected rather than followed outside th
 reviewed tree.
 `.claude/settings.json` is the declaration of optional capabilities rather than a
 required consumer and is excluded from the reference scan. The provenance frontmatter
-of a vendored `.ievo/evolution` overlay is likewise metadata; the overlay body remains
-required and scanned. Every selected asset is checked regardless of file extension,
+of a vendored `.ievo/evolution` overlay is likewise metadata. A standard dated
+`Vendored from <repo>` heading is also provenance only when its repository exactly
+matches that frontmatter; every other part of the overlay body remains required and
+scanned. Every selected asset is checked regardless of file extension,
 using strict UTF-8 or BOM-tagged UTF-16 decoding; unknown encodings fail closed.
 UTF-32 and NUL-bearing text are rejected explicitly so BOM-less UTF-16 cannot
-masquerade as UTF-8. References to an optional plugin or its marketplace are rejected.
+masquerade as UTF-8. References to an optional plugin, its marketplace alias, or its
+configured repository and URL source coordinates are rejected.
 For a pinned marketplace, only the exact validated baseline identity is exempt; an
 unknown or disabled sibling is still rejected. The exact iEvo exemption applies only
 while
