@@ -85,15 +85,20 @@ if ! grep -Fq \
   exit 1
 fi
 
+set +e
 env -u ANTHROPIC_API_KEY \
   -u ANTHROPIC_AUTH_TOKEN \
   -u CLAUDE_CODE_OAUTH_TOKEN \
   CLAUDE_CONFIG_DIR="$test_claude_config" \
   claude -p --no-session-persistence \
   "/pycc-definitely-not-a-skill" >"$unknown_skill_output" 2>&1
+unknown_skill_rc=$?
+set -e
+
 if ! grep -q "Unknown command: /pycc-definitely-not-a-skill" \
   "$unknown_skill_output"; then
-  echo "error: Claude Code unknown-skill failure path changed" >&2
+  echo "error: Claude Code unknown-skill failure path changed (status $unknown_skill_rc)" >&2
+  cat "$unknown_skill_output" >&2
   exit 1
 fi
 

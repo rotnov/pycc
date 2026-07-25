@@ -89,7 +89,9 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 runner=runner,
             )
 
-    def test_feedback_evals_do_not_publish_without_exact_consent(self) -> None:
+    def test_feedback_contract_oracle_cannot_publish_without_exact_consent(
+        self,
+    ) -> None:
         skill = evals.canonical_skill("claude", "pycc-feedback")
         for case in evals.load_cases("pycc-feedback"):
             evals.run_feedback_case(case, skill)

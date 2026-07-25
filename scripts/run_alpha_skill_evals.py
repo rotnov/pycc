@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run deterministic primary-behavior evals for the alpha project skills."""
+"""Run deterministic offline contract checks for the alpha project skills.
+
+These checks resolve each client's repository entrypoint and exercise code and
+consent invariants without invoking an LLM. Authenticated model-response evals
+remain a separate promotion requirement for the alpha skills.
+"""
 
 from __future__ import annotations
 
@@ -41,7 +46,7 @@ CommandRunner = Callable[
 
 
 class EvalError(RuntimeError):
-    """An alpha-skill behavioral contract was not satisfied."""
+    """An alpha-skill offline contract was not satisfied."""
 
 
 @dataclass(frozen=True)
@@ -202,6 +207,9 @@ def run_feedback_case(
     case: dict[str, Any],
     skill_text: str,
 ) -> None:
+    # This is a deterministic safety oracle for the checked-in scenario, not a
+    # simulation of either client's model response. It keeps external writes
+    # structurally impossible in required CI.
     normalized = " ".join(skill_text.split())
     for contract in FEEDBACK_CONTRACT:
         if contract not in normalized:
@@ -263,7 +271,7 @@ def main() -> int:
     except (EvalError, StopIteration) as error:
         print(f"error: {error}")
         return 1
-    print(f"alpha skill evals ({arguments.client}): valid")
+    print(f"offline alpha contract evals ({arguments.client} entrypoint): valid")
     return 0
 
 

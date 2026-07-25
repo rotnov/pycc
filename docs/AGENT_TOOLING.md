@@ -86,14 +86,20 @@ exact-query preview and approval before transmission. The skill must also show
 the exact write payload and receive explicit per-payload user confirmation
 before creating an issue or comment in `rotnov/pycc`.
 
-The required CI build runs `scripts/run_alpha_skill_evals.py` through both the
-Codex wrapper and the Claude Code canonical entrypoint. The primary `pycc` eval
-creates a self-contained temporary source file, invokes the freshly built
-compiler, executes the generated binary, and checks its exact output. The
-`pycc-feedback` evals exercise the draft-only, private-source refusal, and
-context-free-consent paths through a fail-closed publication model that cannot
-perform a network write. The unit suite covers build failure, wrong output,
-entrypoint drift, incomplete runner registration, and every consent predicate.
+The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
+both the Codex wrapper and the Claude Code canonical entrypoint. The primary
+`pycc` offline eval creates a self-contained temporary source file, invokes the
+freshly built compiler, executes the generated binary, and checks its exact
+output. The `pycc-feedback` cases exercise draft-only, private-source refusal,
+and context-free-consent invariants through a fail-closed safety oracle that
+cannot perform a network write. The unit suite covers build failure, wrong
+output, entrypoint drift, incomplete runner registration, and every consent
+predicate.
+
+These deterministic checks do not invoke a language model and do not claim
+that either client's generated response conforms to the prompts. Authenticated
+model-response evals remain a promotion requirement before either alpha skill
+can move into `rotnov/skills` or skills.sh.
 
 ## Optional Claude Code plugins
 
