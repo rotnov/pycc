@@ -6,7 +6,7 @@ use inkwell::targets::{
 };
 use inkwell::types::IntType;
 use inkwell::values::FunctionValue;
-use pycc_mir::{MirInstr, MirItem, MirModule};
+use pycc_mir::{MirExpr, MirInstr, MirItem, MirModule};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -183,8 +183,8 @@ fn emit_instr<'ctx>(
     instr: &MirInstr,
 ) -> Result<(), String> {
     match instr {
-        MirInstr::CallPrint { arg } => {
-            let arg_value = i64_type.const_int(*arg as u64, true);
+        MirInstr::CallPrint { arg: MirExpr::IntLiteral(n) } => {
+            let arg_value = i64_type.const_int(*n as u64, true);
             builder
                 .build_call(print_fn, &[arg_value.into()], "call_print")
                 .expect("build_call should not fail for a well-formed print call");
@@ -205,7 +205,7 @@ fn emit_instr<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pycc_mir::{MirInstr, MirItem, MirModule};
+    use pycc_mir::{MirExpr, MirInstr, MirItem, MirModule};
     use std::process::Command;
 
     #[test]
@@ -217,7 +217,7 @@ mod tests {
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "main".to_string(),
-                body: vec![MirInstr::CallPrint { arg: 42 }],
+                body: vec![MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) }],
             }],
         };
         let dir = tempfile_dir("slice0_uncalled_main");
@@ -235,7 +235,7 @@ mod tests {
             items: vec![
                 MirItem::Function {
                     name: "main".to_string(),
-                    body: vec![MirInstr::CallPrint { arg: 42 }],
+                    body: vec![MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) }],
                 },
                 MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() }),
             ],
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn compiles_top_level_statement_with_no_main() {
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) })],
         };
         let dir = tempfile_dir("slice0_toplevel");
         let obj_path = dir.join("slice0_toplevel.o");
@@ -272,10 +272,10 @@ mod tests {
         // statement, not a special auto-invoked case.
         let mir = MirModule {
             items: vec![
-                MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 1 }),
+                MirItem::TopLevelStmt(MirInstr::CallPrint { arg: MirExpr::IntLiteral(1) }),
                 MirItem::Function {
                     name: "main".to_string(),
-                    body: vec![MirInstr::CallPrint { arg: 2 }],
+                    body: vec![MirInstr::CallPrint { arg: MirExpr::IntLiteral(2) }],
                 },
                 MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() }),
             ],
@@ -336,7 +336,7 @@ mod tests {
         // clean_error below covers this function's other genuine failure
         // mode, Target::from_triple.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) })],
         };
         let bad_path = std::env::temp_dir()
             .join(format!("pycc_codegen_test_nonexistent_dir_{}", std::process::id()))
@@ -355,7 +355,7 @@ mod tests {
         // object file's actual architecture, not just that codegen didn't
         // error.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) })],
         };
         let dir = tempfile_dir("cross_x64");
         let obj_path = dir.join("cross_x64.o");
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn an_unknown_target_triple_is_a_clean_error() {
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })],
+            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) })],
         };
         let dir = tempfile_dir("bad_triple");
         let obj_path = dir.join("bad_triple.o");

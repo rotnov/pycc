@@ -1,8 +1,13 @@
-use pycc_hir::{HirItem, HirModule, HirStmt};
+use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MirExpr {
+    IntLiteral(i64),
+}
 
 #[derive(Debug, PartialEq)]
 pub enum MirInstr {
-    CallPrint { arg: i64 },
+    CallPrint { arg: MirExpr },
     CallUserFunction { name: String },
 }
 
@@ -31,32 +36,51 @@ pub fn build(hir: &HirModule) -> MirModule {
     MirModule { items }
 }
 
+/// Only the two constructs `pycc_codegen` can already emit LLVM IR for are
+/// lowered here -- everything HIR's wider grammar (PR-4's frontend depth)
+/// can now represent but this crate can't yet compile panics with a message
+/// naming PR-5 explicitly (D-034): a deliberate, temporary boundary, not
+/// new codegen work landing in this PR.
 fn lower_instr(stmt: &HirStmt) -> MirInstr {
-    match stmt {
-        HirStmt::CallPrint { arg } => MirInstr::CallPrint { arg: *arg },
-        HirStmt::CallUserFunction { name } => MirInstr::CallUserFunction { name: name.clone() },
+    let HirStmt::ExprStmt(expr) = stmt;
+    match expr {
+        HirExpr::Call { callee, args } if callee == "print" => match args.as_slice() {
+            [HirExpr::IntLiteral(n)] => MirInstr::CallPrint { arg: MirExpr::IntLiteral(*n) },
+            _ => panic!("pycc_mir: print() with this argument shape lands in PR-5"),
+        },
+        HirExpr::Call { callee, args } if args.is_empty() => {
+            MirInstr::CallUserFunction { name: callee.clone() }
+        }
+        _ => panic!("pycc_mir: this construct's codegen lands in PR-5"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pycc_hir::{HirItem, HirModule, HirStmt};
+    use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt};
+
+    fn call_print(arg: i64) -> HirStmt {
+        HirStmt::ExprStmt(HirExpr::Call { callee: "print".to_string(), args: vec![HirExpr::IntLiteral(arg)] })
+    }
+
+    fn call_user_fn(name: &str) -> HirStmt {
+        HirStmt::ExprStmt(HirExpr::Call { callee: name.to_string(), args: vec![] })
+    }
 
     #[test]
     fn builds_one_call_print_instr_per_top_level_hir_stmt() {
-        let hir = HirModule {
-            items: vec![HirItem::TopLevelStmt(HirStmt::CallPrint { arg: 42 })],
-        };
+        let hir = HirModule { items: vec![HirItem::TopLevelStmt(call_print(42))] };
         let mir = build(&hir);
-        assert_eq!(mir.items, vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: 42 })]);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) })]
+        );
     }
 
     #[test]
     fn builds_a_call_user_function_instr() {
-        let hir = HirModule {
-            items: vec![HirItem::TopLevelStmt(HirStmt::CallUserFunction { name: "main".to_string() })],
-        };
+        let hir = HirModule { items: vec![HirItem::TopLevelStmt(call_user_fn("main"))] };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -67,18 +91,34 @@ mod tests {
     #[test]
     fn builds_a_function_item_with_its_body_lowered() {
         let hir = HirModule {
-            items: vec![HirItem::Function {
-                name: "main".to_string(),
-                body: vec![HirStmt::CallPrint { arg: 7 }],
-            }],
+            items: vec![HirItem::Function { name: "main".to_string(), body: vec![call_print(7)] }],
         };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
             vec![MirItem::Function {
                 name: "main".to_string(),
-                body: vec![MirInstr::CallPrint { arg: 7 }],
+                body: vec![MirInstr::CallPrint { arg: MirExpr::IntLiteral(7) }],
             }]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "print() with this argument shape lands in PR-5")]
+    fn print_with_zero_arguments_is_not_yet_lowerable() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![],
+            }))],
+        };
+        build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "this construct's codegen lands in PR-5")]
+    fn a_bare_literal_statement_is_not_yet_lowerable() {
+        let hir = HirModule { items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(1)))] };
+        build(&hir);
     }
 }

@@ -1,15 +1,15 @@
-use pycc_ast::{Expr, ExprCall, ModModule, Number, Stmt};
+use pycc_ast::{Expr, ModModule, Number, Stmt};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HirExpr {
+    IntLiteral(i64),
+    Name(String),
+    Call { callee: String, args: Vec<HirExpr> },
+}
 
 #[derive(Debug, PartialEq)]
 pub enum HirStmt {
-    CallPrint { arg: i64 },
-    /// A zero-argument call to a user-defined function, e.g. a top-level
-    /// `main()` invoking `def main() -> None: ...`. Python has no concept
-    /// of a function auto-running just because of its name -- a def alone
-    /// produces a `HirItem::Function` with no observable effect; only an
-    /// explicit call like this one ever executes it. Arguments aren't
-    /// supported yet (v0.1 slice-0 scope; see PR-4/PR-5 for real calls).
-    CallUserFunction { name: String },
+    ExprStmt(HirExpr),
 }
 
 #[derive(Debug, PartialEq)]
@@ -37,32 +37,29 @@ pub fn lower(module: &ModModule) -> HirModule {
 }
 
 fn lower_stmt(stmt: &Stmt) -> HirStmt {
-    let Stmt::Expr(expr_stmt) = stmt else {
-        panic!("pycc_hir v0.1: only a bare call expression statement is supported so far");
-    };
-    let Expr::Call(ExprCall { func, arguments, .. }) = expr_stmt.value.as_ref() else {
-        panic!("pycc_hir v0.1: only a call expression statement is supported so far");
-    };
-    let Expr::Name(name) = func.as_ref() else {
-        panic!("pycc_hir v0.1: only calling a bare name is supported so far");
-    };
-    if name.id.as_str() == "print" {
-        let [Expr::NumberLiteral(lit)] = arguments.args.as_ref() else {
-            panic!("pycc_hir v0.1: print() must take exactly one integer literal argument so far");
-        };
-        let Number::Int(i) = &lit.value else {
-            panic!("pycc_hir v0.1: only integer literal arguments are supported so far");
-        };
-        HirStmt::CallPrint { arg: i.as_i64().expect("literal too large for v0.1's i64-only HIR") }
-    } else {
-        let [] = arguments.args.as_ref() else {
-            panic!(
-                "pycc_hir v0.1: calling a user-defined function with arguments is not \
-                 supported yet -- only zero-argument calls like `{}()`",
-                name.id.as_str()
-            );
-        };
-        HirStmt::CallUserFunction { name: name.id.as_str().to_string() }
+    match stmt {
+        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)),
+        other => panic!("pycc_hir: statement kind not supported yet: {other:?}"),
+    }
+}
+
+fn lower_expr(expr: &Expr) -> HirExpr {
+    match expr {
+        Expr::NumberLiteral(lit) => match &lit.value {
+            Number::Int(i) => HirExpr::IntLiteral(
+                i.as_i64().unwrap_or_else(|| panic!("pycc_hir: integer literal does not fit in i64: {i:?}")),
+            ),
+            other => panic!("pycc_hir: numeric literal kind not supported yet: {other:?}"),
+        },
+        Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
+        Expr::Call(call) => {
+            let Expr::Name(callee) = call.func.as_ref() else {
+                panic!("pycc_hir: only calling a bare name is supported so far: {:?}", call.func);
+            };
+            let args = call.arguments.args.iter().map(lower_expr).collect();
+            HirExpr::Call { callee: callee.id.as_str().to_string(), args }
+        }
+        other => panic!("pycc_hir: expression kind not supported yet: {other:?}"),
     }
 }
 
@@ -82,7 +79,10 @@ mod tests {
             hir.items,
             vec![HirItem::Function {
                 name: "main".to_string(),
-                body: vec![HirStmt::CallPrint { arg: 42 }],
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::IntLiteral(42)],
+                })],
             }]
         );
     }
@@ -96,9 +96,15 @@ mod tests {
             vec![
                 HirItem::Function {
                     name: "main".to_string(),
-                    body: vec![HirStmt::CallPrint { arg: 42 }],
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::IntLiteral(42)],
+                    })],
                 },
-                HirItem::TopLevelStmt(HirStmt::CallUserFunction { name: "main".to_string() }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "main".to_string(),
+                    args: vec![],
+                })),
             ]
         );
     }
@@ -107,21 +113,59 @@ mod tests {
     fn lowers_top_level_print_with_no_main() {
         let module = pycc_parser_test_helper::parse("print(42)\n");
         let hir = lower(&module);
-        assert_eq!(hir.items, vec![HirItem::TopLevelStmt(HirStmt::CallPrint { arg: 42 })]);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            }))]
+        );
     }
 
     #[test]
-    #[should_panic(expected = "only a bare call expression statement")]
+    fn lowers_a_name_reference_used_as_a_call_argument() {
+        // Exercises HirExpr::Name specifically -- every other test so far
+        // only ever passes an IntLiteral or zero args to a call, never a
+        // bare name reference used as a *value* (as opposed to an
+        // assignment target, which Task 6 handles separately).
+        let module = pycc_parser_test_helper::parse("def f():\n    print(x)\n");
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("x".to_string())],
+                })],
+            }]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "expression kind not supported yet")]
+    fn a_bare_boolean_literal_expression_is_unsupported_until_task_7() {
+        let module = pycc_parser_test_helper::parse("True\n");
+        lower(&module);
+    }
+
+    #[test]
+    #[should_panic(expected = "statement kind not supported yet")]
     fn non_expr_statement_is_unsupported() {
         let module = pycc_parser_test_helper::parse("x = 1\n");
         lower(&module);
     }
 
     #[test]
-    #[should_panic(expected = "only a call expression statement")]
-    fn non_call_expression_statement_is_unsupported() {
+    fn a_bare_literal_expression_statement_is_now_supported() {
+        // `42` alone at module level is legal (if pointless) Python -- an
+        // expression statement whose value is simply discarded. The old
+        // HIR shape only ever represented a *call* expression statement,
+        // so this used to panic; HirExpr::IntLiteral now represents any
+        // expression, not just call arguments.
         let module = pycc_parser_test_helper::parse("42\n");
-        lower(&module);
+        let hir = lower(&module);
+        assert_eq!(hir.items, vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(42)))]);
     }
 
     #[test]
@@ -137,33 +181,55 @@ mod tests {
         let hir = lower(&module);
         assert_eq!(
             hir.items,
-            vec![HirItem::TopLevelStmt(HirStmt::CallUserFunction { name: "foo".to_string() })]
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "foo".to_string(),
+                args: vec![],
+            }))]
         );
     }
 
     #[test]
-    #[should_panic(expected = "calling a user-defined function with arguments is not supported")]
-    fn calling_a_non_print_function_with_arguments_is_unsupported() {
+    fn calling_a_non_print_function_with_arguments_is_now_supported() {
+        // This used to panic in the pre-Task-5 HIR shape (only zero-arg
+        // user-function calls were representable at all) -- HirExpr::Call
+        // now carries arbitrary args for every callee, print included;
+        // real type-checking of a call's arguments against a declared
+        // signature is Task 9's job, not this lowering step's.
         let module = pycc_parser_test_helper::parse("foo(42)\n");
-        lower(&module);
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "foo".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            }))]
+        );
     }
 
     #[test]
-    #[should_panic(expected = "exactly one integer literal argument")]
-    fn print_with_wrong_argument_count_is_unsupported() {
+    fn print_with_more_than_one_argument_is_now_supported_at_the_hir_level() {
+        // Same rationale as above -- HirExpr::Call no longer special-cases
+        // `print`'s arity at lowering time.
         let module = pycc_parser_test_helper::parse("print(1, 2)\n");
-        lower(&module);
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+            }))]
+        );
     }
 
     #[test]
-    #[should_panic(expected = "only integer literal arguments")]
-    fn print_with_a_float_argument_is_unsupported() {
+    #[should_panic(expected = "numeric literal kind not supported yet")]
+    fn print_with_a_float_argument_is_unsupported_until_task_6() {
         let module = pycc_parser_test_helper::parse("print(3.14)\n");
         lower(&module);
     }
 
     #[test]
-    #[should_panic(expected = "too large for v0.1's i64-only HIR")]
+    #[should_panic(expected = "does not fit in i64")]
     fn print_with_an_integer_too_large_for_i64_is_unsupported() {
         let module = pycc_parser_test_helper::parse("print(99999999999999999999999999999999)\n");
         lower(&module);
