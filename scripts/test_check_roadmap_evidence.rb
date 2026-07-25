@@ -562,16 +562,14 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_allowlist_stages_the_frontend_perf_gate_digest
-    # Per docs/TESTING.md's staged-update procedure: the reviewed prospective
-    # digest for the pending frontend-perf-gate ci.yml revision (adding the
-    # frontend-perf-gate job and requiring it in ci-gate) is appended here
-    # while the current digest remains active, ahead of the pull request that
-    # actually activates that workflow and retires this repository's current
-    # digest.
-    assert_includes(
+  def test_tier1_workflow_allowlist_retires_the_deferred_frontend_perf_digest
+    # D-047 requires PR-6 to redesign and re-review the deferred performance
+    # workflow against the then-current trust anchor. Leaving the old PR-4
+    # candidate allowlisted would let those superseded bytes activate without
+    # that required staging pass.
+    refute_includes(
       TIER1_CI_WORKFLOW_SHA256S,
-      PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256
+      "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
     )
   end
 
@@ -666,7 +664,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_equal(
       [
         ACTIVE_TIER1_CI_WORKFLOW_SHA256,
-        PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256,
         STAGED_TIER1_CI_WORKFLOW_SHA256
       ],
       TIER1_CI_WORKFLOW_SHA256S

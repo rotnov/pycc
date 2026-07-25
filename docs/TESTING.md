@@ -113,11 +113,11 @@ incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
 D-047 makes the earlier PR-4 prospective performance workflow obsolete and
-defers a newly designed and reviewed gate to PR-6. This change therefore
-retires the old candidate digest instead of leaving stale workflow bytes
-authorized. The structural cache-lifecycle validator remains fail-closed for
-any future `frontend-perf-gate`, but PR-6 must still stage its exact new
-workflow bytes and digest before activation.
+defers a newly designed and reviewed gate to PR-6. The old candidate digest is
+therefore retired instead of leaving stale workflow bytes authorized. The
+structural cache-lifecycle validator remains fail-closed for any future
+`frontend-perf-gate`, but PR-6 must still stage its exact new workflow bytes and
+digest before activation.
 
 A separate reviewed prospective workflow authorizes the Python language-track
 regression guard without activating it. Its inert
