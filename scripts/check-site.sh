@@ -46,6 +46,8 @@ import sys
 
 class MetadataParser(HTMLParser):
     hidden_body_tags = {"script", "style", "template", "noscript"}
+    inert_asset_tags = {"template", "noscript"}
+    foreign_root_tags = {"math", "svg"}
     void_tags = {
         "area",
         "base",
@@ -68,18 +70,50 @@ class MetadataParser(HTMLParser):
         self.in_title = False
         self.in_json_ld = False
         self.in_body = False
+        self.inert_element_stack = []
+        self.foreign_root_stack = []
         self.hidden_body_depth = 0
         self.body_element_stack = []
         self.titles = []
         self.current_title = []
         self.links = []
         self.metas = []
+        self.base_elements = []
+        self.asset_links = []
+        self.external_scripts = []
         self.json_ld = []
         self.current_json_ld = []
         self.visible_body_text = []
 
     def handle_starttag(self, tag, attrs):
+        if tag in {"base", "link", "script"}:
+            attribute_names = [name for name, _ in attrs]
+            if len(attribute_names) != len(set(attribute_names)):
+                raise SystemExit(f"Duplicate attributes are not allowed on <{tag}>")
         attributes = dict(attrs)
+        if tag in self.inert_asset_tags:
+            self.inert_element_stack.append(tag)
+        if tag in self.foreign_root_tags:
+            self.foreign_root_stack.append(tag)
+        if self.foreign_root_stack and tag in {"link", "script"}:
+            raise SystemExit(
+                "Link and script elements are not allowed inside SVG or MathML"
+            )
+        if tag == "base":
+            self.base_elements.append(attributes)
+        elif (
+            tag == "link"
+            and not self.inert_element_stack
+            and not self.foreign_root_stack
+        ):
+            self.asset_links.append(attributes)
+        elif (
+            tag == "script"
+            and "src" in attributes
+            and not self.inert_element_stack
+            and not self.foreign_root_stack
+        ):
+            self.external_scripts.append(attributes)
         if tag == "body":
             self.in_body = True
             return
@@ -105,11 +139,39 @@ class MetadataParser(HTMLParser):
             self.links.append(attributes)
         elif tag == "meta":
             self.metas.append(attributes)
-        elif tag == "script" and attributes.get("type") == "application/ld+json":
-            self.in_json_ld = True
-            self.current_json_ld = []
+        elif tag == "script":
+            if attributes.get("type") == "application/ld+json":
+                self.in_json_ld = True
+                self.current_json_ld = []
+
+    def handle_startendtag(self, tag, attrs):
+        if self.foreign_root_stack and tag in {"link", "script"}:
+            raise SystemExit(
+                "Link and script elements are not allowed inside SVG or MathML"
+            )
+        if self.foreign_root_stack or tag in self.foreign_root_tags:
+            return
+        if tag not in self.void_tags:
+            raise SystemExit(f"<{tag}> must use an explicit closing tag")
+        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
+        if tag in self.foreign_root_tags:
+            if not self.foreign_root_stack:
+                raise SystemExit(f"Unexpected closing foreign root: {tag}")
+            expected_tag = self.foreign_root_stack.pop()
+            if tag != expected_tag:
+                raise SystemExit(
+                    f"Mismatched foreign roots: expected {expected_tag}, found {tag}"
+                )
+        if tag in self.inert_asset_tags:
+            if not self.inert_element_stack:
+                raise SystemExit(f"Unexpected closing {tag} tag")
+            expected_tag = self.inert_element_stack.pop()
+            if tag != expected_tag:
+                raise SystemExit(
+                    f"Mismatched inert tags: expected {expected_tag}, found {tag}"
+                )
         if tag == "body":
             self.in_body = False
             self.body_element_stack = []
@@ -152,6 +214,13 @@ index_path = Path(sys.argv[1])
 canonical = sys.argv[2]
 parser = MetadataParser()
 parser.feed(index_path.read_text())
+
+if parser.inert_element_stack:
+    raise SystemExit(f"Unclosed inert element: {parser.inert_element_stack[-1]}")
+if parser.foreign_root_stack:
+    raise SystemExit(f"Unclosed foreign root: {parser.foreign_root_stack[-1]}")
+if parser.base_elements:
+    raise SystemExit("Base elements are not allowed because assets must resolve locally")
 
 title = require_one(parser.titles, "page title")
 if title != "pycc — AOT compiler for typed Python to native binaries":
@@ -224,6 +293,30 @@ sitemap_link = require_one(
 )
 if sitemap_link.get("href") != "sitemap.xml":
     raise SystemExit("Sitemap link must reference sitemap.xml")
+
+stylesheet_link = require_one(
+    [
+        link
+        for link in parser.asset_links
+        if "stylesheet" in link.get("rel", "").lower().split()
+    ],
+    "stylesheet link",
+)
+if stylesheet_link.get("href") != "styles.css":
+    raise SystemExit("Stylesheet link must reference styles.css relatively")
+if stylesheet_link.get("rel", "").lower().split() != ["stylesheet"]:
+    raise SystemExit("styles.css must use only the stylesheet relationship")
+if set(stylesheet_link) != {"href", "rel"}:
+    raise SystemExit("styles.css must use only href and rel attributes")
+
+external_script = require_one(
+    parser.external_scripts,
+    "external script",
+)
+if external_script.get("src") != "site.js":
+    raise SystemExit("External script must reference site.js relatively")
+if set(external_script) != {"defer", "src"}:
+    raise SystemExit("site.js must use only defer and src attributes")
 
 software_sources = []
 web_pages = []
