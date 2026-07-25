@@ -67,12 +67,13 @@ exactly one inline marker, including an item nested in a Markdown blockquote:
 `scripts/check_roadmap_evidence.rb` binds each registered identifier to the
 complete roadmap heading path and claim it proves plus a deterministic
 repository check. Missing, unknown, misplaced, or claim-mismatched markers
-fail. Fenced code, including a fence nested in a blockquote, and HTML comments
-do not contribute rendered headings or task items. A task indented beneath a
-rendered list container is still checked, while an unattached
-four-space-indented block is code. Setext headings are rejected fail-closed;
-roadmap structure uses ATX `#` headings only. Adding a new evidence type starts
-with a failing public-CLI mutation in
+fail. Fenced code, including a fence nested in a blockquote or list container,
+and HTML comments do not contribute rendered headings or task items. A task
+indented beneath a rendered list container is still checked, while an
+unattached four-space-indented block is code. Setext headings are rejected
+fail-closed; roadmap structure uses ATX `#` headings with no tab-indented
+pseudo-headings. Adding a new evidence type starts with a failing public-CLI
+mutation in
 `scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
 and documented claim land together.
 

@@ -250,6 +250,26 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_rejects_tab_indented_pseudo_headings
+    roadmap = <<~MARKDOWN
+      \t# pycc Roadmap
+
+      \t## Current delivery status
+
+      \t### v0.1 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: coverage_workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
   def test_ignores_checked_items_hidden_in_fences_and_html_comments
     hidden_items = [
       "```\n- [x] Hidden example without evidence.\n```\n",
@@ -274,6 +294,26 @@ class RoadmapEvidenceCliTest < Minitest::Test
       > ```markdown
       > - [x] Quoted code example without evidence.
       > ```
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: "jobs: {}\n"
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_ignores_checked_items_inside_fences_nested_under_list_items
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      - Example:
+
+          ```markdown
+          - [x] Nested code example without evidence.
+          ```
     MARKDOWN
 
     stdout, stderr, status = run_checker(

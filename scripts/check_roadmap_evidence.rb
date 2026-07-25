@@ -10,7 +10,7 @@ class RoadmapEvidenceError < StandardError; end
 LIST_ITEM =
   /\A(?<indent>[ \t]*)(?<marker>[-*+]|\d+[.)])(?<spacing>[ \t]+)(?<body>.*)$/
 CHECKED_ITEM_BODY = /\A\[[xX]\][ \t]+(?<claim>.*)$/
-ATX_HEADING = /^\s{0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
+ATX_HEADING = /\A {0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
 SETEXT_UNDERLINE = /\A {0,3}(?:=+|-+)[ \t]*(?:\r?\n)?\z/
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
 EVIDENCE_CLAIMS = {
@@ -32,7 +32,8 @@ EVIDENCE_SECTIONS = {
   ]
 }.freeze
 TIER1_CI_WORKFLOW_SHA256S = [
-  "58e2d5026b59e7c921b57c882d24b6507c95dd8f99e390c0a68af217e5e038c8"
+  "58e2d5026b59e7c921b57c882d24b6507c95dd8f99e390c0a68af217e5e038c8",
+  "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2"
 ].freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
@@ -315,6 +316,34 @@ def indentation_width(whitespace, initial_column = 0)
   end
 end
 
+def strip_indentation(line, columns)
+  column = 0
+  index = 0
+  while column < columns
+    character = line[index]
+    return line unless character == " " || character == "\t"
+
+    if character == "\t"
+      next_column = column + (4 - (column % 4))
+      if next_column > columns
+        remainder = next_column - columns
+        return (" " * remainder) + (line[(index + 1)..] || "")
+      end
+      column = next_column
+    else
+      column += 1
+    end
+    index += 1
+  end
+  line[index..] || ""
+end
+
+def list_container_content(line, containers)
+  indent = indentation_width(line[/\A[ \t]*/])
+  content_indent = containers.reverse.find { |candidate| indent >= candidate } || 0
+  [strip_indentation(line, content_indent), content_indent]
+end
+
 def rendered_list_item(line, containers)
   item = LIST_ITEM.match(line)
   return unless item
@@ -343,16 +372,23 @@ def validate_roadmap(text)
   text.each_line.with_index(1) do |line, line_number|
     if fence
       candidate, quote_depth = blockquote_content(line)
-      candidate = line unless quote_depth == fence[2]
+      candidate =
+        if quote_depth == fence[2]
+          strip_indentation(candidate, fence[3])
+        else
+          line
+        end
       fence = nil if closing_fence?(candidate, fence)
       next
     end
 
     visible_line, in_html_comment = without_html_comments(line, in_html_comment)
     fence_candidate, quote_depth = blockquote_content(visible_line)
-    opening = opening_fence(fence_candidate)
+    normalized_fence_candidate, content_indent =
+      list_container_content(fence_candidate, list_containers[quote_depth])
+    opening = opening_fence(normalized_fence_candidate)
     if opening
-      fence = [*opening, quote_depth]
+      fence = [*opening, quote_depth, content_indent]
       next
     end
 
