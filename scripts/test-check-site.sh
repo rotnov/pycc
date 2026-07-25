@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/pycc-site-check.XXXXXX")
 
 cleanup() {
@@ -121,6 +121,64 @@ PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted an invalid IndexNow ownership key" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt" \
+  "$fixture_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt"
+
+for content_page in \
+  status/index.html \
+  architecture/index.html \
+  ai-native/index.html
+do
+  if [ ! -f "$fixture_root/site/$content_page" ]; then
+    echo "Site fixture is missing required evidence page: $content_page" >&2
+    exit 1
+  fi
+done
+
+mv "$fixture_root/site/status/index.html" "$fixture_root/site/status/index.html.missing"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a site with a missing evidence page" >&2
+  exit 1
+fi
+mv "$fixture_root/site/status/index.html.missing" "$fixture_root/site/status/index.html"
+
+python3 - "$fixture_root/site/architecture/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+canonical = "https://rotnov.github.io/pycc/architecture/"
+assert content.count(canonical) >= 1
+path.write_text(content.replace(canonical, "https://rotnov.github.io/pycc/status/"))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an evidence page with the wrong canonical URL" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/architecture/index.html" \
+  "$fixture_root/site/architecture/index.html"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = """  <url>
+    <loc>https://rotnov.github.io/pycc/status/</loc>"""
+assert required in content
+start = content.index(required)
+end = content.index("  </url>", start) + len("  </url>\n")
+path.write_text(content[:start] + content[end:])
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a sitemap that omitted an evidence page" >&2
   exit 1
 fi
 
