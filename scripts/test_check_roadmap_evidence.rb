@@ -883,6 +883,20 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes error.message, "reviewed isolated comparison job"
   end
 
+  def test_rejects_paired_gate_without_flattened_id_download
+    workflow = paired_perf_workflow do |jobs|
+      download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Download sealed predecessor frontend timing"
+      end
+      download.fetch("with").delete("merge-multiple")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
   def test_rejects_paired_gate_without_artifact_identity_verification
     workflow = paired_perf_workflow do |jobs|
       identity = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|

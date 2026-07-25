@@ -144,7 +144,8 @@ digest, and source-file SHA-256 before it benchmarks current source on that same
 runner and uploads `frontend-perf-current`. The isolated gate checks the
 comparator out from the resolved predecessor job output, verifies its digests,
 queries only the exact same-run artifact ID to require the original archive
-digest, downloads by that ID rather than name, verifies the extracted file
+digest, downloads by that ID rather than name with explicit archive flattening,
+verifies the extracted file
 SHA-256, and applies the unchanged 2% comparison. If current code uses inherited
 artifact-service credentials to delete and recreate the predecessor name, the
 original ID disappears and the gate fails closed. It performs no Actions-run
