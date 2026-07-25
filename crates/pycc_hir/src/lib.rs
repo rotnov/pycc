@@ -1,15 +1,29 @@
-use pycc_ast::{Expr, ModModule, Number, Stmt};
+use pycc_ast::{Expr, ModModule, Number, Operator, Stmt};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOpKind {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    FloorDiv,
+    Mod,
+    Pow,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
     IntLiteral(i64),
+    FloatLiteral(f64),
     Name(String),
     Call { callee: String, args: Vec<HirExpr> },
+    BinOp { op: BinOpKind, left: Box<HirExpr>, right: Box<HirExpr> },
 }
 
 #[derive(Debug, PartialEq)]
 pub enum HirStmt {
     ExprStmt(HirExpr),
+    Assign { target: String, value: HirExpr },
 }
 
 #[derive(Debug, PartialEq)]
@@ -39,6 +53,18 @@ pub fn lower(module: &ModModule) -> HirModule {
 fn lower_stmt(stmt: &Stmt) -> HirStmt {
     match stmt {
         Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)),
+        Stmt::Assign(assign) => {
+            let [target] = assign.targets.as_slice() else {
+                panic!(
+                    "pycc_hir: only a single assignment target is supported so far: {:?}",
+                    assign.targets
+                );
+            };
+            let Expr::Name(name) = target else {
+                panic!("pycc_hir: only assigning to a bare name is supported so far: {target:?}");
+            };
+            HirStmt::Assign { target: name.id.as_str().to_string(), value: lower_expr(&assign.value) }
+        }
         other => panic!("pycc_hir: statement kind not supported yet: {other:?}"),
     }
 }
@@ -49,6 +75,7 @@ fn lower_expr(expr: &Expr) -> HirExpr {
             Number::Int(i) => HirExpr::IntLiteral(
                 i.as_i64().unwrap_or_else(|| panic!("pycc_hir: integer literal does not fit in i64: {i:?}")),
             ),
+            Number::Float(f) => HirExpr::FloatLiteral(*f),
             other => panic!("pycc_hir: numeric literal kind not supported yet: {other:?}"),
         },
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
@@ -58,6 +85,23 @@ fn lower_expr(expr: &Expr) -> HirExpr {
             };
             let args = call.arguments.args.iter().map(lower_expr).collect();
             HirExpr::Call { callee: callee.id.as_str().to_string(), args }
+        }
+        Expr::BinOp(bin_op) => {
+            let op = match bin_op.op {
+                Operator::Add => BinOpKind::Add,
+                Operator::Sub => BinOpKind::Sub,
+                Operator::Mult => BinOpKind::Mul,
+                Operator::Div => BinOpKind::Div,
+                Operator::FloorDiv => BinOpKind::FloorDiv,
+                Operator::Mod => BinOpKind::Mod,
+                Operator::Pow => BinOpKind::Pow,
+                other => panic!("pycc_hir: binary operator not supported yet: {other:?}"),
+            };
+            HirExpr::BinOp {
+                op,
+                left: Box::new(lower_expr(&bin_op.left)),
+                right: Box::new(lower_expr(&bin_op.right)),
+            }
         }
         other => panic!("pycc_hir: expression kind not supported yet: {other:?}"),
     }
@@ -150,9 +194,107 @@ mod tests {
     }
 
     #[test]
+    fn lowers_an_assignment_and_a_later_reference_to_it() {
+        let module = pycc_parser_test_helper::parse("x = 1\nprint(x)\n");
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("x".to_string())],
+                })),
+            ]
+        );
+    }
+
+    #[test]
+    fn lowers_a_binary_addition() {
+        let module = pycc_parser_test_helper::parse("x = 1 + 2\n");
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::IntLiteral(1)),
+                    right: Box::new(HirExpr::IntLiteral(2)),
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_every_arithmetic_operator() {
+        let cases = [
+            ("x = 1 - 2\n", BinOpKind::Sub),
+            ("x = 1 * 2\n", BinOpKind::Mul),
+            ("x = 1 / 2\n", BinOpKind::Div),
+            ("x = 1 // 2\n", BinOpKind::FloorDiv),
+            ("x = 1 % 2\n", BinOpKind::Mod),
+            ("x = 1 ** 2\n", BinOpKind::Pow),
+        ];
+        for (source, expected_op) in cases {
+            let module = pycc_parser_test_helper::parse(source);
+            let hir = lower(&module);
+            assert_eq!(
+                hir.items,
+                vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::BinOp {
+                        op: expected_op,
+                        left: Box::new(HirExpr::IntLiteral(1)),
+                        right: Box::new(HirExpr::IntLiteral(2)),
+                    },
+                })],
+                "wrong lowering for {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lowers_a_float_literal() {
+        let module = pycc_parser_test_helper::parse("x = 1.5\n");
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::FloatLiteral(1.5),
+            })]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "only a single assignment target is supported so far")]
+    fn a_multi_target_assignment_is_unsupported() {
+        let module = pycc_parser_test_helper::parse("x = y = 1\n");
+        lower(&module);
+    }
+
+    #[test]
+    #[should_panic(expected = "only assigning to a bare name is supported so far")]
+    fn assigning_to_a_non_name_target_is_unsupported() {
+        let module = pycc_parser_test_helper::parse("x.attr = 1\n");
+        lower(&module);
+    }
+
+    #[test]
+    #[should_panic(expected = "binary operator not supported yet")]
+    fn matrix_multiplication_is_unsupported() {
+        let module = pycc_parser_test_helper::parse("x = a @ b\n");
+        lower(&module);
+    }
+
+    #[test]
     #[should_panic(expected = "statement kind not supported yet")]
-    fn non_expr_statement_is_unsupported() {
-        let module = pycc_parser_test_helper::parse("x = 1\n");
+    fn an_if_statement_is_unsupported_until_task_8() {
+        let module = pycc_parser_test_helper::parse("if True:\n    pass\n");
         lower(&module);
     }
 
@@ -222,16 +364,34 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "numeric literal kind not supported yet")]
-    fn print_with_a_float_argument_is_unsupported_until_task_6() {
-        let module = pycc_parser_test_helper::parse("print(3.14)\n");
-        lower(&module);
+    fn print_with_a_float_argument_is_now_supported_at_the_hir_level() {
+        // MIR/codegen still only understands an integer-literal argument to
+        // `print` (see pycc_mir::lower_instr); this is HIR-only.
+        let module = pycc_parser_test_helper::parse("print(2.5)\n");
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::FloatLiteral(2.5)],
+            }))]
+        );
     }
 
     #[test]
     #[should_panic(expected = "does not fit in i64")]
     fn print_with_an_integer_too_large_for_i64_is_unsupported() {
         let module = pycc_parser_test_helper::parse("print(99999999999999999999999999999999)\n");
+        lower(&module);
+    }
+
+    #[test]
+    #[should_panic(expected = "numeric literal kind not supported yet")]
+    fn a_complex_number_literal_is_unsupported() {
+        // Complex isn't in v0.1's type-representation table (int/float/bool/str/None
+        // per TYPE_SYSTEM.md) -- unlike float/bool, this isn't deferred to a later
+        // PR-4 task, it's simply out of scope for pycc entirely.
+        let module = pycc_parser_test_helper::parse("x = 3j\n");
         lower(&module);
     }
 }

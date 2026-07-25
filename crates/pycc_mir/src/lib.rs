@@ -42,7 +42,9 @@ pub fn build(hir: &HirModule) -> MirModule {
 /// naming PR-5 explicitly (D-034): a deliberate, temporary boundary, not
 /// new codegen work landing in this PR.
 fn lower_instr(stmt: &HirStmt) -> MirInstr {
-    let HirStmt::ExprStmt(expr) = stmt;
+    let HirStmt::ExprStmt(expr) = stmt else {
+        panic!("pycc_mir: this statement kind's codegen lands in PR-5: {stmt:?}");
+    };
     match expr {
         HirExpr::Call { callee, args } if callee == "print" => match args.as_slice() {
             [HirExpr::IntLiteral(n)] => MirInstr::CallPrint { arg: MirExpr::IntLiteral(*n) },
@@ -119,6 +121,18 @@ mod tests {
     #[should_panic(expected = "this construct's codegen lands in PR-5")]
     fn a_bare_literal_statement_is_not_yet_lowerable() {
         let hir = HirModule { items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(1)))] };
+        build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "this statement kind's codegen lands in PR-5")]
+    fn an_assignment_statement_is_not_yet_lowerable() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            })],
+        };
         build(&hir);
     }
 }
