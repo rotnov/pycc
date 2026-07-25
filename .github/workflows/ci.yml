@@ -70,9 +70,11 @@ jobs:
           run_isolated() {
             sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
           }
+          ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
           cd "$GITHUB_WORKSPACE"
           run_isolated "$TRUSTED_CARGO" build --workspace
           run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+          rm "$GITHUB_WORKSPACE/target"
           printf 'LLVM_SYS_221_PREFIX=%s\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 
       - name: Check workflow permission policy

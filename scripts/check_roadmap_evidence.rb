@@ -48,9 +48,11 @@ COVERAGE_SCRIPT = <<~SHELL.strip
   run_isolated() {
     sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
   }
+  ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
   cd "$GITHUB_WORKSPACE"
   run_isolated "$TRUSTED_CARGO" build --workspace
   #{COVERAGE_COMMAND}
+  rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
 TRUSTED_COVERAGE_ENV = {
