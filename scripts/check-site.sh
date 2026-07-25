@@ -456,6 +456,11 @@ PAGE_SPECS = {
             "Validated frontend codes",
             "byte-exact CLI snapshots cover",
             "Code generation and runtime breadth are next.",
+            "D-048's performance transition runs independently of that compiler sequence",
+            "the tracked CI workflow tells whether exact-head activation is pending",
+            "the required frontend measurement and greater-than-2% regression gate are active",
+            "the activation-only bootstrap path for the first main-owned baseline is retained both before and after that artifact is published",
+            "or the gate is in bootstrap-free steady state.",
         ),
     },
     "architecture": {
