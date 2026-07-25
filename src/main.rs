@@ -4,6 +4,7 @@ mod source;
 use clap::Parser;
 use cli::{Cli, Command};
 use pycc_diag::{Diagnostic, Span};
+use std::path::Path;
 use std::process::ExitCode;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -31,6 +32,7 @@ fn main() -> ExitCode {
 /// failure. `?` inside this function needs a `Result`, not an `ExitCode`
 /// directly -- `run` then just propagates whatever `Err` it gets.
 fn try_build(path: &str, out: &str) -> Result<(), ExitCode> {
+    let path = Path::new(path);
     let hir = check_frontend(path)
         .map_err(|failure| ExitCode::from(report_frontend_failure(path, failure)))?;
     let mir = pycc_mir::build(&hir);
@@ -66,7 +68,7 @@ enum FrontendFailure {
     },
 }
 
-fn check_frontend(path: &str) -> Result<pycc_hir::HirModule, FrontendFailure> {
+fn check_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
     let bytes = std::fs::read(path).map_err(|error| FrontendFailure::Input(error.to_string()))?;
     let source = source::decode_python_source(&bytes).map_err(FrontendFailure::Input)?;
     let module = match pycc_parser::parse(&source) {
@@ -81,7 +83,7 @@ fn check_frontend(path: &str) -> Result<pycc_hir::HirModule, FrontendFailure> {
     Ok(hir)
 }
 
-fn check_paths(paths: &[String]) -> ExitCode {
+fn check_paths(paths: &[std::path::PathBuf]) -> ExitCode {
     if paths.is_empty() {
         eprintln!("error: `pycc check` requires at least one Python file in v0.1");
         return ExitCode::from(2);
@@ -96,8 +98,8 @@ fn check_paths(paths: &[String]) -> ExitCode {
     ExitCode::from(exit_code)
 }
 
-fn report_frontend_failure(path: &str, failure: FrontendFailure) -> u8 {
-    let path = normalize_diagnostic_path(path);
+fn report_frontend_failure(path: &Path, failure: FrontendFailure) -> u8 {
+    let path = normalize_diagnostic_path(&path.to_string_lossy());
     match failure {
         FrontendFailure::Input(message) => {
             eprintln!("error: could not read `{path}`: {message}");

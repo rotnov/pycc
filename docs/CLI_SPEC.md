@@ -22,6 +22,12 @@ an omitted path meaning the current project, and `pycc.toml` project loading
 arrive with multi-file projects in v0.4. The ownership pass joins `check` when
 `pycc_own` is introduced in v0.5.
 
+Paths are parsed in the operating system's native representation, so Unix
+filenames with non-UTF-8 bytes reach file access losslessly; diagnostics use a
+lossy display form only when text must be printed. Use `pycc check -- PATH...`
+when a filename may begin with `-`. The published hook includes that boundary,
+so normal `-h` and `--help` handling remains available.
+
 Before any frontend command parses a file, pycc decodes its bytes using
 Python's source-encoding rules: UTF-8 by default, an optional UTF-8 BOM, and an
 encoding declaration on the first or eligible second line. The v0.1 decoder

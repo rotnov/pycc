@@ -243,6 +243,41 @@ fn check_rejects_a_call_before_its_definition_to_match_python_module_order() {
 }
 
 #[test]
+fn check_rejects_function_redefinitions_before_codegen() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_redefinition_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "redefinition.py",
+        "\
+def helper() -> None:
+    print(1)
+
+helper()
+
+def helper() -> None:
+    print(2)
+
+helper()
+",
+    );
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("error[C0001]: redefining function `helper`"));
+    assert!(stderr.contains("redefinition.py:6:5"));
+}
+
+#[test]
 fn check_rejects_unsupported_function_parameters_before_codegen() {
     let dir =
         std::env::temp_dir().join(format!("pycc_e2e_check_parameters_{}", std::process::id()));
@@ -476,13 +511,53 @@ fn check_accepts_a_staged_filename_that_starts_with_a_hyphen() {
     write_fixture(&dir, "--staged.py", "print(1)\n");
 
     let output = Command::new(pycc_bin())
-        .args(["check", "--staged.py"])
+        .args(["check", "--", "--staged.py"])
         .current_dir(&dir)
         .output()
         .unwrap();
 
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_help_flags_show_help_instead_of_becoming_filenames() {
+    for flag in ["--help", "-h"] {
+        let output = Command::new(pycc_bin())
+            .args(["check", flag])
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "flag: {flag}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Usage:"),
+            "flag: {flag}"
+        );
+        assert!(output.stderr.is_empty(), "flag: {flag}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn check_accepts_a_non_utf8_staged_path_losslessly() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_non_utf8_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let filename = std::ffi::OsString::from_vec(b"invalid_\xff.py".to_vec());
+    let src = dir.join(filename);
+    std::fs::write(&src, b"x = 1\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("error[C0001]"));
+    assert!(stderr.contains("invalid_\u{fffd}.py"));
 }
 
 #[test]
@@ -641,7 +716,7 @@ fn repository_publishes_the_pycc_check_pre_commit_hook() {
 - id: pycc-check
   name: pycc check
   description: Check typed Python files with the pycc frontend
-  entry: pycc check
+  entry: pycc check --
   language: rust
   types: [python]
   require_serial: true

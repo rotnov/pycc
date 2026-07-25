@@ -1,7 +1,7 @@
 - id: pycc-check
   name: pycc check
   description: Check typed Python files with the pycc frontend
-  entry: pycc check
+  entry: pycc check --
   language: rust
   types: [python]
   require_serial: true

@@ -12,7 +12,7 @@ The main pycc repository is also the hook repository. Its
 | Field | Contract |
 |---|---|
 | id | `pycc-check` |
-| entry | `pycc check` |
+| entry | `pycc check --` |
 | language | `rust` |
 | inputs | staged files identified by pre-commit as Python |
 | mutation | none |
@@ -29,10 +29,13 @@ repos:
 ```
 
 pre-commit passes the selected filenames after the entry, producing one
-`pycc check FILE...` invocation. pycc checks every file so one early failure
-does not hide later diagnostics. Exit `0` accepts the commit, `1` rejects it
-for compile diagnostics, and `2` rejects it for invocation or input I/O
-errors. When both `1`-class and `2`-class failures occur, `2` takes precedence.
+`pycc check -- FILE...` invocation. The `--` boundary keeps leading-hyphen
+filenames positional without consuming `-h` or `--help`, and paths remain in
+the operating system's native representation through file access. pycc checks
+every file so one early failure does not hide later diagnostics. Exit `0`
+accepts the commit, `1` rejects it for compile diagnostics, and `2` rejects it
+for invocation or input I/O errors. When both `1`-class and `2`-class failures
+occur, `2` takes precedence.
 
 ## Current installation boundary
 

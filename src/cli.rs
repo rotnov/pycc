@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "pycc")]
@@ -18,8 +19,7 @@ pub enum Command {
         path: String,
     },
     Check {
-        #[arg(allow_hyphen_values = true)]
-        paths: Vec<String>,
+        paths: Vec<PathBuf>,
     },
     Test,
     Explain {
@@ -33,4 +33,36 @@ pub enum Command {
         #[arg(long)]
         verbose: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    fn parsed_check_paths(command: Command) -> Option<Vec<std::path::PathBuf>> {
+        match command {
+            Command::Check { paths } => Some(paths),
+            _ => None,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_paths_preserve_non_utf8_bytes() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let path = std::ffi::OsString::from_vec(b"staged_\xff.py".to_vec());
+        let cli = Cli::try_parse_from([
+            std::ffi::OsString::from("pycc"),
+            std::ffi::OsString::from("check"),
+            std::ffi::OsString::from("--"),
+            path,
+        ])
+        .unwrap();
+        let paths = parsed_check_paths(cli.command).unwrap();
+
+        assert_eq!(paths[0].as_os_str().as_bytes(), b"staged_\xff.py");
+        assert!(parsed_check_paths(Command::Clean).is_none());
+    }
 }

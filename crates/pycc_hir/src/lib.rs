@@ -44,14 +44,18 @@ struct FunctionCall {
 /// to later module functions only when top-level execution reaches the call
 /// after those definitions have run.
 pub fn lower(module: &ModModule) -> Result<HirModule, Diagnostic> {
-    let module_functions = module
-        .body
-        .iter()
-        .filter_map(|stmt| match stmt {
-            Stmt::FunctionDef(function) => Some(function.name.id.as_str().to_string()),
-            _ => None,
-        })
-        .collect::<HashSet<_>>();
+    let mut module_functions = HashSet::new();
+    for stmt in &module.body {
+        if let Stmt::FunctionDef(function) = stmt {
+            let name = function.name.id.as_str();
+            if !module_functions.insert(name.to_string()) {
+                return Err(unsupported(
+                    format!("redefining function `{name}` is not supported so far"),
+                    function.name.range(),
+                ));
+            }
+        }
+    }
     let mut available_functions = HashSet::new();
     let mut function_calls = HashMap::<String, Vec<FunctionCall>>::new();
     let mut items = Vec::new();
@@ -560,6 +564,29 @@ first()
         let module = pycc_parser_test_helper::parse(source);
         let hir = lower(&module).unwrap();
         assert_eq!(hir.items.len(), 2);
+    }
+
+    #[test]
+    fn redefining_a_function_is_rejected_until_bindings_have_identity() {
+        let source = "\
+def f() -> None:
+    print(1)
+
+f()
+
+def f() -> None:
+    print(2)
+
+f()
+";
+        let module = pycc_parser_test_helper::parse(source);
+        let error = lower(&module).unwrap_err();
+        let second_definition = source.match_indices("def f").nth(1).unwrap().0;
+        let start = u32::try_from(second_definition + "def ".len()).unwrap();
+
+        assert_eq!(error.code, "C0001");
+        assert_eq!(error.span, Some(Span::new(start, start + 1)));
+        assert!(error.message.contains("redefining function `f`"));
     }
 
     #[test]
