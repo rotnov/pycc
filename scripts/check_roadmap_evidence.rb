@@ -34,7 +34,7 @@ EVIDENCE_SECTIONS = {
   ]
 }.freeze
 TIER1_CI_WORKFLOW_SHA256S = [
-  "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
+  "2f60bd1dbc81e520200406727fa7cdb5f83e1d803b3403e33b024ed3136b2bfe"
 ].freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
