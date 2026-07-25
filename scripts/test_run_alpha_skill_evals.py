@@ -89,6 +89,85 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 runner=runner,
             )
 
+    def test_full_dispatch_executes_every_declared_scenario(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(
+            arguments: list[str],
+            _cwd: Path,
+        ) -> subprocess.CompletedProcess[bytes]:
+            calls.append(arguments)
+            if arguments[-1] == "--help":
+                return subprocess.CompletedProcess(arguments, 0, b"usage\n", b"")
+            if len(arguments) > 1 and arguments[1] == "check":
+                stderr = (
+                    b"error: unexpected argument '--fix' found\n"
+                    b"Usage: pycc check [PATH]\n"
+                )
+                return subprocess.CompletedProcess(arguments, 2, b"", stderr)
+            if len(arguments) > 1 and arguments[1] == "build":
+                if Path(arguments[2]).name == "program.py":
+                    return subprocess.CompletedProcess(arguments, 0, b"", b"")
+                return subprocess.CompletedProcess(
+                    arguments,
+                    1,
+                    b"",
+                    b"error[L0001]: synthetic parser error\n",
+                )
+            return subprocess.CompletedProcess(arguments, 0, b"42\n", b"")
+
+        evals.run_evals(
+            "codex",
+            Path(__file__),
+            runner=runner,
+        )
+
+        self.assertEqual(len(calls), 8)
+        self.assertEqual(
+            sum(arguments[-1] == "--help" for arguments in calls),
+            4,
+        )
+        self.assertTrue(
+            any(len(arguments) > 1 and arguments[1] == "check" for arguments in calls)
+        )
+        self.assertTrue(
+            any(
+                len(arguments) > 2
+                and Path(arguments[2]).name == "parser-error.py"
+                for arguments in calls
+            )
+        )
+
+    def test_check_fix_eval_rejects_a_false_success(self) -> None:
+        case = next(
+            case
+            for case in evals.load_cases("pycc")
+            if case.get("runner") == "observe-current-check-fix-rejection"
+        )
+
+        def runner(
+            arguments: list[str],
+            _cwd: Path,
+        ) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(arguments, 0, b"", b"")
+
+        with self.assertRaisesRegex(evals.EvalError, "invalid invocation"):
+            evals.run_pycc_check_rejection(
+                case,
+                evals.canonical_skill("codex", "pycc"),
+                Path(__file__),
+                runner=runner,
+            )
+
+    def test_research_eval_rejects_incomplete_evidence_criteria(self) -> None:
+        case = dict(evals.load_cases("i-have-an-issue")[0])
+        case["expected_output"] = "generic answer"
+        with self.assertRaisesRegex(evals.EvalError, "incomplete evidence"):
+            evals.run_issue_research_case(
+                case,
+                evals.canonical_skill("claude", "i-have-an-issue"),
+            )
+
     def test_feedback_contract_oracle_cannot_publish_without_exact_consent(
         self,
     ) -> None:

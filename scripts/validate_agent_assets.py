@@ -46,7 +46,11 @@ FEEDBACK_CONSENT_GUARDS = (
     "user-authored code",
 )
 ALPHA_EVAL_RUNNERS = {
-    "pycc": {"build-and-run-self-created-fixture"},
+    "pycc": {
+        "build-and-run-self-created-fixture",
+        "capture-parser-failure-without-write",
+        "observe-current-check-fix-rejection",
+    },
     "pycc-feedback": {
         "prepare-sanitized-draft-without-write",
         "refuse-private-automatic-publication",

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,12 +26,34 @@ CANONICAL_REFERENCE = re.compile(
     r"`(?P<path>\.claude/skills/(?P<name>[a-z][a-z0-9-]*)/SKILL\.md)`"
 )
 EXPECTED_RUNNERS = {
-    "pycc": {"build-and-run-self-created-fixture"},
+    "pycc": {
+        "build-and-run-self-created-fixture",
+        "capture-parser-failure-without-write",
+        "observe-current-check-fix-rejection",
+    },
     "pycc-feedback": {
         "prepare-sanitized-draft-without-write",
         "refuse-private-automatic-publication",
         "require-exact-payload-preview",
     },
+}
+LOCKED_RESEARCH_CASES = {
+    1: (
+        "incremental compiler cache",
+        ("preventive brief", "shipped fixes", "regression tests"),
+    ),
+    2: (
+        "subinterpreters",
+        ("version-aware applicability", "competing hypotheses", "experiment"),
+    ),
+    3: (
+        "cooperative cancellation",
+        ("mechanism-oriented", "analogical evidence", "resource cleanup"),
+    ),
+    4: (
+        "obscure custom bytecode",
+        ("negative result", "residual uncertainty", "profiler experiment"),
+    ),
 }
 FEEDBACK_CONTRACT = (
     "explicit approval",
@@ -137,15 +160,22 @@ def load_cases(name: str, root: Path = ROOT) -> list[dict[str, Any]]:
         for case in cases
     ):
         raise EvalError(f"{path} contains a malformed eval")
-    runner_names = {
-        case["runner"]
-        for case in cases
-        if isinstance(case.get("runner"), str)
-    }
-    if runner_names != EXPECTED_RUNNERS[name]:
-        raise EvalError(
-            f"{path} must bind exactly the executable runners for {name}"
-        )
+    if name == "i-have-an-issue":
+        identifiers = [case["id"] for case in cases]
+        if identifiers != list(LOCKED_RESEARCH_CASES):
+            raise EvalError(
+                f"{path} must retain every reviewed research scenario"
+            )
+    else:
+        runner_names = {
+            case["runner"]
+            for case in cases
+            if isinstance(case.get("runner"), str)
+        }
+        if runner_names != EXPECTED_RUNNERS[name]:
+            raise EvalError(
+                f"{path} must bind exactly the executable runners for {name}"
+            )
     return cases
 
 
@@ -203,6 +233,126 @@ def run_pycc_success(
             )
 
 
+def run_pycc_check_rejection(
+    case: dict[str, Any],
+    skill_text: str,
+    pycc_binary: Path,
+    root: Path = ROOT,
+    runner: CommandRunner = run_command,
+) -> None:
+    if "check --fix" not in case["prompt"]:
+        raise EvalError("pycc check eval must exercise the planned --fix path")
+    expected = case["expected_output"]
+    for fragment in ("recognized but unimplemented", "not currently parsed"):
+        if fragment not in expected:
+            raise EvalError("pycc check eval has an incomplete expected output")
+    for contract in ("planned", "not-implemented", "exit `0`"):
+        if contract not in skill_text:
+            raise EvalError(f"pycc skill is missing {contract!r}")
+
+    result = runner([str(pycc_binary), "check", "--fix"], root)
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    if (
+        result.returncode != 2
+        or result.stdout != b""
+        or "unexpected argument '--fix' found" not in stderr
+        or "Usage: pycc check [PATH]" not in stderr
+    ):
+        raise EvalError(
+            "pycc check --fix must remain an observed invalid invocation"
+        )
+
+
+def run_pycc_failure(
+    case: dict[str, Any],
+    skill_text: str,
+    pycc_binary: Path,
+    root: Path = ROOT,
+    runner: CommandRunner = run_command,
+) -> None:
+    if "makes pycc panic" not in case["prompt"]:
+        raise EvalError("pycc failure eval must start from a suspected panic")
+    expected = case["expected_output"]
+    for fragment in ("identifies the failing compiler stage", "without posting"):
+        if fragment not in expected:
+            raise EvalError("pycc failure eval has an incomplete expected output")
+    for contract in (
+        "smallest self-contained",
+        "parser, type-checker, lowering, codegen, linker",
+        "$pycc-feedback",
+    ):
+        if contract not in skill_text:
+            raise EvalError(f"pycc skill is missing {contract!r}")
+
+    with tempfile.TemporaryDirectory(prefix="pycc-alpha-failure-eval-") as directory:
+        temporary = Path(directory)
+        source = temporary / "parser-error.py"
+        source.write_text("def\n", encoding="utf-8")
+        executable_name = "parser-error.exe" if os.name == "nt" else "parser-error"
+        result = runner(
+            [
+                str(pycc_binary),
+                "build",
+                str(source),
+                "-o",
+                str(temporary / executable_name),
+            ],
+            root,
+        )
+        if (
+            result.returncode != 1
+            or result.stdout != b""
+            or b"error[L0001]" not in result.stderr
+        ):
+            raise EvalError(
+                "synthetic parser failure must return one L0001 diagnostic"
+            )
+
+
+def run_issue_research_case(
+    case: dict[str, Any],
+    skill_text: str,
+    root: Path = ROOT,
+    runner: CommandRunner = run_command,
+) -> None:
+    case_contract = LOCKED_RESEARCH_CASES.get(case["id"])
+    if case_contract is None:
+        raise EvalError(f"unknown i-have-an-issue eval {case['id']!r}")
+    prompt_fragment, expected_fragments = case_contract
+    if prompt_fragment not in case["prompt"]:
+        raise EvalError(
+            f"i-have-an-issue eval {case['id']} changed its reviewed prompt"
+        )
+    if not all(
+        fragment in case["expected_output"]
+        for fragment in expected_fragments
+    ):
+        raise EvalError(
+            f"i-have-an-issue eval {case['id']} has incomplete evidence criteria"
+        )
+    normalized = " ".join(skill_text.split())
+    for contract in (
+        "Prefer primary evidence",
+        "closed issue is not proof that a fix shipped",
+        "Cluster evidence by failure mechanism",
+        "remaining uncertainty",
+        "useful negative result",
+    ):
+        if contract not in normalized:
+            raise EvalError(f"i-have-an-issue skill is missing {contract!r}")
+
+    helper = (
+        root
+        / ".claude"
+        / "skills"
+        / "i-have-an-issue"
+        / "scripts"
+        / "search_github.py"
+    )
+    result = runner([sys.executable, str(helper), "--help"], root)
+    require_success(result, f"i-have-an-issue eval {case['id']} helper")
+
+
 def run_feedback_case(
     case: dict[str, Any],
     skill_text: str,
@@ -245,17 +395,26 @@ def run_evals(
 ) -> None:
     pycc_skill = canonical_skill(client, "pycc", root)
     pycc_cases = load_cases("pycc", root)
-    primary = next(
-        case
-        for case in pycc_cases
-        if case.get("runner") == "build-and-run-self-created-fixture"
-    )
-    run_pycc_success(primary, pycc_skill, pycc_binary, root, runner)
+    pycc_dispatch = {
+        "build-and-run-self-created-fixture": run_pycc_success,
+        "capture-parser-failure-without-write": run_pycc_failure,
+        "observe-current-check-fix-rejection": run_pycc_check_rejection,
+    }
+    for case in pycc_cases:
+        runner_name = case.get("runner")
+        handler = pycc_dispatch.get(runner_name)
+        if handler is None:
+            raise EvalError(f"unknown pycc runner {runner_name!r}")
+        handler(case, pycc_skill, pycc_binary, root, runner)
 
     feedback_skill = canonical_skill(client, "pycc-feedback", root)
     for case in load_cases("pycc-feedback", root):
         if "runner" in case:
             run_feedback_case(case, feedback_skill)
+
+    research_skill = canonical_skill(client, "i-have-an-issue", root)
+    for case in load_cases("i-have-an-issue", root):
+        run_issue_research_case(case, research_skill, root, runner)
 
 
 def main() -> int:

@@ -90,9 +90,13 @@ The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary
 `pycc` offline eval creates a self-contained temporary source file, invokes the
 freshly built compiler, executes the generated binary, and checks its exact
-output. The `pycc-feedback` cases exercise draft-only, private-source refusal,
-and context-free-consent invariants through a fail-closed safety oracle that
-cannot perform a network write. The unit suite covers build failure, wrong
+output. Its two failure scenarios also execute the current `check --fix`
+rejection and a self-created parser failure. The `pycc-feedback` cases exercise
+draft-only, private-source refusal, and context-free-consent invariants through
+a fail-closed safety oracle that cannot perform a network write. All four
+reviewed `i-have-an-issue` scenarios validate their distinct evidence criteria
+and execute the vendored search helper's local help path without a network
+request. The unit suite covers full scenario dispatch, build failure, wrong
 output, entrypoint drift, incomplete runner registration, and every consent
 predicate.
 
