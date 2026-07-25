@@ -184,9 +184,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   def run_perf_baseline_lookup(
-    run_ids: "",
+    run_rows: "",
     artifact_run_id: "",
-    api_failure: false
+    api_failure: false,
+    event_name: "pull_request",
+    pr_base_sha: "exact-base-sha",
+    push_before_sha: "exact-before-sha"
   )
     Dir.mktmpdir do |directory|
       root = Pathname(directory)
@@ -198,7 +201,15 @@ class RoadmapEvidenceCliTest < Minitest::Test
         fi
         case "$*" in
           *"/actions/workflows/ci.yml/runs"*)
-            printf '%b' "$STUB_RUN_IDS"
+            case "$*" in
+              *"head_sha=${STUB_EXPECTED_BASE_SHA}"*)
+                printf '%b' "$STUB_RUN_ROWS"
+                ;;
+              *)
+                echo "workflow-run query omitted the exact predecessor SHA" >&2
+                exit 44
+                ;;
+            esac
             ;;
           *"/actions/runs/${STUB_ARTIFACT_RUN_ID}/artifacts"*)
             printf 'artifact-id\n'
@@ -217,9 +228,14 @@ class RoadmapEvidenceCliTest < Minitest::Test
       env = {
         "PATH" => "#{root}:#{ENV.fetch('PATH')}",
         "GITHUB_OUTPUT" => output.to_s,
+        "GITHUB_EVENT_NAME" => event_name,
         "GITHUB_REPOSITORY" => "rotnov/pycc",
+        "PR_BASE_SHA" => pr_base_sha,
+        "PUSH_BEFORE_SHA" => push_before_sha,
         "STUB_GH_FAIL" => api_failure ? "1" : "0",
-        "STUB_RUN_IDS" => run_ids,
+        "STUB_EXPECTED_BASE_SHA" =>
+          event_name == "pull_request" ? pr_base_sha : push_before_sha,
+        "STUB_RUN_ROWS" => run_rows,
         "STUB_ARTIFACT_RUN_ID" => artifact_run_id
       }
       stdout, stderr, status = Open3.capture3(
@@ -973,7 +989,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_baseline_lookup_selects_the_newest_non_expired_main_artifact
     _stdout, stderr, status, output = run_perf_baseline_lookup(
-      run_ids: "300\\n200\\n",
+      run_rows: "300\\texact-base-sha\\n200\\texact-base-sha\\n",
       artifact_run_id: "300"
     )
 
@@ -983,7 +999,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_baseline_lookup_skips_a_run_without_a_non_expired_artifact
     _stdout, stderr, status, output = run_perf_baseline_lookup(
-      run_ids: "300\\n200\\n",
+      run_rows: "300\\texact-base-sha\\n200\\texact-base-sha\\n",
       artifact_run_id: "200"
     )
 
@@ -993,11 +1009,32 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_baseline_lookup_reports_no_artifact
     _stdout, stderr, status, output = run_perf_baseline_lookup(
-      run_ids: "300\\n200\\n"
+      run_rows: "300\\texact-base-sha\\n200\\texact-base-sha\\n"
     )
 
     assert status.success?, stderr
     assert_equal "found=false\n", output
+  end
+
+  def test_baseline_lookup_rejects_a_successful_run_for_an_older_main_sha
+    _stdout, stderr, status, output = run_perf_baseline_lookup(
+      run_rows: "300\\tolder-main-sha\\n200\\texact-base-sha\\n",
+      artifact_run_id: "300"
+    )
+
+    assert status.success?, stderr
+    assert_equal "found=false\n", output
+  end
+
+  def test_baseline_lookup_uses_the_push_predecessor_sha
+    _stdout, stderr, status, output = run_perf_baseline_lookup(
+      event_name: "push",
+      run_rows: "300\\texact-before-sha\\n",
+      artifact_run_id: "300"
+    )
+
+    assert status.success?, stderr
+    assert_equal "found=true\nrun_id=300\n", output
   end
 
   def test_rejects_split_gate_without_a_measurement_dependency

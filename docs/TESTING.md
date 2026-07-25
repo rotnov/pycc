@@ -120,12 +120,14 @@ checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
 then validates the downloaded measurement against the canonical baseline.
 Artifact and checkout actions use immutable reviewed pins.
 
-The baseline lifecycle is fail-closed and main-owned. The gate queries only
-successful `push` runs of `ci.yml` on `main`, then downloads the newest
-non-expired `frontend-perf-current` artifact from one of those runs by explicit
-run ID. It never restores an Actions cache, so a pull-request merge ref cannot
-shadow baseline provenance. The artifact is retained for 90 days and each
-successful main run refreshes it.
+The baseline lifecycle is fail-closed and main-owned. The gate queries only a
+successful `push` run of `ci.yml` on `main` whose `head_sha` is the exact PR
+base SHA (or the exact `before` SHA for a main push), verifies the returned
+`head_sha`, then downloads that run's non-expired `frontend-perf-current`
+artifact by explicit run ID. It never falls back to an older successful run and
+never restores an Actions cache, so neither overlapping main workflows nor a
+pull-request merge ref can weaken baseline provenance. The artifact is retained
+for 90 days and each successful main run refreshes it.
 
 The only missing-baseline exception is the one-time activation of the reviewed
 split workflow. The pull-request half is explicitly bound to PR #86 targeting

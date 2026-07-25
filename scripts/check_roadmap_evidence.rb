@@ -34,7 +34,7 @@ EVIDENCE_SECTIONS = {
   ]
 }.freeze
 PR4_SPLIT_PERF_CI_WORKFLOW_SHA256 =
-  "a4044d4a71a8b91e66be00caa876f75767ff64860b9475318390a02f3ca2e322"
+  "8edc932077fc235edecb99723450dc27022cbbfba4491eda05d6ff37167f48ce"
 TIER1_CI_WORKFLOW_SHA256S = [
   "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2",
   PR4_SPLIT_PERF_CI_WORKFLOW_SHA256
@@ -95,18 +95,40 @@ PERF_CHECKER_VERIFY_SCRIPT = <<~SHELL.strip
 SHELL
 PERF_BASELINE_LOOKUP_SCRIPT = <<~'SHELL'.strip
   set -euo pipefail
-  run_ids="$(
+  case "$GITHUB_EVENT_NAME" in
+    pull_request)
+      baseline_sha="$PR_BASE_SHA"
+      ;;
+    push)
+      baseline_sha="$PUSH_BEFORE_SHA"
+      ;;
+    *)
+      echo "cannot resolve a performance predecessor for event $GITHUB_EVENT_NAME" >&2
+      exit 1
+      ;;
+  esac
+  if [ -z "$baseline_sha" ] ||
+     [ "$baseline_sha" = "0000000000000000000000000000000000000000" ]; then
+    echo "cannot resolve the exact performance predecessor SHA" >&2
+    exit 1
+  fi
+
+  run_rows="$(
     gh api --method GET \
       -H "Accept: application/vnd.github+json" \
       -H "X-GitHub-Api-Version: 2022-11-28" \
       "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
       -f branch=main \
       -f event=push \
+      -f head_sha="$baseline_sha" \
       -f status=success \
       -f per_page=100 \
-      --jq '.workflow_runs[].id'
+      --jq '.workflow_runs[] | [.id, .head_sha] | @tsv'
   )"
-  for run_id in $run_ids; do
+  while IFS="$(printf '\t')" read -r run_id run_head_sha; do
+    if [ -z "$run_id" ] || [ "$run_head_sha" != "$baseline_sha" ]; then
+      continue
+    fi
     artifact_id="$(
       gh api --method GET \
         -H "Accept: application/vnd.github+json" \
@@ -121,7 +143,9 @@ PERF_BASELINE_LOOKUP_SCRIPT = <<~'SHELL'.strip
       printf 'found=true\nrun_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
       exit 0
     fi
-  done
+  done <<EOF
+  $run_rows
+  EOF
   printf 'found=false\n' >> "$GITHUB_OUTPUT"
 SHELL
 PERF_BASELINE_VALIDATION_SCRIPT_TEMPLATE = <<~'SHELL'.strip
@@ -241,7 +265,11 @@ SPLIT_PERF_GATE_STEPS = [
   {
     "name" => "Locate latest successful main baseline",
     "id" => "locate_baseline",
-    "env" => { "GH_TOKEN" => "${{ github.token }}" },
+    "env" => {
+      "GH_TOKEN" => "${{ github.token }}",
+      "PR_BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
+      "PUSH_BEFORE_SHA" => "${{ github.event.before }}"
+    },
     "run" => PERF_BASELINE_LOOKUP_SCRIPT
   },
   {
