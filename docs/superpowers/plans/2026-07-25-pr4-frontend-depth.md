@@ -2722,7 +2722,7 @@ git commit -m "test: add tests/diagnostics/ negative fixtures for T0001 and T000
 **Interfaces:**
 - Produces: a `criterion` benchmark measuring `pycc check`'s wall-clock time on a representative fixture, checked into CI, with the *first* recorded run establishing the baseline (nothing to compare against yet, per DELIVERY_PLAN.md's literal "every *subsequent* PR" wording) and every later PR's CI run failing if its own `pycc check` timing regresses >2% against the immediately preceding recorded baseline.
 
-- [ ] **Step 1: Add the `criterion` dependency**
+- [x] **Step 1: Add the `criterion` dependency**
 
 Run: `curl -sA "pycc-build/0.1" https://crates.io/api/v1/crates/criterion | python3 -c "import json,sys;print(json.load(sys.stdin)['crate']['newest_version'])"` and use whatever version comes back (verify, don't assume `0.5` or any other specific number from memory).
 
@@ -2739,7 +2739,7 @@ harness = false
 
 (If the root manifest doesn't currently have a `[package]`/`[[bin]]` section of its own — recall PR-1's plan explicitly deferred adding one until its own Task 8 — confirm it exists now, post PR-2/PR-3, before assuming this structure; `src/main.rs` already exists and is built as a binary today, so a `[package]` section must already exist somewhere. Run `grep -n "\[package\]\|\[\[bin\]\]" Cargo.toml` to locate it.)
 
-- [ ] **Step 2: Write the benchmark**
+- [x] **Step 2: Write the benchmark**
 
 Since `pycc check`'s actual logic lives in `src/main.rs`'s private `try_check` function, and a `benches/` file can't call a binary crate's private functions directly, the benchmark measures the same pipeline `try_check` calls, assembled directly from the public library crates it depends on (`pycc_parser`, `pycc_hir`, `pycc_types`) rather than shelling out to the compiled binary (spawning a subprocess would measure process-startup overhead, not the frontend's own work, and be far noisier run to run):
 
@@ -2777,12 +2777,12 @@ criterion_main!(benches);
 
 (Verify this exact `FIXTURE` string actually type-checks cleanly with zero diagnostics once Tasks 6-11 land — `fib`/`main` are both public, both fully annotated, using arithmetic/comparisons/if/for-range/recursion/assignment, exercising a real cross-section of this PR's new grammar without tripping any of its diagnostics, which would make the benchmark measure an early-exit error path instead of full frontend work.)
 
-- [ ] **Step 3: Run the benchmark locally to confirm it executes**
+- [x] **Step 3: Run the benchmark locally to confirm it executes**
 
 Run: `cargo bench --bench check_bench`
 Expected: completes, printing a criterion timing report (e.g. "time: [12.3 µs 12.5 µs 12.8 µs]" — exact numbers don't matter, only that it runs without erroring).
 
-- [ ] **Step 4: Add the CI job**
+- [x] **Step 4: Add the CI job**
 
 Add a new job to `.github/workflows/ci.yml` (after `ci-gate`, or wherever a new job reads best given the file's existing structure — check the file's current end before appending):
 
@@ -2833,12 +2833,12 @@ Add a new job to `.github/workflows/ci.yml` (after `ci-gate`, or wherever a new 
 
 (This cache-key/comparison design is a reasonable first cut, not a fully-proven CI pattern — `actions/cache@v4`'s exact semantics for a criterion-baseline workflow across PRs deserve a real CI round-trip to confirm before treating this step as load-bearing; if the comparison step doesn't actually fail the job on a >2% regression as written, that is a known follow-up, not a silent gap, since criterion's own `--baseline`/`--save-baseline` CLI flags don't themselves set a process exit code on regression — confirm this by reading `criterion`'s own CLI docs for the pinned version, and if it doesn't exit non-zero on regression, add a small script parsing criterion's JSON output (`target/criterion/*/estimates.json`) and comparing the two runs' mean estimates directly, failing with `exit 1` if the current run's mean exceeds the previous by >2%.)
 
-- [ ] **Step 5: Validate the new workflow YAML**
+- [x] **Step 5: Validate the new workflow YAML**
 
 Run: `ruby -ryaml -e "YAML.load_file('.github/workflows/ci.yml'); puts 'valid YAML'"` and `actionlint .github/workflows/ci.yml` and `ruby scripts/check_ci_permissions.rb`
 Expected: all three pass — the new job inherits the workflow's top-level `contents: read` permission (it only checks out and benchmarks, no elevated access needed, no `permissions:` override required).
 
-- [ ] **Step 6: Update `ci-gate`'s `needs:` list**
+- [x] **Step 6: Update `ci-gate`'s `needs:` list**
 
 `.github/workflows/ci.yml`'s `ci-gate` job (D-032) currently `needs: [build-test-coverage, native-build-test, cross-compile-build, cross-compile-verify]` — decide whether `frontend-perf-gate` should also gate merges (add it to `ci-gate`'s `needs:` and its `if:` condition's explicit checks) or stay informational-only for now (since its regression-detection mechanism is unproven per Step 4's caveat). Given the mechanism isn't yet verified to actually fail correctly, the conservative choice is: do **not** add it to `ci-gate` in this task — record that decision explicitly:
 
@@ -2856,12 +2856,12 @@ Note: this snippet's `D-038` label is a stale placeholder from when this plan wa
 
 Append this to `docs/DECISIONS.md` (table row + full section, same format as every other entry) as part of this task's commit.
 
-- [ ] **Step 7: Run the full workspace suite one more time**
+- [x] **Step 7: Run the full workspace suite one more time**
 
 Run: `cargo build --workspace && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS. `benches/check_bench.rs` is a `[[bench]]` target, not a `[[test]]` — confirm `cargo llvm-cov`'s denominator excludes it the same way it excludes `tests/` (check `cargo llvm-cov`'s own docs for whether `benches/` needs an explicit `--ignore-filename-regex` or is excluded by default; if it's *not* excluded by default and the benchmark file itself shows as uncovered, add a documented exemption entry to `docs/TESTING.md`'s exemption table for `benches/check_bench.rs` specifically, following D-014's existing whole-file-exemption mechanism).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add benches/check_bench.rs Cargo.toml .github/workflows/ci.yml docs/DECISIONS.md docs/TESTING.md
