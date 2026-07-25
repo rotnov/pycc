@@ -1,5 +1,5 @@
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{BinOpKind, HirExpr, HirItem, HirModule, HirStmt};
+use pycc_hir::{BinOpKind, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
 #[cfg(test)]
 use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
@@ -46,6 +46,14 @@ pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
         HirExpr::FloatLiteral(_) => Ok(Ty::Float),
         HirExpr::BoolLiteral(_) => Ok(Ty::Bool),
         HirExpr::StringLiteral(_) => Ok(Ty::Str),
+        HirExpr::FString(parts) => {
+            for part in parts {
+                if let FStringPart::Interpolation(expr) = part {
+                    infer_expr(env, expr)?; // any interpolatable type is allowed; Python str()-coerces at runtime
+                }
+            }
+            Ok(Ty::Str)
+        }
         HirExpr::Name(name) => env.lookup(name).ok_or_else(|| {
             Diagnostic::error(
                 "T0021",
@@ -376,6 +384,25 @@ mod tests {
             };
             assert_eq!(infer_expr(&env, &expr), Ok(Ty::Bool), "comparison {op:?} should type-check");
         }
+    }
+
+    #[test]
+    fn an_f_string_always_infers_str_regardless_of_interpolated_types() {
+        let env = Environment::new();
+        let expr = HirExpr::FString(vec![
+            FStringPart::Literal("n=".to_string()),
+            FStringPart::Interpolation(Box::new(HirExpr::IntLiteral(1))),
+        ]);
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
+    }
+
+    #[test]
+    fn an_f_string_still_type_checks_its_interpolated_expressions() {
+        let env = Environment::new();
+        let expr =
+            HirExpr::FString(vec![FStringPart::Interpolation(Box::new(HirExpr::Name("undefined".to_string())))]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
     }
 
     #[test]

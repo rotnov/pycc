@@ -53,6 +53,13 @@ pub enum HirExpr {
     Call { callee: String, args: Vec<HirExpr> },
     BinOp { op: BinOpKind, left: Box<HirExpr>, right: Box<HirExpr> },
     Compare { op: CmpOpKind, left: Box<HirExpr>, right: Box<HirExpr> },
+    FString(Vec<FStringPart>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FStringPart {
+    Literal(String),
+    Interpolation(Box<HirExpr>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -265,6 +272,27 @@ fn lower_expr(expr: &Expr) -> HirExpr {
         }
         Expr::BooleanLiteral(lit) => HirExpr::BoolLiteral(lit.value),
         Expr::StringLiteral(lit) => HirExpr::StringLiteral(lit.value.to_str().to_string()),
+        Expr::FString(fstring) => {
+            let parts = fstring
+                .value
+                .elements()
+                .map(|element| match element {
+                    pycc_ast::InterpolatedStringElement::Literal(lit) => {
+                        FStringPart::Literal(lit.value.to_string())
+                    }
+                    pycc_ast::InterpolatedStringElement::Interpolation(interp) => {
+                        if interp.conversion != pycc_ast::ConversionFlag::None {
+                            panic!("pycc_hir: f-string conversion flags (!r/!s/!a) are not supported yet");
+                        }
+                        if interp.format_spec.is_some() {
+                            panic!("pycc_hir: f-string format spec ({{x:...}}) is not supported yet");
+                        }
+                        FStringPart::Interpolation(Box::new(lower_expr(&interp.expression)))
+                    }
+                })
+                .collect();
+            HirExpr::FString(parts)
+        }
         Expr::Compare(cmp) => {
             if cmp.ops.len() != 1 {
                 panic!("pycc_hir: chained comparisons are not supported yet: {:?}", cmp.ops);
@@ -1005,6 +1033,49 @@ mod tests {
         let module = pycc_parser_test_helper::parse("def f() -> Any:\n    pass\n");
         let diag = lower_checked(&module).unwrap_err();
         assert_eq!(diag.code, "T0002");
+    }
+
+    #[test]
+    fn lowers_a_basic_f_string_with_one_interpolation() {
+        let module = pycc_parser_test_helper::parse("x = 1\ny = f\"value: {x}\"\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::FString(vec![
+                    FStringPart::Literal("value: ".to_string()),
+                    FStringPart::Interpolation(Box::new(HirExpr::Name("x".to_string()))),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_an_f_string_with_only_literal_parts() {
+        let module = pycc_parser_test_helper::parse("y = f\"no interpolation\"\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::FString(vec![FStringPart::Literal("no interpolation".to_string())]),
+            })]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "format spec")]
+    fn an_f_string_with_a_format_spec_is_not_supported_yet() {
+        let module = pycc_parser_test_helper::parse("x = 1.5\ny = f\"{x:.2f}\"\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "conversion")]
+    fn an_f_string_with_a_conversion_flag_is_not_supported_yet() {
+        let module = pycc_parser_test_helper::parse("x = 1\ny = f\"{x!r}\"\n");
+        lower_checked(&module).unwrap();
     }
 }
 
