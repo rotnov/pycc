@@ -1,6 +1,6 @@
 # pycc Website and Search Discoverability
 
-The public project website is a static, dependency-free landing page at
+The public project website is a static, dependency-free evidence hub rooted at
 <https://rotnov.github.io/pycc/>. Its source lives in `site/`; GitHub Pages
 publishes that directory through `.github/workflows/pages.yml`.
 
@@ -17,6 +17,20 @@ indexable explanation of pycc:
 - the project is pre-alpha, and design targets are not presented as released
   features.
 
+The canonical landing page links to three crawlable evidence pages:
+
+- `/status/` describes implemented behavior, enforced gates, remaining v0.1
+  scope, and the next planned delivery slice;
+- `/architecture/` separates the working compiler path and current crates from
+  the target typed-Python architecture;
+- `/ai-native/` documents the AI-author/human-manager boundary, operating loop,
+  safeguards, and public audit trail.
+
+These pages turn repository evidence into useful, internally linked source
+material for humans, conventional search engines, and retrieval systems. They
+must remain concise projections of the repository specifications, not a second
+independent source of product truth.
+
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile
 Python to a native binary”, but must not repeat phrases solely to manipulate
@@ -24,17 +38,20 @@ ranking.
 
 ## Search metadata contract
 
-`site/index.html` must provide:
+Every canonical HTML page must provide:
 
-- the canonical URL `https://rotnov.github.io/pycc/`;
-- a unique title and plain-language meta description;
+- a unique title, canonical URL, and plain-language meta description;
 - Open Graph and X card metadata;
-- the persistent Google Search Console verification token for the
-  `https://rotnov.github.io/pycc/` URL-prefix property;
-- a `WebPage` → `SoftwareSourceCode` JSON-LD graph whose descriptions match
-  the visible project and whose source entity links to the public repository;
 - page-level crawl permission with unlimited text, image, and video previews;
 - a sitemap reference.
+
+The landing page also carries the persistent Google Search Console verification
+token for the `https://rotnov.github.io/pycc/` URL-prefix property and a
+`WebPage` → `SoftwareSourceCode` JSON-LD graph whose descriptions match the
+visible project and whose source entity links to the public repository.
+Evidence pages carry a `WebPage` and two-level `BreadcrumbList`; each WebPage
+references the landing-page project entity instead of duplicating it.
+Structured data must match visible content and current status.
 
 Visible page copy must also state that AI agents create the entire project, the
 human role is management, and no project code is handwritten by a human. This
@@ -42,12 +59,14 @@ development-model claim is part of the public project identity, not hidden
 metadata.
 
 `site/robots.txt` and `site/sitemap.xml` must use the same canonical origin.
-The sitemap lists only canonical human-facing URLs and records `lastmod` when
-the main content, structured data, or important links materially change. The
-social preview is `site/og.png`. `scripts/check-site.sh` enforces these
-mechanical requirements locally and in the Pages workflow.
+The sitemap lists the landing page plus `/status/`, `/architecture/`, and
+`/ai-native/`; it records `lastmod` when main content, structured data, or
+important links materially change. The social preview is `site/og.png`.
+`scripts/check-site.sh` enforces these mechanical requirements locally and in
+the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
-site and rejects missing files or required metadata.
+site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
+or required metadata.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots
@@ -84,8 +103,8 @@ from the relevant providers:
 map for tools that choose to consume the emerging
 [llms.txt proposal](https://llmstxt.org/). It is not described as a ranking
 factor. `site/index.html.md` is the clean Markdown equivalent recommended by
-that proposal and must preserve the landing page's status and AI-authorship
-disclosures.
+that proposal. Both files link to the evidence pages and must preserve the
+landing page's status and AI-authorship disclosures.
 
 The sitemap carries the standards-based discovery signal. After a successful
 production deployment, `scripts/notify-indexnow.sh` submits the canonical URL
@@ -100,7 +119,9 @@ decisions, diagnostics, benchmarks once reproducible, and release notes—and on
 earning relevant references rather than manufacturing mentions, backlinks, or
 search activity. Search Console, Bing Webmaster Tools, referral traffic, and
 fixed query-position checks are the measurement surfaces; no position is
-guaranteed.
+guaranteed. Operational monitoring must distinguish sitemap submission,
+sitemap fetch/processing, URL indexing, impressions, clicks, and query position
+instead of treating any one of them as proof of the others.
 
 ## Publication
 
@@ -115,8 +136,9 @@ post-deployment job sends the best-effort IndexNow notification.
 
 The site deliberately has no package manager, runtime JavaScript dependency,
 analytics, cookies, or external font request. A small local script only powers
-the copy-to-clipboard control. Relative asset paths keep local previews and the
-`/pycc/` project-site base path working identically.
+the copy-to-clipboard control. Relative asset paths at both the root and
+one-directory evidence-page depth keep local previews and the `/pycc/`
+project-site base path working identically.
 
 When the website's claims change, update the root README and the relevant
 specification in the same patch. Search metadata must describe current or

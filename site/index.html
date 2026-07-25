@@ -59,6 +59,7 @@
             "name": "pycc — AOT compiler for typed Python to native binaries",
             "description": "pycc is a fully AI-created, human-managed pre-alpha project building an ahead-of-time compiler for typed Python 3.14 with Rust and LLVM.",
             "inLanguage": "en",
+            "dateModified": "2026-07-25",
             "mainEntity": {
               "@id": "https://rotnov.github.io/pycc/#project"
             }
@@ -104,10 +105,9 @@
         <span>pycc</span>
       </a>
       <nav class="site-nav" aria-label="Primary navigation">
-        <a href="#ai-built">AI-built</a>
-        <a href="#why">Why pycc</a>
-        <a href="#pipeline">Pipeline</a>
-        <a href="#status">Status</a>
+        <a href="status/">Status</a>
+        <a href="architecture/">Architecture</a>
+        <a href="ai-native/">AI experiment</a>
         <a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a>
       </nav>
     </header>
@@ -357,20 +357,20 @@
         </div>
 
         <div class="spec-grid">
-          <a href="https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md">
-            <span>Language contract</span>
-            <strong>Python standards matrix</strong>
-            <small>PEPs 3.0 → 3.14</small>
+          <a href="status/">
+            <span>Current evidence</span>
+            <strong>Implemented vs planned</strong>
+            <small>Commit-relative status</small>
           </a>
-          <a href="https://github.com/rotnov/pycc/blob/main/docs/ARCHITECTURE.md">
+          <a href="architecture/">
             <span>System design</span>
             <strong>Compiler architecture</strong>
-            <small>Pipeline, crates, platforms</small>
+            <small>Current and target pipeline</small>
           </a>
-          <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">
-            <span>Delivery</span>
-            <strong>Roadmap to v1.0</strong>
-            <small>Binary acceptance criteria</small>
+          <a href="ai-native/">
+            <span>Development model</span>
+            <strong>The AI-native experiment</strong>
+            <small>AI creates · human manages</small>
           </a>
         </div>
       </section>
@@ -396,9 +396,10 @@
       </a>
       <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
       <div>
+        <a href="status/">Status</a>
+        <a href="architecture/">Architecture</a>
         <a href="https://github.com/rotnov/pycc">GitHub</a>
         <a href="llms.txt">LLM guide</a>
-        <a href="https://github.com/rotnov/pycc/blob/main/LICENSE">MIT License</a>
       </div>
     </footer>
   </body>
