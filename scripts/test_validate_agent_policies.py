@@ -2201,6 +2201,55 @@ class AgentPolicyValidationTests(unittest.TestCase):
             [],
         )
 
+    def test_tracked_wrapper_options_reject_machine_local_paths(self) -> None:
+        target = "scripts/tracked-hook.sh"
+        for argument, expected in (
+            (
+                "--script=.ievo/hooks/capture.sh",
+                (
+                    "shared hook target must remain machine-local: "
+                    ".ievo/hooks/capture.sh"
+                ),
+            ),
+            (
+                "--script=/tmp/capture.sh",
+                "shared hook target must not be absolute: /tmp/capture.sh",
+            ),
+            (
+                "--script=~/.ievo/hooks/capture.sh",
+                (
+                    "shared hook target must not be home-relative: "
+                    "~/.ievo/hooks/capture.sh"
+                ),
+            ),
+            (
+                "--script=${CLAUDE_PROJECT_DIR}/.ievo/hooks/capture.sh",
+                (
+                    "shared hook target must remain machine-local: "
+                    ".ievo/hooks/capture.sh"
+                ),
+            ),
+        ):
+            with self.subTest(argument=argument):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": target,
+                                        "args": [argument],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, {target}),
+                    [expected],
+                )
+
     def test_inline_python_and_node_commands_are_rejected(self) -> None:
         for command, arguments, expected in [
             (
