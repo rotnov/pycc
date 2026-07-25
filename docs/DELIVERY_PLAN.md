@@ -77,7 +77,16 @@ Each row above absorbs one gap an automated repo audit found in the original ver
 
 ARCHITECTURE.md requires benchmarks in CI on every PR with a >2% frontend-regression merge block. This was originally scheduled to start immediately once PR-4 made the frontend non-trivially executable, deliberately not deferred to a single check in PR-6 (D-042/D-044): every subsequent PR would record a `pycc check` timing run and fail if it regressed >2% against the latest baseline published by a successful `main` run, with pull-request code running only in `frontend-perf-measure` and the separate hash-verified `frontend-perf-gate` consuming its Criterion JSON as untrusted data, restoring the fresh main-only cache namespace but never publishing to it so repeated heads cannot ratchet or shadow the canonical comparison (D-046).
 
-**Superseded by D-047:** that early-start timeline is overridden. While landing PR-4, `scripts/check_roadmap_evidence.rb`'s CI-trust-anchor validation for this exact gate came under active, independent, concurrent development by another automated actor, and reconciling PR-4's own gate design against its evolving structural expectations failed to converge across multiple staged-digest attempts. Rather than keep blocking PR-4's actual frontend-depth deliverable on unrelated, moving CI-trust-anchor plumbing, the whole performance-gate feature (measurement job, hash-verified gate job, its structural lifecycle validator, D-046's cache-scoping fix) is deferred as a unit to PR-6, its originally-planned fallback per this same section's earlier design discussion. This is a real schedule slip, not a relocation of already-working code: PR-5 loses the early per-PR frontend-regression detection this section originally required, until PR-6 lands it. It still ships within v0.1, before release. This is deliberately lightweight and distinct from the full pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which stays out of scope until v0.2 as already planned.
+**D-047 was a temporary deferral, superseded by D-048 after PR-4 merged.**
+The competing trust-anchor work no longer blocks the compiler deliverable, and
+the reviewed replacement no longer relies on ref-scoped cache fallback. The
+gate is now delivered through a staged trust digest, an exact reviewed
+activation head, exact-predecessor artifacts from successful `main` pushes,
+and an immediate post-seed cleanup. The staging commit does not claim the gate
+is active; the following activation and cleanup changes complete D-048 before
+PR-5 work proceeds. This remains deliberately lightweight and distinct from
+the full pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer
+7), which stays out of scope until v0.2.
 
 ## Autonomy policy ("no questions" mechanics)
 

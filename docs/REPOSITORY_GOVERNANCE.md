@@ -17,8 +17,14 @@ enforce the normal delivery path.
   `os`/`target` entry changes. D-044's untrusted `frontend-perf-measure` job
   and isolated `frontend-perf-gate`, which make a measured >2% regression
   merge-blocking without executing PR-head comparator code, join this fan-in
-  once they land in PR-6 rather than in the PR that introduced this document
-  (D-047 overrides D-042/D-044's original early-start timeline). The
+  through D-048's staged exact-head activation. D-048 supersedes D-047's
+  temporary PR-6 deferral and replaces D-046's ref-scoped cache transport with
+  exact-predecessor artifacts from successful `main` runs. The staging change
+  authorizes both the activation and bootstrap-free steady-state workflow
+  digests but does not activate those jobs; the following activation must use
+  the final reviewed head recorded in `PERF_ACTIVATION_HEAD`, and the
+  variable/bootstrap/activation digest must be removed after the first main
+  artifact while the steady-state digest remains. The
   standalone `agent-policy` job provides faster feedback until its exact
   context has run successfully on `main` and is added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
@@ -27,6 +33,40 @@ enforce the normal delivery path.
   second human maintainer is available.
 - All review conversations must be resolved.
 - Administrators are included; force pushes and branch deletion are disabled.
+
+### Performance activation trust anchor (D-048)
+
+`PERF_ACTIVATION_HEAD` is a one-shot repository Actions variable, not standing
+configuration. Only a repository administrator may set or delete it. The
+activation sequence is fail-closed:
+
+1. Merge the staging-policy PR while `ci.yml` is still the pre-split workflow,
+   fetch the resulting `main`, and record that exact base commit.
+2. From that base, create and review the workflow-only activation commit. Run
+   the exact checker, its mutation tests, `actionlint`, and independent deep
+   review before treating the head as final. Its `ci.yml` must be byte-identical
+   to `tests/fixtures/d48-activation-ci.yml`.
+3. Confirm the variable is absent, set it to the final 40-hex activation head,
+   read it back through the Actions Variables API, and record the base SHA,
+   head SHA, setter, timestamp, and read-back value in the activation PR
+   description. Do not push another commit after this mutation.
+4. If `main` advances or the activation head must change, close the activation
+   attempt, delete and verify removal of the variable, refresh from the new
+   `main`, re-review the new final head, and repeat the set/read-back audit.
+   Merely changing the variable underneath an open reviewed head is forbidden.
+5. After the activation merge, require the successful `main` `ci.yml` run and
+   its non-expired `frontend-perf-current` artifact for that exact merge
+   commit. A failed or cancelled attempt may be rerun while that exact commit
+   remains the live `main` head; the event `after`, checkout, live-main, and
+   pre-split predecessor checks still bind every retry to the same activation
+   transition. Then delete the variable, verify that it is absent, and record
+   the deletion evidence in the cleanup PR that replaces `ci.yml`
+   byte-for-byte from `tests/fixtures/d48-steady-ci.yml` and removes every
+   bootstrap path.
+
+The SHA is public and is not a credential. Its administrative mutability is the
+reason the lifecycle requires explicit before/set/read-back/delete evidence and
+immediate cleanup.
 
 When a new check is introduced, first merge and observe it successfully on `main`,
 then add its exact reported context to branch protection. Never require a guessed or
