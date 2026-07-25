@@ -16,14 +16,50 @@ fn main() -> ExitCode {
             println!("pycc 0.1.0 (rustc 1.97.1, LLVM 22.1.1)");
             ExitCode::SUCCESS
         }
-        Command::Check { .. }
-        | Command::Test
-        | Command::Explain { .. }
-        | Command::Init { .. }
-        | Command::Clean => {
+        Command::Check { path, error_format } => {
+            match try_check(path.as_deref().unwrap_or("."), &error_format) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(code) => code,
+            }
+        }
+        Command::Test | Command::Explain { .. } | Command::Init { .. } | Command::Clean => {
             eprintln!("pycc: this subcommand is not yet implemented");
             ExitCode::from(2)
         }
+    }
+}
+
+/// `pycc check`: parse + HIR-lowering + type-checking only, no codegen --
+/// CLI_SPEC.md's contract for this subcommand (ruff-fast, no codegen).
+/// `error_format`: "human" (default) or "json", matching CLI_SPEC.md's
+/// `--error-format` flag. Any diagnostic is printed to stdout and reported
+/// as exit code 1; a missing/unreadable file is a clean exit-2 error (same
+/// convention as `try_build`).
+fn try_check(path: &str, error_format: &str) -> Result<(), ExitCode> {
+    let source = std::fs::read_to_string(path).map_err(|e| {
+        eprintln!("error: could not read `{path}`: {e}");
+        ExitCode::from(2)
+    })?;
+    let report = |diag: pycc_diag::Diagnostic| -> ExitCode {
+        let rendered = if error_format == "json" {
+            pycc_diag::render_json(&diag, path, &source)
+        } else {
+            pycc_diag::render_human(&diag, path, &source)
+        };
+        println!("{rendered}");
+        ExitCode::from(1)
+    };
+    let module = match pycc_parser::parse(&source) {
+        Ok(m) => m,
+        Err(diag) => return Err(report(diag)),
+    };
+    let hir = match pycc_hir::lower_checked(&module) {
+        Ok(h) => h,
+        Err(diag) => return Err(report(diag)),
+    };
+    match pycc_types::check(&hir) {
+        Ok(()) => Ok(()),
+        Err(diag) => Err(report(diag)),
     }
 }
 

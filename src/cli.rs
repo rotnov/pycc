@@ -24,6 +24,9 @@ pub enum Command {
     },
     Check {
         path: Option<String>,
+        /// CLI_SPEC.md's diagnostic-output contract: "human" (default) or "json".
+        #[arg(long, default_value = "human")]
+        error_format: String,
     },
     Test,
     Explain {

@@ -356,6 +356,83 @@ fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
 }
 
 #[test]
+fn check_subcommand_reports_no_issues_on_valid_code() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_ok_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "ok.py", "def main() -> None:\n    print(42)\n\nmain()\n");
+
+    let output = Command::new(pycc_bin()).args(["check", src.to_str().unwrap()]).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn check_subcommand_reports_t0001_on_an_unannotated_public_function() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_t0001_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "def add(a, b):\n    return a + b\n");
+
+    let output = Command::new(pycc_bin()).args(["check", src.to_str().unwrap()]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0001"));
+}
+
+#[test]
+fn check_subcommand_supports_json_error_format() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_json_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "def add(a, b):\n    return a + b\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap(), "--error-format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["code"], "T0001");
+}
+
+#[test]
+fn check_subcommand_reports_a_clean_error_on_a_missing_file() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_missing_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let missing_path = dir.join("does_not_exist.py");
+
+    let output =
+        Command::new(pycc_bin()).args(["check", missing_path.to_str().unwrap()]).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("could not read"));
+}
+
+#[test]
+fn check_subcommand_reports_a_syntax_error() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_syntax_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "def main(:\n");
+
+    let output = Command::new(pycc_bin()).args(["check", src.to_str().unwrap()]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("L0001"));
+}
+
+#[test]
+fn check_subcommand_reports_a_type_error() {
+    // Distinct from the T0001/T0002 cases above -- those are raised during
+    // pycc_hir::lower_checked itself. `x = undefined` parses and lowers
+    // cleanly; the undefined-name error only surfaces from
+    // pycc_types::check's own inference pass, exercising try_check's third
+    // (and otherwise untested) diagnostic-producing stage.
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_typeerr_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "bad.py", "x = undefined\n");
+
+    let output = Command::new(pycc_bin()).args(["check", src.to_str().unwrap()]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0021"));
+}
+
+#[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

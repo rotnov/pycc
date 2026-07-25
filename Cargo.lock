@@ -536,10 +536,12 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "pycc_codegen",
+ "pycc_diag",
  "pycc_hir",
  "pycc_mir",
  "pycc_parser",
  "pycc_types",
+ "serde_json",
 ]
 
 [[package]]
