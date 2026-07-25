@@ -26,7 +26,7 @@ Last reviewed on 2026-07-25. This section describes the repository tree in the c
 - [ ] `pycc check` processes 1k LOC in under 50 ms.
 - [ ] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.
 - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
-- [ ] The 100% line and region coverage gate is required and green for the current slice.
+- [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
 
 The next delivery slices remain the sequence defined in [DELIVERY_PLAN.md](./DELIVERY_PLAN.md): Tier-1 CI and cross-compilation, frontend depth with real strict typing and the performance gate, full v0.1 codegen/runtime breadth, the conformance testkit and named demos, then the final v0.1 acceptance pass.
 
