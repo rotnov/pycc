@@ -185,7 +185,8 @@ Branch protection is strict and requires `ci-gate` and `audit`, bound to the
 GitHub Actions app. `ci-gate` (D-032) is a single stable-named job in
 `ci.yml` that fans in every job in that workflow (`build-test-coverage`, all
 four `native-build-test` Tier-1 legs, `cross-compile-build`,
-`cross-compile-verify`, and the D-044 `frontend-perf-gate`) so branch
+`cross-compile-verify`, D-046's untrusted `frontend-perf-measure`, and the
+isolated D-044/D-046 `frontend-perf-gate`) so branch
 protection enforces the whole Tier-1 matrix, hard coverage invariant, and
 >2% frontend-regression block through one required-check name that survives
 matrix edits, rather than naming each matrix leg directly (whose
@@ -200,6 +201,16 @@ check they had no way to satisfy. Removing either required check, disabling
 strict mode, accepting an `audit` context from another app, or dropping a
 job from `ci-gate`'s `needs:` list is a policy regression; all later policy
 changes are evaluated by the trusted checker from their base revision.
+
+Per D-046, `frontend-perf-measure` is the only performance job that executes
+pull-request compiler/build code, and it exports only Criterion
+`estimates.json`. `frontend-perf-gate` sparse-checks out the comparator and its
+tests, verifies their reviewed SHA-256 digests before execution, and treats the
+downloaded measurement as untrusted data. The gate restores only the fresh
+`frontend-perf-main-v1-` namespace. It promotes and saves a new canonical
+baseline only on a successful `push` to `refs/heads/main`; pull-request
+merge-ref caches from the superseded namespace cannot shadow the merged
+baseline for later heads of the same PR.
 
 ## Code coverage (D-014)
 

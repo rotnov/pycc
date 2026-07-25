@@ -322,24 +322,13 @@ jobs:
   # leave an old, now-nonexistent name required forever (permanently
   # unsatisfiable) while the new leg goes unenforced. This job's own name
   # never changes regardless of matrix edits.
-  # Performance gate (DELIVERY_PLAN.md's Performance gate section): records a
-  # `pycc check` frontend timing run on every PR and fails when it regresses
-  # >2% against the most recent prior run this job itself cached. Criterion
-  # itself does not set a failing exit code on a detected regression --
-  # verified directly against criterion 0.8.2's source, its only
-  # `std::process::exit(1)` calls are for CLI-argument errors, not for a
-  # `ComparisonResult::Regressed` report -- so scripts/check_perf_regression.rb
-  # (unit-tested locally for both the regressed and within-threshold exit
-  # paths) is what actually enforces the threshold. Runs on the same macOS
-  # runner as the coverage gate for a stable, single-machine timing baseline
-  # -- comparing across different runner hardware would be noise, not signal.
-  #
-  # Required by ci-gate (D-044): once a previous baseline is available, a
-  # measured regression over 2% fails this job and therefore blocks merge.
-  # The first run has no comparison target and establishes the baseline;
-  # that bootstrap case is explicitly permitted by DELIVERY_PLAN.md.
-  frontend-perf-gate:
+  # The measurement job executes pull-request code and is therefore
+  # untrusted. It exports only Criterion's estimates JSON as data. The
+  # separate gate job never executes compiler/build code from the PR.
+  frontend-perf-measure:
     runs-on: macos-14
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -354,39 +343,84 @@ jobs:
       - name: Export LLVM_SYS_221_PREFIX
         run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
 
-      - name: Restore previous frontend-perf baseline
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: target/criterion/pycc_check_frontend_fixture/previous
-          key: frontend-perf-baseline-${{ github.run_id }}
-          restore-keys: frontend-perf-baseline-
-
       - name: Run frontend benchmark
         run: cargo bench --bench check_bench -- --save-baseline current
 
-      - name: Test perf regression checker
+      - name: Upload current frontend timing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-perf-current
+          path: target/criterion/pycc_check_frontend_fixture/current/estimates.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Required by ci-gate (D-044/D-046). This job consumes the measurement only
+  # as JSON data, verifies immutable hashes for the reviewed comparator and
+  # its tests before executing them, and restores from a namespace that no
+  # earlier PR-local run populated. PRs never publish into that namespace;
+  # only a successful push to main advances the canonical baseline.
+  frontend-perf-gate:
+    needs: frontend-perf-measure
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - name: Check out only the reviewed performance checker
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/check_perf_regression.rb
+            scripts/test_check_perf_regression.rb
+          sparse-checkout-cone-mode: false
+
+      - name: Verify reviewed performance checker
+        run: |
+          printf '%s  %s\n' \
+            ae52a100b8e2d0c8a7a85e73dc1233c5dff7c6d1dc5b1a55704419c2260d0459 \
+            scripts/check_perf_regression.rb \
+            db27692e03fbfd930fbce5a935b47a51810233039641f765e6d3bc52e69f00ce \
+            scripts/test_check_perf_regression.rb |
+            shasum -a 256 --check
+
+      - name: Test reviewed performance checker
         run: ruby scripts/test_check_perf_regression.rb
 
-      - name: Compare against previous baseline (if one was restored)
+      - name: Restore canonical main frontend-perf baseline
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/criterion/pycc_check_frontend_fixture/previous
+          key: frontend-perf-main-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: frontend-perf-main-v1-
+
+      - name: Download current frontend timing
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: frontend-perf-current
+          path: target/criterion/pycc_check_frontend_fixture/current
+
+      - name: Compare against canonical main baseline
         run: |
           if [ -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
             ruby scripts/check_perf_regression.rb \
               target/criterion/pycc_check_frontend_fixture/current/estimates.json \
               target/criterion/pycc_check_frontend_fixture/previous/estimates.json
           else
-            echo "no previous baseline cached yet -- this run establishes it"
+            echo "no canonical main baseline exists yet -- a successful main push will establish it"
           fi
 
-      - name: Save this run's timing as the next run's baseline
+      - name: Promote successful main timing
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           rm -rf target/criterion/pycc_check_frontend_fixture/previous
           cp -r target/criterion/pycc_check_frontend_fixture/current target/criterion/pycc_check_frontend_fixture/previous
 
-      - name: Cache this run's baseline
+      - name: Publish canonical main frontend-perf baseline
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/criterion/pycc_check_frontend_fixture/previous
-          key: frontend-perf-baseline-${{ github.run_id }}
+          key: frontend-perf-main-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
   ci-gate:
     needs:
@@ -394,6 +428,7 @@ jobs:
       - native-build-test
       - cross-compile-build
       - cross-compile-verify
+      - frontend-perf-measure
       - frontend-perf-gate
     if: always()
     runs-on: ubuntu-latest
@@ -417,6 +452,7 @@ jobs:
           needs.native-build-test.result != 'success' ||
           needs.cross-compile-build.result != 'success' ||
           needs.cross-compile-verify.result != 'success' ||
+          needs.frontend-perf-measure.result != 'success' ||
           needs.frontend-perf-gate.result != 'success'
         run: |
           echo "one or more required jobs did not succeed:"

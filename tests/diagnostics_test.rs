@@ -31,8 +31,7 @@ fn assert_diagnostic_matches_fixture(fixture_stem: &str) {
         .unwrap();
     let actual = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
-        actual.trim_end(),
-        expected.trim_end(),
+        actual, expected,
         "diagnostic output for {fixture_stem} did not match its .expected.txt fixture"
     );
     assert_eq!(
@@ -65,4 +64,9 @@ fn d0022_missing_return() {
 #[test]
 fn d0023_incompatible_assignment() {
     assert_diagnostic_matches_fixture("d0023_incompatible_assignment");
+}
+
+#[test]
+fn d0024_return_outside_function() {
+    assert_diagnostic_matches_fixture("d0024_return_outside_function");
 }

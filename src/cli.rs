@@ -1,4 +1,10 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ErrorFormat {
+    Human,
+    Json,
+}
 
 #[derive(Parser)]
 #[command(name = "pycc")]
@@ -25,8 +31,8 @@ pub enum Command {
     Check {
         path: Option<String>,
         /// CLI_SPEC.md's diagnostic-output contract: "human" (default) or "json".
-        #[arg(long, default_value = "human")]
-        error_format: String,
+        #[arg(long, value_enum, default_value = "human")]
+        error_format: ErrorFormat,
     },
     Test,
     Explain {

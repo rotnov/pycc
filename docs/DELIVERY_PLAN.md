@@ -44,7 +44,7 @@ Only macOS is locally verifiable. Linux x64/arm64 and Windows MSVC exist only vi
 
 Not all 11 crates in [ARCHITECTURE.md](./ARCHITECTURE.md) are needed on day one.
 
-**Built now:** `pycc` (CLI/driver), `pycc_parser`/`pycc_ast` (thin wrapper over vendored `ruff_python_parser`), `pycc_hir`, `pycc_types` (currently a passthrough stub; PR-4 adds T0001 strictness and local inference over the v0.1 type subset), `pycc_mir`, `pycc_codegen` (LLVM via `inkwell`), `pycc_rt` (minimal runtime), `pycc_diag`.
+**Built now:** `pycc` (CLI/driver), `pycc_parser`/`pycc_ast` (thin wrapper over vendored `ruff_python_parser`), `pycc_hir`, `pycc_types` (strict public annotations plus monomorphic local/private-helper inference over the v0.1 primitive subset), `pycc_mir`, `pycc_codegen` (LLVM via `inkwell`), `pycc_rt` (minimal runtime), `pycc_diag`.
 
 **Deliberately deferred:** `pycc_own` (ownership/escape analysis is a v0.5 item — semantics-preserving, perf-only, so v0.1 just uses RC/heap without ownership inference), `pycc_std` (real importable modules start v0.2; the Tier-0 builtins v0.1 needs — `print`, `range`, etc. — live as intrinsics directly in `pycc_rt`/`pycc_codegen`), `pycc_lexer` (D-017 — the vendored parser bundles lexing internally, nothing consumes a standalone token stream yet), `pycc_testkit` (D-018 — no PEP conformance matrix exists yet for a real harness to check against; `tests/slice0.rs` covers PR-2's two named fixtures ad hoc in the meantime).
 
@@ -75,7 +75,7 @@ Each row above absorbs one gap an automated repo audit found in the original ver
 
 ### Performance gate (resolves #12)
 
-ARCHITECTURE.md requires benchmarks in CI on every PR with a >2% frontend-regression merge block, starting immediately — not deferred to a single check in PR-6. Once PR-4 makes the frontend non-trivially executable, every subsequent PR records a `pycc check` timing run (criterion-style, checked into CI history) and fails if it regresses >2% against the previous PR's baseline. This is deliberately lightweight and distinct from the full pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which stays out of scope until v0.2 as already planned.
+ARCHITECTURE.md requires benchmarks in CI on every PR with a >2% frontend-regression merge block, starting immediately — not deferred to a single check in PR-6. Once PR-4 makes the frontend non-trivially executable, every subsequent PR records a `pycc check` timing run and fails if it regresses >2% against the latest baseline published by a successful `main` run. Pull-request code runs only in `frontend-perf-measure`; the separate hash-verified `frontend-perf-gate` consumes its Criterion JSON as untrusted data. PR runs restore the fresh main-only cache namespace but never publish to it, so repeated heads cannot ratchet or shadow the canonical comparison (D-046). This is deliberately lightweight and distinct from the full pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which stays out of scope until v0.2 as already planned.
 
 ## Autonomy policy ("no questions" mechanics)
 

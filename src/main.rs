@@ -1,7 +1,7 @@
 mod cli;
 
 use clap::Parser;
-use cli::{Cli, Command};
+use cli::{Cli, Command, ErrorFormat};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -17,7 +17,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Check { path, error_format } => {
-            match try_check(path.as_deref().unwrap_or("."), &error_format) {
+            match try_check(path.as_deref().unwrap_or("."), error_format) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(code) => code,
             }
@@ -35,18 +35,16 @@ fn main() -> ExitCode {
 /// `--error-format` flag. Any diagnostic is printed to stdout and reported
 /// as exit code 1; a missing/unreadable file is a clean exit-2 error (same
 /// convention as `try_build`).
-fn try_check(path: &str, error_format: &str) -> Result<(), ExitCode> {
+fn try_check(path: &str, error_format: ErrorFormat) -> Result<(), ExitCode> {
     let source = std::fs::read_to_string(path).map_err(|e| {
         eprintln!("error: could not read `{path}`: {e}");
         ExitCode::from(2)
     })?;
     let report = |diag: pycc_diag::Diagnostic| -> ExitCode {
-        let rendered = if error_format == "json" {
-            pycc_diag::render_json(&diag, path, &source)
-        } else {
-            pycc_diag::render_human(&diag, path, &source)
-        };
-        println!("{rendered}");
+        match error_format {
+            ErrorFormat::Human => print!("{}", pycc_diag::render_human(&diag, path, &source)),
+            ErrorFormat::Json => println!("{}", pycc_diag::render_json(&diag, path, &source)),
+        }
         ExitCode::from(1)
     };
     let module = match pycc_parser::parse(&source) {
@@ -84,11 +82,11 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         eprintln!("error[{}]: {}", diag.code, diag.message);
         ExitCode::from(1)
     })?;
-    pycc_types::check(&hir).map_err(|diag| {
+    let typed_hir = pycc_types::check_and_resolve(&hir).map_err(|diag| {
         eprintln!("error[{}]: {}", diag.code, diag.message);
         ExitCode::from(1)
     })?;
-    let mir = pycc_mir::build(&hir);
+    let mir = pycc_mir::build(&typed_hir);
 
     let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
     pycc_codegen::compile_to_object(&mir, &obj_path, target).map_err(|e| {

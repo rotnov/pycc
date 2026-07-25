@@ -397,7 +397,7 @@ fn check_subcommand_reports_no_issues_on_valid_code() {
     let src = write_fixture(
         &dir,
         "ok.py",
-        "def main() -> None:\n    print(42)\n\nmain()\n",
+        "def main() -> None:\n    print(42)\n\n1 < 2\nmain()\n",
     );
 
     let output = Command::new(pycc_bin())
@@ -430,6 +430,98 @@ fn check_subcommand_infers_a_private_helper_signature() {
 }
 
 #[test]
+fn check_subcommand_rejects_conflicting_private_helper_constraints() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_private_conflict_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "private_conflict.py",
+        "def _callee(target):\n    return target\n\ndef _caller(source):\n    return _callee(source)\n\n_callee(1)\n_caller(\"wrong\")\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0021"));
+}
+
+#[test]
+fn check_subcommand_propagates_an_annotated_binary_result() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_private_binop_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "private_binop.py",
+        "def _inc_left(value) -> int:\n    return value + 1\n\ndef _inc_right(value) -> int:\n    return 1 + value\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn check_subcommand_rejects_true_division_with_an_int_result_annotation() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_check_private_div_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "private_div.py",
+        "def _ratio(value) -> int:\n    return value / 2\n\n_ratio(4)\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0021"));
+}
+
+#[test]
+fn check_subcommand_rejects_known_string_operands_for_an_int_result() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_private_string_binop_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (name, source) in [
+        (
+            "string_left.py",
+            "def _bad(value) -> int:\n    return \"wrong\" + value\n",
+        ),
+        (
+            "string_right.py",
+            "def _bad(value) -> int:\n    return value + \"wrong\"\n",
+        ),
+    ] {
+        let src = write_fixture(&dir, name, source);
+        let output = Command::new(pycc_bin())
+            .args(["check", src.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("T0021"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn check_subcommand_reports_t0001_on_an_unannotated_public_function() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_t0001_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -457,6 +549,134 @@ fn check_subcommand_supports_json_error_format() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(parsed["code"], "T0001");
+}
+
+#[test]
+fn check_subcommand_rejects_an_unknown_error_format() {
+    let output = Command::new(pycc_bin())
+        .args(["check", "unused.py", "--error-format", "xml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value 'xml'"));
+    assert!(stderr.contains("[possible values: human, json]"));
+}
+
+#[test]
+fn direct_type_api_rejects_a_for_target_representation_change() {
+    let function = pycc_hir::HirItem::Function {
+        name: "loop_over".to_string(),
+        params: vec![("value".to_string(), pycc_hir::Ty::Str)],
+        return_ty: pycc_hir::Ty::None,
+        body: vec![pycc_hir::HirStmt::ForRange {
+            var: "value".to_string(),
+            start: pycc_hir::HirExpr::IntLiteral(0),
+            stop: pycc_hir::HirExpr::IntLiteral(3),
+            step: pycc_hir::HirExpr::IntLiteral(1),
+            body: vec![],
+        }],
+    };
+    assert_eq!(
+        pycc_types::check_function(&function).unwrap_err().code,
+        "T0023"
+    );
+}
+
+#[test]
+fn module_type_api_rejects_a_for_target_representation_change() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "loop_over".to_string(),
+            params: vec![("value".to_string(), pycc_hir::Ty::Str)],
+            return_ty: pycc_hir::Ty::None,
+            body: vec![pycc_hir::HirStmt::ForRange {
+                var: "value".to_string(),
+                start: pycc_hir::HirExpr::IntLiteral(0),
+                stop: pycc_hir::HirExpr::IntLiteral(3),
+                step: pycc_hir::HirExpr::IntLiteral(1),
+                body: vec![],
+            }],
+        }],
+    };
+    assert_eq!(pycc_types::check(&hir).unwrap_err().code, "T0023");
+}
+
+#[test]
+fn direct_type_api_rejects_an_unconstrained_private_parameter() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "_unused".to_string(),
+            params: vec![("value".to_string(), pycc_hir::Ty::Infer)],
+            return_ty: pycc_hir::Ty::None,
+            body: vec![],
+        }],
+    };
+    assert_eq!(
+        pycc_types::check_and_resolve(&hir).unwrap_err().code,
+        "T0021"
+    );
+}
+
+#[test]
+fn direct_type_api_rejects_an_unconstrained_private_return() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "_unknown".to_string(),
+            params: vec![],
+            return_ty: pycc_hir::Ty::Infer,
+            body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::Name(
+                "missing".to_string(),
+            )))],
+        }],
+    };
+    let err = pycc_types::check_and_resolve(&hir).unwrap_err();
+    assert_eq!(err.code, "T0021");
+    assert!(err.message.contains("return type"));
+}
+
+#[test]
+fn direct_type_api_propagates_an_annotated_binary_result() {
+    let hir = pycc_hir::HirModule {
+        items: vec![pycc_hir::HirItem::Function {
+            name: "_inc".to_string(),
+            params: vec![("value".to_string(), pycc_hir::Ty::Infer)],
+            return_ty: pycc_hir::Ty::Int,
+            body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::BinOp {
+                op: pycc_hir::BinOpKind::Add,
+                left: Box::new(pycc_hir::HirExpr::Name("value".to_string())),
+                right: Box::new(pycc_hir::HirExpr::IntLiteral(1)),
+            }))],
+        }],
+    };
+    assert!(pycc_types::check_and_resolve(&hir).is_ok());
+}
+
+#[test]
+fn direct_type_api_rejects_incompatible_resolved_binary_operands() {
+    let hir = pycc_hir::HirModule {
+        items: vec![
+            pycc_hir::HirItem::Function {
+                name: "_bad_add".to_string(),
+                params: vec![("value".to_string(), pycc_hir::Ty::Infer)],
+                return_ty: pycc_hir::Ty::Infer,
+                body: vec![pycc_hir::HirStmt::Return(Some(pycc_hir::HirExpr::BinOp {
+                    op: pycc_hir::BinOpKind::Add,
+                    left: Box::new(pycc_hir::HirExpr::Name("value".to_string())),
+                    right: Box::new(pycc_hir::HirExpr::StringLiteral("wrong".to_string())),
+                }))],
+            },
+            pycc_hir::HirItem::TopLevelStmt(pycc_hir::HirStmt::ExprStmt(pycc_hir::HirExpr::Call {
+                callee: "_bad_add".to_string(),
+                args: vec![pycc_hir::HirExpr::IntLiteral(1)],
+            })),
+        ],
+    };
+    assert_eq!(
+        pycc_types::check_and_resolve(&hir).unwrap_err().code,
+        "T0021"
+    );
 }
 
 #[test]
@@ -514,11 +734,15 @@ fn a_top_level_return_is_a_clean_error_not_a_panic() {
     // contract. `ruff_python_parser` parses this fine -- CPython itself only
     // rejects it in a later compile pass, not the grammar -- so this is
     // reachable from ordinary (if unusual) CLI input.
-    let dir = std::env::temp_dir().join(format!("pycc_e2e_top_level_return_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_top_level_return_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "bad.py", "return\n");
 
-    let output = Command::new(pycc_bin()).args(["check", src.to_str().unwrap()]).output().unwrap();
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout).contains("T0024"));
 }

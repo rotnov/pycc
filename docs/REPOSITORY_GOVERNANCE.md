@@ -12,8 +12,9 @@ enforce the normal delivery path.
   including `build-test-coverage` (which runs the agent-policy tests and
   clean-clone validator) and the four-target `native-build-test`/
   `cross-compile-build`/`cross-compile-verify` Tier-1 matrix, plus the D-044
-  `frontend-perf-gate` that makes a measured >2% regression merge-blocking
-  -- named directly rather than each matrix leg, since a matrix job's
+  untrusted `frontend-perf-measure` job and isolated `frontend-perf-gate`
+  that make a measured >2% regression merge-blocking without executing
+  PR-head comparator code -- named directly rather than each matrix leg, since a matrix job's
   GitHub-generated check name bakes in its matrix values and would go stale
   the moment an `os`/`target` entry changes. The standalone `agent-policy`
   job provides faster feedback until its exact context has run successfully

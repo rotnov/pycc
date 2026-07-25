@@ -75,7 +75,7 @@ pub enum FStringPart {
     Interpolation(Box<HirExpr>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum HirStmt {
     ExprStmt(HirExpr),
     Assign {
@@ -101,7 +101,7 @@ pub enum HirStmt {
     Return(Option<HirExpr>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum HirItem {
     Function {
         name: String,
@@ -112,7 +112,7 @@ pub enum HirItem {
     TopLevelStmt(HirStmt),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HirModule {
     pub items: Vec<HirItem>,
 }
@@ -130,6 +130,15 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
 }
 
 fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic> {
+    if def.is_async {
+        panic!("pycc_hir: async functions are not supported yet");
+    }
+    if !def.decorator_list.is_empty() {
+        panic!("pycc_hir: function decorators are not supported yet");
+    }
+    if def.type_params.is_some() {
+        panic!("pycc_hir: generic function type parameters are not supported yet");
+    }
     let is_public = !def.name.as_str().starts_with('_'); // D-038
     let params = lower_params(&def.parameters, is_public, def.name.as_str())?;
     let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, def.name.as_str())?;
@@ -290,6 +299,9 @@ fn lower_stmt(stmt: &Stmt) -> HirStmt {
                     callee.id
                 );
             }
+            if !call.arguments.keywords.is_empty() {
+                panic!("pycc_hir: keyword arguments to range() are not supported yet");
+            }
             let (start, stop, step) = match &*call.arguments.args {
                 [stop] => (
                     HirExpr::IntLiteral(0),
@@ -353,6 +365,9 @@ fn lower_expr(expr: &Expr) -> HirExpr {
         }
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
         Expr::Call(call) => {
+            if !call.arguments.keywords.is_empty() {
+                panic!("pycc_hir: keyword call arguments are not supported yet");
+            }
             let Expr::Name(callee) = call.func.as_ref() else {
                 panic!(
                     "pycc_hir: only calling a bare name is supported so far: {:?}",
@@ -1026,11 +1041,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "async for is not supported yet")]
-    fn an_async_for_is_not_supported_yet() {
+    #[should_panic(expected = "async functions are not supported yet")]
+    fn an_async_for_inside_an_async_function_is_not_supported_yet() {
+        // `async for` is only valid Python syntax inside an `async def` body,
+        // so this now hits the (newer, more general) async-function rejection
+        // in lower_function before lower_stmt's own `for_stmt.is_async` check
+        // is ever reached -- the fixture still exercises real, valid Python
+        // that must be rejected, just via the outer boundary now.
         let module = pycc_parser_test_helper::parse(
             "async def f() -> None:\n    async for i in range(3):\n        print(i)\n",
         );
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "async for is not supported yet")]
+    fn a_top_level_async_for_is_not_supported_yet() {
+        let module = pycc_parser_test_helper::parse("async for i in range(3):\n    print(i)\n");
         lower_checked(&module).unwrap();
     }
 
@@ -1150,21 +1177,24 @@ mod tests {
         // used to only read `.parameter`, silently ignoring `.default` --
         // producing a wrong signature (as if `b` had no default at all)
         // instead of this explicit panic.
-        let module = pycc_parser_test_helper::parse("def f(a: int, b: int = 2) -> int:\n    return a + b\n");
+        let module =
+            pycc_parser_test_helper::parse("def f(a: int, b: int = 2) -> int:\n    return a + b\n");
         lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "positional-only parameters")]
     fn a_positional_only_parameter_panics() {
-        let module = pycc_parser_test_helper::parse("def f(a: int, /, b: int) -> int:\n    return a + b\n");
+        let module =
+            pycc_parser_test_helper::parse("def f(a: int, /, b: int) -> int:\n    return a + b\n");
         lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "keyword-only parameters")]
     fn a_keyword_only_parameter_panics() {
-        let module = pycc_parser_test_helper::parse("def f(a: int, *, b: int) -> int:\n    return a + b\n");
+        let module =
+            pycc_parser_test_helper::parse("def f(a: int, *, b: int) -> int:\n    return a + b\n");
         lower_checked(&module).unwrap();
     }
 
@@ -1179,6 +1209,42 @@ mod tests {
     #[should_panic(expected = "**kwargs` is not supported yet")]
     fn a_kwarg_parameter_panics() {
         let module = pycc_parser_test_helper::parse("def f(**kwargs: int) -> None:\n    return\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "async functions are not supported yet")]
+    fn an_async_function_panics_instead_of_losing_async_semantics() {
+        let module = pycc_parser_test_helper::parse("async def f() -> None:\n    return\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "function decorators are not supported yet")]
+    fn a_decorated_function_panics_instead_of_losing_the_decorator() {
+        let module = pycc_parser_test_helper::parse("@decorator\ndef f() -> None:\n    return\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "generic function type parameters are not supported yet")]
+    fn a_generic_function_panics_instead_of_losing_its_type_parameters() {
+        let module = pycc_parser_test_helper::parse("def f[T]() -> None:\n    return\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "keyword call arguments are not supported yet")]
+    fn a_keyword_call_argument_panics_instead_of_being_erased() {
+        let module =
+            pycc_parser_test_helper::parse("def f() -> None:\n    return\n\nf(extra=undefined)\n");
+        lower_checked(&module).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "keyword arguments to range() are not supported yet")]
+    fn a_keyword_range_argument_panics_instead_of_being_erased() {
+        let module = pycc_parser_test_helper::parse("for i in range(stop=3):\n    i\n");
         lower_checked(&module).unwrap();
     }
 

@@ -34,12 +34,15 @@ containing commit incorporates these corrections:
   `range` operand, rejects incompatible reassignment with `T0023`, emits
   `T0022` for return mismatches, and rejects a non-`None` function whenever
   the v0.1 conservative control-flow analysis finds a fallthrough path.
-- The diagnostic snapshot suite contains five fixtures: `T0001`, `T0002`,
-  `T0021`, `T0022`, and `T0023`. D-043 remains the owner of the documented
-  placeholder-span and missing-safe-help gaps.
+- The diagnostic snapshot suite contains six byte-exact fixtures: `T0001`,
+  `T0002`, `T0021`, `T0022`, `T0023`, and top-level-return `T0024`. Human and
+  JSON diagnostics carry primary labels. D-043 remains the owner of the
+  documented placeholder-span and missing-safe-help gaps.
 - D-044 supersedes D-042 and Task 14's informational-only recommendation:
-  `frontend-perf-gate` is a required `ci-gate` dependency, with the
-  first-baseline bootstrap handled inside the required job.
+  both `frontend-perf-measure` and the isolated, hash-verified
+  `frontend-perf-gate` are required `ci-gate` dependencies. D-046 restricts
+  baseline publication to successful `main` pushes in a fresh cache namespace,
+  with the first-baseline bootstrap handled inside the required gate.
 
 When this historical plan conflicts with `docs/SPEC.md`, its linked
 specifications, or the later ADRs, those current sources win.

@@ -18,14 +18,17 @@ DEFAULT_THRESHOLD_PERCENT = 2.0
 
 def mean_point_estimate(path)
   data = JSON.parse(File.read(path))
-  data.fetch("mean").fetch("point_estimate")
+  estimate = data.fetch("mean").fetch("point_estimate")
+  unless estimate.is_a?(Numeric) && estimate.finite? && estimate.positive?
+    raise "mean point estimate in #{path} must be a finite positive number"
+  end
+
+  estimate.to_f
 rescue Errno::ENOENT, JSON::ParserError, KeyError => e
   raise "could not read a mean point estimate from #{path}: #{e.message}"
 end
 
 def regression_percent(current, previous)
-  return 0.0 if previous.zero?
-
   (current - previous) / previous * 100.0
 end
 
@@ -36,6 +39,9 @@ def main(arguments)
     return 2
   end
   threshold = threshold_arg ? Float(threshold_arg) : DEFAULT_THRESHOLD_PERCENT
+  unless threshold.finite? && !threshold.negative?
+    raise ArgumentError, "threshold_percent must be a finite non-negative number"
+  end
 
   current = mean_point_estimate(current_path)
   previous = mean_point_estimate(previous_path)

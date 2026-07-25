@@ -22,14 +22,17 @@ pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
     pub span: Option<Span>,
+    pub label: Option<String>,
 }
 
 impl Diagnostic {
     pub fn error(code: &'static str, message: impl Into<String>, span: Span) -> Self {
+        let message = message.into();
         Self {
             code,
             severity: Severity::Error,
-            message: message.into(),
+            label: Some(message.clone()),
+            message,
             span: Some(span),
         }
     }
@@ -40,6 +43,7 @@ impl Diagnostic {
             severity: Severity::Warning,
             message: message.into(),
             span: None,
+            label: None,
         }
     }
 }
@@ -75,9 +79,9 @@ pub fn byte_offset_to_line_col(source: &str, offset: u32) -> LineCol {
 /// CLI_SPEC.md's human diagnostic format, reproduced byte-for-byte for the
 /// primary error + location block: `error[CODE]: message` / ` --> file:
 /// line:col` / a blank gutter line / the source line prefixed with its line
-/// number / a caret-underline beneath the span. `help:` lines and a trailing
-/// label after the carets are not rendered here -- no code path in this PR
-/// populates one yet (see D-043).
+/// number / a caret-underline beneath the span and its primary label.
+/// `help:` lines are not rendered yet -- no code path currently populates a
+/// safe suggestion (see D-043).
 pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String {
     let mut out = String::new();
     let severity_word = match diag.severity {
@@ -111,13 +115,17 @@ pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String 
         1
     };
     out.push_str(&"^".repeat(caret_len));
+    if let Some(label) = &diag.label {
+        out.push(' ');
+        out.push_str(label);
+    }
     out.push('\n');
     out
 }
 
 /// CLI_SPEC.md's versioned JSON diagnostic format: `format_version: 1`,
-/// `spans[{file,line,col,len,label}]`. `help` is always an empty array in
-/// this PR -- see `render_human`'s doc comment and D-043.
+/// `spans[{file,line,col,len,label}]`. `help` is currently always an empty
+/// array -- see `render_human`'s doc comment and D-043.
 pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
     let severity_word = match diag.severity {
         Severity::Error => "error",
@@ -130,7 +138,7 @@ pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
             "line": start.line,
             "col": start.column,
             "len": span.end.saturating_sub(span.start),
-            "label": serde_json::Value::Null,
+            "label": diag.label,
         }])
     } else {
         serde_json::json!([])
@@ -156,6 +164,7 @@ mod tests {
         assert_eq!(d.code, "T0001");
         assert_eq!(d.severity, Severity::Error);
         assert_eq!(d.span, Some(Span::new(10, 14)));
+        assert_eq!(d.label.as_deref(), Some("argument missing annotation"));
     }
 
     #[test]
@@ -163,6 +172,7 @@ mod tests {
         let d = Diagnostic::warning("W1001", "unreachable code");
         assert_eq!(d.severity, Severity::Warning);
         assert_eq!(d.span, None);
+        assert_eq!(d.label, None);
     }
 
     #[test]
@@ -213,7 +223,7 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
  --> src/main.py:2:15
   |
 2 |     print(fib(\"35\"))
-  |               ^^^^
+  |               ^^^^ argument 1 of `fib` expects `int`, got `str`
 ";
         assert_eq!(rendered, expected);
     }
@@ -232,7 +242,7 @@ error[T0001]: multi-line span
  --> src/main.py:1:1
   |
 1 | x
-  | ^
+  | ^ multi-line span
 ";
         assert_eq!(rendered, expected);
     }
@@ -242,6 +252,26 @@ error[T0001]: multi-line span
         let diag = Diagnostic::warning("W1001", "unreachable code");
         let rendered = render_human(&diag, "src/main.py", "x = 1\n");
         assert_eq!(rendered, "warning[W1001]: unreachable code\n");
+    }
+
+    #[test]
+    fn render_human_with_an_unlabelled_span_omits_the_label() {
+        let diag = Diagnostic {
+            code: "W1001",
+            severity: Severity::Warning,
+            message: "unreachable code".to_string(),
+            span: Some(Span::new(0, 1)),
+            label: None,
+        };
+        let rendered = render_human(&diag, "src/main.py", "x = 1\n");
+        let expected = "\
+warning[W1001]: unreachable code
+ --> src/main.py:1:1
+  |
+1 | x = 1
+  | ^
+";
+        assert_eq!(rendered, expected);
     }
 
     #[test]
@@ -258,6 +288,7 @@ error[T0001]: multi-line span
         assert_eq!(parsed["spans"][0]["line"], 1);
         assert_eq!(parsed["spans"][0]["col"], 1);
         assert_eq!(parsed["spans"][0]["len"], 5);
+        assert_eq!(parsed["spans"][0]["label"], "missing annotation");
     }
 
     #[test]

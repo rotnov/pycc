@@ -55,4 +55,28 @@ class PerfRegressionTest < Minitest::Test
       assert_equal 2, main([File.join(dir, "does_not_exist.json"), previous])
     end
   end
+
+  def test_exits_two_when_an_estimate_is_not_positive
+    Dir.mktmpdir do |dir|
+      previous = estimates_file(dir, "previous.json", 0.0)
+      current = estimates_file(dir, "current.json", 1000.0)
+      assert_equal 2, main([current, previous])
+    end
+  end
+
+  def test_exits_two_when_an_estimate_is_not_numeric
+    Dir.mktmpdir do |dir|
+      previous = estimates_file(dir, "previous.json", "fast")
+      current = estimates_file(dir, "current.json", 1000.0)
+      assert_equal 2, main([current, previous])
+    end
+  end
+
+  def test_exits_two_when_threshold_is_negative
+    Dir.mktmpdir do |dir|
+      previous = estimates_file(dir, "previous.json", 1000.0)
+      current = estimates_file(dir, "current.json", 1000.0)
+      assert_equal 2, main([current, previous, "-1"])
+    end
+  end
 end
