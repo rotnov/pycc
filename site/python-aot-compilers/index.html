@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>Python AOT compilers compared — where pycc fits</title>
+    <meta
+      name="description"
+      content="Compare pycc with Codon, Nuitka, mypyc, and Cython using official documentation: input language, output artifact, runtime model, and project status."
+    >
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    >
+    <meta name="theme-color" content="#101310">
+    <meta name="color-scheme" content="dark">
+    <link rel="canonical" href="https://rotnov.github.io/pycc/python-aot-compilers/">
+    <link rel="sitemap" type="application/xml" href="../sitemap.xml">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="pycc">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:url" content="https://rotnov.github.io/pycc/python-aot-compilers/">
+    <meta property="og:title" content="Python AOT compilers compared — where pycc fits">
+    <meta
+      property="og:description"
+      content="A source-backed map of Python AOT tools by language contract, output artifact, runtime model, and present maturity."
+    >
+    <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
+    <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Python AOT compilers compared — where pycc fits">
+    <meta
+      name="twitter:description"
+      content="A source-backed map of Python AOT tools by language contract, output artifact, runtime model, and present maturity."
+    >
+    <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
+    <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebPage",
+            "@id": "https://rotnov.github.io/pycc/python-aot-compilers/#webpage",
+            "url": "https://rotnov.github.io/pycc/python-aot-compilers/",
+            "name": "Python AOT compilers compared — where pycc fits",
+            "description": "Compare pycc with Codon, Nuitka, mypyc, and Cython using official documentation: input language, output artifact, runtime model, and project status.",
+            "inLanguage": "en",
+            "dateModified": "2026-07-25",
+            "isPartOf": {
+              "@id": "https://rotnov.github.io/pycc/#webpage"
+            },
+            "about": {
+              "@id": "https://rotnov.github.io/pycc/#project"
+            },
+            "breadcrumb": {
+              "@id": "https://rotnov.github.io/pycc/python-aot-compilers/#breadcrumb"
+            }
+          },
+          {
+            "@type": "BreadcrumbList",
+            "@id": "https://rotnov.github.io/pycc/python-aot-compilers/#breadcrumb",
+            "itemListElement": [
+              {
+                "@type": "ListItem",
+                "position": 1,
+                "name": "pycc",
+                "item": "https://rotnov.github.io/pycc/"
+              },
+              {
+                "@type": "ListItem",
+                "position": 2,
+                "name": "Python AOT compiler comparison",
+                "item": "https://rotnov.github.io/pycc/python-aot-compilers/"
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+
+    <link rel="stylesheet" href="../styles.css">
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="../" aria-label="pycc home">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>pycc</span>
+      </a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="../status/">Status</a>
+        <a href="../architecture/">Architecture</a>
+        <a aria-current="page" href="../python-aot-compilers/">Compare</a>
+        <a href="../ai-native/">AI experiment</a>
+        <a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../">pycc</a>
+        <span aria-hidden="true">/</span>
+        <span>Python AOT compilers</span>
+      </nav>
+
+      <header class="page-hero">
+        <p class="eyebrow">Compiler landscape · Sources checked 2026-07-25</p>
+        <h1>Python AOT tools solve <span>different jobs.</span></h1>
+        <p class="page-lede">
+          “Python compiler” can mean a compatibility-focused executable, a
+          CPython extension, or a separate static language close to Python.
+          This comparison uses each project's own documentation and keeps
+          pycc's pre-alpha design target separate from released capability.
+        </p>
+        <div class="page-meta" aria-label="Comparison scope">
+          <span><strong>Tools</strong> five models</span>
+          <span><strong>Evidence</strong> official docs</span>
+          <span><strong>Benchmarks</strong> none claimed</span>
+        </div>
+      </header>
+
+      <div class="prose-layout">
+        <aside class="toc" aria-label="On this page">
+          <span>On this page</span>
+          <a href="#meaning">What AOT means here</a>
+          <a href="#comparison">Model comparison</a>
+          <a href="#choosing">How to choose</a>
+          <a href="#pycc-status">Where pycc fits</a>
+          <a href="#sources">Official sources</a>
+        </aside>
+
+        <article class="prose">
+          <section id="meaning">
+            <p class="section-kicker">Start with the artifact</p>
+            <h2>“Native” does not describe one deployment model.</h2>
+            <p>
+              Ahead-of-time compilation happens before execution, but the
+              resulting artifact can still be a CPython extension, an
+              executable that carries CPython runtime components, or native
+              machine code for a different static language model. Those
+              choices affect compatibility, distribution, type behavior, and
+              which Python programs can be accepted.
+            </p>
+            <p>
+              The table below compares those models. It does not rank
+              performance: no shared, reproducible benchmark suite currently
+              exists in this repository, so speed claims would not be
+              evidence-backed.
+            </p>
+          </section>
+
+          <section id="comparison">
+            <p class="section-kicker">Different contracts</p>
+            <h2>Five projects with overlapping output models.</h2>
+            <div class="table-scroll" tabindex="0" aria-label="Python AOT compiler model comparison">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Tool</th>
+                    <th scope="col">Input contract</th>
+                    <th scope="col">Output and runtime</th>
+                    <th scope="col">Current positioning</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="highlight-row">
+                    <th scope="row">pycc</th>
+                    <td>Typed, standard Python 3.14 is the v1 design target</td>
+                    <td>Standalone native executable without CPython is the design target</td>
+                    <td>Pre-alpha; only a narrow end-to-end slice works today</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Codon</th>
+                    <td>A statically compiled language close to Python, with documented differences and additions</td>
+                    <td>Native machine code without interpreter runtime overhead</td>
+                    <td>High-performance applications that can adopt Codon's language model</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Nuitka</th>
+                    <td>Python applications with a compatibility-first model</td>
+                    <td>Executable or extension; standalone and onefile modes package required runtime dependencies</td>
+                    <td>Application compilation, distribution, and CPython ecosystem compatibility</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">mypyc</th>
+                    <td>Standard Python type hints with a strict, gradually typed compiled subset</td>
+                    <td>Native C extension imported and run by CPython</td>
+                    <td>Accelerating typed Python modules while keeping CPython interoperability</td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Cython</th>
+                    <td>A Python superset with optional static type declarations</td>
+                    <td>Generated C or C++; commonly a CPython extension, with a documented CPython-embedding executable path</td>
+                    <td>Extension development, native-library integration, and targeted acceleration</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="choosing">
+            <p class="section-kicker">Choose by constraint</p>
+            <h2>The right tool depends on what must stay compatible.</h2>
+            <ul class="source-list">
+              <li>
+                <strong>Package an existing Python application</strong>
+                <span>Nuitka explicitly documents standalone and onefile distribution modes while preserving a CPython-oriented compatibility model.</span>
+              </li>
+              <li>
+                <strong>Speed up typed modules inside CPython</strong>
+                <span>mypyc produces C extensions from standard type hints; Cython offers a broader Python-superset and C/C++ integration path.</span>
+              </li>
+              <li>
+                <strong>Compile performance-oriented Python-like code without CPython</strong>
+                <span>Codon is available today, with deliberate language and semantic differences documented by its maintainers.</span>
+              </li>
+              <li>
+                <strong>Target strict standard Python and a standalone runtime</strong>
+                <span>That is pycc's intended niche, but it remains a design target rather than a usable alternative today.</span>
+              </li>
+            </ul>
+          </section>
+
+          <section id="pycc-status">
+            <p class="section-kicker">Honest project boundary</p>
+            <h2>pycc is testing a combination, not claiming a win.</h2>
+            <p>
+              pycc aims to combine hard compile-time type enforcement,
+              standard Python syntax, a native executable without an embedded
+              CPython interpreter, and a five-target portability gate. The
+              repository currently proves only a small source-to-native
+              vertical slice. Its type checker is still a stub, broad Python
+              semantics are not implemented, and no production release exists.
+            </p>
+            <div class="callout">
+              <strong>Do not choose pycc for production today.</strong>
+              <p>
+                Follow the status page if the target model is relevant. Use a
+                mature tool whose current runtime and compatibility contract
+                matches your application if you need to ship now.
+              </p>
+            </div>
+            <div class="page-links">
+              <a href="../status/">
+                <span>Implemented behavior and missing work</span>
+                <strong>Current status →</strong>
+              </a>
+              <a href="../architecture/">
+                <span>Working pipeline and target design</span>
+                <strong>Architecture →</strong>
+              </a>
+            </div>
+          </section>
+
+          <section id="sources">
+            <p class="section-kicker">Primary documentation</p>
+            <h2>Check each project's own contract.</h2>
+            <ul class="source-list">
+              <li>
+                <a href="https://docs.exaloop.io/language/overview/">Codon language overview</a>
+                <span>Python differences, static compilation constraints, and native-code model.</span>
+              </li>
+              <li>
+                <a href="https://nuitka.net/user-documentation/use-cases.html">Nuitka use cases</a>
+                <span>Executable, extension, standalone, and onefile deployment modes.</span>
+              </li>
+              <li>
+                <a href="https://mypyc.readthedocs.io/en/stable/introduction.html">mypyc introduction</a>
+                <span>Type-hint compilation, strict compiled subset, C extensions, and CPython runtime.</span>
+              </li>
+              <li>
+                <a href="https://docs.cython.org/en/latest/src/quickstart/overview.html">Cython overview</a>
+                <span>Python-superset language, optional static declarations, and extension-module output.</span>
+              </li>
+              <li>
+                <a href="https://docs.cython.org/en/latest/src/tutorial/embedding.html">Cython embedding guide</a>
+                <span>The CPython-initializing executable path supported by <code>cython --embed</code>.</span>
+              </li>
+              <li>
+                <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">pycc roadmap</a>
+                <span>Commit-relative implementation status and binary acceptance gates.</span>
+              </li>
+            </ul>
+          </section>
+        </article>
+      </div>
+
+      <aside class="ai-disclosure" aria-label="Project authorship">
+        <p><strong>Built entirely by AI.</strong> <strong>Managed by a human.</strong></p>
+        <p>
+          AI agents write the specifications, code, tests, documentation,
+          reviews, and automation. No project code is handwritten by a human.
+        </p>
+      </aside>
+    </main>
+
+    <footer>
+      <a class="brand" href="../" aria-label="pycc home">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>pycc</span>
+      </a>
+      <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
+      <div>
+        <a href="../status/">Status</a>
+        <a href="../python-aot-compilers/">Compare</a>
+        <a href="../llms.txt">LLM guide</a>
+        <a href="https://github.com/rotnov/pycc">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>
