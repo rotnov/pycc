@@ -2103,6 +2103,17 @@ class AgentPolicyValidationTests(unittest.TestCase):
                 ["scripts/wrapper.py", "--config=C:local-hook"],
                 ("shared hook target must not be drive-relative: C:local-hook"),
             ),
+            (
+                "python3",
+                [
+                    "scripts/wrapper.py",
+                    "file:///home/user/.ievo/hooks/capture.py",
+                ],
+                (
+                    "shared hook loader URL cannot be validated: "
+                    "file:///home/user/.ievo/hooks/capture.py"
+                ),
+            ),
         ):
             with self.subTest(command=command):
                 wrapper = next(
@@ -2272,6 +2283,73 @@ class AgentPolicyValidationTests(unittest.TestCase):
             (
                 r"-s..\.ievo\hooks\capture",
                 ("shared hook target is not tracked: ../.ievo/hooks/capture"),
+            ),
+            (
+                "--script:../.ievo/hooks/capture=variant",
+                ("shared hook target is not tracked: ../.ievo/hooks/capture=variant"),
+            ),
+            (
+                r"--script:..\.ievo\hooks\capture=variant",
+                ("shared hook target is not tracked: ../.ievo/hooks/capture=variant"),
+            ),
+            (
+                "--script:C:local-hook=variant",
+                ("shared hook target must not be drive-relative: C:local-hook=variant"),
+            ),
+            (
+                "-sC:local-hook",
+                ("shared hook target must not be drive-relative: C:local-hook"),
+            ),
+            (
+                "-sC:local-hook=variant",
+                ("shared hook target must not be drive-relative: C:local-hook=variant"),
+            ),
+            (
+                r"-sC:folder\local-hook",
+                ("shared hook target must not be drive-relative: C:folder/local-hook"),
+            ),
+            (
+                "--loader=file:///tmp/hook",
+                "shared hook loader URL cannot be validated: file:///tmp/hook",
+            ),
+            (
+                "--loader:file:///tmp/hook",
+                "shared hook loader URL cannot be validated: file:///tmp/hook",
+            ),
+            (
+                "-lfile:///tmp/hook",
+                "shared hook loader URL cannot be validated: file:///tmp/hook",
+            ),
+            (
+                "--loader=http://example.test/hook",
+                (
+                    "shared hook loader URL cannot be validated: "
+                    "http://example.test/hook"
+                ),
+            ),
+            (
+                "@/tmp/hook",
+                "shared hook target must not be absolute: /tmp/hook",
+            ),
+            (
+                "@../.ievo/hooks/capture",
+                "shared hook target is not tracked: ../.ievo/hooks/capture",
+            ),
+            (
+                r"@..\.ievo\hooks\capture",
+                "shared hook target is not tracked: ../.ievo/hooks/capture",
+            ),
+            (
+                "@C:local-hook",
+                "shared hook target must not be drive-relative: C:local-hook",
+            ),
+            (
+                "--response=@/tmp/args",
+                "shared hook target must not be absolute: /tmp/args",
+            ),
+            (
+                "-r@../.ievo/hooks/args",
+                "shared hook target is not tracked: ../.ievo/hooks/args",
             ),
         ):
             with self.subTest(argument=argument):

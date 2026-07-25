@@ -307,13 +307,19 @@ def trailing_filesystem_targets(
     for token in tokens:
         candidates = [token]
         if token.startswith("--"):
-            for separator in ("=", ":"):
-                if separator in token:
-                    candidates = [token.split(separator, 1)[1]]
-                    break
+            delimiter_positions = [
+                position
+                for separator in ("=", ":")
+                if (position := token.find(separator)) >= 0
+            ]
+            if delimiter_positions:
+                candidates = [token[min(delimiter_positions) + 1 :]]
         elif token.startswith("-") and len(token) > 2:
             candidates = [token[2:].lstrip("=:")]
         for candidate in candidates:
+            response_file = candidate.startswith("@")
+            if response_file and len(candidate) > 1:
+                candidate = candidate[1:]
             normalized, explicit_project_path = normalize_hook_token(
                 candidate,
                 project_expansion,
@@ -324,7 +330,9 @@ def trailing_filesystem_targets(
                 or normalized.lower().endswith(SCRIPT_SUFFIXES)
             )
             if (
-                explicit_project_path
+                response_file
+                or normalized.lower().startswith(LOADER_URL_PREFIXES)
+                or explicit_project_path
                 or normalized.casefold().startswith(LOCAL_PREFIXES)
                 or (
                     is_relative_script_path(normalized)
