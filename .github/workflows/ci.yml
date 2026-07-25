@@ -288,6 +288,74 @@ jobs:
   # leave an old, now-nonexistent name required forever (permanently
   # unsatisfiable) while the new leg goes unenforced. This job's own name
   # never changes regardless of matrix edits.
+  # Performance gate (DELIVERY_PLAN.md's Performance gate section): records a
+  # `pycc check` frontend timing run on every PR and fails when it regresses
+  # >2% against the most recent prior run this job itself cached. Criterion
+  # itself does not set a failing exit code on a detected regression --
+  # verified directly against criterion 0.8.2's source, its only
+  # `std::process::exit(1)` calls are for CLI-argument errors, not for a
+  # `ComparisonResult::Regressed` report -- so scripts/check_perf_regression.rb
+  # (unit-tested locally for both the regressed and within-threshold exit
+  # paths) is what actually enforces the threshold. Runs on the same macOS
+  # runner as the coverage gate for a stable, single-machine timing baseline
+  # -- comparing across different runner hardware would be noise, not signal.
+  #
+  # Deliberately NOT in ci-gate's `needs:` yet (D-041): the cache
+  # restore/save lifecycle below relies on GitHub's documented per-branch
+  # cache scoping (a `push`-to-`main` run's cache is visible as a
+  # `restore-keys` fallback to every PR branched from it, so PR runs compare
+  # against main's last recorded baseline) but has not been confirmed by an
+  # actual multi-run round trip -- this PR's own first run has no prior cache
+  # entry at all, so it can only exercise the "no previous baseline yet"
+  # path. Promote to a required check once a live round trip confirms the
+  # restore/compare/save cycle behaves as designed across two separate runs.
+  frontend-perf-gate:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show pinned toolchain
+        run: rustup show
+
+      - name: Install LLVM 22 (D-015)
+        run: brew install llvm@22
+
+      - name: Export LLVM_SYS_221_PREFIX
+        run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+
+      - name: Restore previous frontend-perf baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: target/criterion/pycc_check_frontend_fixture/previous
+          key: frontend-perf-baseline-${{ github.run_id }}
+          restore-keys: frontend-perf-baseline-
+
+      - name: Run frontend benchmark
+        run: cargo bench --bench check_bench -- --save-baseline current
+
+      - name: Compare against previous baseline (if one was restored)
+        run: |
+          if [ -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
+            ruby scripts/check_perf_regression.rb \
+              target/criterion/pycc_check_frontend_fixture/current/estimates.json \
+              target/criterion/pycc_check_frontend_fixture/previous/estimates.json
+          else
+            echo "no previous baseline cached yet -- this run establishes it"
+          fi
+
+      - name: Save this run's timing as the next run's baseline
+        if: always()
+        run: |
+          rm -rf target/criterion/pycc_check_frontend_fixture/previous
+          cp -r target/criterion/pycc_check_frontend_fixture/current target/criterion/pycc_check_frontend_fixture/previous
+
+      - name: Cache this run's baseline
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: target/criterion/pycc_check_frontend_fixture/previous
+          key: frontend-perf-baseline-${{ github.run_id }}
+
   ci-gate:
     needs: [build-test-coverage, native-build-test, cross-compile-build, cross-compile-verify]
     if: always()

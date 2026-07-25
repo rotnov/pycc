@@ -43,3 +43,8 @@ pycc_diag = { path = "crates/pycc_diag" }
 
 [dev-dependencies]
 serde_json = "1"
+criterion = { version = "0.8.2", features = ["html_reports"] }
+
+[[bench]]
+name = "check_bench"
+harness = false
