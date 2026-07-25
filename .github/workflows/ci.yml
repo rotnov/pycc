@@ -49,6 +49,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --version
           /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+          printf 'LLVM_SYS_221_PREFIX=%s\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 
       - name: Check workflow permission policy
         run: |

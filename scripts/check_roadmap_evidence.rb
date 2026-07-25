@@ -27,6 +27,7 @@ COVERAGE_SCRIPT = <<~SHELL.strip
   cd "$GITHUB_WORKSPACE"
   /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --version
   #{COVERAGE_COMMAND}
+  printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
 TRUSTED_COVERAGE_ENV = {
   "CARGO_LLVM_COV_VERSION" => "0.8.7"

@@ -84,12 +84,14 @@ The initial `ci-build-test-coverage-100` evidence requires all of the following:
 - the exact command
   `/Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`.
 
-Regular CI runs the self-tests and then the repository checker before building
-for fast feedback. This preparatory change does not authorize a checked roadmap
-marker yet: a pull request controls that copy of the checker. The follow-up
-trust-anchor change must make the required read-only `Workflow policy` job run
-the base revision's checker against head workflows and `docs/ROADMAP.md` as
-non-executable data before the coverage item can return to `[x]`.
+Regular CI runs the self-tests and repository checker after the hard coverage
+step for fast feedback; placing a head-controlled script before that step would
+violate the trusted setup sequence. This preparatory change does not authorize
+a checked roadmap marker yet because a pull request controls that copy of the
+checker. The follow-up trust-anchor change must make the required read-only
+`Workflow policy` job run the base revision's checker against head workflows
+and `docs/ROADMAP.md` as non-executable data before the coverage item can return
+to `[x]`.
 
 ## CI privilege policy
 

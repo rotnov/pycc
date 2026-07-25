@@ -47,6 +47,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
                 cd "$GITHUB_WORKSPACE"
                 /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --version
                 #{command}
+                printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
     YAML
   end
 
@@ -331,5 +332,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     assert_includes commands, "ruby scripts/test_check_roadmap_evidence.rb"
     assert_includes commands, "ruby scripts/check_roadmap_evidence.rb"
+    assert_includes commands,
+                    "printf 'LLVM_SYS_221_PREFIX=%s\\n' " \
+                    "\"$LLVM_SYS_221_PREFIX_VALUE\" >> \"$GITHUB_ENV\""
   end
 end
