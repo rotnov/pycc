@@ -829,8 +829,7 @@ def interpreter_arguments(text: str, start: int) -> list[str]:
                     continue
                 value.append(text[index])
                 index += 1
-            if value:
-                arguments.append("".join(value))
+            arguments.append("".join(value))
             continue
 
         value = []
@@ -866,6 +865,57 @@ def interpreter_arguments(text: str, start: int) -> list[str]:
         if command_ended:
             break
     return arguments
+
+
+def folded_yaml_run_commands(text: str) -> list[str]:
+    lines = text.splitlines()
+    commands: list[str] = []
+    index = 0
+    header = re.compile(
+        r"^(?P<indent>[ ]*)(?P<sequence>-\s+)?"
+        r"run:\s*>[+-]?(?:\s+#.*)?\s*$"
+    )
+    while index < len(lines):
+        match = header.match(lines[index])
+        if match is None:
+            index += 1
+            continue
+        header_indent = len(match.group("indent")) + len(
+            match.group("sequence") or ""
+        )
+        index += 1
+        body: list[str] = []
+        while index < len(lines):
+            line = lines[index]
+            if not line.strip():
+                body.append("")
+                index += 1
+                continue
+            indentation = len(line) - len(line.lstrip(" "))
+            if indentation <= header_indent:
+                break
+            body.append(line)
+            index += 1
+        content_indents = [
+            len(line) - len(line.lstrip(" "))
+            for line in body
+            if line.strip()
+        ]
+        if not content_indents:
+            continue
+        content_indent = min(content_indents)
+        paragraph: list[str] = []
+        for line in body:
+            content = line[content_indent:].strip()
+            if content:
+                paragraph.append(content)
+                continue
+            if paragraph:
+                commands.append(" ".join(paragraph))
+                paragraph = []
+        if paragraph:
+            commands.append(" ".join(paragraph))
+    return commands
 
 
 def interpreter_family(interpreter: str) -> str:
@@ -1125,6 +1175,9 @@ def required_agent_files(
             continue
         relative = source.relative_to(root)
         text = required_asset_body(relative, text)
+        folded_commands = folded_yaml_run_commands(text)
+        if folded_commands:
+            text = "\n".join((text, *folded_commands))
         for reference in referenced_interpreter_scripts(text):
             tracked_entry = tracked.get(reference)
             if tracked_entry is None:

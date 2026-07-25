@@ -138,9 +138,10 @@ by selecting every repository-relative operand. Windows `.exe` interpreter names
 backslash paths are normalized to the same Git/POSIX tracked paths without accepting
 drive-qualified, UNC, absolute, or parent-traversing targets. Discovery comes from
 `git ls-files`; shell line continuations, escaped spaces, and Markdown or subshell
-closing delimiters are handled without becoming part of a tracked path. Ignored
-caches and dependency checkouts therefore cannot make local validation disagree with
-a clean CI checkout.
+closing delimiters are handled without becoming part of a tracked path, and GitHub
+Actions folded `run: >` scalars are scanned with their executed newline semantics.
+Ignored caches and dependency checkouts therefore cannot make local validation
+disagree with a clean CI checkout.
 Required agent assets stored as Git symlinks are rejected rather than followed outside
 the reviewed tree.
 Within `.claude/settings.json`, `enabledPlugins` and `extraKnownMarketplaces` declare

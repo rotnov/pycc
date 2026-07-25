@@ -1440,6 +1440,8 @@ class AgentAssetValidationTests(unittest.TestCase):
     ) -> None:
         cases = (
             ("node -C development tools/helper", "tools/helper", False),
+            ('python -W "" tools/helper', "tools/helper", False),
+            ('python -W "" tools/helper', "tools/helper", True),
             ("ruby --encoding UTF-8 tools/helper", "tools/helper", False),
             ("ruby -E UTF-8 tools/helper", "tools/helper", False),
             ("ruby -EUTF-8 tools/helper", "tools/helper", False),
@@ -1578,6 +1580,34 @@ class AgentAssetValidationTests(unittest.TestCase):
             (
                 ".github/workflows/check.yml",
                 "jobs:\n  check:\n    steps:\n"
+                "      - run: >\n"
+                "          python\n"
+                "          tools/helper\n"
+                "        shell: bash\n"
+                "      - run: echo done\n",
+                "tools/helper",
+            ),
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
+                "      - run: >-\n"
+                "          python\n"
+                "          tools/helper\n"
+                "        shell: bash\n",
+                "tools/helper",
+            ),
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
+                "      - run: >+\n"
+                "          python\n"
+                "          tools/helper\n"
+                "        shell: bash\n",
+                "tools/helper",
+            ),
+            (
+                ".github/workflows/check.yml",
+                "jobs:\n  check:\n    steps:\n"
                 "      - run: python \\\n"
                 "          tools/helper\n",
                 "tools/helper",
@@ -1713,6 +1743,8 @@ class AgentAssetValidationTests(unittest.TestCase):
             ("python -X dev tools/helper", {"tools/helper"}),
             ("python -Xdev tools/helper", {"tools/helper"}),
             ("python -W ignore tools/helper", {"tools/helper"}),
+            ('python -W "" tools/helper', {"tools/helper"}),
+            ('python -X "" tools/helper', {"tools/helper"}),
             ("bash -O extglob tools/helper", {"tools/helper"}),
             (
                 "bash --rcfile tools/rc tools/helper",
@@ -1851,6 +1883,29 @@ class AgentAssetValidationTests(unittest.TestCase):
                 self.assertEqual(
                     validator.referenced_interpreter_scripts(invocation),
                     expected,
+                )
+
+    def test_folded_yaml_run_commands_follow_yaml_newline_semantics(
+        self,
+    ) -> None:
+        for indicator in (">", ">-", ">+"):
+            with self.subTest(indicator=indicator):
+                workflow = (
+                    "jobs:\n"
+                    "  check:\n"
+                    "    steps:\n"
+                    f"      - run: {indicator}\n"
+                    "          python\n"
+                    "          tools/helper\n"
+                    "        shell: bash\n"
+                    "      - run: |\n"
+                    "          python\n"
+                    "          tools/not-folded\n"
+                )
+
+                self.assertEqual(
+                    validator.folded_yaml_run_commands(workflow),
+                    ["python tools/helper"],
                 )
 
     def test_claude_behavioral_settings_reject_optional_plugin_references(
