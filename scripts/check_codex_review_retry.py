@@ -95,6 +95,20 @@ def flatten_pages(pages: list[Any], object_key: str | None = None) -> list[Any]:
     return items
 
 
+def force_push_head(event: dict[str, Any]) -> str:
+    commit_id = event.get("commit_id")
+    if isinstance(commit_id, str) and commit_id:
+        return commit_id
+
+    after_commit = event.get("after_commit")
+    if isinstance(after_commit, dict):
+        for key in ("sha", "oid"):
+            value = after_commit.get(key)
+            if isinstance(value, str) and value:
+                return value
+    raise ValueError("head_ref_force_pushed event has no target commit")
+
+
 def paginated_rest(endpoint: str, object_key: str | None = None) -> list[Any]:
     pages = run_gh_json(
         [
@@ -120,7 +134,7 @@ def timeline_comments(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if event_type == "committed":
             current_head = event.get("sha")
         elif event_type == "head_ref_force_pushed":
-            current_head = event.get("after_commit", {}).get("sha")
+            current_head = force_push_head(event)
         elif event_type == "commented":
             comments.append(
                 {

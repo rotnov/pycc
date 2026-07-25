@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <title>pycc status — what the Python AOT compiler can do today</title>
+    <meta
+      name="description"
+      content="See what pycc, the AI-created AOT compiler for typed Python, implements today, what remains planned for v0.1, and the CI evidence behind each claim."
+    >
+    <meta
+      name="robots"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    >
+    <meta name="theme-color" content="#101310">
+    <meta name="color-scheme" content="dark">
+    <link rel="canonical" href="https://rotnov.github.io/pycc/status/">
+    <link rel="sitemap" type="application/xml" href="../sitemap.xml">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="pycc">
+    <meta property="og:locale" content="en_US">
+    <meta property="og:url" content="https://rotnov.github.io/pycc/status/">
+    <meta property="og:title" content="pycc status — implemented now and planned next">
+    <meta
+      property="og:description"
+      content="A commit-relative account of the Python AOT compiler's working slice, enforced quality gates, and remaining v0.1 work."
+    >
+    <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
+    <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="pycc status — implemented now and planned next">
+    <meta
+      name="twitter:description"
+      content="A commit-relative account of the Python AOT compiler's working slice, enforced quality gates, and remaining v0.1 work."
+    >
+    <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
+    <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebPage",
+            "@id": "https://rotnov.github.io/pycc/status/#webpage",
+            "url": "https://rotnov.github.io/pycc/status/",
+            "name": "pycc status — what the Python AOT compiler can do today",
+            "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what remains planned for v0.1, and the CI evidence behind each claim.",
+            "inLanguage": "en",
+            "dateModified": "2026-07-25",
+            "isPartOf": {
+              "@id": "https://rotnov.github.io/pycc/#webpage"
+            },
+            "about": {
+              "@id": "https://rotnov.github.io/pycc/#project"
+            },
+            "breadcrumb": {
+              "@id": "https://rotnov.github.io/pycc/status/#breadcrumb"
+            }
+          },
+          {
+            "@type": "BreadcrumbList",
+            "@id": "https://rotnov.github.io/pycc/status/#breadcrumb",
+            "itemListElement": [
+              {
+                "@type": "ListItem",
+                "position": 1,
+                "name": "pycc",
+                "item": "https://rotnov.github.io/pycc/"
+              },
+              {
+                "@type": "ListItem",
+                "position": 2,
+                "name": "Project status",
+                "item": "https://rotnov.github.io/pycc/status/"
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+
+    <link rel="stylesheet" href="../styles.css">
+  </head>
+  <body class="content-page">
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="../" aria-label="pycc home">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>pycc</span>
+      </a>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a aria-current="page" href="../status/">Status</a>
+        <a href="../architecture/">Architecture</a>
+        <a href="../ai-native/">AI experiment</a>
+        <a class="nav-cta" href="https://github.com/rotnov/pycc">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <main id="main-content">
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="../">pycc</a>
+        <span aria-hidden="true">/</span>
+        <span>status</span>
+      </nav>
+
+      <header class="page-hero">
+        <p class="eyebrow">Evidence page · Updated 2026-07-25</p>
+        <h1>What pycc can do <span>today.</span></h1>
+        <p class="page-lede">
+          pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14.
+          This page separates working, repository-tested behavior from the
+          larger design contract. It is not a release announcement.
+        </p>
+        <div class="page-meta" aria-label="Status summary">
+          <span><strong>Milestone</strong> v0.1 in progress</span>
+          <span><strong>Acceptance</strong> 2 of 5 gates</span>
+          <span><strong>Readiness</strong> pre-alpha</span>
+        </div>
+      </header>
+
+      <div class="prose-layout">
+        <aside class="toc" aria-label="On this page">
+          <span>On this page</span>
+          <a href="#implemented">Implemented now</a>
+          <a href="#not-yet">Not implemented yet</a>
+          <a href="#evidence">Evidence</a>
+          <a href="#next">Next delivery slice</a>
+        </aside>
+
+        <article class="prose">
+          <section id="implemented">
+            <p class="section-kicker">Current implementation</p>
+            <h2>A real native-code path exists.</h2>
+            <p>
+              The repository contains a working vertical slice from Python
+              source through parsing, HIR, a type-stage passthrough, MIR, LLVM
+              object generation, host linking, and execution of the resulting
+              native binary.
+            </p>
+            <div class="evidence-grid">
+              <div class="evidence-card">
+                <span>Language slice</span>
+                <strong>Small, explicit surface</strong>
+                <p>
+                  Module-level <code>print</code> of an <code>i64</code>
+                  literal, zero-argument function definitions, and explicit
+                  zero-argument calls are implemented.
+                </p>
+              </div>
+              <div class="evidence-card">
+                <span>Compiler driver</span>
+                <strong>Build, run, version</strong>
+                <p>
+                  These commands have slice-level working paths. Other
+                  documented CLI commands remain planned.
+                </p>
+              </div>
+              <div class="evidence-card">
+                <span>Portability</span>
+                <strong>Five native CI targets</strong>
+                <p>
+                  Linux x64/arm64, macOS x64/arm64, and Windows x64 build and
+                  test in CI. A macOS arm64-to-x64 cross-host path is verified.
+                </p>
+              </div>
+              <div class="evidence-card">
+                <span>Quality</span>
+                <strong>100% lines and regions</strong>
+                <p>
+                  Pull requests must keep the current Rust slice at 100% line
+                  and region coverage before the protected branch can merge.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section id="not-yet">
+            <p class="section-kicker">Scope boundary</p>
+            <h2>The full typed-Python promise is still planned.</h2>
+            <p>
+              Strict type enforcement is not implemented yet:
+              <code>pycc_types::check</code> is currently a passthrough.
+              Arithmetic, values flowing through function arguments and
+              returns, control flow, recursion with values, strings, floats,
+              booleans, <code>range</code>, and f-strings remain v0.1 work.
+            </p>
+            <div class="callout">
+              <strong>Do not use pycc in production.</strong>
+              <p>
+                Unsupported valid Python may still hit explicit slice-limit
+                failures. The examples on the landing page describe the design
+                target unless they are marked as implemented.
+              </p>
+            </div>
+          </section>
+
+          <section id="evidence">
+            <p class="section-kicker">Primary sources</p>
+            <h2>Claims link back to executable evidence.</h2>
+            <ul class="source-list">
+              <li>
+                <a href="https://github.com/rotnov/pycc/blob/main/tests/slice0.rs">
+                  End-to-end slice tests
+                </a>
+                <span>Compile and execute the currently supported programs.</span>
+              </li>
+              <li>
+                <a href="https://github.com/rotnov/pycc/actions/workflows/ci.yml">
+                  Required CI workflow
+                </a>
+                <span>Build, test, coverage, and Tier-1 target evidence.</span>
+              </li>
+              <li>
+                <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">
+                  Commit-relative roadmap
+                </a>
+                <span>The authoritative current-status table and acceptance gates.</span>
+              </li>
+            </ul>
+          </section>
+
+          <section id="next">
+            <p class="section-kicker">Planned next</p>
+            <h2>Frontend depth is the next compiler slice.</h2>
+            <p>
+              The delivery plan next expands the v0.1 grammar, implements real
+              strict typing and local inference, introduces stable diagnostics,
+              and establishes the frontend performance gate. Code generation
+              breadth and conformance demos follow after that foundation.
+            </p>
+            <div class="page-links">
+              <a href="../architecture/">
+                <span>How the compiler is structured</span>
+                <strong>Architecture →</strong>
+              </a>
+              <a href="https://github.com/rotnov/pycc/blob/main/docs/DELIVERY_PLAN.md">
+                <span>Exact sequence and acceptance</span>
+                <strong>Delivery plan ↗</strong>
+              </a>
+            </div>
+          </section>
+        </article>
+      </div>
+
+      <aside class="ai-disclosure" aria-label="Project authorship">
+        <p><strong>Built entirely by AI.</strong> <strong>Managed by a human.</strong></p>
+        <p>
+          AI agents write the specifications, code, tests, documentation,
+          reviews, and automation. No project code is handwritten by a human.
+        </p>
+      </aside>
+    </main>
+
+    <footer>
+      <a class="brand" href="../" aria-label="pycc home">
+        <span class="brand-mark" aria-hidden="true">&gt;_</span>
+        <span>pycc</span>
+      </a>
+      <p>An AI-created, human-managed AOT compiler for typed Python. Pre-alpha.</p>
+      <div>
+        <a href="../ai-native/">AI experiment</a>
+        <a href="../llms.txt">LLM guide</a>
+        <a href="https://github.com/rotnov/pycc">GitHub</a>
+      </div>
+    </footer>
+  </body>
+</html>

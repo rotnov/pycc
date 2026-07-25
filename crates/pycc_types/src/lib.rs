@@ -193,7 +193,7 @@ pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
 }
 
 /// Checks one function's body, resolving sibling calls and module-level
-/// global reads against a clone of `module_env` (see D-039/D-040) instead
+/// global reads against a clone of `module_env` (see D-040/D-041) instead
 /// of an isolated, self-only scope. Cloning (not sharing) `module_env`
 /// means a function's own parameter bindings and local assignments never
 /// leak back into the module scope or into any other function's check.
@@ -271,7 +271,7 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     // Pass 1: register every function's signature before checking any
     // statement body, matching Python's own "a module runs top to bottom,
     // but any def already executed is callable" semantics -- top-level
-    // code and other function bodies (D-039) both need to see every
+    // code and other function bodies (D-040) both need to see every
     // function regardless of its position in the file.
     for item in &hir.items {
         if let HirItem::Function { name, params, return_ty, .. } = item {
@@ -289,7 +289,7 @@ pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     }
     // Pass 3: check every function body against a clone of `env` as it
     // stands once the whole module's top-level code has been processed
-    // (D-040) -- a function can read any module-level global regardless of
+    // (D-041) -- a function can read any module-level global regardless of
     // whether its own `def` appears before or after that global's
     // assignment in the file, since real Python only evaluates a function
     // body when it's *called*, typically after the module has finished
@@ -823,7 +823,7 @@ mod tests {
 
     #[test]
     fn a_function_can_call_a_sibling_function_defined_before_it() {
-        // Regression test for D-039: `check_function`'s own env used to be
+        // Regression test for D-040: `check_function`'s own env used to be
         // seeded empty, so `main` couldn't see `helper` even though both are
         // ordinary module-level functions -- a valid, non-recursive call
         // between two sibling functions was wrongly rejected with T0021.
@@ -858,7 +858,7 @@ mod tests {
 
     #[test]
     fn a_function_can_call_a_sibling_function_defined_after_it() {
-        // Same gap as above, but exercising the pre-registration pass (D-038)
+        // Same gap as above, but exercising the pre-registration pass (D-039)
         // from the *other* direction: `main` is checked first (it's first in
         // the module) yet still must see `helper`, which is defined later.
         let hir = HirModule {
@@ -892,7 +892,7 @@ mod tests {
 
     #[test]
     fn a_function_can_read_a_module_level_global_defined_before_it() {
-        // Regression test for D-040: reading a module global from a function
+        // Regression test for D-041: reading a module global from a function
         // body needs no `global` declaration in real Python (that's only
         // required to *rebind* one) -- child_for_function used to reset
         // bindings to empty, so `f`'s body couldn't see `x` even though it's

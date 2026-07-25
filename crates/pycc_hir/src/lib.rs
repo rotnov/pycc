@@ -96,7 +96,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
 }
 
 fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic> {
-    let is_public = !def.name.as_str().starts_with('_'); // D-037
+    let is_public = !def.name.as_str().starts_with('_'); // D-038
     let params = lower_params(&def.parameters, is_public, def.name.as_str())?;
     let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, def.name.as_str())?;
     let body = def.body.iter().map(lower_stmt).collect();

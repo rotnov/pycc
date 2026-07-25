@@ -4,7 +4,7 @@ set -eu
 canonical='https://rotnov.github.io/pycc/'
 site_dir=${SITE_DIR:-site}
 indexnow_key='3361fe03d0f44ab7cdbb1a3ce1461821'
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
 for required_file in \
   index.html \
@@ -16,7 +16,10 @@ for required_file in \
   sitemap.xml \
   llms.txt \
   "${indexnow_key}.txt" \
-  404.html
+  404.html \
+  status/index.html \
+  architecture/index.html \
+  ai-native/index.html
 do
   test -f "$site_dir/$required_file"
 done
@@ -273,6 +276,330 @@ for disclosure in required_disclosures:
         raise SystemExit(f"Missing visible AI authorship disclosure: {disclosure}")
 PY
 
+python3 - \
+  "$site_dir/status/index.html" \
+  "$site_dir/architecture/index.html" \
+  "$site_dir/ai-native/index.html" <<'PY'
+from html.parser import HTMLParser
+import json
+from pathlib import Path
+import sys
+
+
+ROOT = "https://rotnov.github.io/pycc/"
+ROBOTS = (
+    "index, follow, max-image-preview:large, "
+    "max-snippet:-1, max-video-preview:-1"
+)
+PAGE_SPECS = {
+    "status": {
+        "canonical": f"{ROOT}status/",
+        "title": "pycc status — what the Python AOT compiler can do today",
+        "description": (
+            "See what pycc, the AI-created AOT compiler for typed Python, "
+            "implements today, what remains planned for v0.1, and the CI "
+            "evidence behind each claim."
+        ),
+    },
+    "architecture": {
+        "canonical": f"{ROOT}architecture/",
+        "title": "pycc architecture — typed Python to LLVM native binaries",
+        "description": (
+            "Explore pycc's implemented Rust and LLVM compiler pipeline, "
+            "current crate boundaries, and the planned path from typed "
+            "Python 3.14 to native binaries."
+        ),
+    },
+    "ai-native": {
+        "canonical": f"{ROOT}ai-native/",
+        "title": (
+            "pycc AI-native experiment — software built entirely by AI"
+        ),
+        "description": (
+            "See how AI agents create pycc's specifications, code, tests, "
+            "reviews, documentation, and automation while a human only "
+            "manages direction and constraints."
+        ),
+    },
+}
+
+
+class PageParser(HTMLParser):
+    hidden_tags = {"script", "style", "template", "noscript"}
+    void_tags = {
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.in_title = False
+        self.in_json_ld = False
+        self.in_body = False
+        self.hidden_depth = 0
+        self.body_stack = []
+        self.titles = []
+        self.current_title = []
+        self.metas = []
+        self.links = []
+        self.json_ld = []
+        self.current_json_ld = []
+        self.visible_text = []
+        self.anchors = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "body":
+            self.in_body = True
+            return
+        if self.in_body:
+            inline_style = attributes.get("style", "").replace(" ", "").lower()
+            hidden = (
+                self.hidden_depth > 0
+                or tag in self.hidden_tags
+                or "hidden" in attributes
+                or attributes.get("aria-hidden", "").lower() == "true"
+                or "display:none" in inline_style
+                or "visibility:hidden" in inline_style
+            )
+            if tag == "a" and not hidden and attributes.get("href"):
+                self.anchors.append(attributes["href"])
+            if tag not in self.void_tags:
+                self.body_stack.append((tag, hidden))
+                if hidden:
+                    self.hidden_depth += 1
+            return
+        if tag == "title":
+            self.in_title = True
+            self.current_title = []
+        elif tag == "meta":
+            self.metas.append(attributes)
+        elif tag == "link":
+            self.links.append(attributes)
+        elif tag == "script" and attributes.get("type") == "application/ld+json":
+            self.in_json_ld = True
+            self.current_json_ld = []
+
+    def handle_endtag(self, tag):
+        if tag == "body":
+            self.in_body = False
+            return
+        if self.in_body:
+            if tag in self.void_tags:
+                return
+            if not self.body_stack:
+                raise SystemExit(f"Unexpected closing body tag: {tag}")
+            started_tag, hidden = self.body_stack.pop()
+            if started_tag != tag:
+                raise SystemExit(
+                    f"Mismatched body tags: expected {started_tag}, found {tag}"
+                )
+            if hidden:
+                self.hidden_depth -= 1
+            return
+        if tag == "title" and self.in_title:
+            self.titles.append("".join(self.current_title).strip())
+            self.in_title = False
+        elif tag == "script" and self.in_json_ld:
+            self.json_ld.append("".join(self.current_json_ld))
+            self.in_json_ld = False
+
+    def handle_data(self, data):
+        if self.in_title:
+            self.current_title.append(data)
+        if self.in_json_ld:
+            self.current_json_ld.append(data)
+        if self.in_body and self.hidden_depth == 0:
+            self.visible_text.append(data)
+
+
+def require_one(items, description):
+    if len(items) != 1:
+        raise SystemExit(
+            f"Expected exactly one {description}; found {len(items)}"
+        )
+    return items[0]
+
+
+seen_titles = set()
+seen_descriptions = set()
+for path_value in sys.argv[1:]:
+    path = Path(path_value)
+    slug = path.parent.name
+    spec = PAGE_SPECS[slug]
+    parser = PageParser()
+    parser.feed(path.read_text())
+
+    title = require_one(parser.titles, f"{slug} title")
+    if title != spec["title"]:
+        raise SystemExit(f"Unexpected {slug} title: {title!r}")
+    if title in seen_titles:
+        raise SystemExit(f"Evidence page title is not unique: {title!r}")
+    seen_titles.add(title)
+
+    metadata = {}
+    for meta in parser.metas:
+        key = meta.get("name") or meta.get("property")
+        if key:
+            metadata.setdefault(key, []).append(meta)
+
+    required_metadata = (
+        "description",
+        "robots",
+        "og:type",
+        "og:site_name",
+        "og:locale",
+        "og:url",
+        "og:title",
+        "og:description",
+        "og:image",
+        "og:image:alt",
+        "twitter:card",
+        "twitter:title",
+        "twitter:description",
+        "twitter:image",
+        "twitter:image:alt",
+    )
+    for key in required_metadata:
+        meta = require_one(
+            metadata.get(key, []),
+            f"{slug} {key!r} metadata field",
+        )
+        if not meta.get("content", "").strip():
+            raise SystemExit(
+                f"{slug} metadata field {key!r} must have nonempty content"
+            )
+
+    description = metadata["description"][0]["content"]
+    if description != spec["description"]:
+        raise SystemExit(f"Unexpected {slug} description: {description!r}")
+    if description in seen_descriptions:
+        raise SystemExit(
+            f"Evidence page description is not unique: {description!r}"
+        )
+    seen_descriptions.add(description)
+
+    expected_metadata = {
+        "robots": ROBOTS,
+        "og:type": "website",
+        "og:url": spec["canonical"],
+        "og:image": f"{ROOT}og.png",
+        "twitter:card": "summary_large_image",
+        "twitter:image": f"{ROOT}og.png",
+    }
+    for key, expected in expected_metadata.items():
+        actual = metadata[key][0]["content"]
+        if actual != expected:
+            raise SystemExit(
+                f"{slug} metadata {key!r}: "
+                f"expected {expected!r}, found {actual!r}"
+            )
+
+    canonical = require_one(
+        [
+            link for link in parser.links
+            if "canonical" in link.get("rel", "").split()
+        ],
+        f"{slug} canonical link",
+    )
+    if canonical.get("href") != spec["canonical"]:
+        raise SystemExit(f"{slug} canonical link does not match its URL")
+
+    sitemap = require_one(
+        [
+            link for link in parser.links
+            if "sitemap" in link.get("rel", "").split()
+        ],
+        f"{slug} sitemap link",
+    )
+    if sitemap.get("href") != "../sitemap.xml":
+        raise SystemExit(f"{slug} sitemap link must be ../sitemap.xml")
+
+    stylesheet = require_one(
+        [
+            link for link in parser.links
+            if "stylesheet" in link.get("rel", "").split()
+        ],
+        f"{slug} stylesheet link",
+    )
+    if stylesheet.get("href") != "../styles.css":
+        raise SystemExit(f"{slug} stylesheet link must be ../styles.css")
+
+    web_pages = []
+    breadcrumbs = []
+    for source in parser.json_ld:
+        document = json.loads(source)
+        candidates = (
+            document.get("@graph", [])
+            if isinstance(document, dict)
+            else []
+        )
+        candidates = [document, *candidates]
+        web_pages.extend(
+            item for item in candidates
+            if isinstance(item, dict) and item.get("@type") == "WebPage"
+        )
+        breadcrumbs.extend(
+            item for item in candidates
+            if isinstance(item, dict)
+            and item.get("@type") == "BreadcrumbList"
+        )
+
+    web_page = require_one(web_pages, f"{slug} WebPage JSON-LD object")
+    breadcrumb = require_one(
+        breadcrumbs,
+        f"{slug} BreadcrumbList JSON-LD object",
+    )
+    if web_page.get("@id") != f"{spec['canonical']}#webpage":
+        raise SystemExit(f"{slug} WebPage has the wrong @id")
+    if web_page.get("url") != spec["canonical"]:
+        raise SystemExit(f"{slug} WebPage has the wrong URL")
+    if web_page.get("name") != title:
+        raise SystemExit(f"{slug} WebPage name must match the title")
+    if web_page.get("description") != description:
+        raise SystemExit(
+            f"{slug} WebPage description must match meta description"
+        )
+    if web_page.get("dateModified") != "2026-07-25":
+        raise SystemExit(f"{slug} WebPage dateModified is stale")
+    if web_page.get("isPartOf") != {"@id": f"{ROOT}#webpage"}:
+        raise SystemExit(f"{slug} WebPage must reference the root WebPage")
+    if web_page.get("about") != {"@id": f"{ROOT}#project"}:
+        raise SystemExit(f"{slug} WebPage must reference the pycc project")
+    if web_page.get("breadcrumb") != {"@id": breadcrumb.get("@id")}:
+        raise SystemExit(f"{slug} WebPage must reference its breadcrumb")
+
+    items = breadcrumb.get("itemListElement", [])
+    if [item.get("position") for item in items] != [1, 2]:
+        raise SystemExit(f"{slug} breadcrumb must contain positions 1 and 2")
+    if [item.get("item") for item in items] != [ROOT, spec["canonical"]]:
+        raise SystemExit(f"{slug} breadcrumb URLs do not match the page")
+
+    visible_text = " ".join(" ".join(parser.visible_text).split())
+    for disclosure in (
+        "Built entirely by AI.",
+        "Managed by a human.",
+        "No project code is handwritten by a human.",
+        "pre-alpha",
+    ):
+        if disclosure not in visible_text:
+            raise SystemExit(
+                f"{slug} is missing visible disclosure: {disclosure}"
+            )
+
+    for required_href in (
+        "../",
+        "../status/",
+        "../architecture/",
+        "../ai-native/",
+        "https://github.com/rotnov/pycc",
+    ):
+        if required_href not in parser.anchors:
+            raise SystemExit(
+                f"{slug} is missing internal navigation link: {required_href}"
+            )
+PY
+
 assert_once "Sitemap: ${canonical}sitemap.xml" "$site_dir/robots.txt"
 
 python3 - \
@@ -294,20 +621,38 @@ canonical = sys.argv[4]
 namespace = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 root = ET.parse(sitemap_path).getroot()
 urls = root.findall("s:url", namespace)
-if len(urls) != 1:
-    raise SystemExit(f"Expected exactly one sitemap URL; found {len(urls)}")
+expected_locations = {
+    canonical,
+    f"{canonical}status/",
+    f"{canonical}architecture/",
+    f"{canonical}ai-native/",
+}
+locations = [
+    entry.findtext("s:loc", namespaces=namespace)
+    for entry in urls
+]
+if len(locations) != len(expected_locations):
+    raise SystemExit(
+        f"Expected {len(expected_locations)} sitemap URLs; "
+        f"found {len(locations)}"
+    )
+if set(locations) != expected_locations:
+    raise SystemExit(
+        f"Sitemap URLs do not match the canonical page set: {locations!r}"
+    )
+if len(locations) != len(set(locations)):
+    raise SystemExit("Sitemap contains a duplicate canonical URL")
 
-location = urls[0].findtext("s:loc", namespaces=namespace)
-if location != canonical:
-    raise SystemExit("Sitemap URL must match the canonical URL")
-
-last_modified = urls[0].findtext("s:lastmod", namespaces=namespace)
-try:
-    last_modified_date = date.fromisoformat(last_modified or "")
-except ValueError as error:
-    raise SystemExit("Sitemap lastmod must be an ISO 8601 calendar date") from error
-if last_modified_date > date.today():
-    raise SystemExit("Sitemap lastmod cannot be in the future")
+for entry in urls:
+    last_modified = entry.findtext("s:lastmod", namespaces=namespace)
+    try:
+        last_modified_date = date.fromisoformat(last_modified or "")
+    except ValueError as error:
+        raise SystemExit(
+            "Sitemap lastmod must be an ISO 8601 calendar date"
+        ) from error
+    if last_modified_date > date.today():
+        raise SystemExit("Sitemap lastmod cannot be in the future")
 
 llms = llms_path.read_text()
 if not llms.startswith("# pycc\n\n> "):
@@ -318,6 +663,9 @@ for heading in ("## Project", "## Specifications", "## Optional"):
 for required_link in (
     f"[Canonical website]({canonical})",
     f"[Markdown website]({canonical}index.html.md)",
+    f"[Current implementation status]({canonical}status/)",
+    f"[Compiler architecture]({canonical}architecture/)",
+    f"[AI-native experiment]({canonical}ai-native/)",
     "[Source repository](https://github.com/rotnov/pycc)",
     "[Specification index](https://github.com/rotnov/pycc/blob/main/docs/SPEC.md)",
 ):
@@ -334,6 +682,15 @@ for disclosure in (
 ):
     if disclosure not in llms or disclosure not in markdown:
         raise SystemExit(f"LLM-readable files are missing disclosure: {disclosure}")
+for evidence_link in (
+    f"[Current implementation status]({canonical}status/)",
+    f"[Compiler architecture]({canonical}architecture/)",
+    f"[AI-native experiment]({canonical}ai-native/)",
+):
+    if evidence_link not in markdown:
+        raise SystemExit(
+            f"Markdown website is missing evidence link: {evidence_link}"
+        )
 PY
 
 key_file="$site_dir/${indexnow_key}.txt"

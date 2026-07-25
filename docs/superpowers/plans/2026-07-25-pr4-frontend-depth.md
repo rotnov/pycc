@@ -6,7 +6,7 @@
 
 **Architecture:** `pycc_mir`/`pycc_codegen` are **not** extended with new lowering logic in this PR — per DELIVERY_PLAN.md's own row split, that is PR-5 ("Codegen depth"). `pycc_hir` grows a real, general small-IR shape (`HirExpr` tree + a wider `HirStmt`) instead of the old two special-cased variants; `pycc_mir` gets a **mechanical** update so it still compiles (exhaustive match) against the grown `HirStmt`, but every new construct it can't lower yet fails with a single, clearly-labeled `todo!("codegen for X lands in PR-5")`-style panic — a deliberate, unchanged-behavior boundary, not new codegen work. `pycc check` (parse → HIR → types, no MIR/codegen at all) is the only consumer of the new frontend depth for this PR; `pycc build`/`pycc run` keep working exactly as before, on exactly the same subset they already support.
 
-**Tech Stack:** Same as PR-1 through PR-3 (Rust 1.97.1 edition 2024, `ruff_python_parser`/`ruff_python_ast` 0.0.6 pinned, `clap`, `cargo-llvm-cov`). No new external crate dependency is added for diagnostic snapshot testing (D-035 below) or for the performance gate (D-037 below) — both are hand-rolled with `std`/existing deps, the most conservative option.
+**Tech Stack:** Same as PR-1 through PR-3 (Rust 1.97.1 edition 2024, `ruff_python_parser`/`ruff_python_ast` 0.0.6 pinned, `clap`, `cargo-llvm-cov`). No new external crate dependency is added for diagnostic snapshot testing (D-036 below) or for the performance gate (D-038 below) — both are hand-rolled with `std`/existing deps, the most conservative option.
 
 ## Global Constraints
 
@@ -15,7 +15,7 @@
 - `ruff_python_ast = "0.0.6"` is the exact pinned version this plan's code is verified against (see Task 4's verified-API appendix) — do not assume newer/older ruff API shapes.
 - `pycc_mir`/`pycc_codegen` receive **no new lowering logic** in this PR (see Architecture above) — if a task description asks you to make `print(x + 1)` actually *run*, stop: that is out of scope, re-read the Architecture section.
 - `pycc_own`/`pycc_std`/`pycc_lexer` remain deferred (D-017, unchanged).
-- `pycc_testkit` and `tests/conformance/` remain deferred to PR-6 (D-018, reaffirmed as D-036 below) — this PR only adds `tests/diagnostics/`, not `tests/conformance/`.
+- `pycc_testkit` and `tests/conformance/` remain deferred to PR-6 (D-018, reaffirmed as D-037 below) — this PR only adds `tests/diagnostics/`, not `tests/conformance/`.
 - Every new `Diagnostic` code must actually be producible by a real, reachable code path added in this same PR — no stub codes nothing constructs (per DIAGNOSTICS.md's own registry being aspirational; only implement what's real).
 - Diagnostics are byte-identical across Tier-1 platforms (DIAGNOSTICS.md's quality bar) — never format a path with a platform-specific separator in test-asserted output; use forward slashes or file-name-only in fixtures.
 
@@ -26,7 +26,7 @@
 ```
 pycc/
 ├── docs/
-│   └── DECISIONS.md                     # D-034..D-037 appended (Task 1)
+│   └── DECISIONS.md                     # D-035..D-038 appended (Task 1)
 ├── crates/
 │   ├── pycc_diag/src/lib.rs              # Span gets real line/col; new render module (Task 2, 3)
 │   ├── pycc_ast/src/lib.rs                # new re-exports (Task 4)
@@ -59,14 +59,14 @@ pycc/
 Add to the summary table (after the last existing row) and as full sections at the end of the file, following the exact format every existing entry already uses:
 
 ```markdown
-| D-034 | PR-4 is frontend-only: `pycc_mir`/`pycc_codegen` gain no new lowering logic; new HIR constructs get a clear "not implemented until PR-5" panic in MIR's one exhaustive match, not new codegen work | accepted |
-| D-035 | Diagnostic snapshot tests are hand-rolled (`assert_eq!` against a checked-in expected-output file per fixture), not the `insta` crate — TESTING.md's "insta-style" describes the *approach*, not a dependency requirement, and this avoids a new external dependency for a mechanism `std` already covers | accepted |
-| D-036 | `pycc_testkit` and `tests/conformance/` remain deferred past PR-4 to PR-6, per D-018's original "PR-4/PR-6" window — PR-4 adds only `tests/diagnostics/` (negative fixtures), which DIAGNOSTICS.md and PYTHON_STANDARDS.md already specify independently of the conformance harness | accepted |
-| D-037 | A top-level function is "public" for T0001 purposes iff its name does not start with `_`, matching ordinary Python convention — TYPE_SYSTEM.md says "locals and private helpers" are inferred but never defines "private" for module-level defs; this is the standard, least-surprising reading | accepted |
+| D-035 | PR-4 is frontend-only: `pycc_mir`/`pycc_codegen` gain no new lowering logic; new HIR constructs get a clear "not implemented until PR-5" panic in MIR's one exhaustive match, not new codegen work | accepted |
+| D-036 | Diagnostic snapshot tests are hand-rolled (`assert_eq!` against a checked-in expected-output file per fixture), not the `insta` crate — TESTING.md's "insta-style" describes the *approach*, not a dependency requirement, and this avoids a new external dependency for a mechanism `std` already covers | accepted |
+| D-037 | `pycc_testkit` and `tests/conformance/` remain deferred past PR-4 to PR-6, per D-018's original "PR-4/PR-6" window — PR-4 adds only `tests/diagnostics/` (negative fixtures), which DIAGNOSTICS.md and PYTHON_STANDARDS.md already specify independently of the conformance harness | accepted |
+| D-038 | A top-level function is "public" for T0001 purposes iff its name does not start with `_`, matching ordinary Python convention — TYPE_SYSTEM.md says "locals and private helpers" are inferred but never defines "private" for module-level defs; this is the standard, least-surprising reading | accepted |
 ```
 
 ```markdown
-## D-034: PR-4 is frontend-only; MIR gains no new lowering logic
+## D-035: PR-4 is frontend-only; MIR gains no new lowering logic
 
 - Status: accepted (PR-4 is the PR that depends on it)
 - Context: DELIVERY_PLAN.md's PR table splits "PR-4: Frontend depth" from "PR-5: Codegen depth: full v0.1 feature set (int/float/str/bool, arithmetic, control flow, recursion, f-strings)" — the *same* feature list PR-4's own row implies growing (via "full v0.1 grammar"). Read literally, PR-4 grows the grammar the *frontend* accepts and type-checks; PR-5 grows what the *backend* can actually compile and run. `pycc check` (CLI_SPEC.md: "frontend only: parse + types + ownership; ruff-fast, no codegen") is the concrete CLI surface that only needs the frontend, confirming this split is intentional, not an oversight.
@@ -74,7 +74,7 @@ Add to the summary table (after the last existing row) and as full sections at t
 - Alternatives: extend `pycc_mir`/`pycc_codegen` in lockstep with every new HIR construct so `pycc build` supports the full grammar immediately (rejected — this is literally PR-5's scope restated, and doing it here would make PR-5 an empty PR while making PR-4 unboundedly large). Build a second, parallel expression tree used only by `pycc check` so `pycc_mir` never needs touching at all (rejected — creates two divergent ASTs that must be reconciled again in PR-5 anyway, redundant work for no real benefit given the mechanical MIR update is small).
 - Consequences: `pycc build`/`pycc run` on any of PR-4's new grammar (arithmetic, control flow, functions with arguments, f-strings, etc.) panics with a clear, PR-5-referencing message rather than silently miscompiling or producing wrong output — a real, intentional, and temporary gap, not a silent one. Every `tests/slice0.rs` CLI-level test added in PR-4 for new grammar must go through `pycc check`, not `pycc build`/`pycc run`.
 
-## D-035: Diagnostic snapshot tests are hand-rolled, not the `insta` crate
+## D-036: Diagnostic snapshot tests are hand-rolled, not the `insta` crate
 
 - Status: accepted (PR-4 is the PR that depends on it)
 - Context: TESTING.md's Layer 3 row says diagnostic fixtures use "insta-style snapshots." DELIVERY_PLAN.md's PR-4 row says "first diagnostic codes with snapshot tests." Neither document requires the literal `insta` crate; "insta-style" describes comparing rendered output against a checked-in expected file and failing on any diff, which `std::fs::read_to_string` + `assert_eq!` already does without a new dependency.
@@ -82,15 +82,15 @@ Add to the summary table (after the last existing row) and as full sections at t
 - Alternatives: add `insta` as a dependency now (rejected — `insta`'s own workflow (`.snap.new` files, `cargo insta review`) is a genuine ergonomic win at scale, but is a new external dependency this PR doesn't need to introduce yet; revisit if/when the fixture count grows large enough that manual maintenance becomes the bottleneck, as its own new ADR entry).
 - Consequences: adding a new diagnostic fixture means hand-writing its exact expected output once, verified by running `pycc check` on it and copying the real output in (never hand-typed from imagination) — slightly more manual than `insta`'s auto-generate-and-review flow, acceptable at this fixture count.
 
-## D-036: `pycc_testkit`/`tests/conformance/` remain deferred to PR-6
+## D-037: `pycc_testkit`/`tests/conformance/` remain deferred to PR-6
 
 - Status: accepted (reaffirms D-018 for PR-4 specifically)
 - Context: D-018 already deferred `pycc_testkit` "past PR-1/PR-2... built for real at PR-4/PR-6," leaving genuine ambiguity about which of those two PRs. PYTHON_STANDARDS.md's PEP matrix is still 100% `☐` (unstarted) and DELIVERY_PLAN.md's own task breakdown names PR-6 "Conformance + benchmark gate" — a dedicated PR for exactly this harness.
-- Decision: PR-4 does not create `pycc_testkit` or `tests/conformance/`. It creates only `tests/diagnostics/` (D-035), which DIAGNOSTICS.md and PYTHON_STANDARDS.md's "rejected by design" table already specify as its own, separate concern from PEP conformance fixtures.
+- Decision: PR-4 does not create `pycc_testkit` or `tests/conformance/`. It creates only `tests/diagnostics/` (D-036), which DIAGNOSTICS.md and PYTHON_STANDARDS.md's "rejected by design" table already specify as its own, separate concern from PEP conformance fixtures.
 - Alternatives: stand up a minimal `pycc_testkit` now too (rejected — no PEP matrix exists yet for it to check against, the same YAGNI reasoning D-017/D-018 already used; would be structure without function).
 - Consequences: PR-6 is where the PEP-by-PEP conformance harness and its `tests/conformance/pyXY/` fixtures actually get built; PR-4's diagnostic fixtures are unaffected by that later work since they live in a separate directory with a separate, already-real purpose.
 
-## D-037: A leading underscore marks a top-level function "private" for T0001
+## D-038: A leading underscore marks a top-level function "private" for T0001
 
 - Status: accepted (PR-4 is the PR that depends on it)
 - Context: TYPE_SYSTEM.md's strictness rule 1 requires annotations on "every public function/method," rule 2 says "locals and private helpers" are inferred — but the document never defines what makes a *module-level function* public or private (there is no Python keyword for this, unlike a class's `_`-prefixed attribute convention, which IS an established Python-ecosystem norm this extends).
@@ -103,7 +103,7 @@ Add to the summary table (after the last existing row) and as full sections at t
 
 ```bash
 git add docs/DECISIONS.md
-git commit -m "docs: record PR-4 scope decisions (D-034 through D-037)"
+git commit -m "docs: record PR-4 scope decisions (D-035 through D-038)"
 ```
 
 ---
@@ -731,7 +731,7 @@ pub fn build(hir: &HirModule) -> MirModule {
 /// Only the two constructs pycc_codegen can already emit LLVM IR for are
 /// lowered here -- everything HIR's wider grammar (Tasks 6-11) can now
 /// represent but this crate can't yet compile panics with a message naming
-/// PR-5 explicitly (D-034): a deliberate, temporary boundary, not new
+/// PR-5 explicitly (D-035): a deliberate, temporary boundary, not new
 /// codegen work landing in this PR.
 fn lower_instr(stmt: &HirStmt) -> MirInstr {
     let HirStmt::ExprStmt(expr) = stmt;
@@ -782,7 +782,7 @@ Expected: PASS. Pay particular attention to `pycc_mir`'s new panic arms and `pyc
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_hir/Cargo.toml crates/pycc_mir/src/lib.rs crates/pycc_codegen/src/lib.rs
-git commit -m "refactor(pycc_hir,pycc_mir): general HirExpr/MirExpr tree, behavior-preserving (D-034)"
+git commit -m "refactor(pycc_hir,pycc_mir): general HirExpr/MirExpr tree, behavior-preserving (D-035)"
 ```
 
 ---
@@ -1671,7 +1671,7 @@ git commit -m "feat(pycc_hir,pycc_types): if/elif/else, while, for-range"
 - Test: inline in both
 
 **Interfaces:**
-- Produces: `HirItem::Function` gains `params: Vec<(String, Ty)>` and `return_ty: Ty` (both required — this is where T0001 actually fires, at lowering time if unannotated on a public function, per D-037's naming convention). `HirStmt` gains `Return(Option<HirExpr>)`. `pycc_types::check_function(env: &Environment, function: &HirItem) -> Result<(), Diagnostic>` type-checks a function's body against its declared parameter types and verifies every `Return` matches the declared `return_ty`.
+- Produces: `HirItem::Function` gains `params: Vec<(String, Ty)>` and `return_ty: Ty` (both required — this is where T0001 actually fires, at lowering time if unannotated on a public function, per D-038's naming convention). `HirStmt` gains `Return(Option<HirExpr>)`. `pycc_types::check_function(env: &Environment, function: &HirItem) -> Result<(), Diagnostic>` type-checks a function's body against its declared parameter types and verifies every `Return` matches the declared `return_ty`.
 
 - [x] **Step 1: Write the failing HIR tests**
 
@@ -1758,7 +1758,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
 }
 
 fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic> {
-    let is_public = !def.name.as_str().starts_with('_'); // D-037
+    let is_public = !def.name.as_str().starts_with('_'); // D-038
     let params = lower_params(&def.parameters, is_public, &def.name)?;
     let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, &def.name)?;
     let body = def.body.iter().map(lower_stmt).collect();
@@ -2590,7 +2590,7 @@ git commit -m "feat(pycc): wire pycc check for real (parse+HIR+types, human/JSON
 
 ---
 
-## Task 13: `tests/diagnostics/` fixtures with hand-rolled snapshot assertions (D-035)
+## Task 13: `tests/diagnostics/` fixtures with hand-rolled snapshot assertions (D-036)
 
 **Files:**
 - Create: `tests/diagnostics/d0001_missing_public_annotation.py`
@@ -2637,7 +2637,7 @@ def f(x: Any) -> None:
 
 This is correct as pycc's own `annotation_to_ty` doesn't care about `Any`'s import provenance — only its literal spelling. Use this version, no import line.)
 
-`tests/diagnostics/d0001_missing_public_annotation.expected.txt` — run `cargo run --bin pycc -- check tests/diagnostics/d0001_missing_public_annotation.py` locally once Task 12 lands, and copy its *actual* stdout verbatim into this file (do not hand-write the expected text from imagination — D-035's whole point is comparing against real, verified output). Example of the shape to expect (verify exactly, byte for byte, before committing):
+`tests/diagnostics/d0001_missing_public_annotation.expected.txt` — run `cargo run --bin pycc -- check tests/diagnostics/d0001_missing_public_annotation.py` locally once Task 12 lands, and copy its *actual* stdout verbatim into this file (do not hand-write the expected text from imagination — D-036's whole point is comparing against real, verified output). Example of the shape to expect (verify exactly, byte for byte, before committing):
 
 ```
 error[T0001]: parameter `a` of public function `add` needs a type annotation
@@ -2706,7 +2706,7 @@ Expected: PASS. `tests/diagnostics_test.rs` is itself a `tests/` file, excluded 
 
 ```bash
 git add tests/diagnostics/ tests/diagnostics_test.rs
-git commit -m "test: add tests/diagnostics/ negative fixtures for T0001 and T0002 (D-035)"
+git commit -m "test: add tests/diagnostics/ negative fixtures for T0001 and T0002 (D-036)"
 ```
 
 ---
@@ -2842,10 +2842,10 @@ Expected: all three pass — the new job inherits the workflow's top-level `cont
 
 `.github/workflows/ci.yml`'s `ci-gate` job (D-032) currently `needs: [build-test-coverage, native-build-test, cross-compile-build, cross-compile-verify]` — decide whether `frontend-perf-gate` should also gate merges (add it to `ci-gate`'s `needs:` and its `if:` condition's explicit checks) or stay informational-only for now (since its regression-detection mechanism is unproven per Step 4's caveat). Given the mechanism isn't yet verified to actually fail correctly, the conservative choice is: do **not** add it to `ci-gate` in this task — record that decision explicitly:
 
-Note: this snippet's `D-038` label is a stale placeholder from when this plan was written — D-038 and D-039 are both already taken (D-039 closed the sibling-function-call gap D-038 itself deferred). Re-check `docs/DECISIONS.md`'s actual highest existing ID when Task 14 is executed and use the next free one instead.
+Note: this snippet's `D-039` label is a stale placeholder from when this plan was written — D-039 and D-040 are both already taken (D-040 closed the sibling-function-call gap D-039 itself deferred). Re-check `docs/DECISIONS.md`'s actual highest existing ID when Task 14 is executed and use the next free one instead.
 
 ```markdown
-## D-038: `frontend-perf-gate` is not yet a required check
+## D-039: `frontend-perf-gate` is not yet a required check
 
 - Status: accepted (PR-4 is the PR that depends on it)
 - Context: Task 14 stood up a `criterion`-based frontend benchmark and a CI job intended to fail on a >2% regression, but whether criterion's own CLI actually sets a failing exit code on regression (vs. just printing a report) for the pinned version was not verified against a live CI run before this PR needed to land -- see the job definition's own comment in `ci.yml`.
@@ -2865,7 +2865,7 @@ Expected: PASS. `benches/check_bench.rs` is a `[[bench]]` target, not a `[[test]
 
 ```bash
 git add benches/check_bench.rs Cargo.toml .github/workflows/ci.yml docs/DECISIONS.md docs/TESTING.md
-git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc check, D-0NN)"  # use the actual next-free ADR ID, not a hardcoded D-038 -- see the note above Step 6's snippet
+git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc check, D-0NN)"  # use the actual next-free ADR ID, not a hardcoded D-039 -- see the note above Step 6's snippet
 ```
 
 ---
@@ -2879,7 +2879,7 @@ git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc
 - TYPE_SYSTEM.md rule 4 (no implicit Optional/narrowing/untyped containers) — **not covered by this plan.** v0.1's grammar subset (per DELIVERY_PLAN.md's own TDD sequence: arithmetic → comparisons → if/while/for+range → functions/recursion → f-strings) never introduces `Optional`, containers, or narrowing constructs at all, so this rule has no surface to violate yet — not a gap in this plan, a gap in what v0.1's grammar itself includes. Flag this explicitly rather than silently passing over it.
 - TYPE_SYSTEM.md rule 5 (unreachable-after-`match`/`Never`) — **not covered.** `match` isn't in v0.1's grammar per DELIVERY_PLAN.md's own scope (PEP 634 `match` is PR-... actually, checking ROADMAP.md's v0.1 accept criteria again: only `if/while/for+range`, no `match` — confirmed out of scope, not a gap).
 - Type↔representation table (int/float/bool/str/None) — Task 6, 7, 10. ✅ (class/Protocol/enum/generics explicitly out of v0.1 scope, correctly excluded)
-- DIAGNOSTICS.md quality bar (span, label, help) — Task 3 covers span; **`help` suggestions are never populated** (every `render_human` call renders an empty help section implicitly, since no task ever constructs one) — flagged as a real, tracked gap, not fixed in this plan; add a follow-up task or DECISIONS.md note if this matters before PR-4 ships. **Action: add this as a documented, explicit follow-up in Task 14's own ADR entry (next free ID, not literally D-038 — that and D-039 are both already taken).**
+- DIAGNOSTICS.md quality bar (span, label, help) — Task 3 covers span; **`help` suggestions are never populated** (every `render_human` call renders an empty help section implicitly, since no task ever constructs one) — flagged as a real, tracked gap, not fixed in this plan; add a follow-up task or DECISIONS.md note if this matters before PR-4 ships. **Action: add this as a documented, explicit follow-up in Task 14's own ADR entry (next free ID, not literally D-039 — that and D-040 are both already taken).**
 - CLI_SPEC.md human/JSON format — Task 3. ✅
 - PYTHON_STANDARDS.md `tests/diagnostics/` convention — Task 13. ✅
 - DELIVERY_PLAN.md Performance gate — Task 14. ✅ (with the honest caveat, recorded under whatever ADR ID is next-free at that time, about its unverified regression-detection mechanism)
@@ -2892,10 +2892,10 @@ git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc
 **Files:**
 - Modify: `docs/DECISIONS.md`
 
-- [x] **Step 1: Add D-039 recording the real, deliberate gaps this PR leaves**
+- [x] **Step 1: Add D-040 recording the real, deliberate gaps this PR leaves**
 
 ```markdown
-## D-039: PR-4's known gaps -- Optional/narrowing/containers, help-text suggestions, real spans
+## D-040: PR-4's known gaps -- Optional/narrowing/containers, help-text suggestions, real spans
 
 - Status: accepted (PR-4 is the PR that depends on it)
 - Context: self-review of this PR's own implementation plan against TYPE_SYSTEM.md and DIAGNOSTICS.md in full found three things this PR does not close: (1) TYPE_SYSTEM.md rule 4 (no implicit Optional, no untyped containers) has no surface to violate yet, since v0.1's grammar (this PR's own scope) never introduces `Optional`/containers/narrowing constructs at all; (2) DIAGNOSTICS.md's quality bar calls for a `help:` suggestion "when one is safe" on every diagnostic, but no diagnostic this PR produces ever populates one (`render_human`/`render_json` support it structurally, nothing calls the codepath that would fill it in); (3) every diagnostic's `Span` is `Span::new(0, 0)` regardless of where the real error is (Task 2 only fixed the *parser's own* L0001 span; every T0001/T0002/T0021/T0023 diagnostic Task 6 onward constructs still hardcodes a placeholder span, since threading a real span through the whole HIR-lowering/type-inference call chain -- carrying a `Span` alongside every `HirExpr`/`HirStmt` node -- is a structural change this plan deliberately didn't take on given its already-large scope).
@@ -2908,7 +2908,7 @@ git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc
 
 ```bash
 git add docs/DECISIONS.md
-git commit -m "docs: record PR-4's known gaps honestly (D-039) rather than leaving them silently implied"
+git commit -m "docs: record PR-4's known gaps honestly (D-040) rather than leaving them silently implied"
 ```
 
 **2. Placeholder scan:** no "TBD"/"implement later" strings remain in any step's code (searched: every code block above is complete and would compile as written, modulo the explicitly-flagged verification points calling out exact method names to confirm against the pinned `ruff_python_ast`/`ruff_python_parser` 0.0.6 source before trusting them — e.g. `Int::as_i64`, `ParseError::location`'s exact field name, `ConversionFlag`'s trait derives — each of these is a "verify this specific claim against the real source" instruction, not a placeholder for missing design).

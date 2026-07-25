@@ -67,7 +67,7 @@ pub fn byte_offset_to_line_col(source: &str, offset: u32) -> LineCol {
 /// line:col` / a blank gutter line / the source line prefixed with its line
 /// number / a caret-underline beneath the span. `help:` lines and a trailing
 /// label after the carets are not rendered here -- no code path in this PR
-/// populates one yet (see D-039).
+/// populates one yet (see D-043).
 pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String {
     let mut out = String::new();
     let severity_word = match diag.severity {
@@ -101,7 +101,7 @@ pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String 
 
 /// CLI_SPEC.md's versioned JSON diagnostic format: `format_version: 1`,
 /// `spans[{file,line,col,len,label}]`. `help` is always an empty array in
-/// this PR -- see `render_human`'s doc comment and D-039.
+/// this PR -- see `render_human`'s doc comment and D-043.
 pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
     let severity_word = match diag.severity {
         Severity::Error => "error",

@@ -39,7 +39,7 @@ pub fn build(hir: &HirModule) -> MirModule {
 /// Only the two constructs `pycc_codegen` can already emit LLVM IR for are
 /// lowered here -- everything HIR's wider grammar (PR-4's frontend depth)
 /// can now represent but this crate can't yet compile panics with a message
-/// naming PR-5 explicitly (D-034): a deliberate, temporary boundary, not
+/// naming PR-5 explicitly (D-035): a deliberate, temporary boundary, not
 /// new codegen work landing in this PR.
 fn lower_instr(stmt: &HirStmt) -> MirInstr {
     let HirStmt::ExprStmt(expr) = stmt else {
