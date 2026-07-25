@@ -235,11 +235,63 @@ def coverage_gate_present?(workflow_text, source)
   true
 end
 
+def opening_fence(line)
+  match = /\A {0,3}(?<marker>`{3,}|~{3,})(?<info>[^\r\n]*)(?:\r?\n)?\z/.match(line)
+  return unless match
+
+  marker = match[:marker]
+  return if marker.start_with?("`") && match[:info].include?("`")
+
+  [marker[0], marker.length]
+end
+
+def closing_fence?(line, fence)
+  character, minimum_length = fence
+  pattern =
+    /\A {0,3}#{Regexp.escape(character)}{#{minimum_length},}[ \t]*(?:\r?\n)?\z/
+  pattern.match?(line)
+end
+
+def without_html_comments(line, in_comment)
+  visible = String.new
+  cursor = 0
+  loop do
+    if in_comment
+      closing = line.index("-->", cursor)
+      return [visible, true] unless closing
+
+      cursor = closing + 3
+      in_comment = false
+    else
+      opening = line.index("<!--", cursor)
+      unless opening
+        visible << line[cursor..]
+        return [visible, false]
+      end
+
+      visible << line[cursor...opening]
+      cursor = opening + 4
+      in_comment = true
+    end
+  end
+end
+
 def validate_roadmap(text)
   evidence_ids = []
   heading_path = []
+  fence = nil
+  in_html_comment = false
   text.each_line.with_index(1) do |line, line_number|
-    heading = ATX_HEADING.match(line)
+    if fence
+      fence = nil if closing_fence?(line, fence)
+      next
+    end
+
+    visible_line, in_html_comment = without_html_comments(line, in_html_comment)
+    fence = opening_fence(visible_line)
+    next if fence
+
+    heading = ATX_HEADING.match(visible_line)
     if heading
       level = heading[:marks].length
       title = heading[:title].sub(/[ \t]+#+[ \t]*$/, "").strip
@@ -248,10 +300,10 @@ def validate_roadmap(text)
       next
     end
 
-    item = CHECKED_ITEM.match(line)
+    item = CHECKED_ITEM.match(visible_line)
     next unless item
 
-    marker = EVIDENCE_MARKER.match(item[:claim])
+    marker = EVIDENCE_MARKER.match(line)
     unless marker
       raise RoadmapEvidenceError,
             "line #{line_number}: checked roadmap item is missing an evidence marker"
@@ -270,7 +322,7 @@ def validate_roadmap(text)
             "the expected roadmap section #{expected_section.join(' > ').inspect}"
     end
 
-    actual_claim = item[:claim].sub(EVIDENCE_MARKER, "").strip
+    actual_claim = item[:claim].strip
     if actual_claim == expected_claim
       evidence_ids << marker[:id]
       next

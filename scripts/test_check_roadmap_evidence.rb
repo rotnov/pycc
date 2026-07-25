@@ -183,6 +183,65 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
+  def test_ignores_headings_hidden_in_fences_and_html_comments
+    hidden_sections = [
+      <<~MARKDOWN,
+        ```markdown
+        # pycc Roadmap
+
+        ## Current delivery status
+
+        ### v0.1 acceptance checklist
+        ```
+      MARKDOWN
+      <<~MARKDOWN
+        <!--
+        # pycc Roadmap
+
+        ## Current delivery status
+
+        ### v0.1 acceptance checklist
+        -->
+      MARKDOWN
+    ]
+
+    hidden_sections.each do |hidden_section|
+      roadmap = <<~MARKDOWN
+        # pycc Roadmap
+
+        ## v1.0 — spec freeze
+
+        #{hidden_section}
+        - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+      MARKDOWN
+
+      _stdout, stderr, status = run_checker(
+        roadmap: roadmap,
+        workflow: coverage_workflow
+      )
+
+      refute status.success?
+      assert_includes stderr, "must appear under the expected roadmap section"
+    end
+  end
+
+  def test_ignores_checked_items_hidden_in_fences_and_html_comments
+    hidden_items = [
+      "```\n- [x] Hidden example without evidence.\n```\n",
+      "<!--\n- [x] Hidden note without evidence.\n-->\n"
+    ]
+
+    hidden_items.each do |hidden_item|
+      stdout, stderr, status = run_checker(
+        roadmap: "# pycc Roadmap\n\n#{hidden_item}",
+        workflow: "jobs: {}\n"
+      )
+
+      assert status.success?, stderr
+      assert_includes stdout, "Roadmap evidence policy passed."
+    end
+  end
+
   def test_rejects_an_unknown_evidence_marker
     roadmap = <<~MARKDOWN
       # pycc Roadmap

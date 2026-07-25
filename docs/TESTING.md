@@ -67,9 +67,10 @@ one nested in a Markdown blockquote, must end with an inline marker:
 `scripts/check_roadmap_evidence.rb` binds each registered identifier to the
 complete roadmap heading path and claim it proves plus a deterministic
 repository check. Missing, unknown, misplaced, or claim-mismatched markers
-fail. Adding a new evidence type starts with a failing public-CLI mutation in
-`scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
-and documented claim land together.
+fail. Fenced code and HTML comments do not contribute rendered headings or
+task items. Adding a new evidence type starts with a failing public-CLI
+mutation in `scripts/test_check_roadmap_evidence.rb`; the checker
+implementation, marker, and documented claim land together.
 
 The initial `ci-build-test-coverage-100` evidence requires all of the following:
 
