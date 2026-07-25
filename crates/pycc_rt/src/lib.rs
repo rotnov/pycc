@@ -550,6 +550,102 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
     }
 }
 
+// --- Implementation note / deviation from the task brief -------------
+//
+// The brief's own version of `pycc_rt_int_to_str`/`pycc_rt_float_to_str`
+// gave each straight to a single `#[unsafe(no_mangle)] pub extern "C" fn`
+// (no private-logic/public-wrapper split). Both can panic --
+// `int_to_str` via `require_smallint`'s bigint-rejection path (not yet
+// exercised by any test in *this* task, since Task 9 is what first makes a
+// bigint-valued tagged `int` reachable, but still a real panicking path
+// today), `float_to_str` via its own scientific-notation-range rejection
+// (directly exercised by this task's own tests) -- and both are plain
+// `extern "C" fn`s, not `extern "C-unwind"`. Per this file's own
+// established convention (see the implementation note above `int_add`,
+// and this crate's project-wide rule that any new `pycc_rt` `extern "C"
+// fn` that can panic needs this split), calling either public wrapper
+// directly from ordinary same-crate Rust test code would abort the whole
+// test binary (`SIGABRT`) instead of letting `#[should_panic]` catch an
+// ordinary unwind -- confirmed empirically: `pycc_rt_float_to_str_rejects_
+// magnitudes_needing_scientific_notation` aborted the test binary before
+// this split existed. Fixed the same way as `int_add`/`pycc_rt_int_add`:
+// a private, ordinary-Rust-ABI function holding the real logic (freely
+// panics, unwinds normally) and a thin `#[unsafe(no_mangle)] pub extern
+// "C" fn` wrapper of the exact name/signature the brief specifies.
+// `bool_to_str` has no failure mode (same reasoning as `pycc_rt_str_from_
+// literal`'s own doc comment) so it keeps the brief's single-function
+// shape unchanged.
+
+/// Formats a tagged `int` the way CPython's own `str(n)` would (Task 8) --
+/// reused unchanged by f-string interpolation and Task 10's `print`. Shares
+/// `format_i64_line`'s digit-formatting logic with `pycc_rt_print_i64`
+/// rather than duplicating it, trimming the trailing newline that function
+/// adds for its own (unrelated) purpose.
+fn int_to_str(tagged: i64) -> *mut PyStrObj {
+    require_smallint(tagged, "formatting");
+    new_pystr(format_i64_line(untag_smallint(tagged)).trim_end().as_bytes())
+}
+
+/// See the panic-across-FFI note above `pycc_rt_int_add`: this crosses no
+/// FFI boundary on its own successful-return tests, but a real
+/// bigint-valued `tagged` (Task 9) would panic here, so this stays a thin
+/// wrapper around `int_to_str`'s own freely-panicking logic rather than
+/// housing that logic directly.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_to_str(tagged: i64) -> *mut PyStrObj {
+    int_to_str(tagged)
+}
+
+/// Formats a `bool` the way CPython's own `str(b)` would: capitalized
+/// `"True"`/`"False"`, never Rust's own lowercase `Display` spelling (Task
+/// 8, reused unchanged by f-string interpolation and Task 10's `print`).
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_bool_to_str(value: i8) -> *mut PyStrObj {
+    new_pystr(if value != 0 { b"True" } else { b"False" })
+}
+
+/// Formats a `float` the way CPython's own `str(f)` would (Task 8, reused
+/// unchanged by f-string interpolation and Task 10's `print`).
+///
+/// Verified against `python3.13`'s actual `repr(float)`/`str(float)`
+/// (identical since Python 3.1): CPython switches to scientific
+/// notation once the value's magnitude is `>= 1e16` or (nonzero and)
+/// `< 1e-4`; within that range it always shows at least one digit after
+/// the decimal point (`3.0`, never bare `3`, unlike Rust's own `{}`
+/// `Display` for `f64`), and `inf`/`-inf`/`nan` are lowercase (Rust's
+/// own `Display` capitalizes `NaN`). Reproducing CPython's scientific
+/// notation formatting exactly is out of scope for this task -- an
+/// honest panic for that narrow range, not a silently wrong digit
+/// string (a documented, named gap, same convention as D-026/D-043).
+fn float_to_str(value: f64) -> *mut PyStrObj {
+    if value.is_nan() {
+        return new_pystr(b"nan");
+    }
+    if value.is_infinite() {
+        return new_pystr(if value > 0.0 { b"inf" } else { b"-inf" });
+    }
+    let magnitude = value.abs();
+    // clippy's `manual_range_contains`: `!(1e-4..1e16).contains(&magnitude)`
+    // is `magnitude < 1e-4 || magnitude >= 1e16` (a `Range` is
+    // start-inclusive, end-exclusive) -- the same condition as the task
+    // brief's own `magnitude >= 1e16 || magnitude < 1e-4`, just reordered.
+    if magnitude != 0.0 && !(1e-4..1e16).contains(&magnitude) {
+        panic!(
+            "pycc_rt: formatting a float this large or small ({value}) needs \
+             scientific notation, which is not supported yet"
+        );
+    }
+    let text = format!("{value}");
+    let text = if text.contains('.') { text } else { format!("{text}.0") };
+    new_pystr(text.as_bytes())
+}
+
+/// See the panic-across-FFI note above `pycc_rt_int_add`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_float_to_str(value: f64) -> *mut PyStrObj {
+    float_to_str(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,5 +983,142 @@ mod tests {
             pycc_rt_str_incref(std::ptr::null_mut());
             pycc_rt_str_decref(std::ptr::null_mut());
         }
+    }
+
+    #[test]
+    fn pycc_rt_int_to_str_formats_the_untagged_decimal_value() {
+        // Deviation from the task brief: the brief's own version of this
+        // (and every other new test below) called `pycc_rt_str_decref`
+        // directly, unwrapped -- but that function is `pub unsafe extern
+        // "C" fn` (see its own doc comment/safety section above), so an
+        // unwrapped call doesn't compile (`E0133`, "call to unsafe function
+        // ... is unsafe and requires unsafe block or unsafe function").
+        // Every `pycc_rt_str_decref` call below is wrapped in its own
+        // `unsafe { ... }` block, matching every other test in this file
+        // that already calls an `unsafe fn` (e.g. `cmp_orders_strings_
+        // lexicographically` above).
+        let s = pycc_rt_int_to_str(tag_smallint(42));
+        assert_eq!(unsafe { &*s }.bytes(), b"42");
+        unsafe { pycc_rt_str_decref(s) };
+        let s = pycc_rt_int_to_str(tag_smallint(-7));
+        assert_eq!(unsafe { &*s }.bytes(), b"-7");
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn pycc_rt_bool_to_str_matches_python_s_capitalized_spelling() {
+        let s = pycc_rt_bool_to_str(1);
+        assert_eq!(unsafe { &*s }.bytes(), b"True");
+        unsafe { pycc_rt_str_decref(s) };
+        let s = pycc_rt_bool_to_str(0);
+        assert_eq!(unsafe { &*s }.bytes(), b"False");
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn pycc_rt_float_to_str_always_shows_a_decimal_point() {
+        // CPython: `str(3.0) == "3.0"`, not `"3"` -- unlike Rust's own `{}`
+        // `Display` for `f64`, which omits the fractional part entirely for
+        // a whole-number value.
+        let s = pycc_rt_float_to_str(3.0);
+        assert_eq!(unsafe { &*s }.bytes(), b"3.0");
+        unsafe { pycc_rt_str_decref(s) };
+        let s = pycc_rt_float_to_str(2.5);
+        assert_eq!(unsafe { &*s }.bytes(), b"2.5");
+        unsafe { pycc_rt_str_decref(s) };
+        let s = pycc_rt_float_to_str(-0.5);
+        assert_eq!(unsafe { &*s }.bytes(), b"-0.5");
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn pycc_rt_float_to_str_handles_infinity_and_nan_like_cpython() {
+        // CPython: `str(float('inf')) == "inf"`, `str(float('nan')) == "nan"`
+        // -- lowercase, unlike Rust's own `{}` (`"inf"`/`"NaN"`, capitalized
+        // for `NaN`).
+        let s = pycc_rt_float_to_str(f64::INFINITY);
+        assert_eq!(unsafe { &*s }.bytes(), b"inf");
+        unsafe { pycc_rt_str_decref(s) };
+        let s = pycc_rt_float_to_str(f64::NEG_INFINITY);
+        assert_eq!(unsafe { &*s }.bytes(), b"-inf");
+        unsafe { pycc_rt_str_decref(s) };
+        let s = pycc_rt_float_to_str(f64::NAN);
+        assert_eq!(unsafe { &*s }.bytes(), b"nan");
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    #[should_panic(expected = "not supported yet")]
+    fn pycc_rt_float_to_str_rejects_magnitudes_needing_scientific_notation() {
+        // CPython's `repr(float)` switches to scientific notation outside a
+        // specific decimal-exponent range (verified against `python3.13`:
+        // `repr(1e17)` is `'1e+17'`, not the full 18-digit expansion) --
+        // reproducing that exact algorithm is out of scope for this task;
+        // this is an honest, loud "not supported yet" for that narrow range
+        // (never a silently wrong digit string), not silently accepted.
+        //
+        // Deviation from the task brief: calls the private `float_to_str`
+        // directly, not the public `pycc_rt_float_to_str` wrapper the brief
+        // used -- the wrapper is a plain `extern "C" fn`, so a panic
+        // crossing its boundary aborts the whole test binary (`SIGABRT`)
+        // instead of unwinding into `#[should_panic]`'s own catch (see the
+        // private-logic/public-wrapper split added above, same convention
+        // as `int_add`/`pycc_rt_int_add`).
+        float_to_str(1e17);
+    }
+
+    #[test]
+    #[should_panic(expected = "not supported yet")]
+    fn pycc_rt_float_to_str_rejects_small_magnitudes_needing_scientific_notation() {
+        // Same rationale as the large-magnitude case above, for the *low*
+        // end of the supported range: verified against `python3.13`,
+        // `repr(1e-5)` is `'1e-05'` (scientific), unlike `repr(1e-4)` which
+        // is `'0.0001'` (still positional). Neither the given tests above
+        // nor `pycc_rt_float_to_str_always_shows_a_decimal_point`/
+        // `_accepts_the_boundary_just_inside_the_supported_range` ever drive
+        // `magnitude < 1e-4` to `true` -- every value they use is either
+        // `>= 1e-4` in magnitude or exactly `0.0`, so without this test the
+        // small-magnitude half of that `||` would never actually fire.
+        // Calls the private `float_to_str` directly, same reason as the
+        // large-magnitude test above.
+        float_to_str(1e-5);
+    }
+
+    #[test]
+    fn pycc_rt_float_to_str_accepts_the_boundary_just_inside_the_supported_range() {
+        // Deviation from the task brief: the brief's own version of this
+        // test called `pycc_rt_float_to_str(1e16)`, expecting
+        // `b"10000000000000000.0"` -- but `1e16` is exactly the boundary
+        // this function's own `magnitude >= 1e16` check *rejects* (verified
+        // against `python3.13`: `repr(1e16)` is itself `'1e+16'`, scientific
+        // notation, contradicting the brief test's expectation that it
+        // stays positional). That test as written would either panic
+        // (contradicting its own non-`#[should_panic]` assertion) or --
+        // had the boundary check instead been written as `>` -- silently
+        // accept a value CPython itself always renders in scientific
+        // notation. Fixed to use the actual double just inside the
+        // supported range: `9999999999999998.0`, the IEEE-754 `f64`
+        // immediately below `1e16` (`ulp` there is `2.0`), which
+        // `python3.13`'s own `repr`/`str` renders positionally as
+        // `'9999999999999998.0'`.
+        let s = pycc_rt_float_to_str(9999999999999998.0);
+        assert_eq!(unsafe { &*s }.bytes(), b"9999999999999998.0");
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn pycc_rt_float_to_str_handles_zero_and_negative_zero() {
+        // CPython: `str(0.0) == "0.0"`, `str(-0.0) == "-0.0"` (verified
+        // against `python3.13`) -- neither the brief's own given tests nor
+        // any test above ever passes a zero magnitude, so the `magnitude !=
+        // 0.0` short-circuit guard's `false` outcome (skipping the
+        // large/small-magnitude check entirely) was otherwise never
+        // exercised.
+        let s = pycc_rt_float_to_str(0.0);
+        assert_eq!(unsafe { &*s }.bytes(), b"0.0");
+        unsafe { pycc_rt_str_decref(s) };
+        let s = pycc_rt_float_to_str(-0.0);
+        assert_eq!(unsafe { &*s }.bytes(), b"-0.0");
+        unsafe { pycc_rt_str_decref(s) };
     }
 }

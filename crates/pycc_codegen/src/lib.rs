@@ -64,6 +64,9 @@ struct RtFns<'ctx> {
     str_truthy: FunctionValue<'ctx>,
     str_incref: FunctionValue<'ctx>,
     str_decref: FunctionValue<'ctx>,
+    int_to_str: FunctionValue<'ctx>,
+    float_to_str: FunctionValue<'ctx>,
+    bool_to_str: FunctionValue<'ctx>,
 }
 
 fn declare_rt_functions<'ctx>(
@@ -147,6 +150,12 @@ fn declare_rt_functions<'ctx>(
         ),
         str_incref: declare("pycc_rt_str_incref", void_type.fn_type(&[ptr_type.into()], false)),
         str_decref: declare("pycc_rt_str_decref", void_type.fn_type(&[ptr_type.into()], false)),
+        int_to_str: declare("pycc_rt_int_to_str", ptr_type.fn_type(&[i64_type.into()], false)),
+        float_to_str: declare("pycc_rt_float_to_str", ptr_type.fn_type(&[f64_type.into()], false)),
+        bool_to_str: declare(
+            "pycc_rt_bool_to_str",
+            ptr_type.fn_type(&[context.i8_type().into()], false),
+        ),
     }
 }
 
@@ -261,6 +270,103 @@ fn build_float_rt_binop<'ctx>(
         .into_float_value()
 }
 
+/// Converts any scalar to a fresh, owned `str` object matching CPython's
+/// `str(x)` for that value (Task 8) -- reused unchanged by Task 10's
+/// `print`. `str` itself passes through (already a `str`, and per this
+/// function's own contract already an owned reference by the time it gets
+/// here -- see `emit_expr`'s `FString` arm, the only caller); every other
+/// type goes through its own `pycc_rt_*_to_str` conversion.
+///
+/// Two deviations from the task brief, both here:
+///
+/// 1. The brief's own version of this function took a `context: &'ctx
+///    Context` parameter (matching `to_tagged_int`/`to_float`'s own
+///    shape) -- but no branch below actually needs it: unlike `to_float`'s
+///    `Bool` case (which builds a real `context`-dependent conversion
+///    instruction), every branch here only ever picks which already-built
+///    `RtFns` field and value to call `build_call` with, and `build_call`
+///    itself needs no `Context` at all. An unused parameter would fail
+///    this crate's `-D warnings` (`unused_variables` applies to
+///    parameters, not just local bindings). Dropped rather than
+///    underscore-prefixed, since it's not merely unused in *this* body but
+///    structurally unneeded by this function's own job -- matching this
+///    file's established convention of removing what's provably
+///    unnecessary rather than working around it (see e.g. `emit_expr`'s
+///    own `module`-parameter history note).
+/// 2. The brief's own version of this function's final `build_call` ended
+///    `.try_as_basic_value().left().expect(msg)` -- but (per the doc
+///    comment on `emit_expr`'s `BinOp` arm) this inkwell version's
+///    `try_as_basic_value()` returns its own `ValueKind` enum, not
+///    `either::Either`, so `.left()` doesn't exist on it and the brief's
+///    code as written doesn't compile. Fixed to `.expect_basic(msg)`, the
+///    same fix already applied throughout this file (e.g.
+///    `build_float_rt_binop` above).
+fn to_str<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    scalar: Scalar<'ctx>,
+) -> PointerValue<'ctx> {
+    let (rt_fn, arg): (FunctionValue<'ctx>, inkwell::values::BasicMetadataValueEnum) = match scalar
+    {
+        Scalar::Str(v) => return v,
+        Scalar::Int(v) => (rt.int_to_str, v.into()),
+        Scalar::Float(v) => (rt.float_to_str, v.into()),
+        Scalar::Bool(v) => (rt.bool_to_str, v.into()),
+    };
+    builder
+        .build_call(rt_fn, &[arg], "to_str")
+        .expect("build_call should not fail for a well-formed conversion")
+        .try_as_basic_value()
+        .expect_basic("every pycc_rt_*_to_str function returns a non-void pointer")
+        .into_pointer_value()
+}
+
+/// Builds a `str` object from a compile-time literal's bytes (Task 7),
+/// embedding them as a private constant global and calling
+/// `pycc_rt_str_from_literal` -- never null-terminated, since a Python
+/// `str` can contain an embedded `\0`, so the byte length is always passed
+/// explicitly rather than relying on termination.
+///
+/// Extracted (Task 8) out of `emit_expr`'s own `MirExpr::StringLiteral` arm
+/// below so `MirExpr::FString`'s `Literal`-part case can build the exact
+/// same `str` object directly, as a `PointerValue`, without going through
+/// `emit_expr`'s general `&MirExpr -> Scalar` dispatch just to immediately
+/// pattern-match the `Scalar::Str` back out again. That defensive
+/// pattern-match (the task brief's own version used a `let Scalar::Str(ptr)
+/// = emit_expr(..., &MirExpr::StringLiteral(s.clone())) else { unreachable!
+/// (...) }`) is *provably* dead code given this function's own contract --
+/// `MirExpr::StringLiteral` always evaluates to `Scalar::Str`, unconditionally,
+/// nothing else ever calls this helper with a different result type -- and
+/// `cargo llvm-cov`'s region coverage confirmed it empirically: that
+/// `unreachable!()` arm's region never executed under any test, an
+/// uncovered region under this project's 100%-line-and-region coverage gate
+/// (D-014). Removed by sharing this typed-`PointerValue`-returning helper
+/// instead, the same "no redundant impossible-to-cover branch" convention
+/// this file already applies elsewhere (see `emit_expr`'s `Name` arm's own
+/// doc comment).
+fn emit_string_literal<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    s: &str,
+) -> PointerValue<'ctx> {
+    let bytes = s.as_bytes();
+    let array_ty = context.i8_type().array_type(bytes.len() as u32);
+    let global = module.add_global(array_ty, None, "str_lit");
+    global.set_initializer(&context.const_string(bytes, false));
+    global.set_constant(true);
+    global.set_linkage(Linkage::Private);
+    let ptr = global.as_pointer_value();
+    let len = context.i64_type().const_int(bytes.len() as u64, false);
+    builder
+        .build_call(rt.str_from_literal, &[ptr.into(), len.into()], "str_lit_obj")
+        .expect("build_call should not fail for a well-formed string literal construction")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_str_from_literal returns a non-void pointer")
+        .into_pointer_value()
+}
+
 fn emit_expr<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -281,29 +387,7 @@ fn emit_expr<'ctx>(
     match expr {
         MirExpr::IntLiteral(n) => Scalar::Int(tag_smallint_const(context, *n)),
         MirExpr::FloatLiteral(f) => Scalar::Float(context.f64_type().const_float(*f)),
-        MirExpr::StringLiteral(s) => {
-            // Never null-terminated -- a Python `str` can contain an
-            // embedded `\0`, so the byte length is always passed
-            // explicitly to `pycc_rt_str_from_literal` rather than relying
-            // on termination (Task 7).
-            let bytes = s.as_bytes();
-            let array_ty = context.i8_type().array_type(bytes.len() as u32);
-            let global = module.add_global(array_ty, None, "str_lit");
-            global.set_initializer(&context.const_string(bytes, false));
-            global.set_constant(true);
-            global.set_linkage(Linkage::Private);
-            let ptr = global.as_pointer_value();
-            let len = context.i64_type().const_int(bytes.len() as u64, false);
-            let call_site = builder
-                .build_call(rt.str_from_literal, &[ptr.into(), len.into()], "str_lit_obj")
-                .expect("build_call should not fail for a well-formed string literal construction");
-            Scalar::Str(
-                call_site
-                    .try_as_basic_value()
-                    .expect_basic("pycc_rt_str_from_literal returns a non-void pointer")
-                    .into_pointer_value(),
-            )
-        }
+        MirExpr::StringLiteral(s) => Scalar::Str(emit_string_literal(context, builder, module, rt, s)),
         MirExpr::Name { name, ty } => {
             let (ptr, local_ty) = locals
                 .get(name)
@@ -599,7 +683,70 @@ fn emit_expr<'ctx>(
                 other => panic!("pycc_codegen: a `{other:?}`-typed call result is not supported yet"),
             }
         }
-        other => panic!("pycc_codegen: this expression kind's codegen is not supported yet: {other:?}"),
+        MirExpr::FString(parts) => {
+            // Two deviations from the task brief, both here:
+            //
+            // 1. The brief's own version of this arm's `str_concat` call
+            //    ended `.try_as_basic_value().left().expect(msg)` -- same
+            //    `.left()`-doesn't-exist-on-this-inkwell-version issue
+            //    documented on `to_str` and `BinOp` above, fixed the same
+            //    way (`.expect_basic(msg)`).
+            // 2. The brief's own `Literal`-part case called `emit_expr`
+            //    recursively on a synthetic `MirExpr::StringLiteral(s.
+            //    clone())` and then defensively pattern-matched the
+            //    `Scalar::Str` back out with a `let ... else {
+            //    unreachable!(...) }`. That `unreachable!()` arm is
+            //    *provably* dead code (confirmed by `cargo llvm-cov`: an
+            //    uncovered region under D-014's 100% gate) -- `MirExpr::
+            //    StringLiteral` always evaluates to `Scalar::Str`, nothing
+            //    else. Fixed by calling `emit_string_literal` (extracted
+            //    from `emit_expr`'s own `StringLiteral` arm) directly,
+            //    which returns the `PointerValue` itself with no `Scalar`
+            //    round-trip and so no impossible arm to cover -- see that
+            //    helper's own doc comment.
+            let mut acc: Option<PointerValue<'ctx>> = None;
+            for part in parts {
+                let part_str = match part {
+                    pycc_mir::MirFStringPart::Literal(s) => {
+                        emit_string_literal(context, builder, module, rt, s)
+                    }
+                    pycc_mir::MirFStringPart::Interpolation(inner) => {
+                        let scalar =
+                            emit_expr(context, builder, module, rt, user_functions, locals, inner);
+                        let scalar = incref_if_str_duplicate(builder, rt, inner, scalar);
+                        to_str(builder, rt, scalar)
+                    }
+                };
+                acc = Some(match acc {
+                    None => part_str,
+                    Some(prev) => {
+                        let joined = builder
+                            .build_call(rt.str_concat, &[prev.into(), part_str.into()], "fstring_concat")
+                            .expect("build_call should not fail for a well-formed concatenation")
+                            .try_as_basic_value()
+                            .expect_basic("pycc_rt_str_concat returns a non-void pointer")
+                            .into_pointer_value();
+                        builder
+                            .build_call(rt.str_decref, &[prev.into()], "fstring_decref_prev")
+                            .expect("build_call should not fail for a well-formed decref");
+                        builder
+                            .build_call(rt.str_decref, &[part_str.into()], "fstring_decref_part")
+                            .expect("build_call should not fail for a well-formed decref");
+                        joined
+                    }
+                });
+            }
+            Scalar::Str(acc.unwrap_or_else(|| {
+                // An empty `FString(vec![])` never actually reaches this arm --
+                // `pycc_hir`'s own f-string lowering always produces at least
+                // one `Literal` part (an empty Python f-string `f""` still
+                // lowers to `FString(vec![FStringPart::Literal("")])`, never a
+                // truly empty `Vec`) -- but guard it explicitly rather than
+                // silently returning a dangling/null pointer if that assumption
+                // is ever wrong.
+                panic!("pycc_codegen: internal error: an f-string with zero parts should not be reachable")
+            }))
+        }
     }
 }
 
@@ -2051,24 +2198,38 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "this expression kind's codegen is not supported yet")]
-    fn assigning_an_fstring_is_not_yet_supported_by_codegen() {
-        // `pycc_types`/`pycc_mir` fully build an `MirExpr::FString`
-        // (f-string interpolation, Task 8's job); `emit_expr` doesn't
-        // implement it yet. This test's earlier (Task 3-era) incarnation
-        // used `StringLiteral` here to exercise `emit_expr`'s final
-        // catch-all -- Task 7 closes that gap (see
-        // `compiles_string_concatenation_and_a_reassignment_that_frees_the_old_value`
-        // below), so `FString` is the one remaining unimplemented
-        // `MirExpr` variant that still reaches it.
+    #[should_panic(expected = "an f-string with zero parts should not be reachable")]
+    fn assigning_a_zero_part_fstring_hits_the_defensive_internal_panic() {
+        // Renamed and re-targeted for Task 8: this test's previous
+        // (Task 3/7-era) incarnation exercised `emit_expr`'s final
+        // catch-all arm (`other => panic!("...this expression kind's
+        // codegen is not supported yet...")`), back when `MirExpr::FString`
+        // had no arm of its own at all. Task 8 gives `FString` a real arm,
+        // and with every other `MirExpr` variant already handled by its own
+        // named arm, that catch-all became dead code (unreachable for any
+        // input) and was removed rather than kept as untestable dead
+        // weight -- the same "remove a provably dead arm" convention this
+        // file already applies elsewhere (see `emit_expr`'s `Name` arm's
+        // own doc comment).
+        //
+        // `MirExpr::FString(vec![])` (zero parts) is still not a real,
+        // reachable program shape -- `pycc_hir`'s own f-string lowering
+        // always produces at least one `Literal` part, even for a literal
+        // empty f-string `f""` -- but `emit_expr`'s new `FString` arm
+        // guards that assumption defensively instead of silently returning
+        // a dangling/null pointer if it's ever wrong (see that arm's own
+        // doc comment). This test is what exercises that guard: deliberately
+        // malformed MIR no real pipeline produces, same convention as this
+        // file's other "internal error" tests (e.g.
+        // `referencing_a_name_with_no_bound_local_is_an_internal_error`).
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
                 value: MirExpr::FString(vec![]),
             })],
         };
-        let dir = tempfile_dir("fstring_panics");
-        let obj_path = dir.join("fstring_panics.o");
+        let dir = tempfile_dir("fstring_zero_parts_panics");
+        let obj_path = dir.join("fstring_zero_parts_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
     }
 
@@ -3951,6 +4112,131 @@ mod tests {
         let dir = tempfile_dir("binop_float_result_str_operand_panics");
         let obj_path = dir.join("binop_float_result_str_operand_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    fn compiles_an_f_string_interpolating_an_int_between_literal_parts() {
+        // `x = 5; s = f"n={x}!"` -- `s` would hold `"n=5!"`.
+        //
+        // Deviations from the task brief, both in this test:
+        //
+        // 1. The brief's own version wrote `pycc_hir::Ty::Int`/`pycc_hir::
+        //    Ty::None` -- but `pycc_hir` is not a dependency of this crate
+        //    (only `pycc_mir` is, per `Cargo.toml`), and Rust doesn't
+        //    resolve an indirect crate's name from a `pub use` re-export
+        //    alone (`pycc_mir::Ty` is the exact same type as `pycc_hir::
+        //    Ty`, but the bare path `pycc_hir::` itself isn't in scope
+        //    here). Fixed to use the plain `Ty` already imported from
+        //    `pycc_mir` at this module's own top (`use pycc_mir::{BinOpKind,
+        //    CmpOpKind, MirExpr, MirItem, MirModule, MirStmt, Ty};`),
+        //    matching every other test in this file.
+        //
+        // 2. The brief's own version wrapped the f-string in `print(...)`
+        //    instead of a plain `Assign`. `emit_stmt`'s own `print()` arm
+        //    (a few hundred lines above) only accepts a *single, `Ty::Int`-
+        //    typed* argument today -- any other shape, including a single
+        //    `Ty::Str`-typed argument, falls through to its own documented
+        //    "this print() argument shape is not supported yet (multi-arg /
+        //    non-int print lands in Task 10)" panic, confirmed empirically:
+        //    with the brief's own `print(f"n={x}!")` shape, this test
+        //    failed with exactly that panic instead of proving f-string
+        //    codegen itself works. Wiring a `str`-typed argument into
+        //    `print` is explicitly Task 10's job (this file's own doc
+        //    comment on `emit_stmt`, and the plan's own Task 10 scope) --
+        //    implementing it here would reach into a later task's scope.
+        //    Changed to a plain `Assign` (`s = f"..."`), the same shape
+        //    already used by this brief's own next two tests below, so this
+        //    test actually exercises `MirExpr::FString`'s own codegen
+        //    without depending on unfinished `print` dispatch.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::IntLiteral(5),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::FString(vec![
+                        pycc_mir::MirFStringPart::Literal("n=".to_string()),
+                        pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        })),
+                        pycc_mir::MirFStringPart::Literal("!".to_string()),
+                    ]),
+                }),
+            ],
+        };
+        let dir = tempfile_dir("fstring_int");
+        let obj_path = dir.join("fstring_int.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn compiles_an_f_string_interpolating_a_float_and_a_bool() {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "s".to_string(),
+                value: MirExpr::FString(vec![
+                    pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::FloatLiteral(2.5))),
+                    pycc_mir::MirFStringPart::Literal(" ".to_string()),
+                    pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::BoolLiteral(true))),
+                ]),
+            })],
+        };
+        let dir = tempfile_dir("fstring_float_bool");
+        let obj_path = dir.join("fstring_float_bool.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn compiles_an_f_string_with_only_literal_parts() {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "s".to_string(),
+                value: MirExpr::FString(vec![pycc_mir::MirFStringPart::Literal(
+                    "no interpolation".to_string(),
+                )]),
+            })],
+        };
+        let dir = tempfile_dir("fstring_literal_only");
+        let obj_path = dir.join("fstring_literal_only.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn compiles_an_f_string_interpolating_an_existing_str_value() {
+        // `s = "hi"; t = f"{s} there"` -- added beyond the task brief's own
+        // three tests above: none of those ever interpolates an
+        // already-`str`-typed value, so `to_str`'s `Scalar::Str` passthrough
+        // arm (`return v` -- no `pycc_rt_*_to_str` conversion call at all)
+        // would otherwise never execute, an uncovered region under this
+        // project's 100%-line-and-region coverage gate (D-014). Also
+        // exercises `incref_if_str_duplicate`'s true branch for a bare
+        // `Name` read inside an interpolation (needed so the f-string's own
+        // final decref of every non-literal part doesn't underflow `s`'s
+        // refcount below what its own binding still owns).
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::StringLiteral("hi".to_string()),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "t".to_string(),
+                    value: MirExpr::FString(vec![
+                        pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::Name {
+                            name: "s".to_string(),
+                            ty: Ty::Str,
+                        })),
+                        pycc_mir::MirFStringPart::Literal(" there".to_string()),
+                    ]),
+                }),
+            ],
+        };
+        let dir = tempfile_dir("fstring_str_passthrough");
+        let obj_path = dir.join("fstring_str_passthrough.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {
