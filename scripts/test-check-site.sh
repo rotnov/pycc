@@ -13,6 +13,245 @@ cp -R "$repo_root/site" "$fixture_root/site"
 
 SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
 
+python3 - "$repo_root" "$fixture_root/site" <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+
+repo_root = Path(sys.argv[1])
+site_dir = Path(sys.argv[2])
+index_path = site_dir / "index.html"
+checker = repo_root / "scripts" / "check-site.sh"
+original = index_path.read_text()
+stylesheet = '    <link rel="stylesheet" href="styles.css">'
+script = '    <script defer src="site.js"></script>'
+assert stylesheet in original
+assert script in original
+
+mutations = {
+    "missing stylesheet": original.replace(stylesheet, "", 1),
+    "empty stylesheet target": original.replace(
+        'href="styles.css"', 'href=""', 1
+    ),
+    "duplicate stylesheet outside the head": original.replace(
+        "  <body>", f"  <body>\n{stylesheet}", 1
+    ),
+    "duplicate stylesheet href attribute": original.replace(
+        'href="styles.css"', 'href="other.css" href="styles.css"', 1
+    ),
+    "duplicate stylesheet rel attribute": original.replace(
+        'rel="stylesheet"', 'rel="alternate" rel="stylesheet"', 1
+    ),
+    "absolute stylesheet target": original.replace(
+        'href="styles.css"',
+        'href="https://rotnov.github.io/pycc/styles.css"',
+        1,
+    ),
+    "local-only stylesheet target": original.replace(
+        'href="styles.css"', 'href="http://127.0.0.1/styles.css"', 1
+    ),
+    "different stylesheet target": original.replace(
+        'href="styles.css"', 'href="other.css"', 1
+    ),
+    "disabled stylesheet": original.replace(
+        '<link rel="stylesheet" href="styles.css">',
+        '<link rel="stylesheet" href="styles.css" disabled>',
+        1,
+    ),
+    "non-applying stylesheet media": original.replace(
+        '<link rel="stylesheet" href="styles.css">',
+        '<link rel="stylesheet" href="styles.css" media="not all">',
+        1,
+    ),
+    "incompatible stylesheet type": original.replace(
+        '<link rel="stylesheet" href="styles.css">',
+        '<link rel="stylesheet" href="styles.css" type="text/plain">',
+        1,
+    ),
+    "alternate stylesheet relationship": original.replace(
+        'rel="stylesheet"', 'rel="alternate stylesheet"', 1
+    ),
+    "stylesheet inside an inert template": original.replace(
+        stylesheet,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <template>\n{stylesheet}\n    </template>",
+        1,
+    ),
+    "stylesheet inside an inert noscript": original.replace(
+        stylesheet,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <noscript>\n{stylesheet}\n    </noscript>",
+        1,
+    ),
+    "stylesheet inside foreign SVG content": original.replace(
+        stylesheet,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <svg>\n{stylesheet}\n    </svg>",
+        1,
+    ),
+    "additional stylesheet inside an SVG HTML integration point": (
+        original.replace(
+            "  <body>",
+            "  <body>\n"
+            "    <svg><foreignObject>"
+            '<link rel="stylesheet" href="other.css">'
+            "</foreignObject></svg>",
+            1,
+        )
+    ),
+    "additional SVG href script": original.replace(
+        "  <body>",
+        '  <body>\n    <svg><script href="other.js"></script></svg>',
+        1,
+    ),
+    "additional self-closing SVG href script": original.replace(
+        "  <body>",
+        '  <body>\n    <svg><script href="other.js" /></svg>',
+        1,
+    ),
+    "missing script": original.replace(script, "", 1),
+    "empty script target": original.replace('src="site.js"', 'src=""', 1),
+    "duplicate script outside the head": original.replace(
+        "  <body>", f"  <body>\n{script}", 1
+    ),
+    "duplicate script src attribute": original.replace(
+        'src="site.js"', 'src="other.js" src="site.js"', 1
+    ),
+    "absolute script target": original.replace(
+        'src="site.js"',
+        'src="https://rotnov.github.io/pycc/site.js"',
+        1,
+    ),
+    "local-only script target": original.replace(
+        'src="site.js"', 'src="http://localhost/site.js"', 1
+    ),
+    "different script target": original.replace(
+        'src="site.js"', 'src="other.js"', 1
+    ),
+    "non-deferred script": original.replace(
+        '<script defer src="site.js">', '<script src="site.js">', 1
+    ),
+    "async script": original.replace(
+        '<script defer src="site.js">',
+        '<script async defer src="site.js">',
+        1,
+    ),
+    "non-executable script type": original.replace(
+        '<script defer src="site.js">',
+        '<script type="text/plain" defer src="site.js">',
+        1,
+    ),
+    "script inside an inert template": original.replace(
+        script,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <template>\n{script}\n    </template>",
+        1,
+    ),
+    "script inside an inert noscript": original.replace(
+        script,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <noscript>\n{script}\n    </noscript>",
+        1,
+    ),
+    "script inside foreign MathML content": original.replace(
+        script,
+        "",
+        1,
+    ).replace(
+        "  <body>",
+        f"  <body>\n    <math>\n{script}\n    </math>",
+        1,
+    ),
+    "additional script inside a MathML HTML integration point": (
+        original.replace(
+            "  <body>",
+            "  <body>\n"
+            '    <math><annotation-xml encoding="text/html">'
+            '<script src="other.js"></script>'
+            "</annotation-xml></math>",
+            1,
+        )
+    ),
+    "self-closing external script": original.replace(
+        script,
+        '    <script defer src="site.js" />',
+        1,
+    ),
+    "base URL override": original.replace(
+        "  <head>", '  <head>\n    <base href="https://example.com/">', 1
+    ),
+}
+
+environment = dict(os.environ)
+environment["SITE_DIR"] = str(site_dir)
+index_path.write_text(original.replace("<br>", "<br />", 1))
+void_result = subprocess.run(
+    [str(checker)],
+    cwd=repo_root,
+    env=environment,
+    capture_output=True,
+    text=True,
+    check=False,
+    timeout=10,
+)
+if void_result.returncode != 0:
+    raise SystemExit("Validator rejected a self-closing void element")
+
+index_path.write_text(
+    original.replace(
+        "  <body>",
+        '  <body>\n    <svg><path d="M0 0h1v1z" /></svg>',
+        1,
+    )
+)
+foreign_result = subprocess.run(
+    [str(checker)],
+    cwd=repo_root,
+    env=environment,
+    capture_output=True,
+    text=True,
+    check=False,
+    timeout=10,
+)
+if foreign_result.returncode != 0:
+    raise SystemExit("Validator rejected a self-closing foreign element")
+
+for description, mutated in mutations.items():
+    index_path.write_text(mutated)
+    result = subprocess.run(
+        [str(checker)],
+        cwd=repo_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if result.returncode == 0:
+        raise SystemExit(
+            f"Validator accepted an entry point with {description}"
+        )
+
+index_path.write_text(original)
+PY
+
 rm "$fixture_root/site/robots.txt"
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted a site with a missing required file" >&2
@@ -179,6 +418,49 @@ PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted a sitemap that omitted an evidence page" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = "    <loc>https://rotnov.github.io/pycc/</loc>"
+assert required in content
+path.write_text(
+    content.replace(
+        required,
+        required + "\n"
+        "    <loc>https://rotnov.github.io/pycc/unexpected/</loc>",
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a sitemap URL entry with multiple loc elements" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+path = Path(sys.argv[1])
+namespace = "http://www.sitemaps.org/schemas/sitemap/0.9"
+ET.register_namespace("", namespace)
+root = ET.parse(path).getroot()
+root[:] = list(reversed(root[:]))
+ET.ElementTree(root).write(path, encoding="unicode", xml_declaration=True)
+PY
+
+if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator rejected a complete sitemap solely because URL order changed" >&2
   exit 1
 fi
 
