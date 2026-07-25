@@ -182,4 +182,47 @@ if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2
   exit 1
 fi
 
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+required = "    <loc>https://rotnov.github.io/pycc/</loc>"
+assert required in content
+path.write_text(
+    content.replace(
+        required,
+        required + "\n"
+        "    <loc>https://rotnov.github.io/pycc/unexpected/</loc>",
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a sitemap URL entry with multiple loc elements" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+path = Path(sys.argv[1])
+namespace = "http://www.sitemaps.org/schemas/sitemap/0.9"
+ET.register_namespace("", namespace)
+root = ET.parse(path).getroot()
+root[:] = list(reversed(root[:]))
+ET.ElementTree(root).write(path, encoding="unicode", xml_declaration=True)
+PY
+
+if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator rejected a complete sitemap solely because URL order changed" >&2
+  exit 1
+fi
+
 echo "Website validator self-tests passed."

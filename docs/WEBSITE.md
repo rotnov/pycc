@@ -107,11 +107,19 @@ that proposal. Both files link to the evidence pages and must preserve the
 landing page's status and AI-authorship disclosures.
 
 The sitemap carries the standards-based discovery signal. After a successful
-production deployment, `scripts/notify-indexnow.sh` submits the canonical URL
-to IndexNow so Bing and participating engines can discover material updates
-quickly. Its public verification key is hosted below `/pycc/`, which limits
-that key to URLs in the project path. The notification is best-effort and does
-not block a successful Pages deployment.
+production deployment, `scripts/notify-indexnow.sh` parses that validated
+sitemap and submits its complete canonical URL set in one IndexNow batch POST
+so Bing and participating engines can discover material updates quickly. It
+rejects empty, duplicate, out-of-scope, query-bearing, or fragment-bearing URLs
+before making a request. Its public verification key is hosted below `/pycc/`,
+which limits that key to URLs in the project path. The notification is
+best-effort, has finite connection and request timeouts, and does not block a
+successful Pages deployment.
+
+`scripts/test-notify-indexnow.py` points the production notifier at a local HTTP
+fixture and proves that the real non-dry-run path sends the expected JSON
+payload and fails on an HTTP error without contacting a public search endpoint.
+An accepted IndexNow response proves receipt only, not crawl or indexing.
 
 Discovery is not ranking. Long-term visibility depends on publishing accurate,
 non-commodity compiler evidence—implemented language features, architecture
@@ -122,6 +130,10 @@ fixed query-position checks are the measurement surfaces; no position is
 guaranteed. Operational monitoring must distinguish sitemap submission,
 sitemap fetch/processing, URL indexing, impressions, clicks, and query position
 instead of treating any one of them as proof of the others.
+GitHub query and rolling traffic observations are preserved in
+[SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) using a fixed top-50 ranking
+contract and timestamped API snapshots so changes can be compared without
+rewriting earlier responses or attributing automation traffic to SEO.
 
 ## Publication
 
