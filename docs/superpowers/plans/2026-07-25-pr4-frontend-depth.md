@@ -1,6 +1,6 @@
 # pycc v0.1 PR-4: Frontend Depth Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Grow pycc's frontend (parser → HIR → types → diagnostics) to accept and strictly type-check the full v0.1 grammar (arithmetic, comparisons, `if`/`while`/`for`+`range`, functions with arguments/return values/recursion, `bool`/`float`/`str` literals, basic f-strings, local variables), implement real T0001 (public-signature annotation requirement) and T0002 (`Any` forbidden) diagnostics with a real human/JSON renderer and real spans, stand up `pycc check` for real, add `tests/diagnostics/` negative fixtures with snapshot-style assertions, and wire the first frontend performance-gate benchmark, per `docs/DELIVERY_PLAN.md`'s PR-4 row and Performance gate section.
 
@@ -54,7 +54,7 @@ pycc/
 **Interfaces:**
 - Produces: nothing code-facing. This task exists so every later task can cite a settled, written decision instead of re-litigating scope mid-implementation.
 
-- [ ] **Step 1: Append four new ADR entries**
+- [x] **Step 1: Append four new ADR entries**
 
 Add to the summary table (after the last existing row) and as full sections at the end of the file, following the exact format every existing entry already uses:
 
@@ -99,7 +99,7 @@ Add to the summary table (after the last existing row) and as full sections at t
 - Consequences: `def _helper(x): ...` (unannotated) type-checks via inference; `def helper(x): ...` (unannotated) raises `T0001`. Revisit if a real `pycc.toml` visibility mechanism is designed later — this convention becomes the default, not a permanent rule.
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/DECISIONS.md
@@ -119,7 +119,7 @@ git commit -m "docs: record PR-4 scope decisions (D-034 through D-037)"
 - Consumes: nothing new from earlier tasks.
 - Produces: `pycc_diag::Span { start: u32, end: u32 }` unchanged in shape (byte offsets — already correct for JSON's `col`/`len`, just never populated with real values before); a new `pycc_diag::LineCol { line: u32, column: u32 }` and `pycc_diag::byte_offset_to_line_col(source: &str, offset: u32) -> LineCol` function every later renderer/test uses to turn a byte offset into a 1-indexed line/column pair for the human-format output.
 
-- [ ] **Step 1: Write the failing test for `byte_offset_to_line_col`**
+- [x] **Step 1: Write the failing test for `byte_offset_to_line_col`**
 
 Add to `crates/pycc_diag/src/lib.rs`'s existing `#[cfg(test)] mod tests`:
 
@@ -144,12 +144,12 @@ fn byte_offset_to_line_col_at_a_newline_byte_stays_on_the_line_it_ends() {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p pycc_diag byte_offset_to_line_col`
 Expected: FAIL with `cannot find function 'byte_offset_to_line_col'` / `cannot find type 'LineCol'`.
 
-- [ ] **Step 3: Implement `LineCol` and `byte_offset_to_line_col`**
+- [x] **Step 3: Implement `LineCol` and `byte_offset_to_line_col`**
 
 Add to `crates/pycc_diag/src/lib.rs` (near the existing `Span` definition):
 
@@ -183,12 +183,12 @@ pub fn byte_offset_to_line_col(source: &str, offset: u32) -> LineCol {
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cargo test -p pycc_diag byte_offset_to_line_col`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Write the failing test proving the parser threads a real span**
+- [x] **Step 5: Write the failing test proving the parser threads a real span**
 
 Add to `crates/pycc_parser/src/lib.rs`'s existing tests:
 
@@ -203,12 +203,12 @@ fn syntax_error_carries_the_real_byte_span_not_a_placeholder() {
 }
 ```
 
-- [ ] **Step 6: Run to verify it fails**
+- [x] **Step 6: Run to verify it fails**
 
 Run: `cargo test -p pycc_parser syntax_error_carries_the_real_byte_span`
 Expected: FAIL (current code always produces `Span::new(0, 0)`).
 
-- [ ] **Step 7: Thread the real span from ruff's error**
+- [x] **Step 7: Thread the real span from ruff's error**
 
 Modify `crates/pycc_parser/src/lib.rs`'s `parse` function. Ruff's `ParseError` (returned inside the `Err` ruff hands back) carries a `location: TextRange` field with `.start()`/`.end()` methods returning `TextSize` (convertible to `u32` via `.to_u32()` or `Into<u32>` — confirm the exact accessor by checking `ruff_python_parser::ParseError`'s definition at `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruff_python_parser-0.0.6/src/error.rs` before writing this; it is `pub struct ParseError { pub error: ParseErrorType, pub location: TextRange }`, and `TextRange` (from `ruff_text_size`, a transitive dependency already in `Cargo.lock`) has `.start() -> TextSize` / `.end() -> TextSize`, and `TextSize` implements `From<TextSize> for u32`). Replace:
 
@@ -225,17 +225,17 @@ Err(e) => {
 }
 ```
 
-- [ ] **Step 8: Run to verify it passes**
+- [x] **Step 8: Run to verify it passes**
 
 Run: `cargo test -p pycc_parser -p pycc_diag`
 Expected: PASS, all tests including the new one.
 
-- [ ] **Step 9: Run the full existing suite to confirm nothing regressed**
+- [x] **Step 9: Run the full existing suite to confirm nothing regressed**
 
 Run: `cargo test --workspace`
 Expected: PASS — `tests/slice0.rs`'s `a_syntax_error_is_a_compile_error_exit_code_1` only checks the diagnostic *code* appears in stderr (`contains("L0001")`), not the exact span text, so it is unaffected by this change.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/pycc_diag/src/lib.rs crates/pycc_parser/src/lib.rs
@@ -254,7 +254,7 @@ git commit -m "feat(pycc_diag,pycc_parser): thread real byte spans, add line/col
 - Consumes: `Diagnostic { code, severity, message, span: Option<Span> }`, `byte_offset_to_line_col` (Task 2).
 - Produces: `pycc_diag::render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String` and `pycc_diag::render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String` — every later diagnostic-emitting call site (T0001, T0002, `pycc check`) renders through these instead of hand-formatting `eprintln!` text, so all diagnostics look identical regardless of which crate raised them.
 
-- [ ] **Step 1: Write the failing test for `render_human`**
+- [x] **Step 1: Write the failing test for `render_human`**
 
 ```rust
 #[test]
@@ -279,12 +279,12 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
 
 (Verify the byte offsets 24/28 and column 16 actually match that exact source string before trusting this test — count bytes by hand or with a quick `python3 -c "s='def fib(n):\n    print(fib(\"35\"))\n'; print(s[24:28])"` to confirm it slices out `"35"` before running the test, since a wrong offset here would make the test self-consistently wrong.)
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test -p pycc_diag render_human_matches_cli_spec_format`
 Expected: FAIL with `cannot find function 'render_human'`.
 
-- [ ] **Step 3: Implement `render_human`**
+- [x] **Step 3: Implement `render_human`**
 
 ```rust
 /// CLI_SPEC.md's human diagnostic format, reproduced byte-for-byte:
@@ -325,12 +325,12 @@ pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String 
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cargo test -p pycc_diag render_human_matches_cli_spec_format`
 Expected: PASS. If it fails on exact whitespace, print both strings with `{:?}` to see the byte-for-byte diff and fix the format string, not the test.
 
-- [ ] **Step 5: Write the failing test for `render_json`**
+- [x] **Step 5: Write the failing test for `render_json`**
 
 ```rust
 #[test]
@@ -350,7 +350,7 @@ fn render_json_matches_the_versioned_schema() {
 }
 ```
 
-- [ ] **Step 6: Add `serde`/`serde_json` to `pycc_diag`'s `Cargo.toml`**
+- [x] **Step 6: Add `serde`/`serde_json` to `pycc_diag`'s `Cargo.toml`**
 
 ```toml
 [dependencies]
@@ -360,12 +360,12 @@ serde_json = "1"
 
 Run: `curl -sA "pycc-build/0.1" https://crates.io/api/v1/crates/serde | python3 -c "import json,sys;print(json.load(sys.stdin)['crate']['newest_version'])"` (and the same for `serde_json`) first, and pin whatever comes back instead of a bare `"1"` if a specific patch matters — `"1"` (major-only) is acceptable here since `serde`/`serde_json` follow strict semver and this is a first-time addition, not a version already pinned elsewhere in the workspace.
 
-- [ ] **Step 7: Run to verify the JSON test fails**
+- [x] **Step 7: Run to verify the JSON test fails**
 
 Run: `cargo test -p pycc_diag render_json_matches_the_versioned_schema`
 Expected: FAIL with `cannot find function 'render_json'`.
 
-- [ ] **Step 8: Implement `render_json`**
+- [x] **Step 8: Implement `render_json`**
 
 ```rust
 pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
@@ -397,12 +397,12 @@ pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
 }
 ```
 
-- [ ] **Step 9: Run to verify it passes**
+- [x] **Step 9: Run to verify it passes**
 
 Run: `cargo test -p pycc_diag`
 Expected: PASS, all tests in the crate.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/pycc_diag/src/lib.rs crates/pycc_diag/Cargo.toml
@@ -435,7 +435,7 @@ git commit -m "feat(pycc_diag): human and JSON diagnostic renderers per CLI_SPEC
 - `ExprUnaryOp { op: UnaryOp, operand: Box<Expr>, .. }`, `UnaryOp { Invert, Not, UAdd, USub }`.
 - `ExprContext { Load, Store, Del, Invalid }` (distinguishes an `ExprName` used as a value vs. an assignment target).
 
-- [ ] **Step 1: Write the failing compile-check test**
+- [x] **Step 1: Write the failing compile-check test**
 
 ```rust
 #[test]
@@ -457,7 +457,7 @@ fn pycc_parser_test_helper_parse(source: &str) -> ModModule {
 
 (This helper duplicates one line of `pycc_parser`'s own logic rather than depending on that crate from `pycc_ast`, since `pycc_ast` sits *below* `pycc_parser` in the dependency graph — `pycc_parser` depends on `pycc_ast`, not the reverse. `ruff_python_parser` becomes a `[dev-dependencies]`-only addition to `pycc_ast/Cargo.toml` for this test.)
 
-- [ ] **Step 2: Add the dev-dependency**
+- [x] **Step 2: Add the dev-dependency**
 
 In `crates/pycc_ast/Cargo.toml`:
 
@@ -466,12 +466,12 @@ In `crates/pycc_ast/Cargo.toml`:
 ruff_python_parser = "0.0.6"
 ```
 
-- [ ] **Step 3: Run to verify it fails**
+- [x] **Step 3: Run to verify it fails**
 
 Run: `cargo test -p pycc_ast re_exported_grammar_types_resolve`
 Expected: FAIL to compile (none of the new types are re-exported yet).
 
-- [ ] **Step 4: Add the re-exports**
+- [x] **Step 4: Add the re-exports**
 
 Replace `crates/pycc_ast/src/lib.rs`'s existing `pub use` line with the widened list (keep every currently-re-exported name, add the new ones):
 
@@ -485,17 +485,17 @@ pub use ruff_python_ast::{
 };
 ```
 
-- [ ] **Step 5: Run to verify it passes**
+- [x] **Step 5: Run to verify it passes**
 
 Run: `cargo test -p pycc_ast`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full workspace test suite**
+- [x] **Step 6: Run the full workspace test suite**
 
 Run: `cargo test --workspace`
 Expected: PASS — this task only widens re-exports, nothing downstream consumes them yet.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/pycc_ast/src/lib.rs crates/pycc_ast/Cargo.toml
@@ -541,7 +541,7 @@ This is the structural task every later vertical slice depends on — it does no
   pub fn build(hir: &HirModule) -> MirModule
   ```
 
-- [ ] **Step 1: Write the failing tests proving the new shape still handles the old two cases**
+- [x] **Step 1: Write the failing tests proving the new shape still handles the old two cases**
 
 Replace `crates/pycc_hir/src/lib.rs`'s existing tests with (same assertions, new shape):
 
@@ -598,12 +598,12 @@ fn parse_test_source(source: &str) -> ModModule {
 
 The four existing "unsupported" panic tests (`non_call_expression_statement_is_unsupported`, `non_name_callee_is_unsupported`, `calling_a_non_print_function_with_arguments_is_unsupported`, `print_with_wrong_argument_count_is_unsupported`, `print_with_an_integer_too_large_for_i64_is_unsupported`, `print_with_a_float_argument_is_unsupported`, `non_expr_statement_is_unsupported`) are **deleted** in this task, not kept: the whole point of Tasks 6+ is to make several of these no longer panic (a non-`print` call *with* arguments becomes legal in Task 8's function-arguments slice; a float argument to `print` becomes legal once `HirExpr` gains a float variant in Task 6). Keeping stale "this panics" tests that Task 6/8 then have to delete anyway just adds churn — delete them now, and each later task adds its own precise test for the new, non-panicking behavior it introduces.
 
-- [ ] **Step 2: Run to verify the new tests fail**
+- [x] **Step 2: Run to verify the new tests fail**
 
 Run: `cargo test -p pycc_hir`
 Expected: FAIL to compile (`HirExpr`, new `HirStmt` shape don't exist yet).
 
-- [ ] **Step 3: Implement the new `HirExpr`/`HirStmt`/`lower`**
+- [x] **Step 3: Implement the new `HirExpr`/`HirStmt`/`lower`**
 
 Replace `crates/pycc_hir/src/lib.rs`'s type definitions and `lower`/`lower_stmt` functions:
 
@@ -679,12 +679,12 @@ fn lower_expr(expr: &Expr) -> HirExpr {
 
 `i.as_i64()`: confirm this exact method name exists on `ruff_python_ast::int::Int` by checking `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ruff_python_ast-0.0.6/src/int.rs` before running — if the real accessor has a different name (e.g. `as_int()`, `to_i64()`), use that instead; the existing pre-Task-5 code already extracted an `i64` from this exact type somehow (check `git log -p -- crates/pycc_hir/src/lib.rs` for the original `lower_stmt`'s int-literal-extraction line and reuse its exact method call).
 
-- [ ] **Step 4: Run `pycc_hir`'s tests**
+- [x] **Step 4: Run `pycc_hir`'s tests**
 
 Run: `cargo test -p pycc_hir`
 Expected: PASS.
 
-- [ ] **Step 5: Update `pycc_mir` to match, mechanically**
+- [x] **Step 5: Update `pycc_mir` to match, mechanically**
 
 Replace `crates/pycc_mir/src/lib.rs`'s types and `build`/`lower_instr`:
 
@@ -748,11 +748,11 @@ fn lower_instr(stmt: &HirStmt) -> MirInstr {
 }
 ```
 
-- [ ] **Step 6: Update `pycc_mir`'s existing tests to the new `MirExpr` shape**
+- [x] **Step 6: Update `pycc_mir`'s existing tests to the new `MirExpr` shape**
 
 Every existing test's `MirInstr::CallPrint { arg: 42 }`-style construction becomes `MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) }`. Run `grep -n "CallPrint { arg:" crates/pycc_mir/src/lib.rs crates/pycc_codegen/src/lib.rs` first to find every call site needing this mechanical edit (both crates' tests construct `MirInstr`/`MirModule` values directly).
 
-- [ ] **Step 7: Update `pycc_codegen` to match the new `MirExpr` shape**
+- [x] **Step 7: Update `pycc_codegen` to match the new `MirExpr` shape**
 
 `crates/pycc_codegen/src/lib.rs`'s `emit_instr` currently does `i64_type.const_int(*arg as u64, true)` for a `MirInstr::CallPrint { arg }` where `arg: i64`. Update the match to destructure the new shape:
 
@@ -768,17 +768,17 @@ MirInstr::CallPrint { arg: MirExpr::IntLiteral(n) } => {
 
 (Add `use pycc_mir::MirExpr;` to the imports at the top of the file alongside the existing `pycc_mir::{MirInstr, MirItem, MirModule}` import.)
 
-- [ ] **Step 8: Run the full workspace test suite**
+- [x] **Step 8: Run the full workspace test suite**
 
 Run: `cargo test --workspace`
 Expected: PASS, all 16 `tests/slice0.rs` CLI tests plus every crate's unit tests — this task changes internal shapes only, never observable CLI behavior.
 
-- [ ] **Step 9: Run clippy and the coverage gate**
+- [x] **Step 9: Run clippy and the coverage gate**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings && cargo build --workspace && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS. Pay particular attention to `pycc_mir`'s new panic arms and `pycc_hir`'s new panic arms — each needs a test that actually triggers it (`#[should_panic]`) to stay covered; port the old `#[should_panic]` tests forward for whichever panic messages still exist after Step 1's deletions (e.g. keep a `calling_a_non_name_callee_is_unsupported`-equivalent test for `Expr::Call` whose `func` isn't `Expr::Name`, since nothing in Tasks 6-11 makes that legal).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_hir/Cargo.toml crates/pycc_mir/src/lib.rs crates/pycc_codegen/src/lib.rs
@@ -2892,7 +2892,7 @@ git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc
 **Files:**
 - Modify: `docs/DECISIONS.md`
 
-- [ ] **Step 1: Add D-039 recording the real, deliberate gaps this PR leaves**
+- [x] **Step 1: Add D-039 recording the real, deliberate gaps this PR leaves**
 
 ```markdown
 ## D-039: PR-4's known gaps -- Optional/narrowing/containers, help-text suggestions, real spans
@@ -2904,7 +2904,7 @@ git commit -m "feat(ci): frontend performance gate (criterion benchmark for pycc
 - Consequences: a future PR (naturally, whichever PR next touches `pycc_hir`/`pycc_types` significantly, likely PR-5 or a dedicated diagnostics-quality PR) should thread real spans through HIR before DIAGNOSTICS.md's quality bar can be honestly claimed as met; until then, every diagnostic's `-->` line points at line 1 column 1 regardless of the real error location, a known, user-visible imprecision.
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/DECISIONS.md
