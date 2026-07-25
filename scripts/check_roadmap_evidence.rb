@@ -8,7 +8,7 @@ require "digest"
 class RoadmapEvidenceError < StandardError; end
 
 LIST_ITEM =
-  /\A(?<indent>[ \t]*)(?<marker>[-*+]|\d+[.)])(?<spacing>[ \t]+)(?<body>.*)$/
+  /\A(?<indent>[ \t]*)(?<marker>[-*+]|\d+[.)])(?:(?<spacing>[ \t]+)(?<body>[^\r\n]*))?(?:\r?\n)?\z/
 CHECKED_ITEM_BODY = /\A\[[xX]\][ \t]+(?<claim>.*)$/
 ATX_HEADING = /\A {0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
 SETEXT_UNDERLINE = /\A {0,3}(?:=+|-+)[ \t]*(?:\r?\n)?\z/
@@ -353,13 +353,17 @@ def rendered_list_item(line, containers)
 
   containers.replace(parent_index ? containers.first(parent_index + 1) : [])
   marker_end = indent + item[:marker].length
-  content_indent = indentation_width(item[:spacing], marker_end)
+  spacing = item[:spacing] || " "
+  content_indent = indentation_width(spacing, marker_end)
   padding = content_indent - marker_end
   containers << (padding <= 4 ? content_indent : marker_end + 1)
 
-  return if padding > 4
-
-  CHECKED_ITEM_BODY.match(item[:body])
+  body = padding <= 4 ? (item[:body] || "") : nil
+  {
+    body: body,
+    checked_item: body && CHECKED_ITEM_BODY.match(body),
+    content_indent: containers.last
+  }
 end
 
 def validate_roadmap(text)
@@ -383,20 +387,25 @@ def validate_roadmap(text)
 
     visible_line, in_html_comment = without_html_comments(line, in_html_comment)
     fence_candidate, quote_depth = blockquote_content(visible_line)
-    normalized_fence_candidate, content_indent =
-      list_container_content(fence_candidate, list_containers[quote_depth])
-    opening = opening_fence(normalized_fence_candidate)
+    containers = list_containers[quote_depth]
+    normalized_container_content, content_indent =
+      list_container_content(fence_candidate, containers)
+    list_item = rendered_list_item(fence_candidate, containers)
+    block_content = list_item ? list_item[:body] : normalized_container_content
+    content_indent = list_item[:content_indent] if list_item
+
+    opening = block_content && opening_fence(block_content)
     if opening
       fence = [*opening, quote_depth, content_indent]
       next
     end
 
-    if SETEXT_UNDERLINE.match?(normalized_fence_candidate)
+    if block_content && SETEXT_UNDERLINE.match?(block_content)
       raise RoadmapEvidenceError,
             "line #{line_number}: Setext headings are not supported; use ATX headings"
     end
 
-    heading = ATX_HEADING.match(normalized_fence_candidate)
+    heading = block_content && ATX_HEADING.match(block_content)
     if heading
       list_containers.clear if quote_depth.zero? && content_indent.zero?
       level = heading[:marks].length
@@ -406,9 +415,9 @@ def validate_roadmap(text)
       next
     end
 
-    containers = list_containers[quote_depth]
-    item = rendered_list_item(fence_candidate, containers)
-    unless LIST_ITEM.match?(fence_candidate)
+    item = list_item && list_item[:checked_item]
+    item ||= CHECKED_ITEM_BODY.match(block_content) if !list_item && content_indent.positive?
+    unless list_item || LIST_ITEM.match?(fence_candidate)
       if fence_candidate.strip.empty?
         next
       end

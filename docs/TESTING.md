@@ -72,8 +72,10 @@ and HTML comments do not contribute rendered headings or task items. A task
 indented beneath a rendered list container is still checked, while an
 unattached four-space-indented block is code. Setext headings are rejected
 fail-closed; roadmap structure uses ATX `#` headings with no tab-indented
-pseudo-headings. Adding a new evidence type starts with a failing public-CLI
-mutation in
+pseudo-headings. Rendered headings in blockquotes and list-item bodies update
+the same complete heading path, and a checked task continuing an empty list
+marker is still evidence-bearing. Adding a new evidence type starts with a
+failing public-CLI mutation in
 `scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
 and documented claim land together.
 

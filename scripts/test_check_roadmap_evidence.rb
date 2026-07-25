@@ -230,6 +230,45 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
+  def test_rejects_coverage_evidence_after_a_list_item_heading_changes_the_section
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - #### Other milestone
+        - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: coverage_workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
+  def test_rejects_checked_item_continuing_an_empty_list_marker_without_evidence
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      -
+        [x] `pycc check` processes 1k LOC in under 50 ms.
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: "jobs: {}\n")
+
+    refute status.success?
+    assert_includes stderr, "checked roadmap item is missing an evidence marker"
+  end
+
   def test_ignores_headings_hidden_in_fences_and_html_comments
     hidden_sections = [
       <<~MARKDOWN,
