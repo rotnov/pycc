@@ -529,7 +529,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     # digest.
     assert_includes(
       TIER1_CI_WORKFLOW_SHA256S,
-      "26588a8771190d82618c230df6bce5d7e911a5d9835a1bd9b9818d496b5c9f61"
+      "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
     )
   end
 
