@@ -105,7 +105,8 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
 JSON format versioned (`"format_version": 1`), one object per diagnostic: code, severity, spans[{file,line,col,len,label}], message, help[], fix{edits[]}?. Consumed by editors and the corpus bot (TESTING.md).
 
 Displayed diagnostic paths are lexically normalized without filesystem
-canonicalization: separators are `/`, redundant `.` components and repeated
-separators are removed, and `..` components are preserved. Human-format caret
-padding uses Unicode display width and retains literal tabs so markers align
-with the rendered source in a terminal.
+canonicalization: native path separators are rendered as `/`, redundant `.`
+components and repeated separators are removed, and `..` components are
+preserved. A literal backslash in a Unix filename remains a backslash.
+Human-format caret padding uses Unicode display width and retains literal tabs
+so markers align with the rendered source in a terminal.

@@ -412,6 +412,28 @@ fn check_normalizes_the_displayed_diagnostic_path() {
     assert!(!stderr.contains(" --> ./bad.py"));
 }
 
+#[cfg(unix)]
+#[test]
+fn check_preserves_a_literal_backslash_in_a_unix_diagnostic_path() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_backslash_path_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_fixture(&dir, r"bad\name.py", "x = 1\n");
+
+    let output = Command::new(pycc_bin())
+        .current_dir(&dir)
+        .args(["check", r"bad\name.py"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains(r" --> bad\name.py:1:1"));
+    assert!(!stderr.contains(" --> bad/name.py"));
+}
+
 #[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));

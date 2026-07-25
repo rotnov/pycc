@@ -125,7 +125,10 @@ fn report_frontend_failure(path: &Path, failure: FrontendFailure) -> u8 {
 }
 
 fn normalize_diagnostic_path(path: &str) -> String {
+    #[cfg(windows)]
     let path = path.replace('\\', "/");
+    #[cfg(not(windows))]
+    let path = path.to_string();
     let root = if path.starts_with("//") {
         "//"
     } else if path.starts_with('/') {
@@ -219,14 +222,22 @@ mod tests {
 
     #[test]
     fn diagnostic_paths_are_lexically_normalized() {
+        #[cfg(windows)]
         assert_eq!(
             normalize_diagnostic_path(r".\src\.\package\\module.py"),
             "src/package/module.py"
         );
+        #[cfg(not(windows))]
+        assert_eq!(normalize_diagnostic_path(r"bad\name.py"), r"bad\name.py");
         assert_eq!(
             normalize_diagnostic_path("/tmp//./package/module.py"),
             "/tmp/package/module.py"
         );
+        assert_eq!(
+            normalize_diagnostic_path("//server//share/./module.py"),
+            "//server/share/module.py"
+        );
+        #[cfg(windows)]
         assert_eq!(
             normalize_diagnostic_path(r"\\server\share\.\module.py"),
             "//server/share/module.py"
