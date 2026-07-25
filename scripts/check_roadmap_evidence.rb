@@ -34,7 +34,7 @@ EVIDENCE_SECTIONS = {
   ]
 }.freeze
 PR4_SPLIT_PERF_CI_WORKFLOW_SHA256 =
-  "fb39ba8db1cb41e9d8aef017b6d017c36e5a8c83c73ac8997b9c1d1e4dcf060e"
+  "a4044d4a71a8b91e66be00caa876f75767ff64860b9475318390a02f3ca2e322"
 TIER1_CI_WORKFLOW_SHA256S = [
   "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2",
   PR4_SPLIT_PERF_CI_WORKFLOW_SHA256
@@ -133,6 +133,10 @@ PERF_BASELINE_VALIDATION_SCRIPT_TEMPLATE = <<~'SHELL'.strip
 
   case "$GITHUB_EVENT_NAME" in
     pull_request)
+      if [ "$GITHUB_RUN_ATTEMPT" != "1" ]; then
+        echo "reviewed activation pull request cannot be replayed" >&2
+        exit 1
+      fi
       if [ "$PR_BASE_REF" != "main" ]; then
         echo "reviewed activation is allowed only for a pull request targeting main" >&2
         exit 1

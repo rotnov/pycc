@@ -831,6 +831,18 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_empty output
   end
 
+  def test_baseline_validation_rejects_a_replayed_activation_pull_request
+    _stdout, stderr, status, output = run_perf_baseline_validation(
+      event_name: "pull_request",
+      github_ref: "refs/pull/86/merge",
+      run_attempt: "2"
+    )
+
+    refute status.success?
+    assert_includes stderr, "pull request cannot be replayed"
+    assert_empty output
+  end
+
   def test_baseline_validation_rejects_a_non_main_pull_request
     _stdout, stderr, status, output = run_perf_baseline_validation(
       event_name: "pull_request",

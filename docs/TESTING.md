@@ -129,17 +129,18 @@ successful main run refreshes it.
 
 The only missing-baseline exception is the one-time activation of the reviewed
 split workflow. The pull-request half is explicitly bound to PR #86 targeting
-`main`; the gate resolves the live `main` head through the API and requires it
-to equal the event's base SHA, so a stale event or rerun cannot replay the
-exception. The first push half requires `refs/heads/main`, run attempt 1, an
-event `after` SHA equal to `github.sha`, and that SHA equal to the live `main`
-head resolved through the API. In both cases the predecessor `ci.yml` must have
-the exact pre-split digest already trusted here. Once the split workflow is
-active, a missing or expired main artifact fails closed. Both performance jobs
-are required by an exact fail-closed `ci-gate`; the trusted checker validates
-all three complete job shapes in addition to the prospective workflow digest.
-The PR-specific bootstrap is a transitional exception and must be retired in a
-follow-up reviewed digest after the first successful main artifact exists.
+`main` and run attempt 1; the gate resolves the live `main` head through the API
+and requires it to equal the event's base SHA, so a stale event or rerun cannot
+replay the exception. The first push half requires `refs/heads/main`, run
+attempt 1, an event `after` SHA equal to `github.sha`, and that SHA equal to the
+live `main` head resolved through the API. In both cases the predecessor
+`ci.yml` must have the exact pre-split digest already trusted here. Once the
+split workflow is active, a missing or expired main artifact fails closed. Both
+performance jobs are required by an exact fail-closed `ci-gate`; the trusted
+checker validates all three complete job shapes in addition to the prospective
+workflow digest. The PR-specific bootstrap is a transitional exception and
+must be retired in a follow-up reviewed digest after the first successful main
+artifact exists.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
