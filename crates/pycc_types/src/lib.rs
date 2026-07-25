@@ -1,8 +1,8 @@
 use pycc_diag::{Diagnostic, Span};
-use pycc_hir::{BinOpKind, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
 #[cfg(test)]
 use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
+use pycc_hir::{BinOpKind, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
 use std::collections::HashMap;
 
 #[derive(Debug, Default, Clone)]
@@ -31,6 +31,428 @@ impl Environment {
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
         self.functions.get(name)
     }
+}
+
+type TypeTerm = Result<Ty, usize>;
+type SignatureTerms = (Vec<String>, Vec<TypeTerm>, TypeTerm);
+type BinOpConstraint = (BinOpKind, TypeTerm, TypeTerm, TypeTerm);
+
+fn fresh_term(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> TypeTerm {
+    let id = parents.len();
+    parents.push(id);
+    concrete.push(None);
+    Err(id)
+}
+
+fn root(parents: &mut [usize], var: usize) -> usize {
+    let parent = parents[var];
+    if parent == var {
+        parent
+    } else {
+        let root = root(parents, parent);
+        parents[var] = root;
+        root
+    }
+}
+
+fn resolved_term(term: TypeTerm, parents: &mut [usize], concrete: &[Option<Ty>]) -> Option<Ty> {
+    match term {
+        Ok(ty) => Some(ty),
+        Err(var) => concrete[root(parents, var)],
+    }
+}
+
+fn inference_conflict(code: &'static str, context: &str, left: Ty, right: Ty) -> Diagnostic {
+    Diagnostic::error(
+        code,
+        format!(
+            "{context}: conflicting inferred types `{}` and `{}`",
+            left.name(),
+            right.name()
+        ),
+        Span::new(0, 0),
+    )
+}
+
+fn unify_terms(
+    left: TypeTerm,
+    right: TypeTerm,
+    parents: &mut [usize],
+    concrete: &mut [Option<Ty>],
+    code: &'static str,
+    context: &str,
+) -> Result<bool, Diagnostic> {
+    match (left, right) {
+        (Ok(left), Ok(right)) => merge_inferred_types(left, right)
+            .map(|_| false)
+            .ok_or_else(|| inference_conflict(code, context, left, right)),
+        (Err(var), Ok(ty)) | (Ok(ty), Err(var)) => {
+            let root = root(parents, var);
+            let merged = match concrete[root] {
+                Some(current) => merge_inferred_types(current, ty)
+                    .ok_or_else(|| inference_conflict(code, context, current, ty))?,
+                None => ty,
+            };
+            let changed = concrete[root] != Some(merged);
+            concrete[root] = Some(merged);
+            Ok(changed)
+        }
+        (Err(left), Err(right)) => {
+            let left_root = root(parents, left);
+            let right_root = root(parents, right);
+            if left_root == right_root {
+                return Ok(false);
+            }
+            let merged = match (concrete[left_root], concrete[right_root]) {
+                (Some(left), Some(right)) => Some(
+                    merge_inferred_types(left, right)
+                        .ok_or_else(|| inference_conflict(code, context, left, right))?,
+                ),
+                (Some(ty), None) | (None, Some(ty)) => Some(ty),
+                (None, None) => None,
+            };
+            parents[right_root] = left_root;
+            concrete[left_root] = merged;
+            Ok(true)
+        }
+    }
+}
+
+fn merge_inferred_types(left: Ty, right: Ty) -> Option<Ty> {
+    if left == right {
+        Some(left)
+    } else if matches!((left, right), (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool)) {
+        Some(Ty::Int)
+    } else {
+        None
+    }
+}
+
+fn term_for_type(ty: Ty, parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> TypeTerm {
+    if ty == Ty::Infer {
+        fresh_term(parents, concrete)
+    } else {
+        Ok(ty)
+    }
+}
+
+fn collect_expr_constraints(
+    signatures: &HashMap<String, SignatureTerms>,
+    parents: &mut Vec<usize>,
+    concrete: &mut Vec<Option<Ty>>,
+    binops: &mut Vec<BinOpConstraint>,
+    bindings: &HashMap<String, TypeTerm>,
+    expr: &HirExpr,
+) -> Result<Option<TypeTerm>, Diagnostic> {
+    match expr {
+        HirExpr::IntLiteral(_) => Ok(Some(Ok(Ty::Int))),
+        HirExpr::FloatLiteral(_) => Ok(Some(Ok(Ty::Float))),
+        HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
+        HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
+        HirExpr::Name(name) => Ok(bindings.get(name).copied()),
+        HirExpr::FString(parts) => {
+            for part in parts {
+                if let FStringPart::Interpolation(expr) = part {
+                    collect_expr_constraints(
+                        signatures, parents, concrete, binops, bindings, expr,
+                    )?;
+                }
+            }
+            Ok(Some(Ok(Ty::Str)))
+        }
+        HirExpr::Compare { left, right, .. } => {
+            collect_expr_constraints(signatures, parents, concrete, binops, bindings, left)?;
+            collect_expr_constraints(signatures, parents, concrete, binops, bindings, right)?;
+            Ok(Some(Ok(Ty::Bool)))
+        }
+        HirExpr::BinOp { op, left, right } => {
+            let left =
+                collect_expr_constraints(signatures, parents, concrete, binops, bindings, left)?;
+            let right =
+                collect_expr_constraints(signatures, parents, concrete, binops, bindings, right)?;
+            match (left, right) {
+                (Some(left), Some(right)) => {
+                    let result = fresh_term(parents, concrete);
+                    binops.push((*op, left, right, result));
+                    Ok(Some(result))
+                }
+                _ => Ok(None),
+            }
+        }
+        HirExpr::Call { callee, args } => {
+            let mut arg_terms = Vec::with_capacity(args.len());
+            for arg in args {
+                arg_terms.push(collect_expr_constraints(
+                    signatures, parents, concrete, binops, bindings, arg,
+                )?);
+            }
+            if callee == "print" {
+                return Ok(Some(Ok(Ty::None)));
+            }
+            let Some(signature) = signatures.get(callee) else {
+                return Ok(None);
+            };
+            for (index, (arg, parameter)) in arg_terms.into_iter().zip(&signature.1).enumerate() {
+                if let (Some(arg), Err(_)) = (arg, parameter) {
+                    unify_terms(
+                        *parameter,
+                        arg,
+                        parents,
+                        concrete,
+                        "T0021",
+                        &format!("argument {} of private helper `{callee}`", index + 1),
+                    )?;
+                }
+            }
+            Ok(Some(signature.2))
+        }
+    }
+}
+
+fn collect_block_constraints(
+    signatures: &HashMap<String, SignatureTerms>,
+    parents: &mut Vec<usize>,
+    concrete: &mut Vec<Option<Ty>>,
+    binops: &mut Vec<BinOpConstraint>,
+    bindings: &mut HashMap<String, TypeTerm>,
+    body: &[HirStmt],
+    return_term: Option<TypeTerm>,
+) -> Result<(), Diagnostic> {
+    for stmt in body {
+        match stmt {
+            HirStmt::Assign { target, value } => {
+                if let Some(term) = collect_expr_constraints(
+                    signatures, parents, concrete, binops, bindings, value,
+                )? {
+                    bindings.entry(target.clone()).or_insert(term);
+                }
+            }
+            HirStmt::ExprStmt(expr) => {
+                collect_expr_constraints(signatures, parents, concrete, binops, bindings, expr)?;
+            }
+            HirStmt::If { test, body, orelse } => {
+                collect_expr_constraints(signatures, parents, concrete, binops, bindings, test)?;
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    binops,
+                    bindings,
+                    body,
+                    return_term,
+                )?;
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    binops,
+                    bindings,
+                    orelse,
+                    return_term,
+                )?;
+            }
+            HirStmt::While { test, body } => {
+                collect_expr_constraints(signatures, parents, concrete, binops, bindings, test)?;
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    binops,
+                    bindings,
+                    body,
+                    return_term,
+                )?;
+            }
+            HirStmt::ForRange {
+                var,
+                start,
+                stop,
+                step,
+                body,
+            } => {
+                for (position, expr) in [("start", start), ("stop", stop), ("step", step)] {
+                    if let Some(term @ Err(_)) = collect_expr_constraints(
+                        signatures, parents, concrete, binops, bindings, expr,
+                    )? {
+                        unify_terms(
+                            term,
+                            Ok(Ty::Int),
+                            parents,
+                            concrete,
+                            "T0021",
+                            &format!("range {position}"),
+                        )?;
+                    }
+                }
+                bindings.insert(var.clone(), Ok(Ty::Int));
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    binops,
+                    bindings,
+                    body,
+                    return_term,
+                )?;
+            }
+            HirStmt::Return(value) => {
+                let Some(return_term @ Err(_)) = return_term else {
+                    continue;
+                };
+                let actual = match value {
+                    Some(expr) => collect_expr_constraints(
+                        signatures, parents, concrete, binops, bindings, expr,
+                    )?,
+                    None => Some(Ok(Ty::None)),
+                };
+                if let Some(actual) = actual {
+                    unify_terms(
+                        return_term,
+                        actual,
+                        parents,
+                        concrete,
+                        "T0022",
+                        "private helper return type",
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn contains_return(body: &[HirStmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        HirStmt::Return(_) => true,
+        HirStmt::If { body, orelse, .. } => contains_return(body) || contains_return(orelse),
+        HirStmt::While { body, .. } | HirStmt::ForRange { body, .. } => contains_return(body),
+        HirStmt::ExprStmt(_) | HirStmt::Assign { .. } => false,
+    })
+}
+
+fn infer_function_signatures(
+    hir: &HirModule,
+) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
+    let mut parents = Vec::new();
+    let mut concrete = Vec::new();
+    let mut signatures = HashMap::new();
+    for item in &hir.items {
+        if let HirItem::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } = item
+        {
+            signatures.insert(
+                name.clone(),
+                (
+                    params.iter().map(|(name, _)| name.clone()).collect(),
+                    params
+                        .iter()
+                        .map(|(_, ty)| term_for_type(*ty, &mut parents, &mut concrete))
+                        .collect(),
+                    term_for_type(*return_ty, &mut parents, &mut concrete),
+                ),
+            );
+        }
+    }
+
+    let mut binops = Vec::new();
+    let mut globals = HashMap::new();
+    for item in &hir.items {
+        if let HirItem::TopLevelStmt(stmt) = item {
+            collect_block_constraints(
+                &signatures,
+                &mut parents,
+                &mut concrete,
+                &mut binops,
+                &mut globals,
+                std::slice::from_ref(stmt),
+                None,
+            )?;
+        }
+    }
+    for item in &hir.items {
+        let HirItem::Function { name, body, .. } = item else {
+            continue;
+        };
+        let signature = &signatures[name];
+        let mut bindings = globals.clone();
+        for (param_name, param_ty) in signature.0.iter().zip(&signature.1) {
+            bindings.insert(param_name.clone(), *param_ty);
+        }
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut bindings,
+            body,
+            Some(signature.2),
+        )?;
+        if signature.2.is_err() && !contains_return(body) {
+            unify_terms(
+                signature.2,
+                Ok(Ty::None),
+                &mut parents,
+                &mut concrete,
+                "T0022",
+                "private helper implicit return",
+            )?;
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for &(op, left_term, right_term, result_term) in &binops {
+            let left = resolved_term(left_term, &mut parents, &concrete);
+            let right = resolved_term(right_term, &mut parents, &concrete);
+            if let (Some(left), Some(right)) = (left, right) {
+                let result = numeric_result_type(op, left, right)?;
+                changed |= unify_terms(
+                    result_term,
+                    Ok(result),
+                    &mut parents,
+                    &mut concrete,
+                    "T0021",
+                    "binary expression",
+                )?;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut resolved = HashMap::new();
+    for (name, signature) in &signatures {
+        let param_tys = signature
+            .0
+            .iter()
+            .zip(signature.1.iter().copied())
+            .map(|(param_name, term)| {
+                resolved_term(term, &mut parents, &concrete).ok_or_else(|| {
+                    Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "cannot infer type of parameter `{param_name}` in private helper `{name}`; add an annotation"
+                        ),
+                        Span::new(0, 0),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let return_ty = resolved_term(signature.2, &mut parents, &concrete).ok_or_else(|| {
+            Diagnostic::error(
+                "T0021",
+                format!("cannot infer return type of private helper `{name}`; add an annotation"),
+                Span::new(0, 0),
+            )
+        })?;
+        resolved.insert(name.clone(), (param_tys, return_ty));
+    }
+    Ok(resolved)
 }
 
 pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
@@ -67,13 +489,20 @@ pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
             } else {
                 Err(Diagnostic::error(
                     "T0021",
-                    format!("cannot compare `{}` and `{}`", left_ty.name(), right_ty.name()),
+                    format!(
+                        "cannot compare `{}` and `{}`",
+                        left_ty.name(),
+                        right_ty.name()
+                    ),
                     Span::new(0, 0),
                 ))
             }
         }
         HirExpr::Call { callee, args } => {
-            let arg_tys = args.iter().map(|a| infer_expr(env, a)).collect::<Result<Vec<_>, _>>()?;
+            let arg_tys = args
+                .iter()
+                .map(|a| infer_expr(env, a))
+                .collect::<Result<Vec<_>, _>>()?;
             if callee == "print" {
                 return Ok(Ty::None); // print's own signature isn't user-declarable in v0.1
             }
@@ -87,7 +516,11 @@ pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
             if arg_tys.len() != param_tys.len() {
                 return Err(Diagnostic::error(
                     "T0021",
-                    format!("`{callee}` expects {} argument(s), got {}", param_tys.len(), arg_tys.len()),
+                    format!(
+                        "`{callee}` expects {} argument(s), got {}",
+                        param_tys.len(),
+                        arg_tys.len()
+                    ),
                     Span::new(0, 0),
                 ));
             }
@@ -132,11 +565,16 @@ fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnos
         _ => None,
     };
     match (as_numeric(left), as_numeric(right)) {
+        (Some(_), Some(_)) if op == BinOpKind::Div => Ok(Ty::Float),
         (Some(Ty::Int), Some(Ty::Int)) => Ok(Ty::Int),
         (Some(_), Some(_)) => Ok(Ty::Float),
         _ => Err(Diagnostic::error(
             "T0021",
-            format!("operator {op:?} is not defined for `{}` and `{}`", left.name(), right.name()),
+            format!(
+                "operator {op:?} is not defined for `{}` and `{}`",
+                left.name(),
+                right.name()
+            ),
             Span::new(0, 0),
         )),
     }
@@ -147,10 +585,41 @@ fn numeric_or_bool_compatible(a: Ty, b: Ty) -> bool {
     (is_numeric_like(a) && is_numeric_like(b)) || (a == Ty::Str && b == Ty::Str)
 }
 
+fn check_range_operand(
+    env: &Environment,
+    position: &str,
+    expr: &HirExpr,
+) -> Result<(), Diagnostic> {
+    let actual = infer_expr(env, expr)?;
+    if is_assignable(actual, Ty::Int) {
+        Ok(())
+    } else {
+        Err(Diagnostic::error(
+            "T0021",
+            format!("range {position} expects `int`, got `{}`", actual.name()),
+            Span::new(0, 0),
+        ))
+    }
+}
+
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Assign { target, value } => {
             let ty = infer_expr(env, value)?;
+            if let Some(previous) = env.lookup(target) {
+                if !is_assignable(ty, previous) {
+                    return Err(Diagnostic::error(
+                        "T0023",
+                        format!(
+                            "cannot assign `{}` to `{target}`, previously inferred as `{}`",
+                            ty.name(),
+                            previous.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                return Ok(());
+            }
             env.bind(target.clone(), ty);
             Ok(())
         }
@@ -172,10 +641,16 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
             Ok(())
         }
-        HirStmt::ForRange { var, start, stop, step, body } => {
-            infer_expr(env, start)?;
-            infer_expr(env, stop)?;
-            infer_expr(env, step)?;
+        HirStmt::ForRange {
+            var,
+            start,
+            stop,
+            step,
+            body,
+        } => {
+            check_range_operand(env, "start", start)?;
+            check_range_operand(env, "stop", stop)?;
+            check_range_operand(env, "step", step)?;
             env.bind(var.clone(), Ty::Int);
             for stmt in body {
                 check_stmt(env, stmt)?;
@@ -198,27 +673,74 @@ pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
 /// means a function's own parameter bindings and local assignments never
 /// leak back into the module scope or into any other function's check.
 fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(), Diagnostic> {
-    let HirItem::Function { name, params, return_ty, body } = function else {
+    let HirItem::Function {
+        name,
+        params,
+        return_ty,
+        body,
+    } = function
+    else {
         panic!("check_function called with a non-Function HirItem");
     };
     let mut env = module_env.clone();
-    env.bind_function(name.clone(), params.iter().map(|(_, ty)| *ty).collect(), *return_ty);
-    for (param_name, param_ty) in params {
-        env.bind(param_name.clone(), *param_ty);
+    let (resolved_params, resolved_return) = module_env
+        .lookup_function(name)
+        .cloned()
+        .unwrap_or_else(|| (params.iter().map(|(_, ty)| *ty).collect(), *return_ty));
+    if resolved_params.contains(&Ty::Infer) || resolved_return == Ty::Infer {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!("cannot check private helper `{name}` before its signature is inferred"),
+            Span::new(0, 0),
+        ));
+    }
+    env.bind_function(name.clone(), resolved_params.clone(), resolved_return);
+    for ((param_name, _), param_ty) in params.iter().zip(resolved_params) {
+        env.bind(param_name.clone(), param_ty);
     }
     for stmt in body {
-        check_stmt_in_function(&mut env, stmt, *return_ty)?;
+        check_stmt_in_function(&mut env, stmt, resolved_return)?;
+    }
+    if resolved_return != Ty::None && !block_always_returns(body) {
+        return Err(Diagnostic::error(
+            "T0022",
+            format!(
+                "function `{name}` can exit without returning `{}`",
+                resolved_return.name()
+            ),
+            Span::new(0, 0),
+        ));
     }
     Ok(())
 }
 
-fn check_stmt_in_function(env: &mut Environment, stmt: &HirStmt, return_ty: Ty) -> Result<(), Diagnostic> {
+fn block_always_returns(body: &[HirStmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        HirStmt::Return(_) => true,
+        HirStmt::If { body, orelse, .. } => {
+            !orelse.is_empty() && block_always_returns(body) && block_always_returns(orelse)
+        }
+        HirStmt::ExprStmt(_)
+        | HirStmt::Assign { .. }
+        | HirStmt::While { .. }
+        | HirStmt::ForRange { .. } => false,
+    })
+}
+
+fn check_stmt_in_function(
+    env: &mut Environment,
+    stmt: &HirStmt,
+    return_ty: Ty,
+) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Return(None) => {
             if return_ty != Ty::None {
                 return Err(Diagnostic::error(
-                    "T0023",
-                    format!("expected a return value of type `{}`, got none", return_ty.name()),
+                    "T0022",
+                    format!(
+                        "expected a return value of type `{}`, got none",
+                        return_ty.name()
+                    ),
                     Span::new(0, 0),
                 ));
             }
@@ -228,8 +750,12 @@ fn check_stmt_in_function(env: &mut Environment, stmt: &HirStmt, return_ty: Ty) 
             let actual = infer_expr(env, expr)?;
             if !is_assignable(actual, return_ty) {
                 return Err(Diagnostic::error(
-                    "T0023",
-                    format!("expected return type `{}`, got `{}`", return_ty.name(), actual.name()),
+                    "T0022",
+                    format!(
+                        "expected return type `{}`, got `{}`",
+                        return_ty.name(),
+                        actual.name()
+                    ),
                     Span::new(0, 0),
                 ));
             }
@@ -252,10 +778,16 @@ fn check_stmt_in_function(env: &mut Environment, stmt: &HirStmt, return_ty: Ty) 
             }
             Ok(())
         }
-        HirStmt::ForRange { var, start, stop, step, body } => {
-            infer_expr(env, start)?;
-            infer_expr(env, stop)?;
-            infer_expr(env, step)?;
+        HirStmt::ForRange {
+            var,
+            start,
+            stop,
+            step,
+            body,
+        } => {
+            check_range_operand(env, "start", start)?;
+            check_range_operand(env, "stop", stop)?;
+            check_range_operand(env, "step", step)?;
             env.bind(var.clone(), Ty::Int);
             for s in body {
                 check_stmt_in_function(env, s, return_ty)?;
@@ -268,14 +800,18 @@ fn check_stmt_in_function(env: &mut Environment, stmt: &HirStmt, return_ty: Ty) 
 
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     let mut env = Environment::new();
+    let signatures = infer_function_signatures(hir)?;
     // Pass 1: register every function's signature before checking any
     // statement body, matching Python's own "a module runs top to bottom,
     // but any def already executed is callable" semantics -- top-level
     // code and other function bodies (D-040) both need to see every
     // function regardless of its position in the file.
     for item in &hir.items {
-        if let HirItem::Function { name, params, return_ty, .. } = item {
-            env.bind_function(name.clone(), params.iter().map(|(_, ty)| *ty).collect(), *return_ty);
+        if let HirItem::Function { name, .. } = item {
+            let (param_tys, return_ty) = signatures
+                .get(name)
+                .expect("every HIR function received an inferred signature");
+            env.bind_function(name.clone(), param_tys.clone(), *return_ty);
         }
     }
     // Pass 2: check every top-level statement in source order, growing
@@ -333,7 +869,10 @@ mod tests {
     #[test]
     fn infers_a_string_literal_as_str() {
         let env = Environment::new();
-        assert_eq!(infer_expr(&env, &HirExpr::StringLiteral("hi".to_string())), Ok(Ty::Str));
+        assert_eq!(
+            infer_expr(&env, &HirExpr::StringLiteral("hi".to_string())),
+            Ok(Ty::Str)
+        );
     }
 
     #[test]
@@ -392,7 +931,11 @@ mod tests {
                 left: Box::new(HirExpr::StringLiteral("a".to_string())),
                 right: Box::new(HirExpr::StringLiteral("b".to_string())),
             };
-            assert_eq!(infer_expr(&env, &expr), Ok(Ty::Bool), "comparison {op:?} should type-check");
+            assert_eq!(
+                infer_expr(&env, &expr),
+                Ok(Ty::Bool),
+                "comparison {op:?} should type-check"
+            );
         }
     }
 
@@ -409,8 +952,9 @@ mod tests {
     #[test]
     fn an_f_string_still_type_checks_its_interpolated_expressions() {
         let env = Environment::new();
-        let expr =
-            HirExpr::FString(vec![FStringPart::Interpolation(Box::new(HirExpr::Name("undefined".to_string())))]);
+        let expr = HirExpr::FString(vec![FStringPart::Interpolation(Box::new(HirExpr::Name(
+            "undefined".to_string(),
+        )))]);
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
     }
@@ -484,7 +1028,10 @@ mod tests {
         let expr = HirExpr::Compare {
             op: CmpOpKind::Eq,
             left: Box::new(HirExpr::IntLiteral(1)),
-            right: Box::new(HirExpr::Call { callee: "f".to_string(), args: vec![] }),
+            right: Box::new(HirExpr::Call {
+                callee: "f".to_string(),
+                args: vec![],
+            }),
         };
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -523,8 +1070,14 @@ mod tests {
     #[test]
     fn an_assignment_binds_the_inferred_type_in_the_environment() {
         let mut env = Environment::new();
-        check_stmt(&mut env, &HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(1) })
-            .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
         assert_eq!(env.lookup("x"), Some(Ty::Int));
     }
 
@@ -533,7 +1086,10 @@ mod tests {
         let mut env = Environment::new();
         let err = check_stmt(
             &mut env,
-            &HirStmt::Assign { target: "x".to_string(), value: HirExpr::Name("undefined".to_string()) },
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::Name("undefined".to_string()),
+            },
         )
         .unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -541,12 +1097,63 @@ mod tests {
     }
 
     #[test]
+    fn an_incompatible_reassignment_is_t0023_and_preserves_the_inferred_type() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::StringLiteral("changed".to_string()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0023");
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn assigning_bool_to_an_int_binding_keeps_the_declared_representation() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::BoolLiteral(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
     fn an_if_s_test_must_be_bool_like_and_both_branches_are_checked() {
         let mut env = Environment::new();
         let stmt = HirStmt::If {
             test: HirExpr::BoolLiteral(true),
-            body: vec![HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(1) }],
-            orelse: vec![HirStmt::Assign { target: "y".to_string(), value: HirExpr::IntLiteral(2) }],
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::IntLiteral(2),
+            }],
         };
         check_stmt(&mut env, &stmt).unwrap();
         // Both branches ran in the same (single, unscoped-per-branch)
@@ -594,7 +1201,10 @@ mod tests {
         let mut env = Environment::new();
         let stmt = HirStmt::While {
             test: HirExpr::BoolLiteral(true),
-            body: vec![HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(1) }],
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
         };
         check_stmt(&mut env, &stmt).unwrap();
         assert_eq!(env.lookup("x"), Some(Ty::Int));
@@ -603,7 +1213,10 @@ mod tests {
     #[test]
     fn a_while_loop_whose_test_is_undefined_propagates_the_error() {
         let mut env = Environment::new();
-        let stmt = HirStmt::While { test: HirExpr::Name("undefined".to_string()), body: vec![] };
+        let stmt = HirStmt::While {
+            test: HirExpr::Name("undefined".to_string()),
+            body: vec![],
+        };
         assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
     }
 
@@ -625,7 +1238,10 @@ mod tests {
             start: HirExpr::IntLiteral(0),
             stop: HirExpr::IntLiteral(3),
             step: HirExpr::IntLiteral(1),
-            body: vec![HirStmt::Assign { target: "x".to_string(), value: HirExpr::Name("i".to_string()) }],
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::Name("i".to_string()),
+            }],
         };
         check_stmt(&mut env, &stmt).unwrap();
         assert_eq!(env.lookup("i"), Some(Ty::Int));
@@ -685,11 +1301,50 @@ mod tests {
     }
 
     #[test]
+    fn a_for_range_loop_rejects_a_non_int_operand() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::StringLiteral("three".to_string()),
+            step: HirExpr::IntLiteral(1),
+            body: vec![],
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("range stop"));
+        assert_eq!(env.lookup("i"), None);
+    }
+
+    #[test]
+    fn a_for_range_loop_accepts_bool_as_an_int_subtype() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::BoolLiteral(false),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::BoolLiteral(true),
+            body: vec![],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("i"), Some(Ty::Int));
+    }
+
+    #[test]
     fn referencing_an_assigned_name_infers_its_bound_type() {
         let mut env = Environment::new();
-        check_stmt(&mut env, &HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(1) })
-            .unwrap();
-        assert_eq!(infer_expr(&env, &HirExpr::Name("x".to_string())), Ok(Ty::Int));
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            infer_expr(&env, &HirExpr::Name("x".to_string())),
+            Ok(Ty::Int)
+        );
     }
 
     #[test]
@@ -729,8 +1384,34 @@ mod tests {
 
     #[test]
     fn numeric_result_type_covers_every_int_float_combination() {
-        assert_eq!(numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Float), Ok(Ty::Float));
-        assert_eq!(numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Int), Ok(Ty::Float));
+        assert_eq!(
+            numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Float),
+            Ok(Ty::Float)
+        );
+        assert_eq!(
+            numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Int),
+            Ok(Ty::Float)
+        );
+    }
+
+    #[test]
+    fn true_division_of_two_ints_infers_float() {
+        assert_eq!(
+            numeric_result_type(BinOpKind::Div, Ty::Int, Ty::Int),
+            Ok(Ty::Float)
+        );
+        assert_eq!(
+            numeric_result_type(BinOpKind::Div, Ty::Bool, Ty::Bool),
+            Ok(Ty::Float)
+        );
+    }
+
+    #[test]
+    fn floor_division_of_two_ints_still_infers_int() {
+        assert_eq!(
+            numeric_result_type(BinOpKind::FloorDiv, Ty::Int, Ty::Int),
+            Ok(Ty::Int)
+        );
     }
 
     #[test]
@@ -764,7 +1445,10 @@ mod tests {
         // legal Python), so this pair is no longer an error -- see
         // `a_binop_treats_bool_and_float_as_float` for the `infer_expr`-level
         // version of this same rule.
-        assert_eq!(numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Bool), Ok(Ty::Float));
+        assert_eq!(
+            numeric_result_type(BinOpKind::Add, Ty::Float, Ty::Bool),
+            Ok(Ty::Float)
+        );
     }
 
     #[test]
@@ -796,7 +1480,9 @@ mod tests {
     #[test]
     fn a_top_level_reference_to_an_undefined_name_is_a_clean_error() {
         let hir = HirModule {
-            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("undefined".to_string())))],
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name(
+                "undefined".to_string(),
+            )))],
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -899,7 +1585,10 @@ mod tests {
         // an ordinary module-level constant, not some caller's local.
         let hir = HirModule {
             items: vec![
-                HirItem::TopLevelStmt(HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(5) }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
                 HirItem::Function {
                     name: "f".to_string(),
                     params: vec![],
@@ -925,7 +1614,10 @@ mod tests {
                     return_ty: Ty::Int,
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
-                HirItem::TopLevelStmt(HirStmt::Assign { target: "x".to_string(), value: HirExpr::IntLiteral(5) }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
             ],
         };
         assert!(check(&hir).is_ok());
@@ -948,7 +1640,7 @@ mod tests {
             ],
         };
         // If the global (Ty::Str) leaked through instead of the parameter
-        // (Ty::Int), this would fail with a T0023 return-type mismatch.
+        // (Ty::Int), this would fail with a T0022 return-type mismatch.
         assert!(check(&hir).is_ok());
     }
 
@@ -961,7 +1653,10 @@ mod tests {
             name: "main".to_string(),
             params: vec![],
             return_ty: Ty::None,
-            body: vec![HirStmt::ExprStmt(HirExpr::Call { callee: "helper".to_string(), args: vec![] })],
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "helper".to_string(),
+                args: vec![],
+            })],
         };
         let err = check_function(&function).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -984,14 +1679,20 @@ mod tests {
     #[test]
     fn a_bare_call_infers_none() {
         let env = Environment::new();
-        let expr = HirExpr::Call { callee: "print".to_string(), args: vec![] };
+        let expr = HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![],
+        };
         assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
     }
 
     #[test]
     fn calling_an_undefined_function_is_a_clean_error() {
         let env = Environment::new();
-        let expr = HirExpr::Call { callee: "undefined".to_string(), args: vec![] };
+        let expr = HirExpr::Call {
+            callee: "undefined".to_string(),
+            args: vec![],
+        };
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(err.message.contains("undefined"));
@@ -1012,7 +1713,10 @@ mod tests {
     fn calling_a_function_with_a_bool_argument_for_an_int_parameter_succeeds() {
         let mut env = Environment::new();
         env.bind_function("f".to_string(), vec![Ty::Int], Ty::None);
-        let expr = HirExpr::Call { callee: "f".to_string(), args: vec![HirExpr::BoolLiteral(true)] };
+        let expr = HirExpr::Call {
+            callee: "f".to_string(),
+            args: vec![HirExpr::BoolLiteral(true)],
+        };
         assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
     }
 
@@ -1020,7 +1724,10 @@ mod tests {
     fn calling_a_function_with_the_wrong_number_of_arguments_is_a_clean_error() {
         let mut env = Environment::new();
         env.bind_function("add".to_string(), vec![Ty::Int, Ty::Int], Ty::Int);
-        let expr = HirExpr::Call { callee: "add".to_string(), args: vec![HirExpr::IntLiteral(1)] };
+        let expr = HirExpr::Call {
+            callee: "add".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        };
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(err.message.contains("expects 2 argument"));
@@ -1036,15 +1743,21 @@ mod tests {
         };
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
-        assert!(err.message.contains("argument 2") && err.message.contains("int") && err.message.contains("float"));
+        assert!(
+            err.message.contains("argument 2")
+                && err.message.contains("int")
+                && err.message.contains("float")
+        );
     }
 
     #[test]
     fn calling_a_function_with_an_undefined_argument_propagates_the_error() {
         let mut env = Environment::new();
         env.bind_function("f".to_string(), vec![Ty::Int], Ty::None);
-        let expr =
-            HirExpr::Call { callee: "f".to_string(), args: vec![HirExpr::Name("undefined".to_string())] };
+        let expr = HirExpr::Call {
+            callee: "f".to_string(),
+            args: vec![HirExpr::Name("undefined".to_string())],
+        };
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
     }
@@ -1084,7 +1797,7 @@ mod tests {
             body: vec![HirStmt::Return(None)],
         };
         let err = check_function(&function).unwrap_err();
-        assert_eq!(err.code, "T0023");
+        assert_eq!(err.code, "T0022");
     }
 
     #[test]
@@ -1096,7 +1809,53 @@ mod tests {
             body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
         };
         let err = check_function(&function).unwrap_err();
-        assert_eq!(err.code, "T0023");
+        assert_eq!(err.code, "T0022");
+    }
+
+    #[test]
+    fn a_value_returning_function_must_return_on_every_path() {
+        let function = HirItem::Function {
+            name: "answer".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::IntLiteral(42)],
+            })],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0022");
+        assert!(err.message.contains("can exit without returning"));
+    }
+
+    #[test]
+    fn an_if_with_returns_in_both_branches_satisfies_the_return_contract() {
+        let function = HirItem::Function {
+            name: "choose".to_string(),
+            params: vec![("condition".to_string(), Ty::Bool)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::If {
+                test: HirExpr::Name("condition".to_string()),
+                body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                orelse: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+            }],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn an_if_with_only_one_returning_branch_is_t0022() {
+        let function = HirItem::Function {
+            name: "choose".to_string(),
+            params: vec![("condition".to_string(), Ty::Bool)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::If {
+                test: HirExpr::Name("condition".to_string()),
+                body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                orelse: vec![],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0022");
     }
 
     #[test]
@@ -1105,7 +1864,9 @@ mod tests {
             name: "f".to_string(),
             params: vec![],
             return_ty: Ty::Int,
-            body: vec![HirStmt::Return(Some(HirExpr::Name("undefined".to_string())))],
+            body: vec![HirStmt::Return(Some(HirExpr::Name(
+                "undefined".to_string(),
+            )))],
         };
         let err = check_function(&function).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -1131,20 +1892,23 @@ mod tests {
             name: "f".to_string(),
             params: vec![],
             return_ty: Ty::Int,
-            body: vec![HirStmt::If {
-                test: HirExpr::BoolLiteral(true),
-                body: vec![HirStmt::While {
+            body: vec![
+                HirStmt::If {
                     test: HirExpr::BoolLiteral(true),
-                    body: vec![HirStmt::ForRange {
-                        var: "i".to_string(),
-                        start: HirExpr::IntLiteral(0),
-                        stop: HirExpr::IntLiteral(1),
-                        step: HirExpr::IntLiteral(1),
-                        body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                    body: vec![HirStmt::While {
+                        test: HirExpr::BoolLiteral(true),
+                        body: vec![HirStmt::ForRange {
+                            var: "i".to_string(),
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(1),
+                            step: HirExpr::IntLiteral(1),
+                            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                        }],
                     }],
-                }],
-                orelse: vec![HirStmt::Return(Some(HirExpr::IntLiteral(0)))],
-            }],
+                    orelse: vec![HirStmt::Return(Some(HirExpr::IntLiteral(0)))],
+                },
+                HirStmt::Return(Some(HirExpr::IntLiteral(2))),
+            ],
         };
         check_function(&function).unwrap();
     }
@@ -1171,7 +1935,7 @@ mod tests {
             }],
         };
         let err = check_function(&function).unwrap_err();
-        assert_eq!(err.code, "T0023");
+        assert_eq!(err.code, "T0022");
     }
 
     #[test]
@@ -1216,7 +1980,10 @@ mod tests {
             name: "f".to_string(),
             params: vec![],
             return_ty: Ty::None,
-            body: vec![HirStmt::While { test: HirExpr::Name("undefined".to_string()), body: vec![] }],
+            body: vec![HirStmt::While {
+                test: HirExpr::Name("undefined".to_string()),
+                body: vec![],
+            }],
         };
         assert_eq!(check_function(&function).unwrap_err().code, "T0021");
     }
@@ -1270,5 +2037,795 @@ mod tests {
             }],
         };
         assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn private_identity_signature_is_inferred_from_its_call_site_and_return() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_identity".to_string(),
+                    params: vec![("value".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn private_binary_helper_signature_is_inferred_across_operator_constraints() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_add".to_string(),
+                    params: vec![
+                        ("left".to_string(), Ty::Infer),
+                        ("right".to_string(), Ty::Infer),
+                    ],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(HirExpr::Name("left".to_string())),
+                        right: Box::new(HirExpr::Name("right".to_string())),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_add".to_string(),
+                    args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                })),
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn private_true_division_helper_infers_a_float_return() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_ratio".to_string(),
+                    params: vec![("value".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Div,
+                        left: Box::new(HirExpr::Name("value".to_string())),
+                        right: Box::new(HirExpr::IntLiteral(2)),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "ratio".to_string(),
+                    value: HirExpr::Call {
+                        callee: "_ratio".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                }),
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn private_helper_without_a_return_infers_none() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_log".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::FString(vec![
+                        FStringPart::Literal("equal=".to_string()),
+                        FStringPart::Interpolation(Box::new(HirExpr::Compare {
+                            op: CmpOpKind::Eq,
+                            left: Box::new(HirExpr::IntLiteral(1)),
+                            right: Box::new(HirExpr::IntLiteral(1)),
+                        })),
+                    ])],
+                })],
+            }],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn private_helper_with_a_bare_return_infers_none() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_stop".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(None)],
+            }],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn private_constant_helper_infers_a_float_return() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_constant".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::FloatLiteral(1.5)))],
+            }],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn private_range_helper_infers_its_parameter_as_int() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_loop".to_string(),
+                params: vec![("limit".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::ForRange {
+                    var: "item".to_string(),
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::Name("limit".to_string()),
+                    step: HirExpr::IntLiteral(1),
+                    body: vec![HirStmt::While {
+                        test: HirExpr::BoolLiteral(false),
+                        body: vec![HirStmt::If {
+                            test: HirExpr::BoolLiteral(true),
+                            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                                callee: "print".to_string(),
+                                args: vec![HirExpr::Name("item".to_string())],
+                            })],
+                            orelse: vec![],
+                        }],
+                    }],
+                }],
+            }],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn unresolved_private_parameter_requests_an_annotation() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_constant".to_string(),
+                params: vec![("unused".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+            }],
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("parameter `unused`"));
+    }
+
+    #[test]
+    fn unresolved_private_return_requests_an_annotation() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_unknown".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("missing".to_string())))],
+            }],
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("return type"));
+    }
+
+    #[test]
+    fn undefined_call_cannot_silently_resolve_a_private_return() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_unknown".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Call {
+                    callee: "missing".to_string(),
+                    args: vec![],
+                }))],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn unresolved_binary_operand_cannot_silently_resolve_a_private_return() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_unknown".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("missing".to_string())),
+                    right: Box::new(HirExpr::IntLiteral(1)),
+                }))],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn unresolved_private_binary_parameters_request_annotations() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_add".to_string(),
+                params: vec![
+                    ("left".to_string(), Ty::Infer),
+                    ("right".to_string(), Ty::Infer),
+                ],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("left".to_string())),
+                    right: Box::new(HirExpr::Name("right".to_string())),
+                }))],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn unresolved_call_argument_does_not_invent_a_private_parameter_type() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_identity".to_string(),
+                    params: vec![("value".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_identity".to_string(),
+                    args: vec![HirExpr::Name("missing".to_string())],
+                })),
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn private_parameter_inference_rejects_conflicting_call_sites() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_identity".to_string(),
+                    params: vec![("value".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_identity".to_string(),
+                    args: vec![HirExpr::StringLiteral("one".to_string())],
+                })),
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn private_return_inference_rejects_conflicting_return_types() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_choose".to_string(),
+                params: vec![("condition".to_string(), Ty::Bool)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::If {
+                    test: HirExpr::Name("condition".to_string()),
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                    orelse: vec![HirStmt::Return(Some(HirExpr::StringLiteral(
+                        "one".to_string(),
+                    )))],
+                }],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0022");
+    }
+
+    fn nested_private_call_conflict() -> HirExpr {
+        HirExpr::Call {
+            callee: "_sink".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "_identity".to_string(),
+                args: vec![HirExpr::StringLiteral("wrong".to_string())],
+            }],
+        }
+    }
+
+    fn private_constraint_error_fixture(stmt: HirStmt) -> HirModule {
+        HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_identity".to_string(),
+                    params: vec![("value".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+                },
+                HirItem::Function {
+                    name: "_sink".to_string(),
+                    params: vec![("value".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::Return(None)],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+                HirItem::Function {
+                    name: "_probe".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![stmt],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn private_f_string_and_return_propagate_nested_constraint_errors() {
+        let stmt = HirStmt::Return(Some(HirExpr::FString(vec![FStringPart::Interpolation(
+            Box::new(nested_private_call_conflict()),
+        )])));
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_if_body_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ExprStmt(nested_private_call_conflict())],
+            orelse: vec![],
+        };
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_while_body_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::While {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ExprStmt(nested_private_call_conflict())],
+        };
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_range_operand_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::ForRange {
+            var: "item".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: nested_private_call_conflict(),
+            step: HirExpr::IntLiteral(1),
+            body: vec![],
+        };
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_range_body_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::ForRange {
+            var: "item".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(1),
+            step: HirExpr::IntLiteral(1),
+            body: vec![HirStmt::ExprStmt(nested_private_call_conflict())],
+        };
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_compare_left_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::ExprStmt(HirExpr::Compare {
+            op: CmpOpKind::Eq,
+            left: Box::new(nested_private_call_conflict()),
+            right: Box::new(HirExpr::IntLiteral(1)),
+        });
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_compare_right_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::ExprStmt(HirExpr::Compare {
+            op: CmpOpKind::Eq,
+            left: Box::new(HirExpr::IntLiteral(1)),
+            right: Box::new(nested_private_call_conflict()),
+        });
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_binary_left_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::ExprStmt(HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(nested_private_call_conflict()),
+            right: Box::new(HirExpr::IntLiteral(1)),
+        });
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_binary_right_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::ExprStmt(HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(HirExpr::IntLiteral(1)),
+            right: Box::new(nested_private_call_conflict()),
+        });
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_assignment_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::Assign {
+            target: "value".to_string(),
+            value: nested_private_call_conflict(),
+        };
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_assignment_with_an_unresolved_value_is_checked_after_inference() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_assign".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Assign {
+                    target: "value".to_string(),
+                    value: HirExpr::Name("missing".to_string()),
+                }],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn private_if_test_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::If {
+            test: nested_private_call_conflict(),
+            body: vec![],
+            orelse: vec![],
+        };
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_while_test_propagates_nested_constraint_errors() {
+        let stmt = HirStmt::While {
+            test: nested_private_call_conflict(),
+            body: vec![],
+        };
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_range_parameter_rejects_a_conflicting_call_site_type() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_loop".to_string(),
+                    params: vec![("limit".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::ForRange {
+                        var: "item".to_string(),
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::Name("limit".to_string()),
+                        step: HirExpr::IntLiteral(1),
+                        body: vec![],
+                    }],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_loop".to_string(),
+                    args: vec![HirExpr::StringLiteral("wrong".to_string())],
+                })),
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn private_implicit_none_return_rejects_an_int_constrained_call_site() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_noop".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![],
+                },
+                HirItem::TopLevelStmt(HirStmt::ForRange {
+                    var: "item".to_string(),
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::Call {
+                        callee: "_noop".to_string(),
+                        args: vec![],
+                    },
+                    step: HirExpr::IntLiteral(1),
+                    body: vec![],
+                }),
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0022");
+    }
+
+    #[test]
+    fn private_division_return_rejects_an_int_constrained_call_site() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_ratio".to_string(),
+                    params: vec![("value".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Div,
+                        left: Box::new(HirExpr::Name("value".to_string())),
+                        right: Box::new(HirExpr::IntLiteral(2)),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ForRange {
+                    var: "item".to_string(),
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::Call {
+                        callee: "_ratio".to_string(),
+                        args: vec![HirExpr::IntLiteral(4)],
+                    },
+                    step: HirExpr::IntLiteral(1),
+                    body: vec![],
+                }),
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn private_binary_constraint_rejects_incompatible_resolved_operands() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_bad_add".to_string(),
+                    params: vec![("value".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(HirExpr::Name("value".to_string())),
+                        right: Box::new(HirExpr::StringLiteral("wrong".to_string())),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_bad_add".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn direct_check_function_rejects_an_unresolved_private_signature() {
+        let function = HirItem::Function {
+            name: "_identity".to_string(),
+            params: vec![("value".to_string(), Ty::Infer)],
+            return_ty: Ty::Infer,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn type_solver_covers_concrete_and_union_merge_paths() {
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        assert!(
+            !unify_terms(
+                Ok(Ty::Int),
+                Ok(Ty::Bool),
+                &mut parents,
+                &mut concrete,
+                "T0021",
+                "test",
+            )
+            .unwrap()
+        );
+        assert!(
+            unify_terms(
+                Ok(Ty::Int),
+                Ok(Ty::Str),
+                &mut parents,
+                &mut concrete,
+                "T0021",
+                "test",
+            )
+            .is_err()
+        );
+
+        let empty_left = fresh_term(&mut parents, &mut concrete);
+        let empty_right = fresh_term(&mut parents, &mut concrete);
+        assert!(
+            unify_terms(
+                empty_left,
+                empty_right,
+                &mut parents,
+                &mut concrete,
+                "T0021",
+                "test",
+            )
+            .unwrap()
+        );
+        assert!(
+            !unify_terms(
+                empty_left,
+                empty_right,
+                &mut parents,
+                &mut concrete,
+                "T0021",
+                "test",
+            )
+            .unwrap()
+        );
+
+        let typed_left = fresh_term(&mut parents, &mut concrete);
+        let typed_right = fresh_term(&mut parents, &mut concrete);
+        unify_terms(
+            typed_left,
+            Ok(Ty::Bool),
+            &mut parents,
+            &mut concrete,
+            "T0021",
+            "test",
+        )
+        .unwrap();
+        unify_terms(
+            typed_right,
+            Ok(Ty::Int),
+            &mut parents,
+            &mut concrete,
+            "T0021",
+            "test",
+        )
+        .unwrap();
+        unify_terms(
+            typed_left,
+            typed_right,
+            &mut parents,
+            &mut concrete,
+            "T0021",
+            "test",
+        )
+        .unwrap();
+        assert_eq!(
+            resolved_term(typed_right, &mut parents, &concrete),
+            Some(Ty::Int)
+        );
+
+        let typed = fresh_term(&mut parents, &mut concrete);
+        let empty = fresh_term(&mut parents, &mut concrete);
+        unify_terms(
+            typed,
+            Ok(Ty::Str),
+            &mut parents,
+            &mut concrete,
+            "T0021",
+            "test",
+        )
+        .unwrap();
+        unify_terms(typed, empty, &mut parents, &mut concrete, "T0021", "test").unwrap();
+        assert_eq!(resolved_term(empty, &mut parents, &concrete), Some(Ty::Str));
+
+        let conflicting_left = fresh_term(&mut parents, &mut concrete);
+        let conflicting_right = fresh_term(&mut parents, &mut concrete);
+        unify_terms(
+            conflicting_left,
+            Ok(Ty::Int),
+            &mut parents,
+            &mut concrete,
+            "T0021",
+            "test",
+        )
+        .unwrap();
+        unify_terms(
+            conflicting_right,
+            Ok(Ty::Str),
+            &mut parents,
+            &mut concrete,
+            "T0021",
+            "test",
+        )
+        .unwrap();
+        assert!(
+            unify_terms(
+                conflicting_left,
+                conflicting_right,
+                &mut parents,
+                &mut concrete,
+                "T0021",
+                "test",
+            )
+            .is_err()
+        );
+
+        let reversed = fresh_term(&mut parents, &mut concrete);
+        assert!(
+            unify_terms(
+                Ok(Ty::Float),
+                reversed,
+                &mut parents,
+                &mut concrete,
+                "T0021",
+                "test",
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            resolved_term(reversed, &mut parents, &concrete),
+            Some(Ty::Float)
+        );
     }
 }

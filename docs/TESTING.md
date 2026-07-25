@@ -185,11 +185,13 @@ Branch protection is strict and requires `ci-gate` and `audit`, bound to the
 GitHub Actions app. `ci-gate` (D-032) is a single stable-named job in
 `ci.yml` that fans in every job in that workflow (`build-test-coverage`, all
 four `native-build-test` Tier-1 legs, `cross-compile-build`,
-`cross-compile-verify`) so branch protection enforces the whole Tier-1
-matrix through one required-check name that survives matrix edits, rather
-than naming each matrix leg directly (whose GitHub-generated name bakes in
-the matrix values and would go stale the moment an `os`/`target` entry
-changes). The switch from directly requiring `build-test-coverage` to
+`cross-compile-verify`, and the D-044 `frontend-perf-gate`) so branch
+protection enforces the whole Tier-1 matrix, hard coverage invariant, and
+>2% frontend-regression block through one required-check name that survives
+matrix edits, rather than naming each matrix leg directly (whose
+GitHub-generated name bakes in the matrix values and would go stale the
+moment an `os`/`target` entry changes). The switch from directly requiring
+`build-test-coverage` to
 requiring `ci-gate` happened once `ci-gate` existed on `main` (PR #19,
 merged 2026-07-25) -- it was deliberately not done inside that same PR,
 since flipping it earlier, while other branches were still open against a

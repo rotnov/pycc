@@ -47,12 +47,14 @@ fn lower_instr(stmt: &HirStmt) -> MirInstr {
     };
     match expr {
         HirExpr::Call { callee, args } if callee == "print" => match args.as_slice() {
-            [HirExpr::IntLiteral(n)] => MirInstr::CallPrint { arg: MirExpr::IntLiteral(*n) },
+            [HirExpr::IntLiteral(n)] => MirInstr::CallPrint {
+                arg: MirExpr::IntLiteral(*n),
+            },
             _ => panic!("pycc_mir: print() with this argument shape lands in PR-5"),
         },
-        HirExpr::Call { callee, args } if args.is_empty() => {
-            MirInstr::CallUserFunction { name: callee.clone() }
-        }
+        HirExpr::Call { callee, args } if args.is_empty() => MirInstr::CallUserFunction {
+            name: callee.clone(),
+        },
         _ => panic!("pycc_mir: this construct's codegen lands in PR-5"),
     }
 }
@@ -63,30 +65,44 @@ mod tests {
     use pycc_hir::{HirExpr, HirItem, HirModule, HirStmt, Ty};
 
     fn call_print(arg: i64) -> HirStmt {
-        HirStmt::ExprStmt(HirExpr::Call { callee: "print".to_string(), args: vec![HirExpr::IntLiteral(arg)] })
+        HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::IntLiteral(arg)],
+        })
     }
 
     fn call_user_fn(name: &str) -> HirStmt {
-        HirStmt::ExprStmt(HirExpr::Call { callee: name.to_string(), args: vec![] })
+        HirStmt::ExprStmt(HirExpr::Call {
+            callee: name.to_string(),
+            args: vec![],
+        })
     }
 
     #[test]
     fn builds_one_call_print_instr_per_top_level_hir_stmt() {
-        let hir = HirModule { items: vec![HirItem::TopLevelStmt(call_print(42))] };
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(call_print(42))],
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
-            vec![MirItem::TopLevelStmt(MirInstr::CallPrint { arg: MirExpr::IntLiteral(42) })]
+            vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
+                arg: MirExpr::IntLiteral(42)
+            })]
         );
     }
 
     #[test]
     fn builds_a_call_user_function_instr() {
-        let hir = HirModule { items: vec![HirItem::TopLevelStmt(call_user_fn("main"))] };
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(call_user_fn("main"))],
+        };
         let mir = build(&hir);
         assert_eq!(
             mir.items,
-            vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction { name: "main".to_string() })]
+            vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction {
+                name: "main".to_string()
+            })]
         );
     }
 
@@ -105,7 +121,9 @@ mod tests {
             mir.items,
             vec![MirItem::Function {
                 name: "main".to_string(),
-                body: vec![MirInstr::CallPrint { arg: MirExpr::IntLiteral(7) }],
+                body: vec![MirInstr::CallPrint {
+                    arg: MirExpr::IntLiteral(7)
+                }],
             }]
         );
     }
@@ -125,7 +143,11 @@ mod tests {
     #[test]
     #[should_panic(expected = "this construct's codegen lands in PR-5")]
     fn a_bare_literal_statement_is_not_yet_lowerable() {
-        let hir = HirModule { items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(1)))] };
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::IntLiteral(1),
+            ))],
+        };
         build(&hir);
     }
 

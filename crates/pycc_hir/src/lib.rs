@@ -8,6 +8,7 @@ pub enum Ty {
     Bool,
     Str,
     None,
+    Infer,
 }
 
 impl Ty {
@@ -18,6 +19,7 @@ impl Ty {
             Ty::Bool => "bool",
             Ty::Str => "str",
             Ty::None => "None",
+            Ty::Infer => "<inferred>",
         }
     }
 }
@@ -50,9 +52,20 @@ pub enum HirExpr {
     BoolLiteral(bool),
     StringLiteral(String),
     Name(String),
-    Call { callee: String, args: Vec<HirExpr> },
-    BinOp { op: BinOpKind, left: Box<HirExpr>, right: Box<HirExpr> },
-    Compare { op: CmpOpKind, left: Box<HirExpr>, right: Box<HirExpr> },
+    Call {
+        callee: String,
+        args: Vec<HirExpr>,
+    },
+    BinOp {
+        op: BinOpKind,
+        left: Box<HirExpr>,
+        right: Box<HirExpr>,
+    },
+    Compare {
+        op: CmpOpKind,
+        left: Box<HirExpr>,
+        right: Box<HirExpr>,
+    },
     FString(Vec<FStringPart>),
 }
 
@@ -65,16 +78,37 @@ pub enum FStringPart {
 #[derive(Debug, PartialEq)]
 pub enum HirStmt {
     ExprStmt(HirExpr),
-    Assign { target: String, value: HirExpr },
-    If { test: HirExpr, body: Vec<HirStmt>, orelse: Vec<HirStmt> },
-    While { test: HirExpr, body: Vec<HirStmt> },
-    ForRange { var: String, start: HirExpr, stop: HirExpr, step: HirExpr, body: Vec<HirStmt> },
+    Assign {
+        target: String,
+        value: HirExpr,
+    },
+    If {
+        test: HirExpr,
+        body: Vec<HirStmt>,
+        orelse: Vec<HirStmt>,
+    },
+    While {
+        test: HirExpr,
+        body: Vec<HirStmt>,
+    },
+    ForRange {
+        var: String,
+        start: HirExpr,
+        stop: HirExpr,
+        step: HirExpr,
+        body: Vec<HirStmt>,
+    },
     Return(Option<HirExpr>),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum HirItem {
-    Function { name: String, params: Vec<(String, Ty)>, return_ty: Ty, body: Vec<HirStmt> },
+    Function {
+        name: String,
+        params: Vec<(String, Ty)>,
+        return_ty: Ty,
+        body: Vec<HirStmt>,
+    },
     TopLevelStmt(HirStmt),
 }
 
@@ -100,7 +134,12 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
     let params = lower_params(&def.parameters, is_public, def.name.as_str())?;
     let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, def.name.as_str())?;
     let body = def.body.iter().map(lower_stmt).collect();
-    Ok(HirItem::Function { name: def.name.to_string(), params, return_ty, body })
+    Ok(HirItem::Function {
+        name: def.name.to_string(),
+        params,
+        return_ty,
+        body,
+    })
 }
 
 fn lower_params(
@@ -117,16 +156,22 @@ fn lower_params(
                 Some(ann) => Ok((name.to_string(), annotation_to_ty(ann)?)),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
-                    format!("parameter `{name}` of public function `{fn_name}` needs a type annotation"),
+                    format!(
+                        "parameter `{name}` of public function `{fn_name}` needs a type annotation"
+                    ),
                     Span::new(0, 0),
                 )),
-                None => Ok((name.to_string(), Ty::None)), // private helper: unannotated is allowed; real inference is a later task's job
+                None => Ok((name.to_string(), Ty::Infer)),
             }
         })
         .collect()
 }
 
-fn lower_return_annotation(returns: Option<&Expr>, is_public: bool, fn_name: &str) -> Result<Ty, Diagnostic> {
+fn lower_return_annotation(
+    returns: Option<&Expr>,
+    is_public: bool,
+    fn_name: &str,
+) -> Result<Ty, Diagnostic> {
     match returns {
         Some(ann) => annotation_to_ty(ann),
         None if is_public => Err(Diagnostic::error(
@@ -134,7 +179,7 @@ fn lower_return_annotation(returns: Option<&Expr>, is_public: bool, fn_name: &st
             format!("public function `{fn_name}` needs a return type annotation"),
             Span::new(0, 0),
         )),
-        None => Ok(Ty::None),
+        None => Ok(Ty::Infer),
     }
 }
 
@@ -148,12 +193,15 @@ fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
             "str" => Ok(Ty::Str),
             "Any" => Err(Diagnostic::error(
                 "T0002",
-                "`Any` is not permitted in pycc code outside a declared interop boundary".to_string(),
+                "`Any` is not permitted in pycc code outside a declared interop boundary"
+                    .to_string(),
                 Span::new(0, 0),
             )),
             other => panic!("pycc_hir: type annotation `{other}` is not supported yet"),
         },
-        other => panic!("pycc_hir: only a bare name type annotation is supported so far: {other:?}"),
+        other => {
+            panic!("pycc_hir: only a bare name type annotation is supported so far: {other:?}")
+        }
     }
 }
 
@@ -170,7 +218,10 @@ fn lower_stmt(stmt: &Stmt) -> HirStmt {
             let Expr::Name(name) = target else {
                 panic!("pycc_hir: only assigning to a bare name is supported so far: {target:?}");
             };
-            HirStmt::Assign { target: name.id.as_str().to_string(), value: lower_expr(&assign.value) }
+            HirStmt::Assign {
+                target: name.id.as_str().to_string(),
+                value: lower_expr(&assign.value),
+            }
         }
         Stmt::If(if_stmt) => HirStmt::If {
             test: lower_expr(&if_stmt.test),
@@ -181,7 +232,10 @@ fn lower_stmt(stmt: &Stmt) -> HirStmt {
             if !while_stmt.orelse.is_empty() {
                 panic!("pycc_hir: while/else is not supported yet");
             }
-            HirStmt::While { test: lower_expr(&while_stmt.test), body: lower_body(&while_stmt.body) }
+            HirStmt::While {
+                test: lower_expr(&while_stmt.test),
+                body: lower_body(&while_stmt.body),
+            }
         }
         Stmt::For(for_stmt) => {
             if for_stmt.is_async {
@@ -191,24 +245,49 @@ fn lower_stmt(stmt: &Stmt) -> HirStmt {
                 panic!("pycc_hir: for/else is not supported yet");
             }
             let Expr::Name(var) = for_stmt.target.as_ref() else {
-                panic!("pycc_hir: only a bare name for-target is supported so far: {:?}", for_stmt.target);
+                panic!(
+                    "pycc_hir: only a bare name for-target is supported so far: {:?}",
+                    for_stmt.target
+                );
             };
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
-                panic!("pycc_hir: only `for x in range(...)` is supported so far: {:?}", for_stmt.iter);
+                panic!(
+                    "pycc_hir: only `for x in range(...)` is supported so far: {:?}",
+                    for_stmt.iter
+                );
             };
             let Expr::Name(callee) = call.func.as_ref() else {
-                panic!("pycc_hir: only `for x in range(...)` is supported so far: {:?}", call.func);
+                panic!(
+                    "pycc_hir: only `for x in range(...)` is supported so far: {:?}",
+                    call.func
+                );
             };
             if callee.id.as_str() != "range" {
-                panic!("pycc_hir: only iterating over `range(...)` is supported so far, got `{}`", callee.id);
+                panic!(
+                    "pycc_hir: only iterating over `range(...)` is supported so far, got `{}`",
+                    callee.id
+                );
             }
             let (start, stop, step) = match &*call.arguments.args {
-                [stop] => (HirExpr::IntLiteral(0), lower_expr(stop), HirExpr::IntLiteral(1)),
+                [stop] => (
+                    HirExpr::IntLiteral(0),
+                    lower_expr(stop),
+                    HirExpr::IntLiteral(1),
+                ),
                 [start, stop] => (lower_expr(start), lower_expr(stop), HirExpr::IntLiteral(1)),
                 [start, stop, step] => (lower_expr(start), lower_expr(stop), lower_expr(step)),
-                other => panic!("pycc_hir: range() with {} arguments is not supported", other.len()),
+                other => panic!(
+                    "pycc_hir: range() with {} arguments is not supported",
+                    other.len()
+                ),
             };
-            HirStmt::ForRange { var: var.id.to_string(), start, stop, step, body: lower_body(&for_stmt.body) }
+            HirStmt::ForRange {
+                var: var.id.to_string(),
+                start,
+                stop,
+                step,
+                body: lower_body(&for_stmt.body),
+            }
         }
         Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr)),
         other => panic!("pycc_hir: statement kind not supported yet: {other:?}"),
@@ -230,7 +309,10 @@ fn lower_elif_else_clauses(clauses: &[ElifElseClause]) -> Vec<HirStmt> {
             orelse: lower_elif_else_clauses(rest),
         }],
         None => {
-            assert!(rest.is_empty(), "pycc_hir: an else clause must be the last elif_else_clause");
+            assert!(
+                rest.is_empty(),
+                "pycc_hir: an else clause must be the last elif_else_clause"
+            );
             lower_body(&first.body)
         }
     }
@@ -238,20 +320,28 @@ fn lower_elif_else_clauses(clauses: &[ElifElseClause]) -> Vec<HirStmt> {
 
 fn lower_expr(expr: &Expr) -> HirExpr {
     match expr {
-        Expr::NumberLiteral(lit) => match &lit.value {
-            Number::Int(i) => HirExpr::IntLiteral(
-                i.as_i64().unwrap_or_else(|| panic!("pycc_hir: integer literal does not fit in i64: {i:?}")),
-            ),
-            Number::Float(f) => HirExpr::FloatLiteral(*f),
-            other => panic!("pycc_hir: numeric literal kind not supported yet: {other:?}"),
-        },
+        Expr::NumberLiteral(lit) => {
+            match &lit.value {
+                Number::Int(i) => HirExpr::IntLiteral(i.as_i64().unwrap_or_else(|| {
+                    panic!("pycc_hir: integer literal does not fit in i64: {i:?}")
+                })),
+                Number::Float(f) => HirExpr::FloatLiteral(*f),
+                other => panic!("pycc_hir: numeric literal kind not supported yet: {other:?}"),
+            }
+        }
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
         Expr::Call(call) => {
             let Expr::Name(callee) = call.func.as_ref() else {
-                panic!("pycc_hir: only calling a bare name is supported so far: {:?}", call.func);
+                panic!(
+                    "pycc_hir: only calling a bare name is supported so far: {:?}",
+                    call.func
+                );
             };
             let args = call.arguments.args.iter().map(lower_expr).collect();
-            HirExpr::Call { callee: callee.id.as_str().to_string(), args }
+            HirExpr::Call {
+                callee: callee.id.as_str().to_string(),
+                args,
+            }
         }
         Expr::BinOp(bin_op) => {
             let op = match bin_op.op {
@@ -295,7 +385,10 @@ fn lower_expr(expr: &Expr) -> HirExpr {
         }
         Expr::Compare(cmp) => {
             if cmp.ops.len() != 1 {
-                panic!("pycc_hir: chained comparisons are not supported yet: {:?}", cmp.ops);
+                panic!(
+                    "pycc_hir: chained comparisons are not supported yet: {:?}",
+                    cmp.ops
+                );
             }
             let op = match cmp.ops[0] {
                 CmpOp::Eq => CmpOpKind::Eq,
@@ -327,6 +420,7 @@ mod tests {
         assert_eq!(Ty::Bool.name(), "bool");
         assert_eq!(Ty::Str.name(), "str");
         assert_eq!(Ty::None.name(), "None");
+        assert_eq!(Ty::Infer.name(), "<inferred>");
     }
 
     #[test]
@@ -353,7 +447,8 @@ mod tests {
 
     #[test]
     fn lowers_a_call_to_a_user_defined_function() {
-        let module = pycc_parser_test_helper::parse("def main() -> None:\n    print(42)\n\nmain()\n");
+        let module =
+            pycc_parser_test_helper::parse("def main() -> None:\n    print(42)\n\nmain()\n");
         let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
@@ -414,7 +509,12 @@ mod tests {
     fn a_bare_boolean_literal_expression_is_now_supported() {
         let module = pycc_parser_test_helper::parse("True\n");
         let hir = lower_checked(&module).unwrap();
-        assert_eq!(hir.items, vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::BoolLiteral(true)))]);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::BoolLiteral(true)
+            ))]
+        );
     }
 
     #[test]
@@ -535,7 +635,12 @@ mod tests {
         // expression, not just call arguments.
         let module = pycc_parser_test_helper::parse("42\n");
         let hir = lower_checked(&module).unwrap();
-        assert_eq!(hir.items, vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(42)))]);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::IntLiteral(42)
+            ))]
+        );
     }
 
     #[test]
@@ -725,7 +830,8 @@ mod tests {
 
     #[test]
     fn lowers_an_if_with_an_else() {
-        let module = pycc_parser_test_helper::parse("if True:\n    print(1)\nelse:\n    print(2)\n");
+        let module =
+            pycc_parser_test_helper::parse("if True:\n    print(1)\nelse:\n    print(2)\n");
         let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
@@ -745,8 +851,9 @@ mod tests {
 
     #[test]
     fn lowers_an_elif_as_a_nested_if_in_orelse() {
-        let module =
-            pycc_parser_test_helper::parse("if False:\n    print(1)\nelif True:\n    print(2)\nelse:\n    print(3)\n");
+        let module = pycc_parser_test_helper::parse(
+            "if False:\n    print(1)\nelif True:\n    print(2)\nelse:\n    print(3)\n",
+        );
         let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
@@ -790,7 +897,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "while/else is not supported yet")]
     fn a_while_else_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("while True:\n    print(1)\nelse:\n    print(2)\n");
+        let module =
+            pycc_parser_test_helper::parse("while True:\n    print(1)\nelse:\n    print(2)\n");
         lower_checked(&module).unwrap();
     }
 
@@ -889,20 +997,25 @@ mod tests {
     #[test]
     #[should_panic(expected = "for/else is not supported yet")]
     fn a_for_else_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("for i in range(3):\n    print(i)\nelse:\n    print(0)\n");
+        let module = pycc_parser_test_helper::parse(
+            "for i in range(3):\n    print(i)\nelse:\n    print(0)\n",
+        );
         lower_checked(&module).unwrap();
     }
 
     #[test]
     #[should_panic(expected = "async for is not supported yet")]
     fn an_async_for_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("async def f() -> None:\n    async for i in range(3):\n        print(i)\n");
+        let module = pycc_parser_test_helper::parse(
+            "async def f() -> None:\n    async for i in range(3):\n        print(i)\n",
+        );
         lower_checked(&module).unwrap();
     }
 
     #[test]
     fn lowers_a_fully_annotated_public_function_with_params_and_return() {
-        let module = pycc_parser_test_helper::parse("def add(a: int, b: int) -> int:\n    return a + b\n");
+        let module =
+            pycc_parser_test_helper::parse("def add(a: int, b: int) -> int:\n    return a + b\n");
         let hir = lower_checked(&module).unwrap();
         assert_eq!(
             hir.items,
@@ -958,8 +1071,8 @@ mod tests {
             hir.items,
             vec![HirItem::Function {
                 name: "_add".to_string(),
-                params: vec![("a".to_string(), Ty::None), ("b".to_string(), Ty::None)],
-                return_ty: Ty::None,
+                params: vec![("a".to_string(), Ty::Infer), ("b".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::BinOp {
                     op: BinOpKind::Add,
                     left: Box::new(HirExpr::Name("a".to_string())),

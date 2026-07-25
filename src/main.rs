@@ -104,10 +104,19 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
     if let Some(triple) = effective_link_target(target) {
         cmd.arg("-target").arg(triple);
     }
-    cmd.arg(&obj_path).arg("-L").arg(&rt_lib_dir).arg("-lpycc_rt").arg("-o").arg(out);
+    cmd.arg(&obj_path)
+        .arg("-L")
+        .arg(&rt_lib_dir)
+        .arg("-lpycc_rt")
+        .arg("-o")
+        .arg(out);
     add_windows_system_libs(&mut cmd);
     let status = cmd.status().expect("the linker driver should run");
-    if status.success() { Ok(()) } else { Err(ExitCode::from(1)) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(ExitCode::from(1))
+    }
 }
 
 /// Windows has no `cc` by default (that's a Unix convention -- MSVC's own
@@ -122,7 +131,9 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
 /// what changes when `--target` is given (D-031).
 #[cfg(windows)]
 fn linker_command(_target: Option<&str>) -> std::process::Command {
-    let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX")).join("bin").join("clang.exe");
+    let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX"))
+        .join("bin")
+        .join("clang.exe");
     std::process::Command::new(clang)
 }
 
@@ -139,7 +150,9 @@ fn linker_command(_target: Option<&str>) -> std::process::Command {
 #[cfg(target_os = "linux")]
 fn linker_command(target: Option<&str>) -> std::process::Command {
     if target.is_some() {
-        let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX")).join("bin").join("clang");
+        let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX"))
+            .join("bin")
+            .join("clang");
         std::process::Command::new(clang)
     } else {
         std::process::Command::new("cc")
@@ -208,10 +221,16 @@ fn add_windows_system_libs(_cmd: &mut std::process::Command) {}
 
 fn run(path: &str) -> ExitCode {
     let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
-    if let Err(code) = try_build(path, out.to_str().expect("temp dir path should be valid UTF-8"), None) {
+    if let Err(code) = try_build(
+        path,
+        out.to_str().expect("temp dir path should be valid UTF-8"),
+        None,
+    ) {
         return code;
     }
-    let status = std::process::Command::new(&out).status().expect("built binary should run");
+    let status = std::process::Command::new(&out)
+        .status()
+        .expect("built binary should run");
     ExitCode::from(status.code().unwrap_or(1) as u8)
 }
 
@@ -250,7 +269,11 @@ fn pycc_rt_lib_filename(target: Option<&str>) -> &'static str {
         Some(triple) => triple.contains("windows-msvc"),
         None => cfg!(windows),
     };
-    if targets_msvc { "pycc_rt.lib" } else { "libpycc_rt.a" }
+    if targets_msvc {
+        "pycc_rt.lib"
+    } else {
+        "libpycc_rt.a"
+    }
 }
 
 /// Testable core of `find_pycc_rt_lib_dir`: takes the filesystem-existence
@@ -314,13 +337,17 @@ mod tests {
     fn finds_the_target_specific_lib_dir_when_it_exists() {
         let root = std::path::Path::new("/workspace");
         let result = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), |_| true);
-        assert_eq!(result, Ok(root.join("target/x86_64-unknown-linux-gnu/debug")));
+        assert_eq!(
+            result,
+            Ok(root.join("target/x86_64-unknown-linux-gnu/debug"))
+        );
     }
 
     #[test]
     fn reports_a_clean_error_naming_the_target_when_its_build_is_missing() {
         let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), |_| false).unwrap_err();
+        let err =
+            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), |_| false).unwrap_err();
         assert!(err.contains("x86_64-unknown-linux-gnu"));
         assert!(err.contains("rustup target add"));
     }
@@ -331,11 +358,17 @@ mod tests {
         // host-#[cfg(windows)] constant, so requesting an -msvc target from
         // this (non-Windows) test runner silently checked for the wrong
         // filename (libpycc_rt.a instead of pycc_rt.lib).
-        assert_eq!(pycc_rt_lib_filename(Some("x86_64-pc-windows-msvc")), "pycc_rt.lib");
+        assert_eq!(
+            pycc_rt_lib_filename(Some("x86_64-pc-windows-msvc")),
+            "pycc_rt.lib"
+        );
     }
 
     #[test]
     fn a_non_msvc_target_uses_the_lib_prefix_dot_a_filename() {
-        assert_eq!(pycc_rt_lib_filename(Some("x86_64-unknown-linux-gnu")), "libpycc_rt.a");
+        assert_eq!(
+            pycc_rt_lib_filename(Some("x86_64-unknown-linux-gnu")),
+            "libpycc_rt.a"
+        );
     }
 }

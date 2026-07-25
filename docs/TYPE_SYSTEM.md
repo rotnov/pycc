@@ -10,6 +10,25 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 4. No implicit `Optional`, no implicit numeric narrowing, no untyped containers (`x = []` requires inferable or annotated element type).
 5. Unreachable code after exhaustive `match` / `Never` is verified (`assert_never` pattern supported).
 
+### v0.1 local inference
+
+- A module-level function whose name starts with `_` is a private helper under
+  D-038. Missing parameter and return annotations create inference variables;
+  explicit annotations remain fixed constraints.
+- The v0.1 solver links those variables through call arguments, local names,
+  assignments, returns, `range` operands, and arithmetic expressions. The
+  resulting helper signature is monomorphic within the module. Conflicting
+  call-site constraints are `T0021`; conflicting inferred returns are `T0022`.
+- An unconstrained parameter or return variable is rejected with `T0021` and
+  an instruction to add an annotation. It never silently becomes `Any` or
+  `None`; only a helper with no value-returning path infers `None`.
+- The first assignment fixes a local variable's inferred type. Later
+  assignments must be compatible or produce `T0023`; assigning `bool` to an
+  `int` binding preserves the `int` representation.
+- Python numeric semantics apply during inference: `bool` is an `int`
+  subtype, mixed `int`/`float` arithmetic promotes to `float`, and true
+  division `/` always returns `float` even for two integer operands.
+
 ## Types and representations
 
 | Python type | Static semantics | Native representation |

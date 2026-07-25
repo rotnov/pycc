@@ -334,19 +334,16 @@ jobs:
   # runner as the coverage gate for a stable, single-machine timing baseline
   # -- comparing across different runner hardware would be noise, not signal.
   #
-  # Deliberately NOT in ci-gate's `needs:` yet (D-041): the cache
-  # restore/save lifecycle below relies on GitHub's documented per-branch
-  # cache scoping (a `push`-to-`main` run's cache is visible as a
-  # `restore-keys` fallback to every PR branched from it, so PR runs compare
-  # against main's last recorded baseline) but has not been confirmed by an
-  # actual multi-run round trip -- this PR's own first run has no prior cache
-  # entry at all, so it can only exercise the "no previous baseline yet"
-  # path. Promote to a required check once a live round trip confirms the
-  # restore/compare/save cycle behaves as designed across two separate runs.
+  # Required by ci-gate (D-044): once a previous baseline is available, a
+  # measured regression over 2% fails this job and therefore blocks merge.
+  # The first run has no comparison target and establishes the baseline;
+  # that bootstrap case is explicitly permitted by DELIVERY_PLAN.md.
   frontend-perf-gate:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Show pinned toolchain
         run: rustup show
@@ -358,7 +355,7 @@ jobs:
         run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
 
       - name: Restore previous frontend-perf baseline
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/criterion/pycc_check_frontend_fixture/previous
           key: frontend-perf-baseline-${{ github.run_id }}
@@ -378,20 +375,23 @@ jobs:
           fi
 
       - name: Save this run's timing as the next run's baseline
-        if: always()
         run: |
           rm -rf target/criterion/pycc_check_frontend_fixture/previous
           cp -r target/criterion/pycc_check_frontend_fixture/current target/criterion/pycc_check_frontend_fixture/previous
 
       - name: Cache this run's baseline
-        if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target/criterion/pycc_check_frontend_fixture/previous
           key: frontend-perf-baseline-${{ github.run_id }}
 
   ci-gate:
-    needs: [build-test-coverage, native-build-test, cross-compile-build, cross-compile-verify]
+    needs:
+      - build-test-coverage
+      - native-build-test
+      - cross-compile-build
+      - cross-compile-verify
+      - frontend-perf-gate
     if: always()
     runs-on: ubuntu-latest
     # Overrides the workflow-level `contents: read` default: this job only
@@ -413,7 +413,8 @@ jobs:
           needs.build-test-coverage.result != 'success' ||
           needs.native-build-test.result != 'success' ||
           needs.cross-compile-build.result != 'success' ||
-          needs.cross-compile-verify.result != 'success'
+          needs.cross-compile-verify.result != 'success' ||
+          needs.frontend-perf-gate.result != 'success'
         run: |
           echo "one or more required jobs did not succeed:"
           echo '${{ toJSON(needs) }}'

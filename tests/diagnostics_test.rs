@@ -17,7 +17,9 @@ fn pycc_bin() -> std::path::PathBuf {
 /// embedded, not a `PathBuf`'s platform-dependent `Display`).
 fn assert_diagnostic_matches_fixture(fixture_stem: &str) {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let expected_path = repo_root.join("tests/diagnostics").join(format!("{fixture_stem}.expected.txt"));
+    let expected_path = repo_root
+        .join("tests/diagnostics")
+        .join(format!("{fixture_stem}.expected.txt"));
     let expected = std::fs::read_to_string(&expected_path)
         .unwrap_or_else(|e| panic!("could not read {}: {e}", expected_path.display()));
 
@@ -33,7 +35,11 @@ fn assert_diagnostic_matches_fixture(fixture_stem: &str) {
         expected.trim_end(),
         "diagnostic output for {fixture_stem} did not match its .expected.txt fixture"
     );
-    assert_eq!(output.status.code(), Some(1), "{fixture_stem} should be a compile error");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{fixture_stem} should be a compile error"
+    );
 }
 
 #[test]
@@ -44,4 +50,19 @@ fn d0001_missing_public_annotation() {
 #[test]
 fn d0002_any_forbidden() {
     assert_diagnostic_matches_fixture("d0002_any_forbidden");
+}
+
+#[test]
+fn d0021_range_argument_type() {
+    assert_diagnostic_matches_fixture("d0021_range_argument_type");
+}
+
+#[test]
+fn d0022_missing_return() {
+    assert_diagnostic_matches_fixture("d0022_missing_return");
+}
+
+#[test]
+fn d0023_incompatible_assignment() {
+    assert_diagnostic_matches_fixture("d0023_incompatible_assignment");
 }

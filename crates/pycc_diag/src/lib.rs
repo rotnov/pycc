@@ -26,11 +26,21 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn error(code: &'static str, message: impl Into<String>, span: Span) -> Self {
-        Self { code, severity: Severity::Error, message: message.into(), span: Some(span) }
+        Self {
+            code,
+            severity: Severity::Error,
+            message: message.into(),
+            span: Some(span),
+        }
     }
 
     pub fn warning(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, severity: Severity::Warning, message: message.into(), span: None }
+        Self {
+            code,
+            severity: Severity::Warning,
+            message: message.into(),
+            span: None,
+        }
     }
 }
 
@@ -74,13 +84,19 @@ pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String 
         Severity::Error => "error",
         Severity::Warning => "warning",
     };
-    out.push_str(&format!("{severity_word}[{}]: {}\n", diag.code, diag.message));
+    out.push_str(&format!(
+        "{severity_word}[{}]: {}\n",
+        diag.code, diag.message
+    ));
     let Some(span) = diag.span else {
         return out;
     };
     let start = byte_offset_to_line_col(source, span.start);
     let end = byte_offset_to_line_col(source, span.end);
-    out.push_str(&format!(" --> {file_path}:{}:{}\n", start.line, start.column));
+    out.push_str(&format!(
+        " --> {file_path}:{}:{}\n",
+        start.line, start.column
+    ));
     let gutter_pad = " ".repeat(start.line.to_string().len());
     out.push_str(&gutter_pad);
     out.push_str(" |\n");
@@ -151,21 +167,30 @@ mod tests {
 
     #[test]
     fn byte_offset_to_line_col_finds_first_line_first_column() {
-        assert_eq!(byte_offset_to_line_col("print(42)\n", 0), LineCol { line: 1, column: 1 });
+        assert_eq!(
+            byte_offset_to_line_col("print(42)\n", 0),
+            LineCol { line: 1, column: 1 }
+        );
     }
 
     #[test]
     fn byte_offset_to_line_col_finds_a_later_line() {
         let source = "def f():\n    print(42)\n";
         // offset 13 is the 'p' in "print", on line 2, column 5 (1-indexed, after 4 spaces)
-        assert_eq!(byte_offset_to_line_col(source, 13), LineCol { line: 2, column: 5 });
+        assert_eq!(
+            byte_offset_to_line_col(source, 13),
+            LineCol { line: 2, column: 5 }
+        );
     }
 
     #[test]
     fn byte_offset_to_line_col_at_a_newline_byte_stays_on_the_line_it_ends() {
         let source = "ab\ncd";
         // offset 2 is the '\n' itself -- still counted as the end of line 1, column 3
-        assert_eq!(byte_offset_to_line_col(source, 2), LineCol { line: 1, column: 3 });
+        assert_eq!(
+            byte_offset_to_line_col(source, 2),
+            LineCol { line: 1, column: 3 }
+        );
     }
 
     #[test]

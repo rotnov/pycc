@@ -41,7 +41,8 @@ mod tests {
         let bin_op = second.value.as_bin_op_expr().unwrap();
         assert_eq!(bin_op.op, Operator::Add);
 
-        let module = parse_test_source("if y == 3:\n    pass\nelif True:\n    pass\nelse:\n    pass\n");
+        let module =
+            parse_test_source("if y == 3:\n    pass\nelif True:\n    pass\nelse:\n    pass\n");
         let if_stmt = module.body[0].as_if_stmt().unwrap();
         let compare = if_stmt.test.as_compare_expr().unwrap();
         assert_eq!(compare.ops[0], CmpOp::Eq);
@@ -82,6 +83,8 @@ mod tests {
     }
 
     fn parse_test_source(source: &str) -> ModModule {
-        ruff_python_parser::parse_module(source).unwrap().into_syntax()
+        ruff_python_parser::parse_module(source)
+            .unwrap()
+            .into_syntax()
     }
 }

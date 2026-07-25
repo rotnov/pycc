@@ -19,6 +19,31 @@
 - Every new `Diagnostic` code must actually be producible by a real, reachable code path added in this same PR — no stub codes nothing constructs (per DIAGNOSTICS.md's own registry being aspirational; only implement what's real).
 - Diagnostics are byte-identical across Tier-1 platforms (DIAGNOSTICS.md's quality bar) — never format a path with a platform-specific separator in test-asserted output; use forward slashes or file-name-only in fixtures.
 
+## Post-implementation review corrections
+
+This checked plan records the original execution sequence; it is not the
+current normative contract where a later review correction differs. The
+containing commit incorporates these corrections:
+
+- D-045 replaces the plan's temporary use of `Ty::None` for missing private
+  annotations with explicit inference variables and a module-local monomorphic
+  solver. Private identity, arithmetic, `range`, recursive, and implicit-`None`
+  helpers therefore use real constraints; unresolved or conflicting variables
+  request annotations instead of silently becoming `None`.
+- The checker applies Python true-division semantics, validates every
+  `range` operand, rejects incompatible reassignment with `T0023`, emits
+  `T0022` for return mismatches, and rejects a non-`None` function whenever
+  the v0.1 conservative control-flow analysis finds a fallthrough path.
+- The diagnostic snapshot suite contains five fixtures: `T0001`, `T0002`,
+  `T0021`, `T0022`, and `T0023`. D-043 remains the owner of the documented
+  placeholder-span and missing-safe-help gaps.
+- D-044 supersedes D-042 and Task 14's informational-only recommendation:
+  `frontend-perf-gate` is a required `ci-gate` dependency, with the
+  first-baseline bootstrap handled inside the required job.
+
+When this historical plan conflicts with `docs/SPEC.md`, its linked
+specifications, or the later ADRs, those current sources win.
+
 ---
 
 ## File Structure
