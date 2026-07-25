@@ -2101,6 +2101,49 @@ mod tests {
     }
 
     #[test]
+    fn a_multi_argument_call_binds_each_parameter_in_the_right_order() {
+        // `def sub(a: int, b: int) -> int: return a - b` ; `print(sub(10, 3))`
+        // -- `add`'s own test above is commutative (`2 + 3 == 3 + 2`), so it
+        // can't tell a correct argument-to-parameter binding apart from a
+        // transposed one (`get_nth_param(i)` bound to the wrong
+        // `param_name`, or `build_call_to` marshaling `args` out of order).
+        // `sub` isn't commutative: `10 - 3 == 7`, but the transposed
+        // binding would compute `3 - 10 == -7` instead. Prints "7", not
+        // "-7".
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "sub".to_string(),
+                    params: vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                        op: BinOpKind::Sub,
+                        left: Box::new(MirExpr::Name { name: "a".to_string(), ty: Ty::Int }),
+                        right: Box::new(MirExpr::Name { name: "b".to_string(), ty: Ty::Int }),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "sub".to_string(),
+                        args: vec![MirExpr::IntLiteral(10), MirExpr::IntLiteral(3)],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("call_arg_order");
+        let obj_path = dir.join("call_arg_order.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("call_arg_order");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"7\n");
+    }
+
+    #[test]
     fn compiles_a_recursive_function_with_an_early_return() {
         // `def fact(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)`
         // `print(fact(5))` -- exercises recursion (calling `fact` from inside
