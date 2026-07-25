@@ -1,4 +1,4 @@
-use pycc_ast::{Expr, ModModule, Number, Operator, Stmt};
+use pycc_ast::{CmpOp, Expr, ModModule, Number, Operator, Stmt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOpKind {
@@ -11,13 +11,25 @@ pub enum BinOpKind {
     Pow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CmpOpKind {
+    Eq,
+    NotEq,
+    Lt,
+    LtE,
+    Gt,
+    GtE,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExpr {
     IntLiteral(i64),
     FloatLiteral(f64),
+    BoolLiteral(bool),
     Name(String),
     Call { callee: String, args: Vec<HirExpr> },
     BinOp { op: BinOpKind, left: Box<HirExpr>, right: Box<HirExpr> },
+    Compare { op: CmpOpKind, left: Box<HirExpr>, right: Box<HirExpr> },
 }
 
 #[derive(Debug, PartialEq)]
@@ -101,6 +113,26 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                 op,
                 left: Box::new(lower_expr(&bin_op.left)),
                 right: Box::new(lower_expr(&bin_op.right)),
+            }
+        }
+        Expr::BooleanLiteral(lit) => HirExpr::BoolLiteral(lit.value),
+        Expr::Compare(cmp) => {
+            if cmp.ops.len() != 1 {
+                panic!("pycc_hir: chained comparisons are not supported yet: {:?}", cmp.ops);
+            }
+            let op = match cmp.ops[0] {
+                CmpOp::Eq => CmpOpKind::Eq,
+                CmpOp::NotEq => CmpOpKind::NotEq,
+                CmpOp::Lt => CmpOpKind::Lt,
+                CmpOp::LtE => CmpOpKind::LtE,
+                CmpOp::Gt => CmpOpKind::Gt,
+                CmpOp::GtE => CmpOpKind::GtE,
+                other => panic!("pycc_hir: comparison operator not supported yet: {other:?}"),
+            };
+            HirExpr::Compare {
+                op,
+                left: Box::new(lower_expr(&cmp.left)),
+                right: Box::new(lower_expr(&cmp.comparators[0])),
             }
         }
         other => panic!("pycc_hir: expression kind not supported yet: {other:?}"),
@@ -187,10 +219,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "expression kind not supported yet")]
-    fn a_bare_boolean_literal_expression_is_unsupported_until_task_7() {
+    fn a_bare_boolean_literal_expression_is_now_supported() {
         let module = pycc_parser_test_helper::parse("True\n");
-        lower(&module);
+        let hir = lower(&module);
+        assert_eq!(hir.items, vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::BoolLiteral(true)))]);
     }
 
     #[test]
@@ -392,6 +424,89 @@ mod tests {
         // per TYPE_SYSTEM.md) -- unlike float/bool, this isn't deferred to a later
         // PR-4 task, it's simply out of scope for pycc entirely.
         let module = pycc_parser_test_helper::parse("x = 3j\n");
+        lower(&module);
+    }
+
+    #[test]
+    fn lowers_a_boolean_literal() {
+        let module = pycc_parser_test_helper::parse("x = True\n");
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::BoolLiteral(true),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_single_comparison() {
+        let module = pycc_parser_test_helper::parse("x = 1 < 2\n");
+        let hir = lower(&module);
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::Compare {
+                    op: CmpOpKind::Lt,
+                    left: Box::new(HirExpr::IntLiteral(1)),
+                    right: Box::new(HirExpr::IntLiteral(2)),
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_every_comparison_operator() {
+        let cases = [
+            ("x = 1 == 2\n", CmpOpKind::Eq),
+            ("x = 1 != 2\n", CmpOpKind::NotEq),
+            ("x = 1 < 2\n", CmpOpKind::Lt),
+            ("x = 1 <= 2\n", CmpOpKind::LtE),
+            ("x = 1 > 2\n", CmpOpKind::Gt),
+            ("x = 1 >= 2\n", CmpOpKind::GtE),
+        ];
+        for (source, expected_op) in cases {
+            let module = pycc_parser_test_helper::parse(source);
+            let hir = lower(&module);
+            assert_eq!(
+                hir.items,
+                vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::Compare {
+                        op: expected_op,
+                        left: Box::new(HirExpr::IntLiteral(1)),
+                        right: Box::new(HirExpr::IntLiteral(2)),
+                    },
+                })],
+                "wrong lowering for {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "chained comparisons")]
+    fn a_chained_comparison_is_not_supported_yet() {
+        let module = pycc_parser_test_helper::parse("x = 1 < 2 < 3\n");
+        lower(&module);
+    }
+
+    #[test]
+    #[should_panic(expected = "comparison operator not supported yet")]
+    fn an_is_comparison_is_not_supported_yet() {
+        let module = pycc_parser_test_helper::parse("x = 1 is 2\n");
+        lower(&module);
+    }
+
+    #[test]
+    #[should_panic(expected = "expression kind not supported yet")]
+    fn a_list_literal_expression_is_unsupported() {
+        // No v0.1 grammar node reaches this catch-all today (every kind
+        // handled so far -- numbers, names, calls, binops, bools,
+        // comparisons -- has its own dedicated arm/panic); a list literal is
+        // genuinely unhandled at every level and exercises the final arm.
+        let module = pycc_parser_test_helper::parse("x = [1]\n");
         lower(&module);
     }
 }
