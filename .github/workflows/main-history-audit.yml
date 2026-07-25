@@ -1,0 +1,58 @@
+name: Main history audit
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  main-history-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the history under audit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: audited-repository
+
+      - name: Check out the trusted audit implementation
+        uses: actions/checkout@v4
+        with:
+          # Do not execute the pushed revision's checker. The workflow YAML
+          # itself is still push-controlled and is verified out of band.
+          ref: ${{ github.event.before }}
+          fetch-depth: 1
+          path: pre-push-audit-implementation
+          sparse-checkout: scripts/check_main_history.py
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the reviewed bootstrap implementation
+        uses: actions/checkout@v4
+        with:
+          # The parent of the first merge lacks the checker. Keep an immutable
+          # reviewed fallback so that first post-merge audit is executable.
+          ref: 2d9fcd1b4135caef19b6ebad7bf96f7111f2258d
+          fetch-depth: 1
+          path: bootstrap-audit-implementation
+          sparse-checkout: scripts/check_main_history.py
+          sparse-checkout-cone-mode: false
+
+      - name: Require every pushed main commit to belong to a merged PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUDIT_REPOSITORY: ${{ github.repository }}
+          AUDIT_BEFORE: ${{ github.event.before }}
+          AUDIT_AFTER: ${{ github.sha }}
+          AUDIT_CREATED: ${{ github.event.created }}
+          AUDIT_FORCED: ${{ github.event.forced }}
+        working-directory: audited-repository
+        run: |
+          checker=../pre-push-audit-implementation/scripts/check_main_history.py
+          if [ ! -f "$checker" ]; then
+            checker=../bootstrap-audit-implementation/scripts/check_main_history.py
+          fi
+          python3 "$checker"
