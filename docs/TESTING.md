@@ -65,9 +65,9 @@ one nested in a Markdown blockquote, must end with an inline marker:
 ```
 
 `scripts/check_roadmap_evidence.rb` binds each registered identifier to the
-exact roadmap section and claim it proves plus a deterministic repository
-check. Missing, unknown, misplaced, or claim-mismatched markers fail. Adding a
-new evidence type starts with a failing public-CLI mutation case in
+complete roadmap heading path and claim it proves plus a deterministic
+repository check. Missing, unknown, misplaced, or claim-mismatched markers
+fail. Adding a new evidence type starts with a failing public-CLI mutation in
 `scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
 and documented claim land together.
 
@@ -123,8 +123,9 @@ The audited workflow set must contain `workflow-policy.yml`, and that file must
 match an explicitly approved SHA-256 digest in the trusted checker. This makes
 deletion, renaming, trigger replacement, or an extra executable step fail
 closed. Updating the anchor is intentionally staged: first add the independently
-reviewed prospective digest while the old anchor remains, then change the
-anchor in a later pull request, and remove the retired digest afterward.
+reviewed prospective workflow as an inert fixture and add its exact digest
+while the old anchor remains, then replace the active anchor byte-for-byte from
+that fixture in a later pull request, and remove the retired digest afterward.
 
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses

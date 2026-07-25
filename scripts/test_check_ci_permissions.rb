@@ -6,6 +6,11 @@ require "tmpdir"
 require_relative "check_ci_permissions"
 
 class WorkflowPermissionsTest < Minitest::Test
+  PROSPECTIVE_TRUST_ANCHOR =
+    Pathname(__dir__).parent / "tests/fixtures/workflow-policy-roadmap-evidence.yml"
+  PROSPECTIVE_TRUST_ANCHOR_SHA256 =
+    "4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6"
+
   def workflow(test_job = "runs-on: ubuntu-latest", trigger: "pull_request", extra_jobs: nil)
     lines = [
       "name: Test",
@@ -276,5 +281,42 @@ class WorkflowPermissionsTest < Minitest::Test
   def test_policy_set_accepts_repository_trust_anchor
     anchor = WORKFLOW_DIRECTORY / TRUST_ANCHOR_FILENAME
     validate_policy_set([anchor])
+  end
+
+  def test_prospective_trust_anchor_is_reviewable_before_allowlisting
+    assert PROSPECTIVE_TRUST_ANCHOR.file?,
+           "missing prospective trust-anchor fixture"
+    return unless PROSPECTIVE_TRUST_ANCHOR.file?
+
+    digest = Digest::SHA256.file(PROSPECTIVE_TRUST_ANCHOR).hexdigest
+    assert_equal PROSPECTIVE_TRUST_ANCHOR_SHA256, digest
+    assert_includes TRUST_ANCHOR_SHA256_ALLOWLIST, digest
+  end
+
+  def test_prospective_trust_anchor_audits_head_roadmap_with_base_checker
+    return unless PROSPECTIVE_TRUST_ANCHOR.file?
+
+    text = PROSPECTIVE_TRUST_ANCHOR.read
+    validate_workflow(text, PROSPECTIVE_TRUST_ANCHOR.to_s)
+    anchor = Psych.load(text)
+    steps = anchor.fetch("jobs").fetch("audit").fetch("steps")
+
+    checkout = steps.find { |step| step["name"] == "Check out trusted policy implementation" }
+    assert_equal "${{ github.sha }}", checkout.fetch("with").fetch("ref")
+
+    download = steps.find do |step|
+      step["name"] == "Download head policy inputs as non-executable data"
+    end
+    script = download.fetch("with").fetch("script")
+    assert_includes script, 'const output = "/tmp/pr-policy-input";'
+    assert_includes script, '"docs/ROADMAP.md"'
+
+    run_commands = steps
+                   .map { |step| step["run"] }
+                   .compact
+                   .flat_map { |run| run.lines.map(&:strip) }
+    assert_includes run_commands, "ruby scripts/test_check_roadmap_evidence.rb"
+    assert_includes run_commands,
+                    "ruby scripts/check_roadmap_evidence.rb /tmp/pr-policy-input"
   end
 end

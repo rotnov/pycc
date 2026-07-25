@@ -14,7 +14,11 @@ EVIDENCE_CLAIMS = {
     "The 100% line and region coverage gate is required and green for the current slice."
 }.freeze
 EVIDENCE_SECTIONS = {
-  "ci-build-test-coverage-100" => "v0.1 acceptance checklist"
+  "ci-build-test-coverage-100" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ]
 }.freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
@@ -260,10 +264,10 @@ def validate_roadmap(text)
     end
 
     expected_section = EVIDENCE_SECTIONS.fetch(marker[:id])
-    unless heading_path.include?(expected_section)
+    unless heading_path == expected_section
       raise RoadmapEvidenceError,
             "line #{line_number}: evidence #{marker[:id].inspect} must appear under " \
-            "#{expected_section.inspect}"
+            "the expected roadmap section #{expected_section.join(' > ').inspect}"
     end
 
     actual_claim = item[:claim].sub(EVIDENCE_MARKER, "").strip

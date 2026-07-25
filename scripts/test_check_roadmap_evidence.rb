@@ -90,6 +90,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_false_completed_item_without_evidence
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] `pycc check` processes 1k LOC in under 50 ms.
@@ -104,6 +108,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
   def test_rejects_all_checked_markdown_list_bullets_without_evidence
     ["*", "+", "1."].each do |bullet|
       roadmap = <<~MARKDOWN
+        # pycc Roadmap
+
+        ## Current delivery status
+
         ### v0.1 acceptance checklist
 
         #{bullet} [x] `pycc check` processes 1k LOC in under 50 ms.
@@ -119,6 +127,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
   def test_rejects_checked_items_nested_in_markdown_blockquotes_without_evidence
     ["> -", "> > 1)"].each do |prefix|
       roadmap = <<~MARKDOWN
+        # pycc Roadmap
+
+        ## Current delivery status
+
         ### v0.1 acceptance checklist
 
         #{prefix} [x] `pycc check` processes 1k LOC in under 50 ms.
@@ -133,6 +145,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_evidence_marker_attached_to_the_wrong_claim
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -149,7 +165,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_coverage_evidence_moved_outside_the_v0_1_checklist
     roadmap = <<~MARKDOWN
-      ### v1.0 acceptance checklist
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
     MARKDOWN
@@ -160,11 +180,15 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, 'must appear under "v0.1 acceptance checklist"'
+    assert_includes stderr, "must appear under the expected roadmap section"
   end
 
   def test_rejects_an_unknown_evidence_marker
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: invented-proof -->
@@ -181,6 +205,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_coverage_evidence_when_the_threshold_is_lowered
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -200,6 +228,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_a_coverage_step_that_can_be_skipped
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -217,6 +249,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_a_preceding_step_that_can_shadow_cargo
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -234,6 +270,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_environment_that_can_shadow_coverage_tools
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -251,6 +291,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_accepts_explicit_continue_on_error_false
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -268,6 +312,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_a_coverage_job_with_dependencies
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -290,6 +338,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_continue_on_error_for_the_coverage_job
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -307,6 +359,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_a_custom_shell_for_the_coverage_step
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -324,6 +380,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_workflow_and_job_run_defaults
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
@@ -349,6 +409,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_rejects_coverage_evidence_not_scheduled_for_pull_requests
     roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
       ### v0.1 acceptance checklist
 
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
