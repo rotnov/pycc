@@ -40,10 +40,12 @@ their discovery metadata to stay in lockstep.
 Claude Code reads the project-scoped marketplace declaration after the repository is
 trusted and enables the configured plugin without enabling automatic updates.
 The `Agent assets` workflow repeats the validators plus isolated Codex and Claude Code
-checks on every pull request and push to `main`. Claude Code validates the project
-settings and the extracted inline marketplace with its strict manifest validator, so
-a developer's global plugin installation cannot mask a broken repository pin or
-marketplace declaration.
+checks on every pull request and push to `main`. Its checkout retains Git history so
+the hash-bound model evidence can prove that its recorded source revision is an
+ancestor of the revision under test. Claude Code validates the project settings and
+the extracted inline marketplace with its strict manifest validator, so a developer's
+global plugin installation cannot mask a broken repository pin or marketplace
+declaration.
 
 The `i-have-an-issue` skill is installed with:
 

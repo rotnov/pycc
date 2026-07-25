@@ -19,6 +19,17 @@ import check_alpha_skill_evals as evaluator
 
 
 class AlphaSkillEvalTests(unittest.TestCase):
+    def test_agent_assets_checkout_preserves_evidence_ancestry(self) -> None:
+        workflow = (
+            evaluator.ROOT / ".github/workflows/agent-assets.yml"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(
+            workflow,
+            r"(?m)^\s+- uses: actions/checkout@v4\s*$"
+            r"\n^\s+with:\s*$"
+            r"\n^\s+fetch-depth: 0\s*$",
+        )
+
     def test_contracts_pass_for_both_client_entrypoints(self) -> None:
         self.assertEqual(evaluator.contract_failures("codex"), [])
         self.assertEqual(evaluator.contract_failures("claude"), [])
