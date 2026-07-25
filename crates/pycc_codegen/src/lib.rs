@@ -5,6 +5,7 @@ use inkwell::module::Linkage;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
+use inkwell::types::BasicType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt};
 use std::collections::HashMap;
@@ -109,6 +110,14 @@ fn tag_smallint_const(context: &Context, n: i64) -> IntValue<'_> {
     context.i64_type().const_int(tagged as u64, true)
 }
 
+fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::BasicTypeEnum<'_> {
+    match ty {
+        pycc_mir::Ty::Int => context.i64_type().into(),
+        pycc_mir::Ty::Bool => context.i8_type().into(),
+        other => panic!("pycc_codegen: a `{other:?}`-typed parameter/return value is not supported yet"),
+    }
+}
+
 fn emit_expr<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -120,13 +129,7 @@ fn emit_expr<'ctx>(
     // dropping the underscore).
     _module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
-    // Same `only_used_in_recursion` situation as `_module` above, until
-    // Task 5 adds a `MirExpr::Call` arm that reads it directly (Task 5
-    // renames this to `user_functions`, dropping the underscore, at that
-    // point; every call site below already passes its own local
-    // `user_functions` variable through regardless of this parameter's
-    // own name).
-    _user_functions: &HashMap<&str, FunctionValue<'ctx>>,
+    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
     locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
     expr: &MirExpr,
 ) -> Scalar<'ctx> {
@@ -169,10 +172,10 @@ fn emit_expr<'ctx>(
             }
         }
         MirExpr::BinOp { op, left, right, ty: Ty::Int } => {
-            let Scalar::Int(l) = emit_expr(context, builder, _module, rt, _user_functions, locals, left) else {
+            let Scalar::Int(l) = emit_expr(context, builder, _module, rt, user_functions, locals, left) else {
                 panic!("pycc_codegen: internal error: `int` BinOp operand did not evaluate to `int`");
             };
-            let Scalar::Int(r) = emit_expr(context, builder, _module, rt, _user_functions, locals, right) else {
+            let Scalar::Int(r) = emit_expr(context, builder, _module, rt, user_functions, locals, right) else {
                 panic!("pycc_codegen: internal error: `int` BinOp operand did not evaluate to `int`");
             };
             let rt_fn = match op {
@@ -200,10 +203,10 @@ fn emit_expr<'ctx>(
             Scalar::Int(result.into_int_value())
         }
         MirExpr::Compare { op, left, right, .. } => {
-            let Scalar::Int(l) = emit_expr(context, builder, _module, rt, _user_functions, locals, left) else {
+            let Scalar::Int(l) = emit_expr(context, builder, _module, rt, user_functions, locals, left) else {
                 panic!("pycc_codegen: comparing a non-`int` operand is not supported yet");
             };
-            let Scalar::Int(r) = emit_expr(context, builder, _module, rt, _user_functions, locals, right) else {
+            let Scalar::Int(r) = emit_expr(context, builder, _module, rt, user_functions, locals, right) else {
                 panic!("pycc_codegen: comparing a non-`int` operand is not supported yet");
             };
             let ordering = builder
@@ -232,8 +235,86 @@ fn emit_expr<'ctx>(
         MirExpr::BoolLiteral(b) => {
             Scalar::Bool(context.i8_type().const_int(u64::from(*b), false))
         }
+        MirExpr::Call { callee, args, ty } => {
+            if callee == "print" {
+                panic!("pycc_codegen: using print()'s result as a nested expression is not supported yet");
+            }
+            // Unlike `emit_stmt`'s void-call arm below, there is no
+            // `Result` here to propagate a clean, user-facing error
+            // through -- `emit_expr` returns a `Scalar` unconditionally, so
+            // an undefined callee can only be this crate's own internal
+            // error. Real `pycc_types` already rejects any call to an
+            // undefined function (T0021) long before codegen runs, so this
+            // is a defensive backstop, not a rejection of legitimate
+            // source (see `calling_an_undefined_function_as_a_nested_
+            // expression_is_an_internal_error` below).
+            let f = *user_functions.get(callee.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "pycc_codegen: internal error: call to undefined function `{callee}` \
+                     should have been rejected by pycc_types before reaching codegen"
+                )
+            });
+            let call_site = build_call_to(context, builder, _module, rt, user_functions, locals, f, args);
+            match ty {
+                Ty::Int => Scalar::Int(
+                    call_site
+                        .try_as_basic_value()
+                        .expect_basic("this function is declared to return int")
+                        .into_int_value(),
+                ),
+                Ty::Bool => Scalar::Bool(
+                    call_site
+                        .try_as_basic_value()
+                        .expect_basic("this function is declared to return bool")
+                        .into_int_value(),
+                ),
+                other => panic!("pycc_codegen: a `{other:?}`-typed call result is not supported yet"),
+            }
+        }
         other => panic!("pycc_codegen: this expression kind's codegen is not supported yet: {other:?}"),
     }
+}
+
+/// Evaluates every entry in `args` (via `emit_expr`, so each argument is
+/// itself an arbitrary expression -- nested calls included, which is
+/// exactly what makes recursion with real arguments work) and emits the
+/// `call` instruction to the already-resolved `f`. Shared between
+/// `emit_expr`'s `Call` arm (a value-producing call used inside a larger
+/// expression) and `emit_stmt`'s void-call arm below (a call whose
+/// declared return type is `None`, used as a bare statement) -- `Scalar`
+/// has no variant for "no value" (see its own doc comment), so a
+/// `None`-returning call can never flow back out of `emit_expr` itself;
+/// this is the one piece both call sites need regardless of whether a
+/// value comes back afterward.
+///
+/// Deliberately does *not* also do the `user_functions` lookup for
+/// `callee`: the two call sites disagree on how a missing function should
+/// be reported. `emit_stmt`'s arm still has a `Result` to propagate a
+/// clean, user-facing error through (matching this crate's pre-Task-5
+/// behavior, just generalized from zero-arg-only to any arity); `emit_expr`
+/// does not (see its own `Call` arm's comment) -- so each resolves `f`
+/// itself, with its own error-handling policy, before calling this helper.
+#[allow(clippy::too_many_arguments)]
+fn build_call_to<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
+    locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    f: FunctionValue<'ctx>,
+    args: &[MirExpr],
+) -> inkwell::values::CallSiteValue<'ctx> {
+    let arg_values: Vec<inkwell::values::BasicMetadataValueEnum> = args
+        .iter()
+        .map(|a| match emit_expr(context, builder, module, rt, user_functions, locals, a) {
+            Scalar::Int(v) => v.into(),
+            Scalar::Bool(v) => v.into(),
+        })
+        .collect();
+    builder
+        .build_call(f, &arg_values, "call_user_fn")
+        .expect("build_call should not fail for a well-formed user function call")
 }
 
 /// Turns any supported `Scalar` into an LLVM `i1` for use as a `br`
@@ -296,52 +377,28 @@ fn emit_assign<'ctx>(
         .expect("build_store should not fail for a slot this function itself allocated");
 }
 
-/// Emits every statement in `body` in order.
+/// Emits every statement in `body` in order, stopping early the moment the
+/// current block already ends in a terminator.
 ///
-/// **Deviation from the task brief, flagged prominently by Task 3, revisited
-/// here by Task 4 (which is the task the original flag pointed at):** the
-/// brief's version of this helper also stopped early the moment the current
-/// block already ended in a terminator, anticipating a `return` nested
-/// inside an `if`/`while`/`for` body. Task 3 removed that check as
-/// permanently-unreachable dead code in *its own* scope (only `ExprStmt`/
-/// `Assign` existed) and flagged that Task 4 "must re-add this exact check"
-/// once real control-flow codegen exists.
-///
-/// Task 4 *does* now add `If`/`While`/`ForRange` -- but the check still does
-/// not belong in *this* per-statement loop, and still is not reinstated
-/// here. Every one of this task's own `emit_stmt` arms (`If`/`While`/
-/// `ForRange`) is written to *always* finish by repositioning the builder
-/// at a fresh, never-yet-terminated continuation block (`if`'s `merge_bb`,
-/// `while`/`for`'s `after_bb`) before returning `Ok(())` -- never by leaving
-/// the terminator it just built as the *current* block. So, given only the
-/// `MirStmt` shapes Task 4 itself adds, the block this loop is about to
-/// emit into the *next* iteration is still, provably, never already
-/// terminated by the *previous* iteration -- this loop's own hypothetical
-/// early-stop check would remain exactly as unreachable as it was under
-/// Task 3, confirmed empirically by `cargo llvm-cov` (region coverage
-/// cannot be forced onto code no legitimate or malformed Task-4 `MirStmt`
-/// sequence can reach). The two places that *would* need this same
-/// terminator-safety check once a nested body's last statement really can
-/// leave a block already terminated -- `emit_body_then_branch` below (used
-/// by `If`/`While`) and `ForRange`'s own inline copy in `emit_stmt` --
-/// started this task with the brief's own `if ...is_none() { ... }` guard
-/// in place, but it was removed from both for the exact same reason as
-/// this loop's copy (see each site's own doc comment for the empirical
-/// `cargo llvm-cov` detail specific to it: unlike a dead `match` arm, an
-/// `if` with no `else` gets its own "condition false" coverage region, so
-/// the guard had to go, not just go untested).
-///
-/// **The next task to add `Return` codegen must revisit this exact
-/// per-statement loop, `emit_body_then_branch`, and `ForRange`'s own inline
-/// copy** -- the same way this comment revisited Task 3's: a `Return` arm,
-/// unlike every arm that exists as of Task 4, terminates the *current*
-/// block and does *not* reposition the builder afterward (there is nothing
-/// left to emit into) -- so a body with a `Return` followed by further
-/// statements (legal, if dead, Python) would, for the first time, make one
-/// of these three spots try to emit into an already-terminated block.
-/// Losing this file's `git blame` chain linking that requirement back to
-/// this comment (now spanning Tasks 3 and 4) is the risk being flagged
-/// here.
+/// **History (Tasks 3/4 removed this exact check as unreachable, Task 5
+/// re-adds it as their own doc comments predicted it eventually would
+/// need to):** Task 3 (only `ExprStmt`/`Assign` existed) and Task 4 (which
+/// added `If`/`While`/`ForRange`, every arm of which always finishes by
+/// repositioning the builder at a fresh, never-yet-terminated continuation
+/// block before returning) both proved this check was unreachable in their
+/// own scope, confirmed empirically by `cargo llvm-cov`, and removed it
+/// rather than carry dead code -- while flagging that a future `Return`
+/// arm would be the first `MirStmt` shape whose codegen terminates the
+/// *current* block without repositioning the builder afterward (nothing is
+/// left to emit into). Task 5 adds exactly that `Return` arm, so a body
+/// with a `Return` followed by further (legal, if dead, Python) statements
+/// now really can leave this loop's *next* iteration trying to emit into
+/// an already-terminated block -- without this check, that would build a
+/// second terminator onto the same block, invalid LLVM IR that
+/// `module.verify()` (correctly) rejects. `emit_body_then_branch` below
+/// and `ForRange`'s own inline copy in `emit_stmt` need the exact same
+/// reasoning applied to their own trailing branch, and both re-add their
+/// own guard for the same reason (see each one's own doc comment).
 fn emit_body<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -353,40 +410,23 @@ fn emit_body<'ctx>(
 ) -> Result<(), String> {
     for stmt in body {
         emit_stmt(context, builder, module, rt, user_functions, locals, stmt)?;
+        if builder.get_insert_block().unwrap().get_terminator().is_some() {
+            break;
+        }
     }
     Ok(())
 }
 
-/// Emits `body` (via `emit_body`, which -- see its own doc comment -- never
-/// needs to stop early within Task 4's own scope), then an unconditional
-/// branch to `dest`. Used by `If`'s `then`/`else` arms and `While`'s body;
-/// `ForRange`'s body needs its own variant inline (it has extra
-/// post-body work -- incrementing the loop variable -- to do before
-/// branching back to the loop test), so does not reuse this helper.
-///
-/// **Deviation from the task brief:** the brief's version of this helper
-/// guarded the trailing branch with `if ...get_terminator().is_none()`,
-/// anticipating a body whose last statement (once a later task adds
-/// `Return`) already terminates the current block. Per `emit_body`'s own
-/// doc comment, that condition is *always* true given only the `MirStmt`
-/// shapes Task 4 itself adds -- and unlike a plain "unreachable `match`
-/// arm" or "unreachable panic", `cargo llvm-cov`'s region coverage tracks
-/// an `if` with no `else` as having its own distinct "condition false"
-/// region (confirmed empirically: with the guard in place, exactly this
-/// region -- and only this one, everywhere else was reachable -- was the
-/// last one keeping this file below 100%). Since the guarded code is the
-/// *only* thing inside the `if`, and the condition can never be false in
-/// this task's scope, guarding it at all is equivalent to not guarding it
-/// for every input Task 4 can construct -- so the guard is removed here
-/// (not silenced or exempted), matching the same reasoning `emit_body`'s
-/// own doc comment already documents for why *its* copy of this same
-/// check stays removed for now.
-///
-/// **The next task to add `Return` codegen must re-add this guard here**
-/// (and in `ForRange`'s own inline copy below) the moment a body's last
-/// statement can leave the current block already terminated -- without
-/// it, building a second terminator onto an already-terminated block is
-/// invalid LLVM IR, which `module.verify()` will (correctly) reject.
+/// Emits `body` (via `emit_body`, which may now leave the current block
+/// already terminated -- see its own doc comment), then an unconditional
+/// branch to `dest` *unless* the block is already terminated (a `Return`
+/// reached inside `body`, in which case there is nothing left to branch
+/// from and doing so anyway would build an invalid second terminator).
+/// Used by `If`'s `then`/`else` arms and `While`'s body; `ForRange`'s body
+/// needs its own variant inline (it has extra post-body work --
+/// incrementing the loop variable -- to do before branching back to the
+/// loop test), so does not reuse this helper, but re-adds the identical
+/// guard around its own trailing branch for the same reason.
 #[allow(clippy::too_many_arguments)]
 fn emit_body_then_branch<'ctx>(
     context: &'ctx Context,
@@ -399,9 +439,11 @@ fn emit_body_then_branch<'ctx>(
     dest: inkwell::basic_block::BasicBlock<'ctx>,
 ) -> Result<(), String> {
     emit_body(context, builder, module, rt, user_functions, locals, body)?;
-    builder
-        .build_unconditional_branch(dest)
-        .expect("build_unconditional_branch should not fail on a block with no terminator yet");
+    if builder.get_insert_block().unwrap().get_terminator().is_none() {
+        builder
+            .build_unconditional_branch(dest)
+            .expect("build_unconditional_branch should not fail on a block with no terminator yet");
+    }
     Ok(())
 }
 
@@ -425,25 +467,34 @@ pub fn compile_to_object(
     let i64_type = context.i64_type();
     let rt = declare_rt_functions(&context, &module);
 
-    // First pass: declare every user-defined function under a mangled name
-    // (never the bare Python name) before emitting any body. Two reasons:
-    // this is what lets a function call another function defined later in
-    // the same module, or itself (recursion -- structurally supported by
-    // this pass ordering, though nothing in v0.1's HIR/MIR can express a
-    // recursive call *with* arguments or a return value yet); and mangling
-    // is what stops a Python-level function actually named `main` from
-    // colliding with the real C-ABI entry point below, which must be
-    // literally named `main` for the OS loader to find it. A def alone has
-    // no runtime effect in Python regardless of its name -- something has
-    // to call it, which is exactly the bug this pass structure fixes (see
+    // First pass: declare every user-defined function -- with its real
+    // parameter types and return type (Task 5), instead of Task 3/4's
+    // placeholder zero-arg/void signature -- under a mangled name (never
+    // the bare Python name) before emitting any body. Two reasons: this is
+    // what lets a function call another function defined later in the
+    // same module, or itself (recursion, now with real arguments and a
+    // real return value flowing through it, since every signature is
+    // already known before any body is lowered); and mangling is what
+    // stops a Python-level function actually named `main` from colliding
+    // with the real C-ABI entry point below, which must be literally
+    // named `main` for the OS loader to find it. A def alone has no
+    // runtime effect in Python regardless of its name -- something has to
+    // call it, which is exactly the bug this pass structure fixes (see
     // git history: an earlier version treated a function merely named
     // `main` as auto-invoked, which doesn't match CPython at all).
-    let no_arg_void_fn_type = context.void_type().fn_type(&[], false);
     let mut user_functions: HashMap<&str, FunctionValue> = HashMap::new();
     for item in &mir.items {
-        if let MirItem::Function { name, .. } = item {
+        if let MirItem::Function { name, params, return_ty, .. } = item {
+            let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = params
+                .iter()
+                .map(|(_, ty)| ty_to_basic_type(&context, *ty).into())
+                .collect();
+            let fn_type = match return_ty {
+                pycc_mir::Ty::None => context.void_type().fn_type(&param_types, false),
+                other => ty_to_basic_type(&context, *other).fn_type(&param_types, false),
+            };
             let mangled = format!("pyfn_{name}");
-            let f = module.add_function(&mangled, no_arg_void_fn_type, None);
+            let f = module.add_function(&mangled, fn_type, None);
             user_functions.insert(name.as_str(), f);
         }
     }
@@ -477,16 +528,68 @@ pub fn compile_to_object(
 
     // Second pass: fill in each user function's body, now that every
     // function (including ones a body might call) is already declared.
+    // Each parameter is bound into `fn_locals` by allocating a fresh slot
+    // for it and storing the incoming LLVM argument into it (Task 5) --
+    // the same load/store-via-`alloca` model every other local already
+    // uses (see `emit_assign`), so a parameter is fully ordinary once
+    // bound: reassignable, and readable via `emit_expr`'s `Name` arm with
+    // no special-casing.
     for item in &mir.items {
-        if let MirItem::Function { name, body, .. } = item {
+        if let MirItem::Function { name, params, return_ty, body } = item {
             let f = user_functions[name.as_str()];
             let block = context.append_basic_block(f, "entry");
             builder.position_at_end(block);
             let mut fn_locals = HashMap::new();
+            for (i, (param_name, ty)) in params.iter().enumerate() {
+                // `.expect(...)`, not `.unwrap_or_else(|| panic!(...))`:
+                // `f`'s own `fn_type` (built above, in the first pass) was
+                // constructed from this exact `params` list, so
+                // `get_nth_param` always succeeds for every `i` this loop
+                // produces -- an unreachable "missing parameter" case
+                // would be a defensive branch this crate's own coverage
+                // gate (D-014) could never legitimately exercise, so it's
+                // not introduced in the first place, the same reasoning
+                // already applied elsewhere in this file (e.g.
+                // `emit_body_then_branch`'s removed guard, Task 4).
+                let incoming = f
+                    .get_nth_param(i as u32)
+                    .expect("this function was declared with exactly `params.len()` parameters above");
+                let ptr = builder
+                    .build_alloca(ty_to_basic_type(&context, *ty), param_name)
+                    .expect("build_alloca should not fail for a supported scalar type");
+                builder
+                    .build_store(ptr, incoming)
+                    .expect("build_store should not fail for a slot this function itself allocated");
+                fn_locals.insert(param_name.clone(), (ptr, *ty));
+            }
             emit_body(&context, &builder, &module, &rt, &user_functions, &mut fn_locals, body)?;
-            builder
-                .build_return(None)
-                .expect("build_return should not fail: builder is always freshly positioned before this call");
+            // A `None`-returning function falling through its last
+            // statement without an explicit `return` is ordinary, legal
+            // Python (an implicit `return None`); a non-`None`-returning
+            // function falling through is not -- `pycc_types`' T0024
+            // fallthrough check rejects that HIR before it ever reaches
+            // codegen, so seeing it here is this crate's own internal
+            // error, not a user-facing rejection (see this task's own
+            // `a_non_none_function_falling_through_is_an_internal_error_
+            // not_bad_ir` test).
+            match return_ty {
+                pycc_mir::Ty::None => {
+                    if builder.get_insert_block().unwrap().get_terminator().is_none() {
+                        builder.build_return(None).expect(
+                            "build_return should not fail: builder is always freshly positioned before this call",
+                        );
+                    }
+                }
+                _ if builder.get_insert_block().unwrap().get_terminator().is_none() => {
+                    panic!(
+                        "pycc_codegen: internal error: `{name}` is declared to return a \
+                         non-`None` value but fell through without a `return` -- \
+                         pycc_types::check (T0024) should have rejected this HIR before \
+                         it reached codegen"
+                    );
+                }
+                _ => {}
+            }
         }
     }
 
@@ -574,17 +677,19 @@ fn verify_module(module: &inkwell::module::Module<'_>) {
     );
 }
 
-/// Handles every `MirStmt` shape reachable in v0.1 so far: a `print()`
-/// call of a single `int`-typed expression, a zero-arg user-function
-/// call, any other bare expression statement (evaluated for side effects
-/// -- none exist yet, but the shape is legal MIR), a local-variable
-/// assignment, and now (Task 4) `If`/`While`/`ForRange` control flow --
-/// real basic blocks, conditional branches, and loop back-edges, using
-/// `truthy` for the shared `if`/`while` truthiness check and `emit_body_
-/// then_branch`/an inline equivalent for the terminator-safety this
-/// introduces (see both helpers' own doc comments). Only `Return` still
-/// hits an explicit panic naming this crate: a deliberate, temporary
-/// boundary a later task in this plan replaces.
+/// Handles every `MirStmt` shape in v0.1 (this match is exhaustive over
+/// `MirStmt`, no catch-all arm): a `print()` call of a single `int`-typed
+/// expression, any other bare expression statement (a user-function call
+/// with any number of arguments included -- see `emit_expr`'s `Call` arm,
+/// which this now delegates to uniformly instead of special-casing
+/// zero-arg calls here), a local-variable assignment, `If`/`While`/
+/// `ForRange` control flow (Task 4) -- real basic blocks, conditional
+/// branches, and loop back-edges, using `truthy` for the shared `if`/
+/// `while` truthiness check and `emit_body_then_branch`/an inline
+/// equivalent for the terminator-safety this introduces (see both
+/// helpers' own doc comments) -- and now (Task 5) `Return`, terminating
+/// the current block with the evaluated value (or none, for a bare
+/// `return`).
 fn emit_stmt<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -612,13 +717,31 @@ fn emit_stmt<'ctx>(
                 ),
             }
         }
-        MirStmt::ExprStmt(MirExpr::Call { callee, args, .. }) if args.is_empty() => {
-            let f = user_functions
+        // A user-function call whose declared return type is `None`, used
+        // as a bare statement (e.g. `main()`) -- must go through
+        // `build_call_to` directly rather than the general `ExprStmt(expr)`
+        // arm below: `emit_expr`'s own `Call` arm always maps its result
+        // into a `Scalar`, and `Scalar` has no variant representing "no
+        // value" (see its own doc comment), so a `None`-returning call can
+        // never validly flow through `emit_expr` at all. Matched by `ty`
+        // alone (no `callee != "print"` guard needed): the arm above
+        // already claims every `print` call via its own guard regardless
+        // of `ty`, so only a non-`print` call ever reaches this one.
+        //
+        // Generalizes this crate's pre-Task-5 zero-arg-only special case
+        // (which this task's brief called "redundant" and removed) to a
+        // call of any arity: unlike `emit_expr`'s `Call` arm, this arm
+        // *does* still have a `Result` to propagate a clean, user-facing
+        // error through for an undefined callee, exactly like the
+        // zero-arg case always did -- so it keeps doing that, rather than
+        // switching to `emit_expr`'s "internal error" panic, preserving
+        // both the existing user-facing behavior and the `?`-propagation
+        // coverage every nested-body call site below relies on.
+        MirStmt::ExprStmt(MirExpr::Call { callee, args, ty: pycc_mir::Ty::None }) => {
+            let f = *user_functions
                 .get(callee.as_str())
                 .ok_or_else(|| format!("pycc_codegen v0.1: call to undefined function `{callee}`"))?;
-            builder
-                .build_call(*f, &[], "call_user_fn")
-                .expect("build_call should not fail for a well-formed zero-arg call");
+            build_call_to(context, builder, module, rt, user_functions, locals, f, args);
             Ok(())
         }
         MirStmt::ExprStmt(expr) => {
@@ -720,36 +843,55 @@ fn emit_stmt<'ctx>(
 
             builder.position_at_end(body_bb);
             emit_body(context, builder, module, rt, user_functions, locals, body)?;
-            // Deviation from the task brief: no `if ...get_terminator().
-            // is_none()` guard around the increment-and-branch-back below --
-            // see `emit_body_then_branch`'s doc comment for why (same
-            // reasoning, same empirical `cargo llvm-cov` finding, applied
-            // here since this is `ForRange`'s own inline copy of that exact
-            // pattern). Re-add it here too, alongside `emit_body_then_
-            // branch`'s copy, the moment a later task's `Return` codegen
-            // can leave `body`'s last statement having already terminated
-            // this block.
-            let current = builder
-                .build_load(context.i64_type(), var_ptr, "for_var_reload")
-                .expect("build_load should not fail for this function's own alloca")
-                .into_int_value();
-            let next = builder
-                .build_call(rt.int_add, &[current.into(), step_v.into()], "for_next")
-                .expect("build_call should not fail for a well-formed int add")
-                .try_as_basic_value()
-                .expect_basic("pycc_rt_int_add returns a non-void i64")
-                .into_int_value();
-            builder
-                .build_store(var_ptr, next)
-                .expect("build_store should not fail for this function's own alloca");
-            builder
-                .build_unconditional_branch(test_bb)
-                .expect("build_unconditional_branch should not fail on a block with no terminator yet");
+            // `ForRange`'s own inline copy of `emit_body_then_branch`'s
+            // terminator-safety guard (see that function's own doc comment
+            // for why): a `Return` reached inside `body` already terminates
+            // `body_bb`, so the increment-and-branch-back below must be
+            // skipped in that case -- building it anyway would try to add a
+            // second terminator onto an already-terminated block, which is
+            // invalid LLVM IR.
+            if builder.get_insert_block().unwrap().get_terminator().is_none() {
+                let current = builder
+                    .build_load(context.i64_type(), var_ptr, "for_var_reload")
+                    .expect("build_load should not fail for this function's own alloca")
+                    .into_int_value();
+                let next = builder
+                    .build_call(rt.int_add, &[current.into(), step_v.into()], "for_next")
+                    .expect("build_call should not fail for a well-formed int add")
+                    .try_as_basic_value()
+                    .expect_basic("pycc_rt_int_add returns a non-void i64")
+                    .into_int_value();
+                builder
+                    .build_store(var_ptr, next)
+                    .expect("build_store should not fail for this function's own alloca");
+                builder
+                    .build_unconditional_branch(test_bb)
+                    .expect("build_unconditional_branch should not fail on a block with no terminator yet");
+            }
 
             builder.position_at_end(after_bb);
             Ok(())
         }
-        other => panic!("pycc_codegen: this statement kind's codegen is not supported yet: {other:?}"),
+        MirStmt::Return(value) => {
+            match value {
+                Some(expr) => {
+                    let scalar = emit_expr(context, builder, module, rt, user_functions, locals, expr);
+                    let basic_value: inkwell::values::BasicValueEnum = match scalar {
+                        Scalar::Int(v) => v.into(),
+                        Scalar::Bool(v) => v.into(),
+                    };
+                    builder
+                        .build_return(Some(&basic_value))
+                        .expect("build_return should not fail for a well-formed return value");
+                }
+                None => {
+                    builder
+                        .build_return(None)
+                        .expect("build_return should not fail for a bare `return`");
+                }
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1011,23 +1153,51 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "this statement kind's codegen is not supported yet")]
-    fn a_return_statement_is_not_yet_supported_by_codegen() {
-        // This task (Task 4) gives `MirStmt::If`/`While`/`ForRange` real
-        // codegen (see the dedicated tests below), superseding Task 3's
-        // version of this test (`an_if_statement_is_not_yet_supported_by_
-        // codegen`), which exercised `emit_stmt`'s catch-all via `If` --
-        // so this test is renamed again to exercise that same catch-all
-        // (now reachable only via `Return`) with the one variant Task 4
-        // does not implement, rather than asserting behavior this task
-        // deliberately changes. Same rename convention Task 3 itself used
-        // on the version before this one (see that commit's history).
+    fn a_bare_return_with_no_value_exits_a_none_returning_function_early() {
+        // `def f() -> None:\n    return\n    print(999)` ; `f(); print(1)`
+        // -- supersedes this test's earlier (Task 3/4) incarnation,
+        // `a_return_statement_is_not_yet_supported_by_codegen`, which
+        // proved `Return` had no codegen at all yet (via `emit_stmt`'s
+        // then-catch-all, since removed -- the match is now exhaustive
+        // over `MirStmt`, see Task 5's own doc comment on `emit_stmt`).
+        // Now that `Return` is fully implemented, this instead exercises
+        // its `None` arm (a bare `return`, as opposed to `return <expr>`,
+        // which the two dedicated function-call tests above already
+        // cover) and proves `emit_body`'s terminator-safety early-stop
+        // (re-added by this task, see its own doc comment) really does
+        // skip the unreachable `print(999)` after the `return`, rather
+        // than trying to emit into an already-terminated block. Only "1"
+        // should print.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirStmt::Return(None))],
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        MirStmt::Return(None),
+                        MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::IntLiteral(999)],
+                            ty: Ty::None,
+                        }),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![],
+                    ty: Ty::None,
+                })),
+                MirItem::TopLevelStmt(call_print(1)),
+            ],
         };
-        let dir = tempfile_dir("return_stmt_panics");
-        let obj_path = dir.join("return_stmt_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let dir = tempfile_dir("bare_return_none");
+        let obj_path = dir.join("bare_return_none.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("bare_return_none");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
     }
 
     #[test]
@@ -1457,33 +1627,46 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "has no local slot")]
-    fn referencing_a_function_parameter_is_not_yet_supported() {
-        // `def f(n): print(n)` -- a real, legitimate function parameter
-        // reference (see `pycc_mir`'s own
-        // `builds_a_function_with_typed_params_and_return` test for the
-        // exact shape `pycc_types`/`pycc_mir` produce for this). Task 3
-        // doesn't implement parameter binding at all yet (Task 5's job,
-        // calling functions with real arguments): `compile_to_object`
-        // starts each function's `fn_locals` map empty and nothing
-        // inserts its parameters into it, so reading one back by name
-        // hits this internal-error panic -- a real, reachable gap, not a
-        // hand-crafted malformed-MIR scenario.
+    fn a_function_parameter_can_be_read_back_and_printed() {
+        // `def f(n: int): print(n)` ; `f(7)` -- supersedes this test's
+        // earlier (Task 3) incarnation, `referencing_a_function_parameter_
+        // is_not_yet_supported`, which proved the opposite: that
+        // `compile_to_object` started each function's `fn_locals` map
+        // empty, so reading a parameter back by name hit an internal-error
+        // panic. Task 5 fixes exactly that gap (see `compile_to_object`'s
+        // second pass: each parameter gets its own `alloca`, with the
+        // incoming LLVM argument stored into it before the body runs), so
+        // this now proves a parameter is fully ordinary -- readable via
+        // `emit_expr`'s `Name` arm exactly like any other local -- and
+        // this call site also exercises `emit_stmt`'s void-call arm with a
+        // *non-empty* argument list (every other void-call test in this
+        // file uses a zero-arg call).
         let mir = MirModule {
-            items: vec![MirItem::Function {
-                name: "f".to_string(),
-                params: vec![("n".to_string(), Ty::Int)],
-                return_ty: Ty::None,
-                body: vec![MirStmt::ExprStmt(MirExpr::Call {
-                    callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "n".to_string(), ty: Ty::Int }],
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("n".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::Name { name: "n".to_string(), ty: Ty::Int }],
+                        ty: Ty::None,
+                    })],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![MirExpr::IntLiteral(7)],
                     ty: Ty::None,
-                })],
-            }],
+                })),
+            ],
         };
-        let dir = tempfile_dir("param_reference_panics");
-        let obj_path = dir.join("param_reference_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let dir = tempfile_dir("param_reference_reads_back");
+        let obj_path = dir.join("param_reference_reads_back.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("param_reference_reads_back");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"7\n");
     }
 
     #[test]
@@ -1879,6 +2062,398 @@ mod tests {
             err.contains("does_not_exist_in_for_range"),
             "error should name the offending function: {err}"
         );
+    }
+
+    #[test]
+    fn compiles_a_function_call_with_real_arguments_and_a_return_value() {
+        // `def add(a: int, b: int) -> int: return a + b` ; `print(add(2, 3))`
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "add".to_string(),
+                    params: vec![("a".to_string(), Ty::Int), ("b".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(MirExpr::Name { name: "a".to_string(), ty: Ty::Int }),
+                        right: Box::new(MirExpr::Name { name: "b".to_string(), ty: Ty::Int }),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "add".to_string(),
+                        args: vec![MirExpr::IntLiteral(2), MirExpr::IntLiteral(3)],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("call_with_args");
+        let obj_path = dir.join("call_with_args.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("call_with_args");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"5\n");
+    }
+
+    #[test]
+    fn compiles_a_recursive_function_with_an_early_return() {
+        // `def fact(n: int) -> int:\n    if n <= 1:\n        return 1\n    return n * fact(n - 1)`
+        // `print(fact(5))` -- exercises recursion (calling `fact` from inside
+        // its own not-yet-fully-emitted body works because the two-pass
+        // declare-then-define structure already declares every function
+        // before any body is compiled), a return nested inside an `if` with
+        // no `else`, and a second `return` reached only via that `if`'s false
+        // edge (Task 4's `merge_bb` handling).
+        let fact_body = vec![
+            MirStmt::If {
+                test: MirExpr::Compare {
+                    op: CmpOpKind::LtE,
+                    left: Box::new(MirExpr::Name { name: "n".to_string(), ty: Ty::Int }),
+                    right: Box::new(MirExpr::IntLiteral(1)),
+                    ty: Ty::Bool,
+                },
+                body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(1)))],
+                orelse: vec![],
+            },
+            MirStmt::Return(Some(MirExpr::BinOp {
+                op: BinOpKind::Mul,
+                left: Box::new(MirExpr::Name { name: "n".to_string(), ty: Ty::Int }),
+                right: Box::new(MirExpr::Call {
+                    callee: "fact".to_string(),
+                    args: vec![MirExpr::BinOp {
+                        op: BinOpKind::Sub,
+                        left: Box::new(MirExpr::Name { name: "n".to_string(), ty: Ty::Int }),
+                        right: Box::new(MirExpr::IntLiteral(1)),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::Int,
+                }),
+                ty: Ty::Int,
+            })),
+        ];
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "fact".to_string(),
+                    params: vec![("n".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: fact_body,
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "fact".to_string(),
+                        args: vec![MirExpr::IntLiteral(5)],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("recursive_fact");
+        let obj_path = dir.join("recursive_fact.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("recursive_fact");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"120\n");
+    }
+
+    #[test]
+    fn a_non_none_function_falling_through_is_an_internal_error_not_bad_ir() {
+        // `pycc_types`' T0024 fallthrough check should have rejected this
+        // HIR already -- this proves codegen fails loudly (a clear panic)
+        // rather than emitting an invalid `ret` from a function declared to
+        // return `int`, if that check is ever somehow bypassed.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "broken".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![],
+            }],
+        };
+        let dir = tempfile_dir("fallthrough_internal_error");
+        let obj_path = dir.join("fallthrough_internal_error.o");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_to_object(&mir, &obj_path, None)
+        }));
+        assert!(result.is_err(), "expected a panic, not a successfully-compiled object");
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: call to undefined function")]
+    fn calling_an_undefined_function_as_a_nested_expression_is_an_internal_error() {
+        // Unlike a bare statement-level call (see `calling_an_undefined_
+        // function_at_top_level_is_rejected` and its siblings above, which
+        // still return a clean `Result::Err` -- `emit_stmt`'s void-call
+        // arm generalizes this crate's pre-Task-5 zero-arg-only behavior
+        // rather than switching to a panic), a call used *inside* another
+        // expression flows through `emit_expr`'s `Call` arm, which returns
+        // a `Scalar`, not a `Result` -- there is no way to propagate a
+        // graceful error from there. Real `pycc_types` already rejects any
+        // call to an undefined function (T0021) long before codegen runs,
+        // so this is this crate's own defensive "should never happen"
+        // backstop, not a rejection of legitimate source.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::Call {
+                    callee: "does_not_exist_as_expr".to_string(),
+                    args: vec![],
+                    ty: Ty::Int,
+                },
+            })],
+        };
+        let dir = tempfile_dir("undefined_fn_nested_expr_panics");
+        let obj_path = dir.join("undefined_fn_nested_expr_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    fn compiles_a_function_call_returning_bool_used_as_an_expression() {
+        // `def is_positive(n: int) -> bool: return n > 0` ;
+        // `x = is_positive(5)` -- the brief's own Step 1 tests only ever
+        // exercise `emit_expr`'s `Call` arm's `Ty::Int` branch; this
+        // exercises its `Ty::Bool` branch instead.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "is_positive".to_string(),
+                    params: vec![("n".to_string(), Ty::Int)],
+                    return_ty: Ty::Bool,
+                    body: vec![MirStmt::Return(Some(MirExpr::Compare {
+                        op: CmpOpKind::Gt,
+                        left: Box::new(MirExpr::Name { name: "n".to_string(), ty: Ty::Int }),
+                        right: Box::new(MirExpr::IntLiteral(0)),
+                        ty: Ty::Bool,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::Call {
+                        callee: "is_positive".to_string(),
+                        args: vec![MirExpr::IntLiteral(5)],
+                        ty: Ty::Bool,
+                    },
+                }),
+            ],
+        };
+        let dir = tempfile_dir("call_returns_bool");
+        let obj_path = dir.join("call_returns_bool.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    #[should_panic(expected = "a `None`-typed call result is not supported yet")]
+    fn a_none_typed_call_result_used_as_a_nested_expression_is_not_supported() {
+        // Deliberately malformed MIR: a `None`-returning function's result
+        // can only legitimately appear as a bare statement (see
+        // `emit_stmt`'s own void-call arm) -- real `pycc_types` would
+        // never type an `Assign`'s value as `Ty::None` this way (there is
+        // no `x = None`-shaped source this could come from in v0.1).
+        // Exercises `emit_expr`'s `Call` arm's own defensive `other =>`
+        // catch-all on `ty`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(None)],
+                },
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::Call { callee: "f".to_string(), args: vec![], ty: Ty::None },
+                }),
+            ],
+        };
+        let dir = tempfile_dir("none_typed_call_result_panics");
+        let obj_path = dir.join("none_typed_call_result_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "a `Float`-typed parameter/return value is not supported yet")]
+    fn a_float_typed_return_value_is_not_yet_supported() {
+        // `def f() -> float: ...` -- `ty_to_basic_type` only implements
+        // `Int`/`Bool` so far (`Float`/`Str` are Task 6/7's job).
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Float,
+                body: vec![],
+            }],
+        };
+        let dir = tempfile_dir("float_return_panics");
+        let obj_path = dir.join("float_return_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "a `Float`-typed parameter/return value is not supported yet")]
+    fn a_float_typed_parameter_is_not_yet_supported() {
+        // `def f(x: float): ...` -- a distinct `ty_to_basic_type` call site
+        // from the return-type test above (a function's parameter list,
+        // inside `compile_to_object`'s first pass), same underlying panic.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Float)],
+                return_ty: Ty::None,
+                body: vec![],
+            }],
+        };
+        let dir = tempfile_dir("float_param_panics");
+        let obj_path = dir.join("float_param_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    fn a_return_inside_a_for_range_body_returns_immediately_without_looping() {
+        // `def first_of_range() -> int:\n    for i in range(0, 5, 1):\n
+        // return i\n    return -1` ; `print(first_of_range())` -- the
+        // trailing `return -1` is unreachable in practice (every
+        // legitimate call actually returns from inside the loop on its
+        // first iteration) but keeps this hand-built MIR shape well-formed
+        // for a non-`None`-returning function (real `pycc_types` would
+        // likely reject a bare `for` loop as satisfying T0024's
+        // definite-return check on its own, since a `for` loop is never
+        // assumed to execute at least once). Proves `ForRange`'s own
+        // inline terminator-safety guard (this task's re-add, see the
+        // `ForRange` arm's own comment) correctly skips the
+        // increment-and-branch-back the moment `body`'s `Return` already
+        // terminates `body_bb` -- without it, this would try to build a
+        // second terminator onto an already-terminated block, which
+        // `module.verify()` would (correctly) reject. Prints "0", not
+        // "0\n1\n2\n3\n4\n" (which would mean the loop kept running) or a
+        // crash.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "first_of_range".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        MirStmt::ForRange {
+                            var: "i".to_string(),
+                            start: MirExpr::IntLiteral(0),
+                            stop: MirExpr::IntLiteral(5),
+                            step: MirExpr::IntLiteral(1),
+                            body: vec![MirStmt::Return(Some(MirExpr::Name {
+                                name: "i".to_string(),
+                                ty: Ty::Int,
+                            }))],
+                        },
+                        MirStmt::Return(Some(MirExpr::IntLiteral(-1))),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "first_of_range".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("for_range_return_inside_body");
+        let obj_path = dir.join("for_range_return_inside_body.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("for_range_return_inside_body");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"0\n");
+    }
+
+    #[test]
+    fn compiles_a_function_call_with_a_bool_argument() {
+        // `def identity_bool(b: bool) -> bool: return b` ;
+        // `x = identity_bool(True)` -- exercises `build_call_to`'s
+        // `Scalar::Bool` argument-marshalling arm (every other
+        // function-call test in this file passes only `int` arguments).
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "identity_bool".to_string(),
+                    params: vec![("b".to_string(), Ty::Bool)],
+                    return_ty: Ty::Bool,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "b".to_string(),
+                        ty: Ty::Bool,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::Call {
+                        callee: "identity_bool".to_string(),
+                        args: vec![MirExpr::BoolLiteral(true)],
+                        ty: Ty::Bool,
+                    },
+                }),
+            ],
+        };
+        let dir = tempfile_dir("call_with_bool_arg");
+        let obj_path = dir.join("call_with_bool_arg.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    #[should_panic(expected = "using print()'s result as a nested expression is not supported yet")]
+    fn nesting_a_print_call_inside_another_expression_is_not_yet_supported() {
+        // `x = print(1)` -- v0.1's `print()` always returns `None`, and
+        // nothing implements using a `None` value as an operand yet.
+        // `emit_stmt`'s own `print`-call arm builds a `pycc_rt_int_print`
+        // call directly and never routes the outer `print(...)` itself
+        // through `emit_expr` -- so the only way a `print` call can reach
+        // `emit_expr`'s `Call` arm at all is nested one level deeper than
+        // that, inside another expression, exercised here via `Assign`.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::IntLiteral(1)],
+                    ty: Ty::None,
+                },
+            })],
+        };
+        let dir = tempfile_dir("print_result_nested_panics");
+        let obj_path = dir.join("print_result_nested_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "has no local slot")]
+    fn referencing_a_name_with_no_bound_local_is_an_internal_error() {
+        // Real `pycc_types` already rejects any reference to an undefined
+        // name (T0021) long before codegen runs, so this is hand-built
+        // malformed MIR exercising `emit_expr`'s `Name` arm's own
+        // defensive backstop directly. This panic's coverage used to come
+        // from this file's earlier (Task 3) `referencing_a_function_
+        // parameter_is_not_yet_supported` test, which happened to hit it
+        // via an *unbound* parameter; now that Task 5 binds parameters for
+        // real, that test was rewritten into a positive one (see
+        // `a_function_parameter_can_be_read_back_and_printed` above),
+        // leaving this exact check's own coverage to this more direct,
+        // dedicated test instead.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Name {
+                name: "never_bound".to_string(),
+                ty: Ty::Int,
+            }))],
+        };
+        let dir = tempfile_dir("unbound_name_panics");
+        let obj_path = dir.join("unbound_name_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {
