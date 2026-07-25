@@ -7,10 +7,16 @@ enforce the normal delivery path.
 
 - Pull request required; direct pushes are rejected.
 - The branch must be current with `main` before merge.
-- Required status checks: `build-test-coverage` and the trusted `audit` context.
-  `build-test-coverage` runs the agent-policy tests and clean-clone validator;
-  the standalone `agent-policy` job provides faster feedback until its exact
-  context has run successfully on `main` and is added to branch protection.
+- Required status checks: `ci-gate` and the trusted `audit` context. `ci-gate`
+  (D-032) is a single stable-named job that fans in every job in `ci.yml`,
+  including `build-test-coverage` (which runs the agent-policy tests and
+  clean-clone validator) and the four-target `native-build-test`/
+  `cross-compile-build`/`cross-compile-verify` Tier-1 matrix -- named directly
+  rather than each matrix leg, since a matrix job's GitHub-generated check
+  name bakes in its matrix values and would go stale the moment an `os`/
+  `target` entry changes. The standalone `agent-policy` job provides faster
+  feedback until its exact context has run successfully on `main` and is
+  added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
   Requiring the author's own approval would deadlock every pull request. Enable one
   independent approval, stale-approval dismissal, and last-push approval when a
