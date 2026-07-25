@@ -520,6 +520,19 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
+  def test_tier1_workflow_allowlist_stages_the_frontend_perf_gate_digest
+    # Per docs/TESTING.md's staged-update procedure: the reviewed prospective
+    # digest for the pending frontend-perf-gate ci.yml revision (adding the
+    # frontend-perf-gate job and requiring it in ci-gate) is appended here
+    # while the current digest remains active, ahead of the pull request that
+    # actually activates that workflow and retires this repository's current
+    # digest.
+    assert_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      "26588a8771190d82618c230df6bce5d7e911a5d9835a1bd9b9818d496b5c9f61"
+    )
+  end
+
   def test_rejects_changed_tier1_matrix_workflow
     repository_root = Pathname(__dir__).parent
     workflow = (repository_root / ".github/workflows/ci.yml").read.sub(
