@@ -36,10 +36,10 @@ repository as the marketplace, and installs only the pinned iEvo plugin.
 Repository-owned Codex entry points live under `.agents/skills/`, so Codex discovers
 them only while this checkout is active; they are never installed globally or made
 available to unrelated repositories. Ordinary entry points load canonical workflow
-bodies from this checkout's `.claude/skills/`; the security-sensitive local-review
-entrypoint instead loads its canonical body from the exact merge-base commit with the
-refreshed protected default branch. CI requires the two skill sets and their discovery
-metadata to stay in lockstep.
+bodies from this checkout's `.claude/skills/`. Local review does not use a
+repository-owned entrypoint: dispatch binds directly to the independently installed
+and digest-verified iEvo reviewer artifact. CI requires the repository skill sets and
+their discovery metadata to stay in lockstep.
 Claude Code reads the project-scoped marketplace declaration after the repository is
 trusted and enables the configured plugin without enabling automatic updates.
 The `Agent assets` workflow repeats the validators plus isolated Codex and Claude Code

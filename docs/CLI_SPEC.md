@@ -105,7 +105,7 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
   = help: did you mean `int("35")`?
 ```
 
-JSON format versioned (`"format_version": 1`), one object per diagnostic: code, severity, spans[{file,line,col,len,label}], message, help[], fix{edits[]}?. Consumed by editors and the corpus bot (TESTING.md).
+JSON format versioned (`"format_version": 1`), one object per diagnostic: code, severity, spans[{file,line,col,len,label}], message, help[], fix{edits[]}?. `line` and `col` are 1-indexed Unicode-scalar positions; `len` counts Unicode scalar values from the span start, including normalized line separators in a multi-line span. Consumed by editors and the corpus bot (TESTING.md).
 
 Displayed diagnostic paths are lexically normalized without filesystem
 canonicalization: native path separators are rendered as `/`, redundant `.`

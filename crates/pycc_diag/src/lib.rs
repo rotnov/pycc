@@ -137,8 +137,9 @@ pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String 
 }
 
 /// CLI_SPEC.md's versioned JSON diagnostic format: `format_version: 1`,
-/// `spans[{file,line,col,len,label}]`. `help` is currently always an empty
-/// array -- see `render_human`'s doc comment and D-043.
+/// `spans[{file,line,col,len,label}]`. Columns are 1-indexed Unicode scalar
+/// positions and lengths count Unicode scalar values. `help` is currently
+/// always an empty array -- see `render_human`'s doc comment and D-043.
 pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
     let severity_word = match diag.severity {
         Severity::Error => "error",
@@ -146,12 +147,15 @@ pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
     };
     let spans = if let Some(span) = diag.span {
         let start = byte_offset_to_line_col(source, span.start);
+        let scalar_len = source[span.start as usize..span.end.max(span.start) as usize]
+            .chars()
+            .count() as u32;
         let file_path = display_path(file_path);
         serde_json::json!([{
             "file": file_path,
             "line": start.line,
             "col": start.column,
-            "len": span.end.saturating_sub(span.start),
+            "len": scalar_len,
             "label": diag.label,
         }])
     } else {
@@ -391,6 +395,22 @@ warning[W1001]: unreachable code
         let rendered = render_json(&diag, "src/main.py", "x = 1\n");
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(parsed["spans"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn render_json_uses_unicode_scalar_columns_and_lengths() {
+        let source = "éx\n";
+        let first = Diagnostic::error("T0001", "first".to_string(), Span::new(0, 2));
+        let first: serde_json::Value =
+            serde_json::from_str(&render_json(&first, "unicode.py", source)).unwrap();
+        assert_eq!(first["spans"][0]["col"], 1);
+        assert_eq!(first["spans"][0]["len"], 1);
+
+        let second = Diagnostic::error("T0001", "second".to_string(), Span::new(2, 3));
+        let second: serde_json::Value =
+            serde_json::from_str(&render_json(&second, "unicode.py", source)).unwrap();
+        assert_eq!(second["spans"][0]["col"], 2);
+        assert_eq!(second["spans"][0]["len"], 1);
     }
 
     #[test]

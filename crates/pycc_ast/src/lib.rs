@@ -5,7 +5,6 @@ pub use ruff_python_ast::{
     InterpolatedStringLiteralElement, ModModule, Number, Operator, Parameters, Stmt, StmtAssign,
     StmtExpr, StmtFor, StmtFunctionDef, StmtIf, StmtReturn, StmtWhile, UnaryOp,
 };
-pub use ruff_text_size::{Ranged, TextRange};
 
 #[cfg(test)]
 mod tests {
