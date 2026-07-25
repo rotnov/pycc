@@ -88,6 +88,7 @@ indexed, so this ledger records those states independently.
 | Observed at (UTC) | URL Inspection | Sitemap | Performance |
 |---|---|---|---|
 | 2026-07-25T10:29:08Z | All 4 canonical URLs report “URL is on Google”; the 3 evidence pages also report one valid breadcrumb item each | Public `/sitemap.xml` returns `200 application/xml` with 4 valid canonical URLs. Search Console still reports that it could not process the sitemap and 0 discovered pages; a new submission was accepted for periodic processing | Report still processing; no clicks, impressions, or query rows available |
+| 2026-07-25T12:54:10Z | The new comparison URL reports “URL is not on Google” because it is unknown to Google; a request was accepted into the priority crawl queue | Public `/sitemap.xml` returns `200 application/xml` with 5 valid canonical URLs. Search Console still reports “Couldn’t fetch” and 0 discovered pages; another submission was accepted for periodic processing | Report still processing; no clicks, impressions, or query rows available |
 
 ## Change log
 
@@ -107,9 +108,10 @@ has entered the measured window for every tracked AOT/native/AI intent:
 ahead-of-time, native-binary, and AI-native positions stayed unchanged. It is
 still outside the top 50 for the ambiguous exact name and broad typed-Python
 query. Topic ranks continue to move in both directions, reinforcing that one
-best-match observation is volatile rather than a stable trend. The four
-pre-existing canonical website URLs are individually indexed in Google; the
-new comparison URL has no indexing evidence yet. Google query performance is
-not available and the sitemap processing row remains unsuccessful after an
-accepted resubmission. The unchanged traffic window is too automation-heavy
-and low-uniqueness to attribute to SEO.
+best-match observation is volatile rather than a stable trend. The latest URL
+Inspection evidence has two timestamps: the four pre-existing canonical URLs
+were on Google at 10:29 UTC, while the new comparison URL was unknown to Google
+at 12:54 UTC and now has an accepted priority indexing request. Google query
+performance is not available, and sitemap processing remains unsuccessful
+after another accepted resubmission. The unchanged traffic window is too
+automation-heavy and low-uniqueness to attribute to SEO.
