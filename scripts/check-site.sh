@@ -74,12 +74,25 @@ class MetadataParser(HTMLParser):
         self.current_title = []
         self.links = []
         self.metas = []
+        self.base_elements = []
+        self.asset_links = []
+        self.external_scripts = []
         self.json_ld = []
         self.current_json_ld = []
         self.visible_body_text = []
 
     def handle_starttag(self, tag, attrs):
+        if tag in {"base", "link", "script"}:
+            attribute_names = [name for name, _ in attrs]
+            if len(attribute_names) != len(set(attribute_names)):
+                raise SystemExit(f"Duplicate attributes are not allowed on <{tag}>")
         attributes = dict(attrs)
+        if tag == "base":
+            self.base_elements.append(attributes)
+        elif tag == "link":
+            self.asset_links.append(attributes)
+        elif tag == "script" and "src" in attributes:
+            self.external_scripts.append(attributes)
         if tag == "body":
             self.in_body = True
             return
@@ -105,9 +118,10 @@ class MetadataParser(HTMLParser):
             self.links.append(attributes)
         elif tag == "meta":
             self.metas.append(attributes)
-        elif tag == "script" and attributes.get("type") == "application/ld+json":
-            self.in_json_ld = True
-            self.current_json_ld = []
+        elif tag == "script":
+            if attributes.get("type") == "application/ld+json":
+                self.in_json_ld = True
+                self.current_json_ld = []
 
     def handle_endtag(self, tag):
         if tag == "body":
@@ -152,6 +166,9 @@ index_path = Path(sys.argv[1])
 canonical = sys.argv[2]
 parser = MetadataParser()
 parser.feed(index_path.read_text())
+
+if parser.base_elements:
+    raise SystemExit("Base elements are not allowed because assets must resolve locally")
 
 title = require_one(parser.titles, "page title")
 if title != "pycc — AOT compiler for typed Python to native binaries":
@@ -224,6 +241,26 @@ sitemap_link = require_one(
 )
 if sitemap_link.get("href") != "sitemap.xml":
     raise SystemExit("Sitemap link must reference sitemap.xml")
+
+stylesheet_link = require_one(
+    [
+        link
+        for link in parser.asset_links
+        if "stylesheet" in link.get("rel", "").lower().split()
+    ],
+    "stylesheet link",
+)
+if stylesheet_link.get("href") != "styles.css":
+    raise SystemExit("Stylesheet link must reference styles.css relatively")
+
+external_script = require_one(
+    parser.external_scripts,
+    "external script",
+)
+if external_script.get("src") != "site.js":
+    raise SystemExit("External script must reference site.js relatively")
+if "defer" not in external_script:
+    raise SystemExit("site.js must use deferred loading")
 
 software_sources = []
 web_pages = []

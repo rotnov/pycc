@@ -13,6 +13,96 @@ cp -R "$repo_root/site" "$fixture_root/site"
 
 SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
 
+python3 - "$repo_root" "$fixture_root/site" <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+
+repo_root = Path(sys.argv[1])
+site_dir = Path(sys.argv[2])
+index_path = site_dir / "index.html"
+checker = repo_root / "scripts" / "check-site.sh"
+original = index_path.read_text()
+stylesheet = '    <link rel="stylesheet" href="styles.css">'
+script = '    <script defer src="site.js"></script>'
+assert stylesheet in original
+assert script in original
+
+mutations = {
+    "missing stylesheet": original.replace(stylesheet, "", 1),
+    "empty stylesheet target": original.replace(
+        'href="styles.css"', 'href=""', 1
+    ),
+    "duplicate stylesheet outside the head": original.replace(
+        "  <body>", f"  <body>\n{stylesheet}", 1
+    ),
+    "duplicate stylesheet href attribute": original.replace(
+        'href="styles.css"', 'href="other.css" href="styles.css"', 1
+    ),
+    "duplicate stylesheet rel attribute": original.replace(
+        'rel="stylesheet"', 'rel="alternate" rel="stylesheet"', 1
+    ),
+    "absolute stylesheet target": original.replace(
+        'href="styles.css"',
+        'href="https://rotnov.github.io/pycc/styles.css"',
+        1,
+    ),
+    "local-only stylesheet target": original.replace(
+        'href="styles.css"', 'href="http://127.0.0.1/styles.css"', 1
+    ),
+    "different stylesheet target": original.replace(
+        'href="styles.css"', 'href="other.css"', 1
+    ),
+    "missing script": original.replace(script, "", 1),
+    "empty script target": original.replace('src="site.js"', 'src=""', 1),
+    "duplicate script outside the head": original.replace(
+        "  <body>", f"  <body>\n{script}", 1
+    ),
+    "duplicate script src attribute": original.replace(
+        'src="site.js"', 'src="other.js" src="site.js"', 1
+    ),
+    "absolute script target": original.replace(
+        'src="site.js"',
+        'src="https://rotnov.github.io/pycc/site.js"',
+        1,
+    ),
+    "local-only script target": original.replace(
+        'src="site.js"', 'src="http://localhost/site.js"', 1
+    ),
+    "different script target": original.replace(
+        'src="site.js"', 'src="other.js"', 1
+    ),
+    "non-deferred script": original.replace(
+        '<script defer src="site.js">', '<script src="site.js">', 1
+    ),
+    "base URL override": original.replace(
+        "  <head>", '  <head>\n    <base href="https://example.com/">', 1
+    ),
+}
+
+environment = dict(os.environ)
+environment["SITE_DIR"] = str(site_dir)
+for description, mutated in mutations.items():
+    index_path.write_text(mutated)
+    result = subprocess.run(
+        [str(checker)],
+        cwd=repo_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if result.returncode == 0:
+        raise SystemExit(
+            f"Validator accepted an entry point with {description}"
+        )
+
+index_path.write_text(original)
+PY
+
 rm "$fixture_root/site/robots.txt"
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted a site with a missing required file" >&2

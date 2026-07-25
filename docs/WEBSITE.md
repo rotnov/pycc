@@ -66,7 +66,14 @@ important links materially change. The social preview is `site/og.png`.
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
 site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
-or required metadata.
+or required metadata. The landing-page contract also requires exactly one
+relative `styles.css` stylesheet link and exactly one deferred relative
+`site.js` script reference. Table-driven negative controls cover missing,
+empty, duplicate, absolute, local-only, and differently targeted asset
+references so the uploaded files cannot silently become browser-orphaned.
+The validator also rejects duplicate asset attributes and HTML `base` elements,
+which could otherwise make browser URL resolution disagree with the checked
+attribute values.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots
@@ -134,6 +141,9 @@ GitHub query and rolling traffic observations are preserved in
 [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) using a fixed top-50 ranking
 contract and timestamped API snapshots so changes can be compared without
 rewriting earlier responses or attributing automation traffic to SEO.
+The same ledger records Search Console URL Inspection, sitemap-processing, and
+performance-report states independently because none of those signals is a
+substitute for the others.
 
 ## Publication
 
