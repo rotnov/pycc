@@ -63,6 +63,21 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_rejects_checked_items_nested_in_markdown_blockquotes_without_evidence
+    ["> -", "> > 1)"].each do |prefix|
+      roadmap = <<~MARKDOWN
+        ### v0.1 acceptance checklist
+
+        #{prefix} [x] `pycc check` processes 1k LOC in under 50 ms.
+      MARKDOWN
+
+      _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: "jobs: {}\n")
+
+      refute status.success?, "expected #{prefix.inspect} task item to be checked"
+      assert_includes stderr, "checked roadmap item is missing an evidence marker"
+    end
+  end
+
   def test_rejects_evidence_marker_attached_to_the_wrong_claim
     roadmap = <<~MARKDOWN
       ### v0.1 acceptance checklist

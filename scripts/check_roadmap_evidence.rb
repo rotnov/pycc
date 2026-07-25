@@ -6,7 +6,7 @@ require "psych"
 
 class RoadmapEvidenceError < StandardError; end
 
-CHECKED_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+\[[xX]\]\s+(?<claim>.*)$/
+CHECKED_ITEM = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[[xX]\]\s+(?<claim>.*)$/
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
 EVIDENCE_CLAIMS = {
   "ci-build-test-coverage-100" =>
