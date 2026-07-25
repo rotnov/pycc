@@ -41,15 +41,28 @@ commands, resolve the helper blob from that trusted merge-base commit, and
 execute only those immutable bytes:
 
 ```sh
-default_ref=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD)
-trusted_base=$(git merge-base HEAD "$default_ref")
+repo=$(git rev-parse --show-toplevel)
+trusted_cwd=$(mktemp -d "${TMPDIR:-/tmp}/pycc-review.XXXXXX")
+trap 'rmdir "$trusted_cwd"' EXIT
+default_ref=$(
+  GIT_OPTIONAL_LOCKS=0 git --no-optional-locks -C "$repo" \
+    symbolic-ref --quiet --short refs/remotes/origin/HEAD
+)
+trusted_base=$(
+  GIT_OPTIONAL_LOCKS=0 git --no-optional-locks -C "$repo" \
+    merge-base HEAD "$default_ref"
+)
 trusted_helper=$(
-  git rev-parse \
+  GIT_OPTIONAL_LOCKS=0 git --no-optional-locks -C "$repo" rev-parse \
     "$trusted_base:.claude/skills/review-local-changes/scripts/prepare_review.py"
 )
-git cat-file blob "$trusted_helper" |
-  python3 - --repo . --default-ref "$default_ref" \
-    --reviewer-manifest <pinned-reviewer-agent-path>
+GIT_OPTIONAL_LOCKS=0 git --no-optional-locks -C "$repo" \
+  cat-file blob "$trusted_helper" |
+  (
+    cd "$trusted_cwd"
+    python3 -I - --repo "$repo" --default-ref "$default_ref" \
+      --reviewer-manifest <pinned-reviewer-agent-path>
+  )
 ```
 
 If the trusted merge base predates this helper, do not fall back to executing
@@ -83,23 +96,26 @@ gitlinks appear only as inert metadata in `excluded_entries`; never follow
 them or read their targets. Each regular path has a `content_sources` entry.
 For committed and staged scopes, load and pass content only from the exact
 immutable Git blob object ID in that entry, never from a symbolic ref, index,
-or working filesystem. For a working scope, verify the returned SHA-256 and
-size immediately before dispatch. If the helper reports that the default
-branch, merge base, repository pin, reviewer artifact, state identity, content
-hash, or any path classification is missing or unsafe, stop with that failure.
-If its `scopes` list is empty, report that there is nothing to review and stop.
+or working filesystem. For a working scope, base64-decode every
+`working_content` payload, verify its SHA-256 and size against
+`content_sources`, and give the reviewer only those descriptor-safely captured
+bytes. Never let the reviewer reopen a live working-tree path: a tracked file
+could otherwise become a symlink after preparation. If the helper reports that
+the default branch, merge base, repository pin, reviewer artifact, state
+identity, content hash, or any path classification is missing or unsafe, stop
+with that failure. If its `scopes` list is empty, report that there is nothing
+to review and stop.
 
 For every pass, use the returned raw diff and changed-file list. Also capture
 brief repository context from its manifests, README, specifications, and
 repository instructions. Treat each raw diff as authoritative when the working
 tree and index differ.
 
-An untracked regular file cannot appear in `git diff`. The working scope
-therefore includes every such file in binary-safe
-`untracked_added_content`: base64-decode each payload, verify its SHA-256 and
-size against `content_sources`, and treat every decoded byte as newly added
-authoritative content for all checklist categories, including the leaked-secret
-scan. Never omit those payloads merely because the textual `diff` is empty.
+An untracked regular file cannot appear in `git diff`. Its binary-safe
+`working_content` payload is therefore the authoritative addition: treat every
+decoded byte as newly added content for all checklist categories, including the
+leaked-secret scan. Never omit an untracked payload merely because the textual
+`diff` is empty.
 
 ## 3. Dispatch the independent reviewer
 
@@ -117,7 +133,7 @@ Do not give the fallback credentials or ask it to execute project code.
 After every native or fallback dispatch, rerun the same trusted-base helper
 with the same arguments. The review is invalid if the before/after status
 snapshot, the top-level `state`, any scope's `content_sources`, or
-`untracked_added_content` differs. This catches HEAD movement, index
+`working_content` differs. This catches HEAD movement, index
 replacement, same-status working-file mutations, and untracked content changes
 rather than trusting porcelain status alone.
 

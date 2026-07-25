@@ -596,7 +596,7 @@ def worktree_content_state(
 ]:
     sources: dict[str, dict[str, object]] = {}
     untracked = set(untracked_paths)
-    added_content: dict[str, dict[str, object]] = {}
+    content: dict[str, dict[str, object]] = {}
     for relative_path in relative_paths:
         raw = read_regular_file_without_symlinks(repo, relative_path)
         sources[relative_path] = {
@@ -604,14 +604,14 @@ def worktree_content_state(
             "sha256": sha256_bytes(raw),
             "size": len(raw),
         }
-        if relative_path in untracked:
-            added_content[relative_path] = {
-                "encoding": "base64",
-                "data": base64.b64encode(raw).decode("ascii"),
-                "sha256": sha256_bytes(raw),
-                "size": len(raw),
-            }
-    return sources, added_content
+        content[relative_path] = {
+            "encoding": "base64",
+            "data": base64.b64encode(raw).decode("ascii"),
+            "sha256": sha256_bytes(raw),
+            "size": len(raw),
+            "status": "untracked" if relative_path in untracked else "tracked",
+        }
+    return sources, content
 
 
 def resolve_default_ref(repo: Path, explicit: str | None) -> str:
@@ -640,12 +640,12 @@ def append_scope(
     files: list[str],
     excluded_entries: list[dict[str, str]] | None = None,
     content_sources: dict[str, dict[str, object]] | None = None,
-    untracked_added_content: dict[str, dict[str, object]] | None = None,
+    working_content: dict[str, dict[str, object]] | None = None,
 ) -> None:
     entries = excluded_entries or []
     sources = content_sources or {}
-    added_content = untracked_added_content or {}
-    if diff or files or entries or added_content:
+    content = working_content or {}
+    if diff or files or entries or content:
         scopes.append(
             {
                 "name": name,
@@ -655,8 +655,8 @@ def append_scope(
                 "content_sources": {
                     path: sources[path] for path in sorted(sources)
                 },
-                "untracked_added_content": {
-                    path: added_content[path] for path in sorted(added_content)
+                "working_content": {
+                    path: content[path] for path in sorted(content)
                 },
             }
         )
@@ -807,7 +807,7 @@ def prepare_review(
         repo,
         [*working_files, *untracked_files],
     )
-    working_sources, working_added_content = worktree_content_state(
+    working_sources, working_content = worktree_content_state(
         repo,
         working_regular,
         untracked_files,
@@ -819,7 +819,7 @@ def prepare_review(
         working_regular,
         working_excluded,
         working_sources,
-        working_added_content,
+        working_content,
     )
 
     final_head = head_object_id(repo)
@@ -854,7 +854,7 @@ def prepare_review(
     )
     (
         final_working_sources,
-        final_working_added_content,
+        final_working_content,
     ) = worktree_content_state(
         repo,
         final_working_regular,
@@ -871,7 +871,7 @@ def prepare_review(
         or final_working_regular != working_regular
         or final_working_excluded != working_excluded
         or final_working_sources != working_sources
-        or final_working_added_content != working_added_content
+        or final_working_content != working_content
     ):
         raise ReviewPreparationError(
             "repository state changed while review scopes were prepared"
@@ -891,7 +891,7 @@ def prepare_review(
             "index_sha256": prepared_index,
             "status_sha256": prepared_status,
             "working_content_sources": working_sources,
-            "untracked_added_content": working_added_content,
+            "working_content": working_content,
         },
         "scopes": scopes,
     }

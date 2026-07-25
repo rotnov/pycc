@@ -113,6 +113,10 @@
   trusted base predates the helper, use the documented bootstrap procedure with
   host-provided read-only primitives; do not execute the newly introduced
   helper before it has landed on the protected default branch.
+- Execute the trusted helper with Python isolated mode from outside the
+  repository. For tracked-working and untracked files, pass the helper's
+  descriptor-safely captured payload bytes to the reviewer; never reopen their
+  live paths after preparation.
 - The skill reviews staged or working-tree changes before commit. For an
   existing pull request with a clean tree, it reviews the full committed branch
   diff from its merge base with the refreshed remote default branch, not a

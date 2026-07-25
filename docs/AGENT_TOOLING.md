@@ -246,13 +246,14 @@ table.
 The orchestrator never executes the helper from the branch, index, or working
 tree under review. It resolves the exact merge base with the refreshed remote
 default branch, loads the helper from that immutable protected-branch Git blob,
-and executes those trusted bytes without writing them into the checkout. A
-bootstrap pull request whose trusted base predates the helper uses only
-client-hosted read-only Git and file primitives to prepare equivalent scopes
-and reviews the proposed helper as inert source. It must not execute the new
-helper merely because that copy is available in the pull-request checkout.
-After the bootstrap lands, later helper changes are prepared by the previous
-trusted default-branch implementation.
+and executes those trusted bytes with Python isolated mode from a fresh
+non-repository directory, so modules added by the reviewed branch cannot shadow
+the standard library. A bootstrap pull request whose trusted base predates the
+helper uses only client-hosted read-only Git and file primitives to prepare
+equivalent scopes and reviews the proposed helper as inert source. It must not
+execute the new helper merely because that copy is available in the
+pull-request checkout. After the bootstrap lands, later helper changes are
+prepared by the previous trusted default-branch implementation.
 
 The helper binds preparation to iEvo commit
 `7d5f3e12d0556cb6c5df2974e2babe0433674186` and reviewer SHA-256
@@ -299,11 +300,13 @@ authority, and the workflow rejects the run if a before/after Git status
 snapshot changes. Preparation also records exact commit and default-ref IDs,
 the index identity, worktree/untracked content hashes, and immutable blob IDs
 for committed and staged file reads. Because ordinary Git diffs omit untracked
-files, their complete bytes are carried separately as base64-encoded
-authoritative added-content payloads; the reviewer verifies their hashes and
-includes them in every checklist category, including leaked-secret review.
-The trusted-base helper is rerun after dispatch; any state, content-source, or
-untracked-payload mismatch invalidates the review even when porcelain status
+files, complete bytes for every tracked-working and untracked regular file are
+carried as base64-encoded authoritative payloads. The reviewer verifies their
+hashes and never reopens a live path after preparation, preventing a symlink
+swap from disclosing an outside-repository target. Untracked payloads are
+included in every checklist category, including leaked-secret review. The
+trusted-base helper is rerun after dispatch; any state, content-source, or
+working-content mismatch invalidates the review even when porcelain status
 text stayed unchanged.
 
 ## Rollback

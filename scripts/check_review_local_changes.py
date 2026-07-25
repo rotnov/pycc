@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -137,8 +138,11 @@ def validate_entrypoint(
     assert "scripts/prepare_review.py" in canonical_text
     assert "content_sources" in canonical_text
     assert "top-level `state`" in canonical_text
-    assert "git cat-file blob" in canonical_text
-    assert "untracked_added_content" in canonical_text
+    assert "cat-file blob" in canonical_text
+    assert "python3 -I -" in canonical_text
+    assert 'cd "$trusted_cwd"' in canonical_text
+    assert "working_content" in canonical_text
+    assert "Never let the reviewer reopen a live working-tree path" in canonical_text
     assert (
         "python3 .claude/skills/review-local-changes/scripts/prepare_review.py"
         not in canonical_text
@@ -160,6 +164,27 @@ def validate_entrypoint(
         safe_manifest = root / "safe-reviewer.md"
         write_reviewer(safe_manifest, safe=True)
         safe_digest = hashlib.sha256(safe_manifest.read_bytes()).hexdigest()
+
+        shadow_root = root / "python-shadow-fixture"
+        shadow_root.mkdir()
+        (shadow_root / "hashlib.py").write_text(
+            "raise RuntimeError('reviewed branch module was imported')\n",
+            encoding="utf-8",
+        )
+        isolation_probe = subprocess.run(
+            [sys.executable, "-I", "-"],
+            cwd=shadow_root,
+            check=False,
+            input=b"import argparse, hashlib, pathlib\nprint('isolated')\n",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert isolation_probe.returncode == 0, isolation_probe.stderr.decode(
+            "utf-8",
+            errors="replace",
+        )
+        assert isolation_probe.stdout == b"isolated\n"
+
         index_path = repo / ".git/index"
         index_before = index_path.read_bytes()
         result = helper.prepare_review(
@@ -190,8 +215,9 @@ def validate_entrypoint(
             and len(source["sha256"]) == 64
             for source in working["content_sources"].values()
         )
-        untracked_payload = working["untracked_added_content"]["untracked.txt"]
+        untracked_payload = working["working_content"]["untracked.txt"]
         assert untracked_payload["encoding"] == "base64"
+        assert untracked_payload["status"] == "untracked"
         assert base64.b64decode(untracked_payload["data"]) == b"untracked\n"
         assert untracked_payload["sha256"] == hashlib.sha256(
             b"untracked\n"
@@ -201,6 +227,21 @@ def validate_entrypoint(
             untracked_payload["sha256"]
             == working["content_sources"]["untracked.txt"]["sha256"]
         )
+        tracked_payload = working["working_content"]["tracked.txt"]
+        assert tracked_payload["status"] == "tracked"
+        assert base64.b64decode(tracked_payload["data"]) == b"working\n"
+        outside_secret = root / "outside-secret.txt"
+        outside_secret.write_text("outside secret\n", encoding="utf-8")
+        tracked_path = repo / "tracked.txt"
+        tracked_path.unlink()
+        try:
+            tracked_path.symlink_to(outside_secret)
+        except OSError:
+            tracked_path.write_text("working\n", encoding="utf-8")
+        else:
+            assert base64.b64decode(tracked_payload["data"]) == b"working\n"
+            tracked_path.unlink()
+            tracked_path.write_text("working\n", encoding="utf-8")
         assert result["state"]["head"] == git_output(repo, "rev-parse", "HEAD")
         assert len(result["state"]["index_sha256"]) == 64
         assert len(result["state"]["status_sha256"]) == 64
@@ -235,12 +276,12 @@ def validate_entrypoint(
             == original_state["status_sha256"]
         )
         changed_payload = same_status_untracked["state"][
-            "untracked_added_content"
+            "working_content"
         ]["untracked.txt"]
         assert base64.b64decode(changed_payload["data"]) == b"secret-sentinel\n"
         assert (
             changed_payload
-            != original_state["untracked_added_content"]["untracked.txt"]
+            != original_state["working_content"]["untracked.txt"]
         )
         untracked.write_text("untracked\n", encoding="utf-8")
 
