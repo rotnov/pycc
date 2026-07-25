@@ -2306,7 +2306,7 @@ git commit -m "feat(pycc_hir,pycc_types): str literals and concatenation, T0002 
 **Interfaces:**
 - Produces: `HirExpr` gains `FString(Vec<FStringPart>)`, `pub enum FStringPart { Literal(String), Interpolation(Box<HirExpr>) }` (a pycc-owned, flattened shape — deliberately not threading `ruff`'s own nested `FStringValue`/`FStringPart`/`InterpolatedElement` types any further than this one lowering function, keeping HIR's vocabulary its own). Only the simple case is in v0.1 scope: no `format_spec` (`{x:.2f}`-style), no `conversion` (`{x!r}`-style), no nested f-strings — each panics with a clear message.
 
-- [ ] **Step 1: Write the failing HIR tests**
+- [x] **Step 1: Write the failing HIR tests**
 
 ```rust
 #[test]
@@ -2342,12 +2342,12 @@ fn an_f_string_with_a_conversion_flag_is_not_supported_yet() {
 
 (Verify `!r` actually parses to a non-`ConversionFlag::None` value in ruff 0.0.6 before trusting this test — check `nodes.rs`'s `ConversionFlag` enum definition directly if uncertain.)
 
-- [ ] **Step 2: Run to verify these fail**
+- [x] **Step 2: Run to verify these fail**
 
 Run: `cargo test -p pycc_hir lowers_a_basic_f_string an_f_string_with_a_format_spec an_f_string_with_a_conversion_flag`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Add `FStringPart`, extend `HirExpr`, implement lowering**
+- [x] **Step 3: Add `FStringPart`, extend `HirExpr`, implement lowering**
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -2387,12 +2387,12 @@ Expr::FString(pycc_ast::ExprFString { value, .. }) => {
 
 Confirm `ConversionFlag` implements `Default` (defaulting to "no conversion") and `PartialEq` by checking its definition in `nodes.rs` before trusting `!= Default::default()` compiles — if it doesn't implement both, match on its variant explicitly instead (e.g. `if !matches!(interp.conversion, pycc_ast::ConversionFlag::None) { panic!(...) }`, adding `ConversionFlag` to `pycc_ast`'s re-export list in that case, which Task 4 did not anticipate needing).
 
-- [ ] **Step 4: Run to verify pycc_hir tests pass**
+- [x] **Step 4: Run to verify pycc_hir tests pass**
 
 Run: `cargo test -p pycc_hir`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing pycc_types test**
+- [x] **Step 5: Write the failing pycc_types test**
 
 ```rust
 #[test]
@@ -2414,12 +2414,12 @@ fn an_f_string_still_type_checks_its_interpolated_expressions() {
 }
 ```
 
-- [ ] **Step 6: Run to verify these fail**
+- [x] **Step 6: Run to verify these fail**
 
 Run: `cargo test -p pycc_types an_f_string`
 Expected: FAIL to compile (no `HirExpr::FString` arm in `infer_expr`).
 
-- [ ] **Step 7: Implement**
+- [x] **Step 7: Implement**
 
 ```rust
 HirExpr::FString(parts) => {
@@ -2432,17 +2432,17 @@ HirExpr::FString(parts) => {
 }
 ```
 
-- [ ] **Step 8: Run to verify pycc_types tests pass**
+- [x] **Step 8: Run to verify pycc_types tests pass**
 
 Run: `cargo test -p pycc_types`
 Expected: PASS.
 
-- [ ] **Step 9: Run the full workspace suite, clippy, coverage**
+- [x] **Step 9: Run the full workspace suite, clippy, coverage**
 
 Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_types/src/lib.rs
