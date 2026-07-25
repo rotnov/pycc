@@ -246,6 +246,24 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_ignores_checked_items_inside_blockquoted_fences
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      > ```markdown
+      > - [x] Quoted code example without evidence.
+      > ```
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: "jobs: {}\n"
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
   def test_ignores_checked_items_rendered_as_indented_code
     ["    - [x] Root code example.\n", ">     - [x] Quoted code example.\n"].each do |example|
       stdout, stderr, status = run_checker(
@@ -299,6 +317,25 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     refute status.success?
     assert_includes stderr, 'unknown roadmap evidence "invented-proof"'
+  end
+
+  def test_rejects_multiple_evidence_markers_on_one_checked_item
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile --> <!-- roadmap-evidence: invented-proof -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    refute status.success?
+    assert_includes stderr, "must contain exactly one evidence marker"
   end
 
   def test_accepts_reviewed_tier1_matrix_evidence

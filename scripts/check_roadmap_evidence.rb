@@ -294,6 +294,19 @@ def without_html_comments(line, in_comment)
   end
 end
 
+def blockquote_content(line)
+  content = line
+  depth = 0
+  loop do
+    prefix = /\A {0,3}>[ \t]?/.match(content)
+    break unless prefix
+
+    content = content[prefix.end(0)..] || ""
+    depth += 1
+  end
+  [content, depth]
+end
+
 def validate_roadmap(text)
   evidence_ids = []
   heading_path = []
@@ -301,13 +314,19 @@ def validate_roadmap(text)
   in_html_comment = false
   text.each_line.with_index(1) do |line, line_number|
     if fence
-      fence = nil if closing_fence?(line, fence)
+      candidate, quote_depth = blockquote_content(line)
+      candidate = line unless quote_depth == fence[2]
+      fence = nil if closing_fence?(candidate, fence)
       next
     end
 
     visible_line, in_html_comment = without_html_comments(line, in_html_comment)
-    fence = opening_fence(visible_line)
-    next if fence
+    fence_candidate, quote_depth = blockquote_content(visible_line)
+    opening = opening_fence(fence_candidate)
+    if opening
+      fence = [*opening, quote_depth]
+      next
+    end
 
     if SETEXT_UNDERLINE.match?(visible_line)
       raise RoadmapEvidenceError,
@@ -326,33 +345,39 @@ def validate_roadmap(text)
     item = CHECKED_ITEM.match(visible_line)
     next unless item
 
-    marker = EVIDENCE_MARKER.match(line)
-    unless marker
+    marker_ids = []
+    line.scan(EVIDENCE_MARKER) { marker_ids << Regexp.last_match[:id] }
+    if marker_ids.empty?
       raise RoadmapEvidenceError,
             "line #{line_number}: checked roadmap item is missing an evidence marker"
     end
-
-    expected_claim = EVIDENCE_CLAIMS[marker[:id]]
-    unless expected_claim
+    unless marker_ids.length == 1
       raise RoadmapEvidenceError,
-            "line #{line_number}: unknown roadmap evidence #{marker[:id].inspect}"
+            "line #{line_number}: checked roadmap item must contain exactly one evidence marker"
     end
 
-    expected_section = EVIDENCE_SECTIONS.fetch(marker[:id])
+    evidence_id = marker_ids.first
+    expected_claim = EVIDENCE_CLAIMS[evidence_id]
+    unless expected_claim
+      raise RoadmapEvidenceError,
+            "line #{line_number}: unknown roadmap evidence #{evidence_id.inspect}"
+    end
+
+    expected_section = EVIDENCE_SECTIONS.fetch(evidence_id)
     unless heading_path == expected_section
       raise RoadmapEvidenceError,
-            "line #{line_number}: evidence #{marker[:id].inspect} must appear under " \
+            "line #{line_number}: evidence #{evidence_id.inspect} must appear under " \
             "the expected roadmap section #{expected_section.join(' > ').inspect}"
     end
 
     actual_claim = item[:claim].strip
     if actual_claim == expected_claim
-      evidence_ids << marker[:id]
+      evidence_ids << evidence_id
       next
     end
 
     raise RoadmapEvidenceError,
-          "line #{line_number}: evidence #{marker[:id].inspect} does not prove this roadmap claim"
+          "line #{line_number}: evidence #{evidence_id.inspect} does not prove this roadmap claim"
   end
   evidence_ids
 end
