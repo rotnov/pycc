@@ -2604,7 +2604,7 @@ git commit -m "feat(pycc): wire pycc check for real (parse+HIR+types, human/JSON
 - Consumes: `pycc` binary (via `Command::new(pycc_bin())`, same pattern as `tests/slice0.rs`).
 - Produces: nothing new code-facing — this task is pure test/fixture infrastructure.
 
-- [ ] **Step 1: Write the fixture files**
+- [x] **Step 1: Write the fixture files**
 
 `tests/diagnostics/d0001_missing_public_annotation.py`:
 ```python
@@ -2647,7 +2647,7 @@ error[T0001]: parameter `a` of public function `add` needs a type annotation
 
 `tests/diagnostics/d0002_any_forbidden.expected.txt` — same process: run `pycc check` on the real fixture and copy its real output.
 
-- [ ] **Step 2: Write the failing test harness**
+- [x] **Step 2: Write the failing test harness**
 
 Create `tests/diagnostics_test.rs`:
 
@@ -2687,22 +2687,22 @@ fn d0002_any_forbidden() {
 }
 ```
 
-- [ ] **Step 3: Run to verify it fails, then generate the real fixtures**
+- [x] **Step 3: Run to verify it fails, then generate the real fixtures**
 
 Run: `cargo test --test diagnostics_test`
 Expected: initially FAILS (the `.expected.txt` files don't exist yet, or don't match if hand-guessed). Run `cargo build --bin pycc` then manually: `./target/debug/pycc check tests/diagnostics/d0001_missing_public_annotation.py` and `./target/debug/pycc check tests/diagnostics/d0002_any_forbidden.py`, and paste each command's *actual* stdout into the corresponding `.expected.txt` file exactly.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cargo test --test diagnostics_test`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full workspace suite, clippy, coverage**
+- [x] **Step 5: Run the full workspace suite, clippy, coverage**
 
 Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
 Expected: PASS. `tests/diagnostics_test.rs` is itself a `tests/` file, excluded from the coverage denominator by cargo-llvm-cov's default (per D-014's own documented behavior) — no coverage concern from this file itself, only from whether it actually exercises real product-code paths (it does, via the real `pycc` binary).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/diagnostics/ tests/diagnostics_test.rs
