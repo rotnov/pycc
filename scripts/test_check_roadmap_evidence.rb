@@ -23,6 +23,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
         pull_request:
       env:
         CARGO_LLVM_COV_VERSION: "0.8.7"
+        LLVM_VERSION: "22.1.1"
       jobs:
         build-test-coverage:
           runs-on: macos-14
@@ -36,6 +37,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
               run: brew install llvm@22
             - name: Install llvm-tools-preview
               run: rustup component add llvm-tools-preview
+            - name: Add x86_64-apple-darwin Rust target
+              run: rustup target add x86_64-apple-darwin
             - name: Hard coverage gate — 100% lines + regions (D-014)
               run: |
                 set -euo pipefail
@@ -70,6 +73,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
                 }
                 ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
                 cd "$GITHUB_WORKSPACE"
+                run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
                 run_isolated "$TRUSTED_CARGO" build --workspace
                 #{command}
                 rm "$GITHUB_WORKSPACE/target"
@@ -295,6 +299,47 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     refute status.success?
     assert_includes stderr, 'unknown roadmap evidence "invented-proof"'
+  end
+
+  def test_accepts_reviewed_tier1_matrix_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_changed_tier1_matrix_workflow
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read.sub(
+      "macos-15-intel",
+      "macos-14"
+    )
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not match the reviewed Tier-1 CI workflow"
   end
 
   def test_rejects_coverage_evidence_when_the_threshold_is_lowered
@@ -539,6 +584,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes commands, 'sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"'
     assert_includes commands,
                     'ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"'
+    assert_includes commands,
+                    'run_isolated "$TRUSTED_CARGO" build ' \
+                    "--target x86_64-apple-darwin -p pycc_rt"
     assert_operator commands.index("cargo build --workspace"),
                     :<,
                     commands.index("cargo test --workspace")

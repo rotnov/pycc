@@ -176,6 +176,153 @@ fn calling_an_undefined_function_is_a_codegen_error() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("does_not_exist"));
 }
 
+/// `--target x86_64-apple-darwin`'s pycc_rt build (`rustup target add
+/// x86_64-apple-darwin && cargo build --target x86_64-apple-darwin -p
+/// pycc_rt`) is set up on the PR-3 CI job and on this repo's dev host, but
+/// isn't guaranteed for every environment `cargo test` might run in --
+/// skip cleanly rather than fail on an environment gap the rest of this
+/// test suite doesn't require.
+fn x86_64_apple_darwin_pycc_rt_is_available() -> bool {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target/x86_64-apple-darwin/debug/libpycc_rt.a")
+        .exists()
+}
+
+#[test]
+fn build_and_run_cross_compiled_to_a_different_tier_1_target() {
+    if !x86_64_apple_darwin_pycc_rt_is_available() {
+        eprintln!("skipping: x86_64-apple-darwin pycc_rt build not available in this environment");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_cross_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "hello_cross.py", "print(42)\n");
+    let out = dir.join("hello_cross");
+
+    let status = Command::new(pycc_bin())
+        .args([
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--target",
+            "x86_64-apple-darwin",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let file_output = Command::new("file").arg(&out).output().unwrap();
+    let description = String::from_utf8_lossy(&file_output.stdout);
+    assert!(description.contains("x86_64"), "expected an x86_64 binary, got: {description}");
+
+    // Runs via Rosetta 2 on this arm64 dev host / CI runner.
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"42\n");
+}
+
+/// Not real cross-compilation (the triple matches this runner's own arch)
+/// -- this exercises the same --target code path (linker_command,
+/// effective_link_target) using a triple that's available on every Linux
+/// CI runner, unlike x86_64-apple-darwin above which only exists on the
+/// macOS legs. Catches regressions like D-031 (GCC's `cc` rejecting
+/// clang-only `-target` syntax on Linux) that only manifest once
+/// --target reaches the actual link step -- which
+/// targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error
+/// above never reaches (it returns from find_pycc_rt_lib_dir before the
+/// linker is ever invoked).
+#[test]
+fn build_and_run_with_target_set_to_the_host_s_own_triple_on_linux() {
+    if std::env::consts::OS != "linux" {
+        eprintln!("skipping: this test only applies on Linux (see D-031)");
+        return;
+    }
+    let triple = match std::env::consts::ARCH {
+        "x86_64" => "x86_64-unknown-linux-gnu",
+        "aarch64" => "aarch64-unknown-linux-gnu",
+        other => {
+            eprintln!("skipping: no known Tier-1 triple for Linux/{other}");
+            return;
+        }
+    };
+    let rt_lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(triple)
+        .join("debug/libpycc_rt.a");
+    if !rt_lib.exists() {
+        eprintln!("skipping: {triple} pycc_rt build not available in this environment");
+        return;
+    }
+
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_owntriple_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "hello_owntriple.py", "print(42)\n");
+    let out = dir.join("hello_owntriple");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap(), "--target", triple])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"42\n");
+}
+
+#[test]
+fn an_unknown_target_triple_is_a_clean_build_error() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_badtriple_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "hello_badtriple.py", "print(42)\n");
+    let out = dir.join("hello_badtriple");
+
+    let output = Command::new(pycc_bin())
+        .args([
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--target",
+            "not-a-real-target-triple",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
+    // riscv64-unknown-linux-gnu is a real LLVM target (codegen succeeds)
+    // but isn't part of this project's Tier-1 or Tier-2 matrix (see
+    // ARCHITECTURE.md), so no CI job anywhere builds pycc_rt for it -- the
+    // clean, actionable error from find_pycc_rt_lib_dir, not a raw linker
+    // failure about a missing -lpycc_rt. Deliberately NOT one of the two
+    // Linux Tier-1 triples (x86_64/aarch64-unknown-linux-gnu): D-031's own
+    // CI step builds pycc_rt for whichever of those matches the runner's
+    // own arch, so using either here would flip this test's assumption
+    // false on that one runner (this exact regression was caught in PR
+    // review: this test failed on ubuntu-24.04-arm once D-031 gave that
+    // runner its own aarch64-unknown-linux-gnu build).
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_no_rt_build_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "hello_no_rt.py", "print(42)\n");
+    let out = dir.join("hello_no_rt");
+
+    let output = Command::new(pycc_bin())
+        .args([
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+            "--target",
+            "riscv64-unknown-linux-gnu",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no pycc_rt build found"));
+}
+
 #[test]
 fn a_bad_output_path_is_a_link_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_badout_{}", std::process::id()));

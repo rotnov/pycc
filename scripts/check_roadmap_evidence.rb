@@ -3,6 +3,7 @@
 
 require "pathname"
 require "psych"
+require "digest"
 
 class RoadmapEvidenceError < StandardError; end
 
@@ -12,16 +13,25 @@ ATX_HEADING = /^\s{0,3}(?<marks>\#{1,6})[ \t]+(?<title>.*)$/
 SETEXT_UNDERLINE = /\A {0,3}(?:=+|-+)[ \t]*(?:\r?\n)?\z/
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
 EVIDENCE_CLAIMS = {
+  "ci-tier1-cross-compile" =>
+    "The five-target native CI matrix and one cross-host compilation path are live on `main`.",
   "ci-build-test-coverage-100" =>
     "The 100% line and region coverage gate is required and green for the current slice."
 }.freeze
 EVIDENCE_SECTIONS = {
+  "ci-tier1-cross-compile" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
   "ci-build-test-coverage-100" => [
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"
   ]
 }.freeze
+TIER1_CI_WORKFLOW_SHA256 =
+  "58e2d5026b59e7c921b57c882d24b6507c95dd8f99e390c0a68af217e5e038c8"
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
@@ -60,13 +70,15 @@ COVERAGE_SCRIPT = <<~SHELL.strip
   }
   ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
   cd "$GITHUB_WORKSPACE"
+  run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
   run_isolated "$TRUSTED_CARGO" build --workspace
   #{COVERAGE_COMMAND}
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
 TRUSTED_COVERAGE_ENV = {
-  "CARGO_LLVM_COV_VERSION" => "0.8.7"
+  "CARGO_LLVM_COV_VERSION" => "0.8.7",
+  "LLVM_VERSION" => "22.1.1"
 }.freeze
 TRUSTED_COVERAGE_STEPS = [
   {
@@ -84,6 +96,10 @@ TRUSTED_COVERAGE_STEPS = [
   {
     "name" => "Install llvm-tools-preview",
     "run" => "rustup component add llvm-tools-preview"
+  },
+  {
+    "name" => "Add x86_64-apple-darwin Rust target",
+    "run" => "rustup target add x86_64-apple-darwin"
   },
   {
     "name" => COVERAGE_STEP,
@@ -342,10 +358,18 @@ def validate_roadmap(text)
 end
 
 def validate_evidence(root, evidence_ids)
-  return unless evidence_ids.include?("ci-build-test-coverage-100")
-
   workflow = root / ".github/workflows/ci.yml"
-  return if coverage_gate_present?(workflow.read, workflow.to_s)
+  workflow_text = workflow.read
+  if evidence_ids.include?("ci-tier1-cross-compile")
+    digest = Digest::SHA256.hexdigest(workflow_text)
+    unless digest == TIER1_CI_WORKFLOW_SHA256
+      raise RoadmapEvidenceError,
+            "#{workflow}: does not match the reviewed Tier-1 CI workflow"
+    end
+  end
+
+  return unless evidence_ids.include?("ci-build-test-coverage-100")
+  return if coverage_gate_present?(workflow_text, workflow.to_s)
 
   raise RoadmapEvidenceError,
         "#{workflow}: evidence does not provide the exact 100% line and region gate"
