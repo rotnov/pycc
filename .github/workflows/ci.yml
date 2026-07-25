@@ -21,17 +21,9 @@ jobs:
   build-test-coverage:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Check workflow permission policy
-        run: |
-          ruby scripts/test_check_ci_permissions.rb
-          ruby scripts/check_ci_permissions.rb
-
-      - name: Check agent policy
-        run: |
-          python3 -B -m unittest discover -s scripts -p 'test_*.py'
-          python3 -B scripts/validate_agent_policies.py
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Show pinned toolchain
         run: rustup show
@@ -39,17 +31,73 @@ jobs:
       - name: Install LLVM 22 (D-015)
         run: brew install llvm@22
 
-      - name: Export LLVM_SYS_221_PREFIX
-        run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
 
-      # tests/slice0.rs's cross-compilation test skips cleanly when this
-      # target's pycc_rt build is absent (see its own environment guard), but
-      # a skip means the 100% coverage gate below never sees that test's
-      # success path -- so this job needs the same cross-target build that
-      # cross-compile-build sets up, purely to keep coverage deterministic.
+      # tests/slice0.rs's cross-compilation test needs this target and its
+      # pycc_rt build for the success path to contribute to coverage.
       - name: Add x86_64-apple-darwin Rust target
         run: rustup target add x86_64-apple-darwin
 
+      # Hard merge invariant from D-014. These thresholds must never be
+      # lowered or bypassed to make a pull request pass.
+      - name: Hard coverage gate — 100% lines + regions (D-014)
+        run: |
+          set -euo pipefail
+          LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
+          TRUSTED_CARGO="$(rustup which cargo)"
+          TRUSTED_RUSTC="$(rustup which rustc)"
+          TRUSTED_RUSTDOC="$(rustup which rustdoc)"
+          TRUSTED_COV="/Users/runner/.cargo/bin/cargo-llvm-cov"
+          TRUSTED_TOOLCHAIN="$(dirname "$(dirname "$TRUSTED_CARGO")")"
+          cd "$RUNNER_TEMP"
+          RUSTC="$TRUSTED_RUSTC" RUSTDOC="$TRUSTED_RUSTDOC" "$TRUSTED_CARGO" install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+          "$TRUSTED_COV" llvm-cov --version
+          sudo chmod o+x /Users/runner /Users/runner/.cargo /Users/runner/.cargo/bin /Users/runner/.rustup /Users/runner/.rustup/toolchains
+          sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"
+          sudo chmod o+rx "$TRUSTED_COV"
+          ISOLATED_ROOT="$RUNNER_TEMP/pycc-coverage"
+          mkdir -p "$ISOLATED_ROOT/home" "$ISOLATED_ROOT/tmp" "$ISOLATED_ROOT/cargo-home" "$ISOLATED_ROOT/target"
+          sudo chown -R nobody:nobody "$ISOLATED_ROOT"
+          ISOLATED_ENV=(
+            "HOME=$ISOLATED_ROOT/home"
+            "TMPDIR=$ISOLATED_ROOT/tmp/"
+            "CARGO_HOME=$ISOLATED_ROOT/cargo-home"
+            "CARGO_TARGET_DIR=$ISOLATED_ROOT/target"
+            "CARGO=$TRUSTED_CARGO"
+            "RUSTC=$TRUSTED_RUSTC"
+            "RUSTDOC=$TRUSTED_RUSTDOC"
+            "LLVM_SYS_221_PREFIX=$LLVM_SYS_221_PREFIX_VALUE"
+            "PATH=$(dirname "$TRUSTED_CARGO"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+          )
+          run_isolated() {
+            sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
+          }
+          ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
+          cd "$GITHUB_WORKSPACE"
+          run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
+          run_isolated "$TRUSTED_CARGO" build --workspace
+          run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+          rm "$GITHUB_WORKSPACE/target"
+          printf 'LLVM_SYS_221_PREFIX=%s\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
+
+      - name: Check agent policy
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_*.py'
+          python3 -B scripts/validate_agent_policies.py
+
+      - name: Check workflow permission policy
+        run: |
+          ruby scripts/test_check_ci_permissions.rb
+          ruby scripts/check_ci_permissions.rb
+
+      - name: Check roadmap evidence
+        run: |
+          ruby scripts/test_check_roadmap_evidence.rb
+          ruby scripts/check_roadmap_evidence.rb
+
+      # Rebuild outside the coverage boundary so the regular cargo test below
+      # exercises the same cross-target success path.
       - name: Build pycc_rt for x86_64-apple-darwin
         run: cargo build --target x86_64-apple-darwin -p pycc_rt
 
@@ -70,20 +118,6 @@ jobs:
         run: |
           rustup component add clippy
           cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Install cargo-llvm-cov (pinned)
-        run: cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
-
-      - name: Install llvm-tools-preview
-        run: rustup component add llvm-tools-preview
-
-      - name: Coverage gate smoke check
-        run: cargo llvm-cov --version
-
-      # Hard merge invariant from D-014. These thresholds must never be
-      # lowered or bypassed to make a pull request pass.
-      - name: Hard coverage gate — 100% lines + regions (D-014)
-        run: cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
 
   # PR-3: native build+test+lint on the other 4 Tier-1 targets. No coverage
   # requirement here -- that's build-test-coverage's job alone, per D-014.

@@ -14,7 +14,7 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 | [DIAGNOSTICS.md](./DIAGNOSTICS.md) | Error-code registry, quality bar, stability rules | `pycc_diag` |
 | [STDLIB_PLAN.md](./STDLIB_PLAN.md) | Builtins + module tiers with target versions, compat policy | `pycc_std` |
 | [TESTING.md](./TESTING.md) | 7 test layers, conformance harness, differential fuzzing, corpus bot | CI, `pycc_testkit` |
-| [ROADMAP.md](./ROADMAP.md) | Current default-branch delivery status plus v0.1→v1.0 milestones with binary acceptance criteria | releases |
+| [ROADMAP.md](./ROADMAP.md) | Delivery status for the repository tree in the containing commit plus v0.1→v1.0 milestones with binary acceptance criteria | releases |
 | [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-033 (int repr, LLVM, UTF-8 str, no-GIL model, coverage, agent surfaces, CI trust, iEvo, repository governance, Windows CI…) | irreversible calls |
 | [DELIVERY_PLAN.md](./DELIVERY_PLAN.md) | Milestone decomposition, verified environment baseline, v0.1 crate scope + PR breakdown, autonomy policy | execution order, PR sequencing |
 | [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md) | Protected-branch contract, required controls, emergency bypass, and audit response | GitHub settings, governance workflows |

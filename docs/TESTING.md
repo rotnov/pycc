@@ -54,6 +54,66 @@ GitHub Action (`corpus-bot`):
 - Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
 
+## Roadmap acceptance evidence
+
+A checked acceptance item in [ROADMAP.md](./ROADMAP.md) is a release claim, not
+a manually maintained status decoration. Every `[x]` task-list item must have
+exactly one inline marker, including an item nested in a Markdown blockquote:
+
+```markdown
+<!-- roadmap-evidence: <registered-id> -->
+```
+
+`scripts/check_roadmap_evidence.rb` binds each registered identifier to the
+complete roadmap heading path and claim it proves plus a deterministic
+repository check. Missing, unknown, misplaced, or claim-mismatched markers
+fail. Fenced code, including a fence nested in a blockquote or list container,
+and HTML comments do not contribute rendered headings or task items. Raw HTML
+blocks are rejected fail-closed instead of attempting to infer their rendered
+contents. A task indented beneath a rendered list container is still checked,
+while an unattached four-space-indented block is code. Setext headings are
+rejected fail-closed; roadmap structure uses ATX `#` headings with no
+tab-indented pseudo-headings. Rendered headings in blockquotes and list-item
+bodies update the same complete heading path, and a checked task continuing an
+empty list marker is still evidence-bearing. Adding a new evidence type starts
+with a failing public-CLI mutation in
+`scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
+and documented claim land together.
+
+The initial `ci-build-test-coverage-100` evidence requires all of the following:
+
+- the exact coverage claim in the v0.1 checklist;
+- an unfiltered `pull_request` trigger;
+- the unconditional, dependency-free, failure-propagating
+  `build-test-coverage` job on the trusted runner;
+- the exact pinned environment and setup-step prefix, with no earlier
+  head-controlled script able to shadow the coverage executable;
+- the named hard-coverage step using the default shell with no inherited run
+  defaults;
+- the exact command
+  `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+  inside a clean environment owned by the unprivileged `nobody` user.
+
+The `ci-tier1-cross-compile` evidence binds an allowlist of exact reviewed
+`ci.yml` byte digests that provide the five Tier-1 native targets, cross-host
+build and execution proof, and aggregate `ci-gate`. Because a workflow can
+preserve plausible job names while bypassing their commands, any future change
+to that evidence is staged: first append the reviewed prospective digest while
+retaining the current digest in the trusted checker, then change the workflow
+and roadmap claim, and finally remove the superseded digest. A digest is
+retired immediately if later repository requirements make that workflow
+incomplete; a transition window is valid only while both versions satisfy the
+current contract.
+
+Regular CI runs the self-tests and repository checker after the hard coverage
+step for fast feedback; placing a head-controlled script before that step would
+violate the trusted setup sequence. This preparatory change does not authorize
+a checked roadmap marker yet because a pull request controls that copy of the
+checker. The follow-up trust-anchor change must make the required read-only
+`Workflow policy` job run the base revision's checker against head workflows
+and `docs/ROADMAP.md` as non-executable data before the coverage item can return
+to `[x]`.
+
 ## CI privilege policy
 
 Every GitHub Actions workflow declares an explicit workflow-level permission
@@ -61,7 +121,8 @@ baseline. The baseline may contain only read or `none` scopes, or
 `permissions: {}`; a job that needs an elevated scope must opt in at job level
 and satisfy the trust-boundary rules in `AGENTS.md`.
 
-CI runs both commands before the build:
+Regular CI runs both commands after the isolated hard-coverage boundary and
+before the ordinary post-gate build:
 
 ```sh
 ruby scripts/test_check_ci_permissions.rb
@@ -83,8 +144,9 @@ The audited workflow set must contain `workflow-policy.yml`, and that file must
 match an explicitly approved SHA-256 digest in the trusted checker. This makes
 deletion, renaming, trigger replacement, or an extra executable step fail
 closed. Updating the anchor is intentionally staged: first add the independently
-reviewed prospective digest while the old anchor remains, then change the
-anchor in a later pull request, and remove the retired digest afterward.
+reviewed prospective workflow as an inert fixture and add its exact digest
+while the old anchor remains, then replace the active anchor byte-for-byte from
+that fixture in a later pull request, and remove the retired digest afterward.
 
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
@@ -134,7 +196,7 @@ changes are evaluated by the trusted checker from their base revision.
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
 
 - Tool: `cargo llvm-cov` — a separately distributed cargo subcommand, **not** bundled with any rustup component. CI installs it explicitly and pinned (installer action or `cargo install cargo-llvm-cov --locked --version <pinned>`), plus the `llvm-tools-preview` rustup component it drives at runtime; a bare "install llvm-tools" fails with "no such command: llvm-cov" (caught by repo audit, issue #13). Independent of the Homebrew LLVM used by `inkwell` for codegen — versions don't need to match.
-- Gate: `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. Run `cargo build --workspace` first: the slice-0 end-to-end tests link the normal debug build of `pycc_rt`, matching the CI sequence. Without that prerequisite the coverage command fails at the link step before it can measure coverage. A version-print smoke step runs before the gate so a broken/missing install fails loudly rather than silently.
+- Gate: `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`, run in CI on at least one Tier-1 target per PR. The explicit `llvm-cov` argument is required when invoking Cargo's subcommand binary directly. CI resolves and installs the trusted tool before executing repository code, then runs the cross-target `pycc_rt` prerequisite, workspace build, and coverage under `sudo -u nobody env -i` with isolated HOME, Cargo home, temp, and target directories. The workspace and runner-owned toolchain/binary are read-only to that user, so a build script or procedural macro cannot replace the executables or write GitHub command files. The checker pins the complete environment and step prefix through the hard-gate step; regular repository policy/test steps run only afterward. The x86_64 macOS runtime is built first so the cross-compilation test cannot skip its success path, then `cargo build --workspace` supplies the normal debug `pycc_rt` used by the remaining slice-0 tests. The pinned tool's version smoke check runs immediately before entering the boundary.
 - Test code itself (`tests/`, `*_tests.rs`, `tests.rs`) is excluded from the denominator automatically — the gate measures product code exercised by tests, not tests covering themselves.
 - Exemptions are whole-file only, via `--ignore-filename-regex` (no per-function opt-out exists on stable Rust — see D-014). Each exemption needs a named entry here:
 

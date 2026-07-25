@@ -8,7 +8,7 @@ Last reviewed on 2026-07-25. This section describes the repository tree in the c
 
 **Current milestone: v0.1 — in progress.** The first end-to-end vertical slice works on the primary macOS arm64 host, but v0.1 is not yet shippable.
 
-| Area | Status on `main` | Evidence and remaining gap |
+| Area | Status in this commit | Evidence and remaining gap |
 |---|---|---|
 | Compiler pipeline | Partial | The workspace contains the driver plus `pycc_ast`, `pycc_parser`, `pycc_hir`, `pycc_types`, `pycc_mir`, `pycc_codegen`, `pycc_rt`, and `pycc_diag`. [`tests/slice0.rs`](../tests/slice0.rs) proves source → parser → HIR → type-check passthrough → MIR → LLVM object → host linker → native executable. |
 | Language surface | Slice only | Module-level `print(<i64 literal>)`, zero-argument function definitions, and explicit zero-argument calls work. Arithmetic, variables, arguments and return values, control flow, recursion with values, floats/strings/bools, `range`, and f-strings remain v0.1 work. Unsupported valid Python can still reach explicit slice-limit panics in [`pycc_hir`](../crates/pycc_hir/src/lib.rs). |
@@ -25,8 +25,8 @@ Last reviewed on 2026-07-25. This section describes the repository tree in the c
 - [ ] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets.
 - [ ] `pycc check` processes 1k LOC in under 50 ms.
 - [ ] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.
-- [x] The five-target native CI matrix and one cross-host compilation path are live on `main`.
-- [x] The 100% line and region coverage gate is required and green for the current slice.
+- [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
+- [ ] The 100% line and region coverage gate is required and green for the current slice.
 
 The next delivery slices remain the sequence defined in [DELIVERY_PLAN.md](./DELIVERY_PLAN.md): Tier-1 CI and cross-compilation, frontend depth with real strict typing and the performance gate, full v0.1 codegen/runtime breadth, the conformance testkit and named demos, then the final v0.1 acceptance pass.
 
