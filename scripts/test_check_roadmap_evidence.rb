@@ -15,6 +15,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
   D48_STEADY_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d48-steady-ci.yml"
+  D51_PAIRED_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d051-paired-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -107,6 +109,44 @@ class RoadmapEvidenceCliTest < Minitest::Test
     }
     yield jobs if block_given?
     { "jobs" => jobs }.to_yaml
+  end
+
+  def paired_perf_workflow
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_GATE_JOB)),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(SPLIT_PERF_CI_GATE_JOB))
+    }
+    yield jobs if block_given?
+    { "jobs" => jobs }.to_yaml
+  end
+
+  def run_paired_predecessor_resolution(
+    event_name:,
+    pr_base_sha: "exact-base-sha",
+    push_before_sha: "exact-before-sha"
+  )
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      script = root / "resolve-predecessor.sh"
+      output = root / "github-output"
+      script.write(PAIRED_PERF_PREDECESSOR_RESOLVE_SCRIPT)
+      stdout, stderr, status = Open3.capture3(
+        {
+          "GITHUB_EVENT_NAME" => event_name,
+          "GITHUB_OUTPUT" => output.to_s,
+          "PR_BASE_SHA" => pr_base_sha,
+          "PUSH_BEFORE_SHA" => push_before_sha
+        },
+        "bash",
+        script.to_s
+      )
+      recorded_output = output.exist? ? output.read : ""
+      return stdout, stderr, status, recorded_output
+    end
   end
 
   def run_perf_baseline_lookup(
@@ -584,6 +624,26 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stdout, "Roadmap evidence policy passed."
   end
 
+  def test_accepts_reviewed_d51_tier1_matrix_evidence
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(
+      roadmap: roadmap,
+      workflow: D51_PAIRED_WORKFLOW_FIXTURE.read
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
   def test_tier1_workflow_authorization_is_an_allowlist
     assert_kind_of Array, TIER1_CI_WORKFLOW_SHA256S
     assert_includes(
@@ -601,9 +661,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_allowlist_retains_only_the_steady_state_digest
+  def test_tier1_workflow_allowlist_retains_reviewed_transition_digests
     assert_equal(
-      [D48_STEADY_PERF_CI_WORKFLOW_SHA256],
+      [
+        D48_STEADY_PERF_CI_WORKFLOW_SHA256,
+        D51_PAIRED_PERF_CI_WORKFLOW_SHA256
+      ],
       TIER1_CI_WORKFLOW_SHA256S
     )
   end
@@ -619,6 +682,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
+  def test_d51_paired_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D51_PAIRED_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D51_PAIRED_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_perf_gate_baseline_lifecycle(
+      D51_PAIRED_WORKFLOW_FIXTURE.read,
+      D51_PAIRED_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
   def test_tier1_workflow_allowlist_retires_the_superseded_single_job_digest
     refute_includes(
       TIER1_CI_WORKFLOW_SHA256S,
@@ -631,6 +705,145 @@ class RoadmapEvidenceCliTest < Minitest::Test
       split_perf_workflow,
       "ci.yml"
     )
+  end
+
+  def test_accepts_the_reviewed_paired_perf_trust_boundary
+    assert validate_perf_gate_baseline_lifecycle(
+      paired_perf_workflow,
+      "ci.yml"
+    )
+  end
+
+  def test_rejects_paired_measurement_without_exact_predecessor_checkout
+    workflow = paired_perf_workflow do |jobs|
+      checkout = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+        step["name"] == "Check out exact predecessor benchmark source"
+      end
+      checkout.fetch("with")["ref"] = "${{ github.sha }}"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed untrusted measurement job"
+  end
+
+  def test_rejects_paired_measurement_that_seals_predecessor_after_current_checkout
+    workflow = paired_perf_workflow do |jobs|
+      steps = jobs.fetch("frontend-perf-measure").fetch("steps")
+      upload_index = steps.index do |step|
+        step["name"] == "Upload sealed predecessor frontend timing"
+      end
+      upload = steps.delete_at(upload_index)
+      current_index = steps.index do |step|
+        step["name"] == "Check out current benchmark source"
+      end
+      steps.insert(current_index + 1, upload)
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed untrusted measurement job"
+  end
+
+  def test_rejects_paired_measurement_without_predecessor_output
+    workflow = paired_perf_workflow do |jobs|
+      jobs.fetch("frontend-perf-measure").delete("outputs")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed untrusted measurement job"
+  end
+
+  def test_rejects_paired_gate_without_predecessor_checker_ref
+    workflow = paired_perf_workflow do |jobs|
+      checkout = jobs.fetch("frontend-perf-gate").fetch("steps").first
+      checkout.fetch("with")["ref"] = "${{ github.sha }}"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_rejects_paired_gate_with_mutable_predecessor_download
+    workflow = paired_perf_workflow do |jobs|
+      download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Download sealed predecessor frontend timing"
+      end
+      download["uses"] = "actions/download-artifact@v4"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
+  def test_rejects_mixed_reviewed_perf_job_generations
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(SPLIT_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_GATE_JOB)),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(SPLIT_PERF_CI_GATE_JOB))
+    }
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle({ "jobs" => jobs }.to_yaml, "ci.yml")
+    end
+    assert_includes error.message, "one reviewed measurement/comparison pair"
+  end
+
+  def test_paired_gate_has_no_cross_run_baseline_lookup_or_cache
+    serialized_gate = PAIRED_PERF_GATE_JOB.to_s
+    refute_match(/gh api/, serialized_gate)
+    refute_match(/run-id/, serialized_gate)
+    refute_match(%r{actions/cache}, serialized_gate)
+  end
+
+  def test_paired_predecessor_resolution_uses_pull_request_base
+    _stdout, stderr, status, output = run_paired_predecessor_resolution(
+      event_name: "pull_request"
+    )
+
+    assert status.success?, stderr
+    assert_equal "sha=exact-base-sha\n", output
+  end
+
+  def test_paired_predecessor_resolution_uses_push_before
+    _stdout, stderr, status, output = run_paired_predecessor_resolution(
+      event_name: "push"
+    )
+
+    assert status.success?, stderr
+    assert_equal "sha=exact-before-sha\n", output
+  end
+
+  def test_paired_predecessor_resolution_rejects_unsupported_event
+    _stdout, stderr, status, output = run_paired_predecessor_resolution(
+      event_name: "workflow_dispatch"
+    )
+
+    refute status.success?
+    assert_includes stderr, "cannot resolve a performance predecessor"
+    assert_empty output
+  end
+
+  def test_paired_predecessor_resolution_rejects_zero_sha
+    _stdout, stderr, status, output = run_paired_predecessor_resolution(
+      event_name: "push",
+      push_before_sha: "0000000000000000000000000000000000000000"
+    )
+
+    refute status.success?
+    assert_includes stderr, "cannot resolve the exact performance predecessor SHA"
+    assert_empty output
   end
 
   def test_rejects_steady_state_gate_without_a_canonical_baseline_requirement

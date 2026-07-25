@@ -35,8 +35,11 @@ EVIDENCE_SECTIONS = {
 }.freeze
 D48_STEADY_PERF_CI_WORKFLOW_SHA256 =
   "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
+D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
+  "c58aa22fea19d1d7c6483826e17d8e153196bc803dc81a281d2b1168603bbb10"
 TIER1_CI_WORKFLOW_SHA256S = [
-  D48_STEADY_PERF_CI_WORKFLOW_SHA256
+  D48_STEADY_PERF_CI_WORKFLOW_SHA256,
+  D51_PAIRED_PERF_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -228,6 +231,169 @@ SPLIT_PERF_GATE_JOB = {
     "contents" => "read"
   },
   "steps" => SPLIT_PERF_GATE_STEPS
+}.freeze
+PAIRED_PERF_PREDECESSOR_RESOLVE_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  case "$GITHUB_EVENT_NAME" in
+    pull_request)
+      predecessor_sha="$PR_BASE_SHA"
+      ;;
+    push)
+      predecessor_sha="$PUSH_BEFORE_SHA"
+      ;;
+    *)
+      echo "cannot resolve a performance predecessor for event $GITHUB_EVENT_NAME" >&2
+      exit 1
+      ;;
+  esac
+  if [ -z "$predecessor_sha" ] ||
+     [ "$predecessor_sha" = "0000000000000000000000000000000000000000" ]; then
+    echo "cannot resolve the exact performance predecessor SHA" >&2
+    exit 1
+  fi
+  printf 'sha=%s\n' "$predecessor_sha" >> "$GITHUB_OUTPUT"
+SHELL
+PAIRED_PERF_PREDECESSOR_REQUIRE_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  if [ ! -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
+    echo "the same-run exact predecessor timing is unavailable" >&2
+    exit 1
+  fi
+SHELL
+PAIRED_PERF_MEASURE_STEPS = [
+  {
+    "name" => "Resolve exact performance predecessor",
+    "id" => "predecessor",
+    "env" => {
+      "PR_BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
+      "PUSH_BEFORE_SHA" => "${{ github.event.before }}"
+    },
+    "run" => PAIRED_PERF_PREDECESSOR_RESOLVE_SCRIPT
+  },
+  {
+    "name" => "Check out exact predecessor benchmark source",
+    "uses" => PINNED_CHECKOUT_ACTION,
+    "with" => {
+      "persist-credentials" => "false",
+      "ref" => "${{ steps.predecessor.outputs.sha }}",
+      "path" => "predecessor"
+    }
+  },
+  {
+    "name" => "Show pinned toolchain",
+    "run" => "rustup show"
+  },
+  {
+    "name" => "Install LLVM 22 (D-015)",
+    "run" => "brew install llvm@22"
+  },
+  {
+    "name" => "Export LLVM_SYS_221_PREFIX",
+    "run" => 'echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"'
+  },
+  {
+    "name" => "Run exact predecessor frontend benchmark",
+    "working-directory" => "predecessor",
+    "run" => "cargo bench --bench check_bench -- --save-baseline previous"
+  },
+  {
+    "name" => "Upload sealed predecessor frontend timing",
+    "uses" => PINNED_ARTIFACT_UPLOAD_ACTION,
+    "with" => {
+      "name" => "frontend-perf-previous",
+      "path" =>
+        "predecessor/target/criterion/pycc_check_frontend_fixture/previous/estimates.json",
+      "if-no-files-found" => "error",
+      "retention-days" => "30"
+    }
+  },
+  {
+    "name" => "Check out current benchmark source",
+    "uses" => PINNED_CHECKOUT_ACTION,
+    "with" => {
+      "persist-credentials" => "false",
+      "ref" => "${{ github.sha }}",
+      "path" => "current"
+    }
+  },
+  {
+    "name" => "Run current frontend benchmark",
+    "working-directory" => "current",
+    "run" => "cargo bench --bench check_bench -- --save-baseline current"
+  },
+  {
+    "name" => "Upload current frontend timing",
+    "uses" => PINNED_ARTIFACT_UPLOAD_ACTION,
+    "with" => {
+      "name" => "frontend-perf-current",
+      "path" =>
+        "current/target/criterion/pycc_check_frontend_fixture/current/estimates.json",
+      "if-no-files-found" => "error",
+      "retention-days" => "30"
+    }
+  }
+].freeze
+PAIRED_PERF_GATE_STEPS = [
+  {
+    "name" => "Check out only the reviewed performance checker",
+    "uses" => PINNED_CHECKOUT_ACTION,
+    "with" => {
+      "persist-credentials" => "false",
+      "ref" => "${{ needs.frontend-perf-measure.outputs.predecessor_sha }}",
+      "sparse-checkout" =>
+        "scripts/check_perf_regression.rb\nscripts/test_check_perf_regression.rb",
+      "sparse-checkout-cone-mode" => "false"
+    }
+  },
+  {
+    "name" => "Verify reviewed performance checker",
+    "run" => PERF_CHECKER_VERIFY_SCRIPT
+  },
+  {
+    "name" => "Test reviewed performance checker",
+    "run" => "ruby scripts/test_check_perf_regression.rb"
+  },
+  {
+    "name" => "Download sealed predecessor frontend timing",
+    "uses" => PINNED_ARTIFACT_DOWNLOAD_ACTION,
+    "with" => {
+      "name" => "frontend-perf-previous",
+      "path" => PERF_BASELINE_PATH
+    }
+  },
+  {
+    "name" => "Require sealed predecessor frontend timing",
+    "run" => PAIRED_PERF_PREDECESSOR_REQUIRE_SCRIPT
+  },
+  {
+    "name" => "Download current frontend timing",
+    "uses" => PINNED_ARTIFACT_DOWNLOAD_ACTION,
+    "with" => {
+      "name" => "frontend-perf-current",
+      "path" => PERF_CURRENT_PATH
+    }
+  },
+  {
+    "name" => "Compare against same-run exact predecessor",
+    "run" => SPLIT_PERF_COMPARE_SCRIPT
+  }
+].freeze
+PAIRED_PERF_MEASURE_JOB = {
+  "runs-on" => "macos-14",
+  "permissions" => { "contents" => "read" },
+  "outputs" => {
+    "predecessor_sha" => "${{ steps.predecessor.outputs.sha }}"
+  },
+  "steps" => PAIRED_PERF_MEASURE_STEPS
+}.freeze
+PAIRED_PERF_GATE_JOB = {
+  "needs" => "frontend-perf-measure",
+  "runs-on" => "macos-14",
+  "permissions" => {
+    "actions" => "read",
+    "contents" => "read"
+  },
+  "steps" => PAIRED_PERF_GATE_STEPS
 }.freeze
 SPLIT_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
@@ -498,19 +664,31 @@ def validate_perf_gate_baseline_lifecycle(workflow_text, source)
   end
   measure_job =
     yaml_value(measure_job_node, "#{source} frontend-perf-measure job")
-  unless measure_job == SPLIT_PERF_MEASURE_JOB
-    raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-measure must match the reviewed untrusted measurement job"
-  end
 
   unless perf_job_node
     raise RoadmapEvidenceError,
           "#{source}: split performance measurement requires frontend-perf-gate"
   end
   perf_job = yaml_value(perf_job_node, "#{source} frontend-perf-gate job")
-  unless perf_job == SPLIT_PERF_GATE_JOB
+
+  reviewed_measure_jobs = [SPLIT_PERF_MEASURE_JOB, PAIRED_PERF_MEASURE_JOB]
+  unless reviewed_measure_jobs.include?(measure_job)
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate must match the reviewed isolated comparison job"
+          "#{source}: frontend-perf-measure must match a reviewed untrusted measurement job"
+  end
+  reviewed_gate_jobs = [SPLIT_PERF_GATE_JOB, PAIRED_PERF_GATE_JOB]
+  unless reviewed_gate_jobs.include?(perf_job)
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate must match a reviewed isolated comparison job"
+  end
+
+  reviewed_perf_job_pairs = [
+    [SPLIT_PERF_MEASURE_JOB, SPLIT_PERF_GATE_JOB],
+    [PAIRED_PERF_MEASURE_JOB, PAIRED_PERF_GATE_JOB]
+  ]
+  unless reviewed_perf_job_pairs.include?([measure_job, perf_job])
+    raise RoadmapEvidenceError,
+          "#{source}: performance jobs must match one reviewed measurement/comparison pair"
   end
 
   ci_gate_node = jobs["ci-gate"]

@@ -457,9 +457,10 @@ PAGE_SPECS = {
             "byte-exact CLI snapshots cover",
             "Code generation and runtime breadth are next.",
             "The required frontend measurement and greater-than-2% regression gate run independently of that compiler sequence through ci-gate",
-            "This gate is bootstrap-free:",
-            "it requires the non-expired frontend-perf-current artifact from the exact successful main predecessor",
-            "and fails closed when that baseline is unavailable.",
+            "During the staged D-051 migration, the tracked workflow digest selects the reviewed exact-predecessor transport.",
+            "The D-048 digest requires the non-expired frontend-perf-current artifact from the exact successful main predecessor.",
+            "The D-051 digest seals the exact-predecessor measurement before current source executes and compares both measurements from the same runner.",
+            "Both modes fail closed when exact predecessor evidence is unavailable.",
         ),
     },
     "architecture": {

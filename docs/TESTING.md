@@ -112,38 +112,48 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The D-048 steady-state workflow replaces the superseded single-job performance
-design with a split trust boundary. `frontend-perf-measure`
-executes pull-request benchmark code and uploads only Criterion's estimates
-JSON as untrusted data. `frontend-perf-gate` executes only the two sparse
-checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
-then validates the downloaded measurement against the canonical baseline.
-Artifact and checkout actions use immutable reviewed pins.
+The required performance workflow has a split trust boundary in both reviewed
+transition modes. `frontend-perf-measure` executes benchmark source and uploads
+only Criterion estimates JSON as untrusted data. `frontend-perf-gate` executes
+only the two sparse-checked-out Ruby checker files after verifying their
+reviewed SHA-256 digests, then validates the current measurement against exact
+predecessor evidence. Artifact and checkout actions use immutable reviewed
+pins, and both jobs remain mandatory inputs to the exact fail-closed `ci-gate`.
 
-The completed transition retains only
-`tests/fixtures/d48-steady-ci.yml`. The active `.github/workflows/ci.yml` is
-byte-identical to that reviewed fixture, the checker binds its whole-file
-digest, and structural mutation tests exercise the bootstrap-free job shapes.
-The retired pre-split and activation fixtures, their digests, and their
-shell-level bootstrap tests are removed.
+During D-051's staged migration, `scripts/check_roadmap_evidence.rb` binds two
+whole-workflow digests and accepts only their atomic measurement/gate pairs.
+The active D-048 bytes are preserved in
+`tests/fixtures/d48-steady-ci.yml`. The prospective D-051 bytes are inert in
+`tests/fixtures/d051-paired-ci.yml` until a later workflow-only pull request
+copies them byte-for-byte to `.github/workflows/ci.yml`. A mixed D-048/D-051
+pair is invalid. After D-051 succeeds on `main`, cleanup removes the D-048
+fixture, digest, cross-run lookup tests, and transitional wording.
 
-The baseline lifecycle is fail-closed and main-owned. The gate queries only a
-successful `push` run of `ci.yml` on `main` whose `head_sha` is the exact PR
-base SHA (or the exact `before` SHA for a main push), verifies the returned
-`head_sha`, then downloads that run's non-expired `frontend-perf-current`
-artifact by explicit run ID. It never falls back to an older successful run and
-never restores an Actions cache, so neither overlapping main workflows nor a
-pull-request merge ref can weaken baseline provenance. The artifact is retained
-for 90 days and each successful main run refreshes it.
+In D-048 mode, the gate queries only a successful `push` run of `ci.yml` on
+`main` whose `head_sha` is the exact PR base SHA (or exact `before` SHA for a
+main push), verifies that SHA, and downloads the non-expired
+`frontend-perf-current` artifact by explicit run ID. It never falls back to an
+older successful run or an Actions cache. The artifact is retained for 90 days
+and each successful main run refreshes it.
 
-There is no missing-baseline exception. Both performance jobs are required by
-an exact fail-closed `ci-gate`; the trusted checker validates their complete
-job shapes and the aggregate fan-in. The gate requires the exact predecessor
-artifact unconditionally and compares without a skip expression. A missing,
-expired, cancelled, or non-exact predecessor artifact fails the pull request
-or `main` run. The completed one-time activation and its deletion evidence are
-recorded in [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md); the
-repository variable is absent and is not standing configuration.
+In D-051 mode, the measurement job resolves the same exact predecessor SHA,
+checks out and benchmarks it first on one `macos-14` runner, and uploads
+`frontend-perf-previous` before checking out or executing `github.sha`. It then
+benchmarks current source on that same runner and uploads
+`frontend-perf-current`. The isolated gate checks the comparator out from the
+resolved predecessor job output, verifies its digests, downloads both same-run
+artifacts, requires the predecessor JSON, and applies the unchanged 2%
+comparison. It has no Actions-run API lookup, run ID, or cache. Focused tests
+reject a mutable action, wrong predecessor/current ref, missing job output,
+reordered sealing step, mixed job generations, unsupported event, empty/zero
+predecessor, or comparator checkout from current source.
+
+There is no missing-baseline exception in either mode. Missing, expired,
+cancelled, non-exact, or malformed predecessor evidence fails the pull request
+or `main` run. D-051 requires no activation variable because it creates the
+paired predecessor measurement inside every run; D-048's completed one-time
+activation and variable-deletion evidence remain recorded in
+[REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md).
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would

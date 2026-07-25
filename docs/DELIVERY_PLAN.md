@@ -80,14 +80,17 @@ ARCHITECTURE.md requires benchmarks in CI on every PR with a >2% frontend-regres
 **D-047 was a temporary deferral, superseded by D-048 after PR-4 merged.**
 The competing trust-anchor work no longer blocks the compiler deliverable, and
 the reviewed replacement no longer relies on ref-scoped cache fallback. The
-gate is now in bootstrap-free steady state: every PR records a
-`frontend-perf-current` measurement, and the isolated gate requires the
-non-expired artifact from the exact successful `main` predecessor before
-applying the greater-than-2% regression block. The first successful activation
-run published that artifact, and cleanup removed the administrative variable,
-bootstrap branches, retired digests, and transition fixtures. D-048 through
-D-050 preserve the staged activation rationale; they no longer describe live
-configuration. PR-5 may proceed with the performance invariant already active.
+performance invariant is active and PR-5 may proceed independently of its
+transport. During D-051's staged migration, the tracked workflow digest selects
+one of two exact-predecessor modes: D-048 downloads the non-expired artifact
+from the exact successful `main` predecessor, while D-051 measures and seals
+that predecessor before current source executes on the same runner. Both keep
+the comparator isolated and hash-verified, fail closed without exact evidence,
+and apply the unchanged greater-than-2% regression block. The prospective D-051
+workflow is first reviewed as an inert byte-exact fixture; a later workflow-only
+pull request activates it, and a final cleanup retires D-048's cross-run lookup
+and transitional digest. No bootstrap variable or missing-baseline exemption is
+needed because each D-051 run creates its paired predecessor measurement.
 This remains deliberately lightweight and distinct from the full
 pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which
 stays out of scope until v0.2.

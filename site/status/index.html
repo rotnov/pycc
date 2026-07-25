@@ -273,10 +273,15 @@
               integers, floats, strings, booleans, control flow, recursion, and
               basic f-strings. The required frontend measurement and
               greater-than-2% regression gate run independently of that compiler
-              sequence through <code>ci-gate</code>. This gate is bootstrap-free:
-              it requires the non-expired <code>frontend-perf-current</code>
-              artifact from the exact successful <code>main</code> predecessor
-              and fails closed when that baseline is unavailable.
+              sequence through <code>ci-gate</code>. During the staged D-051
+              migration, the tracked workflow digest selects the reviewed
+              exact-predecessor transport. The D-048 digest requires the
+              non-expired <code>frontend-perf-current</code> artifact from the
+              exact successful <code>main</code> predecessor. The D-051 digest
+              seals the exact-predecessor measurement before current source
+              executes and compares both measurements from the same runner.
+              Both modes fail closed when exact predecessor evidence is
+              unavailable.
               The conformance testkit, named demos, and final v0.1 acceptance pass
               follow the code-generation and runtime work.
             </p>

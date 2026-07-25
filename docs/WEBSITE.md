@@ -44,11 +44,13 @@ slice. Code-generation and runtime breadth are the next delivery step. These
 facts must move with the authoritative roadmap whenever implementation depth
 changes.
 
-The status page presents D-048's bootstrap-free steady state independently of
-later compiler slices. It states that the frontend measurement and
-greater-than-2% regression gate are required through `ci-gate`, require the
-non-expired timing artifact from the exact successful `main` predecessor, and
-fail closed when that baseline is unavailable.
+The status page presents the performance gate independently of later compiler
+slices and remains truthful across D-051's workflow-only activation. It states
+that the frontend measurement and greater-than-2% regression gate are required
+through `ci-gate`, then maps the reviewed workflow digest to either D-048's
+non-expired artifact from the exact successful `main` predecessor or D-051's
+sealed exact-predecessor/current measurements from one runner. Both modes fail
+closed when exact predecessor evidence is unavailable.
 
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile
@@ -92,9 +94,10 @@ independently removes LPython's official project source and alpha positioning
 so a newly covered compiler model cannot silently disappear. It also mutates
 the landing, status, architecture, comparison, Markdown, and `llms.txt`
 frontend/backend claims independently, preventing a structurally valid site
-from silently describing a superseded compiler milestone. It also removes the
-status page's exact-predecessor performance-baseline requirement so the
-validator rejects a public steady-state claim that no longer fails closed. The
+from silently describing a superseded compiler milestone. It also mutates each
+D-048 and D-051 exact-predecessor mapping and the shared fail-closed requirement
+independently so the validator rejects incomplete public performance-gate
+provenance. The
 landing-page contract also requires
 exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable

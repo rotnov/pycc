@@ -19,11 +19,13 @@ enforce the normal delivery path.
   merge-blocking without executing PR-head comparator code, are required by
   this fan-in. D-048 supersedes D-047's temporary PR-6 deferral and replaces
   D-046's ref-scoped cache transport with exact-predecessor artifacts from
-  successful `main` runs. The gate is now bootstrap-free: it requires a
-  non-expired `frontend-perf-current` artifact from the exact successful
-  predecessor, compares untrusted PR timing through the hash-verified
-  main-owned checker, and fails closed when that artifact is unavailable.
-  Only the reviewed steady-state workflow digest remains authorized. The
+  successful `main` runs. D-051 stages a same-run replacement that benchmarks
+  and seals the exact predecessor before current source executes on the same
+  runner. During migration, the tracked whole-workflow digest selects the
+  reviewed D-048 cross-run pair or D-051 paired-run pair; mixed generations are
+  rejected. Both compare untrusted timing through the predecessor-owned,
+  hash-verified checker and fail closed when exact predecessor evidence is
+  unavailable. The
   standalone `agent-policy` job provides faster feedback until its exact
   context has run successfully on `main` and is added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
@@ -33,7 +35,7 @@ enforce the normal delivery path.
 - All review conversations must be resolved.
 - Administrators are included; force pushes and branch deletion are disabled.
 
-### Frontend performance baseline provenance (D-048)
+### Frontend performance baseline provenance (D-048, D-051)
 
 The one-time activation is complete. The successful
 [`main` CI run](https://github.com/rotnov/pycc/actions/runs/30168696265) for
@@ -45,12 +47,23 @@ that `PERF_ACTIVATION_HEAD` was absent after that run at
 steady-state fixture, and the activation variable, bootstrap branches,
 pre-split fixture, activation fixture, and retired digests are absent.
 
-Every later pull request must locate the non-expired artifact from the exact
-successful `main` run at its base SHA. Every later `main` push must use the
-exact `before` SHA. Missing, expired, cancelled, or non-exact predecessor
-evidence is a hard failure; there is no reusable bootstrap or administrative
-feature flag. D-048 and D-050 preserve the historical activation lifecycle and
-the reason it was bounded.
+While the D-048 digest is active, every pull request must locate the
+non-expired artifact from the exact successful `main` run at its base SHA and
+every `main` push must use the exact `before` SHA. Missing, expired, cancelled,
+or non-exact predecessor evidence is a hard failure; there is no reusable
+bootstrap or administrative feature flag. D-048 and D-050 preserve the
+historical activation lifecycle and the reason it was bounded.
+
+D-051 is staged without changing the active workflow in the staging commit.
+`tests/fixtures/d051-paired-ci.yml` and its reviewed digest define the later
+workflow-only replacement: one unprivileged runner benchmarks the exact PR base
+or push predecessor, uploads and seals that JSON before current source is
+checked out, then measures current source. The isolated gate checks its
+hash-verified comparator out from that predecessor and consumes both same-run
+artifacts. It performs no cross-run Actions lookup and needs no bootstrap
+variable. Until the byte-exact replacement lands, the D-048 paragraph above is
+the active transport; after replacement, the D-051 paragraph is the active
+transport. A final cleanup retires the inactive D-048 fixture and digest.
 
 When a new check is introduced, first merge and observe it successfully on `main`,
 then add its exact reported context to branch protection. Never require a guessed or

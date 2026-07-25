@@ -9,6 +9,8 @@ class WorkflowPermissionsTest < Minitest::Test
   ACTIVE_TRUST_ANCHOR = WORKFLOW_DIRECTORY / TRUST_ANCHOR_FILENAME
   REVIEWED_TRUST_ANCHOR_SNAPSHOT =
     Pathname(__dir__).parent / "tests/fixtures/workflow-policy-roadmap-evidence.yml"
+  D51_PAIRED_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d051-paired-ci.yml"
   ACTIVE_TRUST_ANCHOR_SHA256 =
     "4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6"
   RETIRED_TRUST_ANCHOR_SHA256 =
@@ -31,6 +33,10 @@ class WorkflowPermissionsTest < Minitest::Test
 
   def test_accepts_read_only_pull_request_job
     validate_workflow(workflow)
+  end
+
+  def test_accepts_reviewed_d51_paired_workflow_permissions
+    validate_workflow(D51_PAIRED_WORKFLOW_FIXTURE.read)
   end
 
   def test_accepts_explicit_empty_baseline
