@@ -56,7 +56,7 @@
 - Shared `.claude/settings.json` entries must not invoke scripts or other targets that are absent from a clean checkout. A hook whose target is gitignored is a clean-clone defect even when the hook failure is non-blocking.
 - iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Wire them only from the gitignored `.claude/settings.local.json`; never commit those hook entries or the generated scripts.
 - After cloning the repository, enable or refresh iEvo locally, then verify the generated hook entries live in `.claude/settings.local.json`. If the current iEvo version writes them to shared settings, relocate the complete `hooks` object to local settings before committing any repository change.
-- Shared hooks must not hide executable targets in inline interpreter forms such as `sh -c`, `python -c`, or `node --eval`.
+- Shared hooks must not hide executable targets in inline or stdin interpreter forms such as `sh -c`, `bash -s`, `python -c`, or `node --eval`.
 - Before changing shared hook configuration, test the tracked-file view of the repository. Every referenced filesystem target must be tracked and registered in `FAIL_SILENT_WRAPPER_CONTRACTS` with a tracked `scripts/test_*.py` contract that runs in required CI.
 - A wrapper contract must simulate a clean clone without generated local hooks and prove that an absent local dependency produces a silent successful no-op. Adding a registered wrapper requires the D-025 security review; a merely tracked script is not sufficient.
 

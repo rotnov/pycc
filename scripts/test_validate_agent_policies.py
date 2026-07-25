@@ -1006,6 +1006,36 @@ class AgentPolicyValidationTests(unittest.TestCase):
             [],
         )
 
+    def test_shell_stdin_modes_are_rejected_before_wrapper_operands(self) -> None:
+        target = "scripts/safe-wrapper.sh"
+        for mode in ("-s", "-is"):
+            with self.subTest(mode=mode):
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": "bash",
+                                        "args": [mode, target],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(
+                        settings,
+                        {target},
+                        contracts(target),
+                    ),
+                    [
+                        "shared hook inline interpreter mode cannot be "
+                        f"validated: bash {mode}"
+                    ],
+                )
+
     def test_inline_python_and_node_commands_are_rejected(self) -> None:
         for command, arguments, expected in [
             (

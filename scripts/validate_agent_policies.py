@@ -154,7 +154,12 @@ def inline_interpreter_mode(kind: str, tokens: list[str]) -> str | None:
     for token in tokens:
         if token == "--":
             return None
-        if kind == "shell" and token.startswith("-") and "c" in token[1:]:
+        if (
+            kind == "shell"
+            and token.startswith("-")
+            and not token.startswith("--")
+            and any(mode in token[1:] for mode in ("c", "s"))
+        ):
             return token
         if kind == "python" and token.startswith(("-c", "-m")):
             return token
