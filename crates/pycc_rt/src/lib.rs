@@ -346,6 +346,53 @@ pub extern "C" fn pycc_rt_range_continue(i: i64, stop: i64, step: i64) -> i8 {
     range_continue(i, stop, step)
 }
 
+/// Converts a tagged `int` (D-052) to its `f64` value -- the `int` half of
+/// Python's `int`/`float` arithmetic promotion (Task 6). Can panic (via
+/// `require_smallint`'s bigint-rejection path), so -- per this crate's
+/// established convention, see the implementation note above `int_add` --
+/// this is split into this private, ordinary-Rust-ABI function (freely
+/// panics, unwinds normally) and a thin `pub extern "C"` wrapper below.
+/// Deviation from the task brief: the brief's own Step 2 code made this a
+/// single plain `extern "C" fn`; that would abort (rather than unwind)
+/// if this function's own panic path were ever exercised directly from
+/// this crate's same-binary Rust tests, exactly the hazard the
+/// `int_add`/`range_continue` split comments already document -- this
+/// function is no exception just because its own tests don't currently
+/// hit that path directly.
+fn int_to_float(tagged: i64) -> f64 {
+    require_smallint(tagged, "converting");
+    untag_smallint(tagged) as f64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_to_float(tagged: i64) -> f64 {
+    int_to_float(tagged)
+}
+
+/// Python's `//` on `float`: floors toward negative infinity, not
+/// truncation toward zero (matches `int_floordiv`'s own semantics, just
+/// without the tagging/overflow bookkeeping a `float` doesn't need).
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_float_floordiv(a: f64, b: f64) -> f64 {
+    (a / b).floor()
+}
+
+/// Python's `%` on `float`: result takes the divisor's sign (matches
+/// `int_floormod`'s own semantics).
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_float_floormod(a: f64, b: f64) -> f64 {
+    let r = a % b;
+    if r != 0.0 && (r < 0.0) != (b < 0.0) { r + b } else { r }
+}
+
+/// Python's `**` on `float`: unlike `int_pow`, a negative exponent is
+/// perfectly ordinary here (`2.0 ** -1 == 0.5`) -- `f64::powf` already
+/// implements this correctly, no special-casing needed.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_float_pow(a: f64, b: f64) -> f64 {
+    a.powf(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +623,29 @@ mod tests {
         // comment above `range_continue`'s definition (same rationale as
         // `pycc_rt_int_add_panics_...` above).
         range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(0));
+    }
+
+    #[test]
+    fn pycc_rt_int_to_float_converts_the_untagged_value() {
+        assert_eq!(pycc_rt_int_to_float(tag_smallint(5)), 5.0);
+        assert_eq!(pycc_rt_int_to_float(tag_smallint(-3)), -3.0);
+    }
+
+    #[test]
+    fn pycc_rt_float_floordiv_matches_python_floor_semantics() {
+        assert_eq!(pycc_rt_float_floordiv(7.0, 2.0), 3.0);
+        assert_eq!(pycc_rt_float_floordiv(-7.0, 2.0), -4.0);
+    }
+
+    #[test]
+    fn pycc_rt_float_floormod_matches_python_floor_semantics() {
+        assert_eq!(pycc_rt_float_floormod(-7.0, 2.0), 1.0);
+        assert_eq!(pycc_rt_float_floormod(7.0, 2.0), 1.0);
+    }
+
+    #[test]
+    fn pycc_rt_float_pow_computes_the_correct_power() {
+        assert_eq!(pycc_rt_float_pow(2.0, 10.0), 1024.0);
+        assert_eq!(pycc_rt_float_pow(9.0, 0.5), 3.0);
     }
 }
