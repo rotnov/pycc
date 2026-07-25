@@ -225,7 +225,7 @@ fn build_and_run_cross_compiled_to_a_different_tier_1_target() {
 /// -- this exercises the same --target code path (linker_command,
 /// effective_link_target) using a triple that's available on every Linux
 /// CI runner, unlike x86_64-apple-darwin above which only exists on the
-/// macOS legs. Catches regressions like D-026 (GCC's `cc` rejecting
+/// macOS legs. Catches regressions like D-031 (GCC's `cc` rejecting
 /// clang-only `-target` syntax on Linux) that only manifest once
 /// --target reaches the actual link step -- which
 /// targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error
@@ -234,7 +234,7 @@ fn build_and_run_cross_compiled_to_a_different_tier_1_target() {
 #[test]
 fn build_and_run_with_target_set_to_the_host_s_own_triple_on_linux() {
     if std::env::consts::OS != "linux" {
-        eprintln!("skipping: this test only applies on Linux (see D-026)");
+        eprintln!("skipping: this test only applies on Linux (see D-031)");
         return;
     }
     let triple = match std::env::consts::ARCH {
@@ -297,11 +297,11 @@ fn targeting_a_valid_triple_with_no_local_pycc_rt_build_is_a_clean_error() {
     // ARCHITECTURE.md), so no CI job anywhere builds pycc_rt for it -- the
     // clean, actionable error from find_pycc_rt_lib_dir, not a raw linker
     // failure about a missing -lpycc_rt. Deliberately NOT one of the two
-    // Linux Tier-1 triples (x86_64/aarch64-unknown-linux-gnu): D-026's own
+    // Linux Tier-1 triples (x86_64/aarch64-unknown-linux-gnu): D-031's own
     // CI step builds pycc_rt for whichever of those matches the runner's
     // own arch, so using either here would flip this test's assumption
     // false on that one runner (this exact regression was caught in PR
-    // review: this test failed on ubuntu-24.04-arm once D-026 gave that
+    // review: this test failed on ubuntu-24.04-arm once D-031 gave that
     // runner its own aarch64-unknown-linux-gnu build).
     let dir = std::env::temp_dir().join(format!("pycc_e2e_no_rt_build_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

@@ -99,7 +99,7 @@ pub fn compile_to_object(
     // not match the host's own architecture, and LLVM only has codegen
     // support for a target's backend if that backend was initialized.
     Target::initialize_all(&InitializationConfig::default());
-    // ManuallyDrop, not a plain value: see D-024. TargetTriple wraps an
+    // ManuallyDrop, not a plain value: see D-029. TargetTriple wraps an
     // LLVMString (inkwell's own message wrapper around LLVMCreateMessage /
     // LLVMGetDefaultTargetTriple), whose Drop calls LLVMDisposeMessage --
     // this crashes on Windows against the official prebuilt LLVM 22.1.1
@@ -135,7 +135,7 @@ pub fn compile_to_object(
     target_machine.write_to_file(&module, FileType::Object, output_path).map_err(llvm_string_to_owned)
 }
 
-/// See D-024: every message inkwell hands back as an `LLVMString` --
+/// See D-029: every message inkwell hands back as an `LLVMString` --
 /// `Target::from_triple`'s and `TargetMachine::write_to_file`'s error
 /// paths, on top of `TargetTriple` itself -- shares the same broken `Drop`
 /// (`LLVMDisposeMessage`) on Windows against this LLVM release. Converts
@@ -152,7 +152,7 @@ fn llvm_string_to_owned(message: inkwell::support::LLVMString) -> String {
 /// Skipped on Windows: `module.verify()` crashes there with an access
 /// violation when linked against the official prebuilt LLVM 22.1.1 release
 /// -- isolated with stderr checkpoints bracketing every call from the end of
-/// IR building through object emission (D-024): every other call completed,
+/// IR building through object emission (D-029): every other call completed,
 /// consistently, across every test that reached this point; only this one
 /// never returned. Root cause not further isolated -- no Windows debugger
 /// available in this environment to get an exact crash address/frame -- so
@@ -412,12 +412,12 @@ mod tests {
     /// crate (that would be a dependency cycle: pycc depends on
     /// pycc_codegen, not the other way around). Needs the same Windows
     /// handling as `main.rs`, and for the same reasons: there's no default
-    /// `cc` there (D-023) -- on this runner it silently resolved to
+    /// `cc` there (D-028) -- on this runner it silently resolved to
     /// MinGW's `gcc`, which cannot link the MSVC-ABI `pycc_rt.lib` (the
-    /// exact "undefined reference to `__imp_...`"/`collect2` wall D-023
+    /// exact "undefined reference to `__imp_...`"/`collect2` wall D-028
     /// already diagnosed for `main.rs`, reproduced here because this
     /// helper wasn't covered by that fix); clang's bare-invocation default
-    /// target also proved unreliable (D-023), so `-target` must be
+    /// target also proved unreliable (D-028), so `-target` must be
     /// explicit too.
     fn link_object_with_runtime(obj_path: &std::path::Path, bin_path: &std::path::Path) {
         let rt_lib_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");

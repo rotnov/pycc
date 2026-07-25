@@ -112,7 +112,7 @@ checked out the trusted policy implementation from base commit
 70 assertions, and audited all five workflow files at the triggering
 [PR #35](https://github.com/rotnov/pycc/pull/35) head as non-executable data.
 Branch protection is strict and currently requires `build-test-coverage` and
-`audit`, bound to the GitHub Actions app. `ci-gate` (D-027) is a single
+`audit`, bound to the GitHub Actions app. `ci-gate` (D-032) is a single
 stable-named job in `ci.yml`, added in the same pull request that landed the
 five-target Tier-1 matrix, that fans in every job in that workflow
 (`build-test-coverage`, all four `native-build-test` Tier-1 legs,

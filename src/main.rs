@@ -71,13 +71,13 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
 /// Windows has no `cc` by default (that's a Unix convention -- MSVC's own
 /// tools are `cl.exe`/`link.exe`), so this uses the `clang` bundled with the
 /// same LLVM install `LLVM_SYS_221_PREFIX` already points builds at (see
-/// D-015/D-022) -- clang's driver translates GCC-style `-l`/`-L`/`-o` flags
+/// D-015/D-027) -- clang's driver translates GCC-style `-l`/`-L`/`-o` flags
 /// into the `link.exe` invocation this target needs, verified empirically
 /// (`clang -target x86_64-pc-windows-msvc -### ...`) rather than assumed.
 /// Elsewhere, the system `cc` already works for the no-`--target` case
 /// (verified: native-build-test passes on both Linux architectures and
 /// macOS) -- see this function's other two cfg-gated bodies below for
-/// what changes when `--target` is given (D-026).
+/// what changes when `--target` is given (D-031).
 #[cfg(windows)]
 fn linker_command(_target: Option<&str>) -> std::process::Command {
     let clang = std::path::Path::new(env!("LLVM_SYS_221_PREFIX")).join("bin").join("clang.exe");
@@ -88,12 +88,12 @@ fn linker_command(_target: Option<&str>) -> std::process::Command {
 /// `ubuntu-24.04-arm` runners), and GCC's driver rejects clang-only
 /// `-target <triple>` syntax outright ("unrecognized command-line option
 /// '-target'") -- for *any* value, even a triple naming this same host
-/// (D-026). Only route through the bundled clang when the caller actually
+/// (D-031). Only route through the bundled clang when the caller actually
 /// asked for one: `<LLVM_SYS_221_PREFIX>/bin/clang` is the same
 /// apt.llvm.org prefix layout `ci.yml`'s "Install LLVM 22 (Linux)" step
 /// already installs for `inkwell` itself, so this needs no new install.
 /// The plain, no-target case keeps using the system `cc` unchanged --
-/// verified working there already (D-023 point 1).
+/// verified working there already (D-028 point 1).
 #[cfg(target_os = "linux")]
 fn linker_command(target: Option<&str>) -> std::process::Command {
     if target.is_some() {
@@ -104,7 +104,7 @@ fn linker_command(target: Option<&str>) -> std::process::Command {
     }
 }
 
-/// macOS's system `cc` already *is* Apple clang, and D-021 already proved
+/// macOS's system `cc` already *is* Apple clang, and D-026 already proved
 /// it handles `--target` correctly for the cross-arch pair CI verifies
 /// (`cross-compile-build`/`cross-compile-verify`) -- left exactly as-is
 /// regardless of `target`, rather than folded into Linux's branch above,
@@ -115,7 +115,7 @@ fn linker_command(_target: Option<&str>) -> std::process::Command {
 }
 
 /// A bare `clang.exe` invocation with no `-target` flag was observed
-/// (D-023) resolving inconsistently: some invocations correctly select
+/// (D-028) resolving inconsistently: some invocations correctly select
 /// MSVC's `lld-link`, others silently fall back to a MinGW/GCC toolchain
 /// discovered on `PATH` (`C:\mingw64`) -- which cannot link `pycc_rt.lib`'s
 /// MSVC-ABI symbols (`__imp_closesocket`, `__chkstk`, the MSVC RTTI
@@ -139,7 +139,7 @@ fn effective_link_target(target: Option<&str>) -> Option<&str> {
 /// Windows system library Rust's std transitively needs; invoking the
 /// linker driver directly here (see `linker_command` above) does not. This
 /// set is the exact one rustc itself passed when linking `pycc.exe` on
-/// this same CI runner (D-023) -- confirmed from that link's own log, not
+/// this same CI runner (D-028) -- confirmed from that link's own log, not
 /// guessed. `#[cfg(not(windows))]`'s no-op keeps the other platforms,
 /// where system libs are found automatically, unaffected.
 #[cfg(windows)]

@@ -28,6 +28,11 @@ jobs:
           ruby scripts/test_check_ci_permissions.rb
           ruby scripts/check_ci_permissions.rb
 
+      - name: Check agent policy
+        run: |
+          python3 -B -m unittest discover -s scripts -p 'test_*.py'
+          python3 -B scripts/validate_agent_policies.py
+
       - name: Show pinned toolchain
         run: rustup show
 
@@ -96,9 +101,9 @@ jobs:
         run: rustup show
 
       # rustc/link.exe already discover the MSVC toolset on their own, but
-      # pycc's own linking step (src/main.rs's linker_command(), D-023) shells
+      # pycc's own linking step (src/main.rs's linker_command(), D-028) shells
       # out to clang.exe directly -- outside any Developer Command Prompt,
-      # its bundled lld-link.exe can't find libcmt.lib/oldnames.lib (D-023).
+      # its bundled lld-link.exe can't find libcmt.lib/oldnames.lib (D-028).
       # This sets up the same environment vcvarsall.bat would.
       - name: Set up MSVC Developer Command Prompt (Windows)
         if: runner.os == 'Windows'
@@ -115,16 +120,16 @@ jobs:
           sudo apt-get install -y libpolly-22-dev
           echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
 
-      # tests/slice0.rs's own-triple --target test (D-026) needs a
+      # tests/slice0.rs's own-triple --target test (D-031) needs a
       # target-qualified pycc_rt build to link against, exactly like the
       # macOS cross-compile tests already need for x86_64-apple-darwin --
       # `cargo build --target <triple>` always uses target/<triple>/debug/,
       # even when <triple> is this same runner's own default.
-      - name: Add own-triple Rust target (Linux, D-026)
+      - name: Add own-triple Rust target (Linux, D-031)
         if: runner.os == 'Linux'
         run: rustup target add ${{ matrix.target }}
 
-      - name: Build pycc_rt for own triple (Linux, D-026)
+      - name: Build pycc_rt for own triple (Linux, D-031)
         if: runner.os == 'Linux'
         run: cargo build --target ${{ matrix.target }} -p pycc_rt
 
@@ -152,7 +157,7 @@ jobs:
           echo "LLVM_SYS_221_PREFIX=$(cygpath -w "$(pwd)/llvm-extract")" >> "$GITHUB_ENV"
 
       # This LLVM release's own llvm-config reports libxml2 as a system lib
-      # (see D-022), so llvm-sys requires a real xml2s.lib to link -- vcpkg
+      # (see D-027), so llvm-sys requires a real xml2s.lib to link -- vcpkg
       # is preinstalled on GitHub's Windows runners (path varies by image,
       # hence the env var rather than a hardcoded one). static-md matches
       # Rust's own default dynamic-CRT linkage on this target.
@@ -181,10 +186,10 @@ jobs:
       # per test; parallel runs interleave their stderr output at the OS
       # pipe level (Rust's own per-test output capture doesn't isolate
       # inherited child-process output the same way), which made an earlier
-      # Windows-crash investigation (D-024) hard to attribute to specific
+      # Windows-crash investigation (D-029) hard to attribute to specific
       # tests from the CI log alone. Serialized here so that if this ever
       # needs repeating, the log is unambiguous; not needed on other OSes.
-      - name: cargo test --workspace (single-threaded, see D-024)
+      - name: cargo test --workspace (single-threaded, see D-029)
         if: runner.os == 'Windows'
         run: cargo test --workspace -- --test-threads=1
 
@@ -193,7 +198,7 @@ jobs:
       # puts its bundled coreutils `link.exe` (the Unix hardlink tool, at
       # `C:\Program Files\Git\usr\bin\link.exe`) ahead of MSVC's real
       # linker, breaking any proc-macro dependency's build with a bizarre
-      # "extra operand" error from what is very much not a linker (D-025).
+      # "extra operand" error from what is very much not a linker (D-030).
       # `cargo build`/`cargo test` above already run correctly on Windows
       # using each OS's own default shell (pwsh here) with no override;
       # this step's two commands have no bash-specific syntax, so dropping
@@ -204,9 +209,9 @@ jobs:
           rustup component add clippy
           cargo clippy --workspace --all-targets -- -D warnings
 
-  # PR-3's cross-compilation proof (D-021): pycc, running natively on the
+  # PR-3's cross-compilation proof (D-026): pycc, running natively on the
   # arm64 runner, cross-compiles for x86_64-apple-darwin using its own
-  # --target flag -- same-OS/cross-arch, not cross-OS (see D-021 for why).
+  # --target flag -- same-OS/cross-arch, not cross-OS (see D-026 for why).
   cross-compile-build:
     runs-on: macos-14
     steps:
@@ -264,7 +269,7 @@ jobs:
           echo "cross-compiled binary verified on its native x86_64 runner"
 
   # Single stable required-status-check name fanning in every job in this
-  # workflow (D-027): branch protection previously required only
+  # workflow (D-032): branch protection previously required only
   # build-test-coverage + audit, so a failing/pending native-build-test leg
   # or cross-compile-build/verify could not block a merge -- SPEC.md's own
   # invariant 5 ("a feature doesn't exist until it's green everywhere") was

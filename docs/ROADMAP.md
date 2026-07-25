@@ -4,7 +4,7 @@ Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone i
 
 ## Current delivery status
 
-Last reviewed on 2026-07-24. This section describes the repository tree in the commit that contains it: behavior and evidence from that same commit count, while work that exists only in another open pull request or unmerged branch remains work in flight.
+Last reviewed on 2026-07-25. This section describes the repository tree in the commit that contains it: behavior and evidence from that same commit count, while work that exists only in another open pull request or unmerged branch remains work in flight.
 
 **Current milestone: v0.1 — in progress.** The first end-to-end vertical slice works on the primary macOS arm64 host, but v0.1 is not yet shippable.
 
@@ -15,8 +15,9 @@ Last reviewed on 2026-07-24. This section describes the repository tree in the c
 | Type system | Stub | The parser preserves annotations, but [`pycc_types::check`](../crates/pycc_types/src/lib.rs) is still a no-op passthrough. `T0001` strictness and local inference have not landed. |
 | CLI | Partial | `build`, `run`, and `version` have working slice-level paths. `check`, `test`, `explain`, `init`, and `clean` report “not yet implemented”; the broader flags and project-mode contracts in [CLI_SPEC.md](./CLI_SPEC.md) remain planned. |
 | Diagnostics | Partial | Parser failures become `L0001` compile diagnostics and the diagnostic data types exist. Stable spans, the shipped-feature registry, screenshot parity, JSON output, and diagnostics for unsupported valid programs remain open. |
-| Portability | Five-target Tier-1 matrix live | The PR-3 [CI run](https://github.com/rotnov/pycc/actions/runs/30135016242) builds and tests natively on all five Tier-1 targets (`ubuntu-latest`/x86_64, `ubuntu-24.04-arm`/aarch64, `macos-15-intel`/x86_64, `macos-14`/aarch64 via the coverage job, `windows-latest`) and cross-compiles `x86_64-apple-darwin` from the `macos-14` (arm64) runner, executed and verified on its native `macos-15-intel` runner. Cross-*OS* compilation (e.g. Linux/Windows from a Mac) remains a tracked future gap per D-021, not silently dropped. |
+| Portability | Five-target Tier-1 matrix live | The PR-3 [CI run](https://github.com/rotnov/pycc/actions/runs/30135016242) builds and tests natively on all five Tier-1 targets (`ubuntu-latest`/x86_64, `ubuntu-24.04-arm`/aarch64, `macos-15-intel`/x86_64, `macos-14`/aarch64 via the coverage job, `windows-latest`) and cross-compiles `x86_64-apple-darwin` from the `macos-14` (arm64) runner, executed and verified on its native `macos-15-intel` runner. Cross-*OS* compilation (e.g. Linux/Windows from a Mac) remains a tracked future gap per D-026, not silently dropped. |
 | Quality gates | Partial but enforced | Unit and slice-level end-to-end tests pass, and CI enforces 100% Rust line and region coverage on every PR. The conformance harness, diagnostic snapshots, frontend performance gate, five-target conformance, fuzzing, and corpus layers remain planned according to [TESTING.md](./TESTING.md). |
+| Repository governance | Enforced | Protected `main` requires an up-to-date PR, `build-test-coverage`, the trusted `audit` context, and resolved conversations. The required build runs clean-clone agent-policy validation, while the push-time [main-history audit](../.github/workflows/main-history-audit.yml) uses the pre-push checker (or its immutable reviewed bootstrap) and correlates each introduced commit with the merged-main PR whose merge commit arrived in that push. The external repository monitor verifies the push-controlled workflow and expected run; a changed workflow, missing run, or failure is release-blocking under [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md). |
 
 ### v0.1 acceptance checklist
 
