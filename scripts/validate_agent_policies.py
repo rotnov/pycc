@@ -296,6 +296,30 @@ def loader_candidate_target(
     )
 
 
+def trailing_filesystem_targets(
+    tokens: list[str],
+    project_expansion: str,
+) -> list[str]:
+    targets: list[str] = []
+    for token in tokens:
+        candidates = [token]
+        if token.startswith("-") and "=" in token:
+            candidates.append(token.split("=", 1)[1])
+        for candidate in candidates:
+            normalized, explicit_project_path = normalize_hook_token(
+                candidate,
+                project_expansion,
+            )
+            if (
+                explicit_project_path
+                or normalized.casefold().startswith(LOCAL_PREFIXES)
+                or is_home_relative_script_path(normalized)
+                or is_absolute_script_path(normalized)
+            ):
+                targets.append(normalized)
+    return targets
+
+
 def interpreter_invocation_targets(
     kind: str,
     tokens: list[str],
@@ -314,6 +338,9 @@ def interpreter_invocation_targets(
                 project_expansion,
             )
             targets.append(target)
+            targets.extend(
+                trailing_filesystem_targets(tokens[index + 1 :], project_expansion)
+            )
             return targets, None
 
         if token == "-" or (kind == "shell" and token == "-s"):
@@ -327,6 +354,9 @@ def interpreter_invocation_targets(
                 project_expansion,
             )
             targets.append(target)
+            targets.extend(
+                trailing_filesystem_targets(tokens[index + 2 :], project_expansion)
+            )
             return targets, None
 
         candidate: str | None = None
@@ -374,6 +404,9 @@ def interpreter_invocation_targets(
 
         target, _ = normalize_hook_token(token, project_expansion)
         targets.append(target)
+        targets.extend(
+            trailing_filesystem_targets(tokens[index + 1 :], project_expansion)
+        )
         return targets, None
 
     return targets, "interpreter invocation has no tracked script"

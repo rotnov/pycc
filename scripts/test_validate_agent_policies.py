@@ -2015,6 +2015,63 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     failures[0],
                 )
 
+    def test_interpreter_wrapper_arguments_are_scanned_for_local_paths(self) -> None:
+        for command, arguments, expected in (
+            (
+                "python3",
+                ["scripts/wrapper.py", "/home/user/.ievo/hooks/capture.py"],
+                (
+                    "shared hook target must not be absolute: "
+                    "/home/user/.ievo/hooks/capture.py"
+                ),
+            ),
+            (
+                "node",
+                ["scripts/wrapper.js", ".ievo/hooks/capture.js"],
+                (
+                    "shared hook target must remain machine-local: "
+                    ".ievo/hooks/capture.js"
+                ),
+            ),
+            (
+                "ruby",
+                ["scripts/wrapper.rb", "--config=/tmp/local.rb"],
+                "shared hook target must not be absolute: /tmp/local.rb",
+            ),
+            (
+                "powershell",
+                ["-File", "scripts/wrapper.ps1", "~/.ievo/hooks/capture.ps1"],
+                (
+                    "shared hook target must not be home-relative: "
+                    "~/.ievo/hooks/capture.ps1"
+                ),
+            ),
+        ):
+            with self.subTest(command=command):
+                wrapper = next(
+                    argument
+                    for argument in arguments
+                    if argument.startswith("scripts/")
+                )
+                settings = {
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "command": command,
+                                        "args": arguments,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                self.assertEqual(
+                    validator.validate_hook_targets(settings, {wrapper}),
+                    [expected],
+                )
+
     def test_tracked_wrapper_options_are_not_treated_as_inline_code(self) -> None:
         for target in ("scripts/tracked-hook.sh", "scripts/python", "tools/sh"):
             with self.subTest(target=target):
