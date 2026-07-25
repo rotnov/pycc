@@ -1,4 +1,4 @@
-use pycc_hir::{BinOpKind, CmpOpKind, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
+use pycc_hir::{FStringPart, HirExpr, HirItem, HirModule, HirStmt};
 use std::collections::HashMap;
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
@@ -6,7 +6,7 @@ use std::collections::HashMap;
 // through `MirExpr`/`MirItem`'s fields, so it must be nameable as
 // `pycc_mir::Ty` from any downstream crate, exactly like `pycc_types` already
 // re-exports it (`pycc_types::Ty`, its own line 4) for the same reason.
-pub use pycc_hir::Ty;
+pub use pycc_hir::{BinOpKind, CmpOpKind, Ty};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MirExpr {
