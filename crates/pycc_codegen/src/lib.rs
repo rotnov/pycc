@@ -3459,6 +3459,39 @@ mod tests {
     }
 
     #[test]
+    fn a_string_comparison_result_is_correct_at_runtime() {
+        // `if "a" < "b": print(1)` -- unlike `compiles_a_string_comparison`
+        // above (which only proves codegen for a `str` `Compare` succeeds),
+        // this proves `pycc_rt_str_cmp`'s lexicographic ordering actually
+        // drives a real `if` branch decision correctly, in both directions.
+        for (left, right, expected) in [("a", "b", "1\n"), ("b", "a", "")] {
+            let mir = MirModule {
+                items: vec![MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::Compare {
+                        op: CmpOpKind::Lt,
+                        left: Box::new(MirExpr::StringLiteral(left.to_string())),
+                        right: Box::new(MirExpr::StringLiteral(right.to_string())),
+                        ty: Ty::Bool,
+                    },
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::IntLiteral(1)],
+                        ty: Ty::None,
+                    })],
+                    orelse: vec![],
+                })],
+            };
+            let dir = tempfile_dir(&format!("str_cmp_runtime_{left}_{right}"));
+            let obj_path = dir.join("str_cmp_runtime.o");
+            compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+            let bin_path = dir.join("str_cmp_runtime");
+            link_object_with_runtime(&obj_path, &bin_path);
+            let output = Command::new(&bin_path).output().expect("binary should run");
+            assert_eq!(output.stdout, expected.as_bytes(), "comparing {left:?} < {right:?}");
+        }
+    }
+
+    #[test]
     fn compiles_the_remaining_string_comparison_operators() {
         // `Lt` already has its own dedicated test above
         // (`compiles_a_string_comparison`); this exercises the rest of the
