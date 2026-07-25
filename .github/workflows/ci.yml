@@ -280,6 +280,10 @@ jobs:
     needs: [build-test-coverage, native-build-test, cross-compile-build, cross-compile-verify]
     if: always()
     runs-on: ubuntu-latest
+    # Overrides the workflow-level `contents: read` default: this job only
+    # reads the `needs` context, never checks out or touches the repository,
+    # so it gets none of that access rather than an unused inherited grant.
+    permissions: {}
     steps:
       # Checks each named job's result equals 'success' explicitly, rather
       # than blocklisting contains(needs.*.result, 'failure' | 'cancelled'):
