@@ -462,11 +462,13 @@ PAGE_SPECS = {
         "canonical": f"{ROOT}python-aot-compilers/",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
-            "Compare pycc with Codon, Nuitka, mypyc, and Cython using "
-            "official documentation: input language, output artifact, "
-            "runtime model, and project status."
+            "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "
+            "official docs: language contract, output artifact, runtime "
+            "model, and current positioning."
         ),
         "required_hrefs": (
+            "https://lpython.org/",
+            "https://github.com/lcompilers/lpython",
             "https://docs.exaloop.io/language/overview/",
             "https://nuitka.net/user-documentation/use-cases.html",
             "https://mypyc.readthedocs.io/en/stable/introduction.html",
@@ -480,6 +482,8 @@ PAGE_SPECS = {
             ),
         ),
         "required_visible_text": (
+            "Tools six projects",
+            "Alpha; focused on numerical and array-oriented typed Python",
             "Do not choose pycc for production today.",
             "Benchmarks none claimed",
         ),

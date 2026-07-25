@@ -102,7 +102,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
             if len(arguments) > 1 and arguments[1] == "check":
                 stderr = (
                     b"error: unexpected argument '--fix' found\n"
-                    b"Usage: pycc check [PATH]\n"
+                    b"Usage: pycc check [OPTIONS] [PATH]\n"
                 )
                 return subprocess.CompletedProcess(arguments, 2, b"", stderr)
             if len(arguments) > 1 and arguments[1] == "build":

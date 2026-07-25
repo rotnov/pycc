@@ -18,7 +18,7 @@ must not be interpreted as released features.
 - [Markdown website](https://rotnov.github.io/pycc/index.html.md): Clean text equivalent of the landing page for agents and constrained clients.
 - [Current implementation status](https://rotnov.github.io/pycc/status/): Commit-relative account of working behavior, missing v0.1 features, CI, and coverage evidence.
 - [Compiler architecture](https://rotnov.github.io/pycc/architecture/): Implemented Rust and LLVM pipeline separated from the target architecture.
-- [Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/): Source-backed map of pycc, Codon, Nuitka, mypyc, and Cython by language contract, artifact, runtime model, and maturity.
+- [Python AOT compiler comparison](https://rotnov.github.io/pycc/python-aot-compilers/): Source-backed map of pycc, LPython, Codon, Nuitka, mypyc, and Cython by language contract, artifact, runtime model, and current positioning.
 - [AI-native experiment](https://rotnov.github.io/pycc/ai-native/): Authorship boundary, operating loop, governance, and public evidence for the fully AI-created, human-managed development model.
 - [Source repository](https://github.com/rotnov/pycc): Public source, tests, issues, pull requests, and development history.
 - [README](https://github.com/rotnov/pycc/blob/main/README.md): Project positioning, current capabilities, build instructions, and quality policy.

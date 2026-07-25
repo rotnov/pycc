@@ -155,6 +155,10 @@ footer {
   padding: 90px 0 110px;
 }
 
+.hero > * {
+  min-width: 0;
+}
+
 .eyebrow {
   margin: 0 0 22px;
   color: var(--acid);

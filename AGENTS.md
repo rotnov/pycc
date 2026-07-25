@@ -121,6 +121,8 @@
 - Address every verified P0/P1 finding and every other actionable correctness or contract finding before merge. Keep fixes focused, push them to the pull request branch, and re-run the review and CI gates.
 - Merge only when required checks, including the 100% coverage gate, are green and no unresolved actionable review thread remains.
 - Codex review is an additional high-signal pass, not a replacement for tests, specifications, branch protection, or independent review.
+- Monitor for Codex being unavailable for reasons outside the retry/timeout protocol above: an explicit usage-limit message (e.g. "reached your Codex usage limits for code reviews"), a billing/account error, or any response indicating the review cannot run regardless of retries. Do not keep retrying against `check_codex_review_retry.py`'s timeout logic in that case — a usage-limit block will not clear on a timer the way a missing response might.
+- When Codex review is unavailable for this reason, perform the review yourself instead: work through the same Review focus checklist below directly, or fan it out across independent subagents/dimensions when the diff is large enough to benefit from parallel passes. Say explicitly, in the task log and PR, that the review was self-performed because Codex was unavailable and why — never merge silently as if a Codex review occurred. This substitution satisfies the "review before merge" requirement; it does not relax it.
 
 ### Review focus
 
