@@ -1,0 +1,4 @@
+interface:
+  display_name: "pycc Feedback (Alpha)"
+  short_description: "Prepare a consent-gated pycc bug report"
+  default_prompt: "Use $pycc-feedback to prepare a sanitized pycc compiler bug report for my approval."

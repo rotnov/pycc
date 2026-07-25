@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -23,10 +24,52 @@ SLASH_SKILL = re.compile(r"`/([a-z][a-z0-9-]+)`")
 ABSOLUTE_OUTPUT = re.compile(
     r"(?i)(?:save|saved|write|written|output|destination).{0,160}`(/[^`]+)`"
 )
+EXPECTED_SKILL_LOCK_ENTRIES = {
+    "i-have-an-issue": {
+        "source": "rotnov/skills",
+        "ref": "i-have-an-issue-v0.1.1",
+        "reviewedCommit": "1bc6bcee3766a7e62b936343a48ebb56a3767470",
+        "sourceType": "github",
+        "skillPath": "skills/i-have-an-issue/SKILL.md",
+        "computedHash": (
+            "99e492ccae20ad3acf02e28dd76c7d74de28c7cf2141bfc7a2942c46c4bf687c"
+        ),
+    }
+}
+FEEDBACK_CONSENT_GUARDS = (
+    "explicit approval",
+    "exact payload",
+    "rotnov/pycc",
+    "search open and closed issues",
+    "make no external change",
+    "sanitize every outbound query",
+    "user-authored code",
+)
+ALPHA_EVAL_RUNNERS = {
+    "pycc": {
+        "build-and-run-self-created-fixture",
+        "capture-parser-failure-without-write",
+        "observe-current-check-fix-rejection",
+    },
+    "pycc-feedback": {
+        "prepare-sanitized-draft-without-write",
+        "refuse-private-automatic-publication",
+        "require-exact-payload-preview",
+    },
+}
+PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
+# Required PR CI has no model credentials. Promotion stays fail-closed until
+# reviewed, stable authenticated runs exist for both supported client surfaces.
+AUTHENTICATED_MODEL_EVAL_EVIDENCE: dict[str, dict[str, str]] = {}
+REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
 
 
-def load_json(relative_path: str, failures: list[str]) -> dict:
-    path = ROOT / relative_path
+def load_json(
+    relative_path: str,
+    failures: list[str],
+    root: Path = ROOT,
+) -> dict:
+    path = root / relative_path
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -36,6 +79,120 @@ def load_json(relative_path: str, failures: list[str]) -> dict:
         failures.append(f"{relative_path}: top-level value must be an object")
         return {}
     return value
+
+
+def compute_skill_folder_hash(skill_root: Path) -> str:
+    """Match skills CLI 1.5.20's path-plus-content SHA-256."""
+    files = [
+        path
+        for path in skill_root.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
+    ]
+    files.sort(
+        key=lambda path: path.relative_to(skill_root).as_posix().casefold()
+    )
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.relative_to(skill_root).as_posix().encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def validate_skill_lock(
+    failures: list[str],
+    root: Path = ROOT,
+    skills_root: Path = SKILLS_ROOT,
+) -> None:
+    lock = load_json("skills-lock.json", failures, root)
+    if lock.get("version") != 1:
+        failures.append("skills-lock.json: version must be 1")
+    entries = lock.get("skills")
+    if not isinstance(entries, dict) or not entries:
+        failures.append("skills-lock.json: skills must be a non-empty object")
+        return
+
+    expected_names = set(EXPECTED_SKILL_LOCK_ENTRIES)
+    actual_names = set(entries)
+    validate_alpha_promotion_gate(entries, failures)
+    if actual_names != expected_names:
+        failures.append(
+            "skills-lock.json: locked skill set must be exactly "
+            + ", ".join(sorted(expected_names))
+        )
+
+    policy_path = root / "docs" / "AGENT_TOOLING.md"
+    try:
+        policy = policy_path.read_text(encoding="utf-8")
+    except OSError as error:
+        failures.append(f"docs/AGENT_TOOLING.md: could not read policy: {error}")
+        policy = ""
+
+    for name, expected_entry in EXPECTED_SKILL_LOCK_ENTRIES.items():
+        entry = entries.get(name)
+        label = f"skills-lock.json: skills.{name}"
+        if not isinstance(entry, dict):
+            failures.append(f"{label} must be an object")
+            continue
+        for field, expected_value in expected_entry.items():
+            if entry.get(field) != expected_value:
+                failures.append(
+                    f"{label}.{field} must be {expected_value!r}"
+                )
+        reviewed_commit = entry.get("reviewedCommit")
+        if (
+            not isinstance(reviewed_commit, str)
+            or IMMUTABLE_SHA.fullmatch(reviewed_commit) is None
+        ):
+            failures.append(
+                f"{label}.reviewedCommit must be a full immutable commit SHA"
+            )
+
+        skill_root = skills_root / name
+        if not (skill_root / "SKILL.md").is_file():
+            failures.append(f"{label} has no canonical .claude skill")
+            continue
+        expected_hash = expected_entry["computedHash"]
+        locked_hash = entry.get("computedHash")
+        if (
+            not isinstance(locked_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", locked_hash) is None
+        ):
+            failures.append(f"{label}.computedHash must be a SHA-256 digest")
+            continue
+        actual = compute_skill_folder_hash(skill_root)
+        if actual != expected_hash:
+            failures.append(
+                f"{label}.computedHash does not match the reviewed vendored skill: "
+                f"expected {expected_hash}, got {actual}"
+            )
+        for field in ("ref", "reviewedCommit", "computedHash"):
+            value = expected_entry[field]
+            if value not in policy:
+                failures.append(
+                    f"docs/AGENT_TOOLING.md: missing {field} for {name}"
+                )
+
+
+def validate_alpha_promotion_gate(
+    locked_skills: dict[str, object],
+    failures: list[str],
+) -> None:
+    for name in sorted(PROJECT_ALPHA_SKILLS & set(locked_skills)):
+        evidence = AUTHENTICATED_MODEL_EVAL_EVIDENCE.get(name)
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence) != REQUIRED_MODEL_EVAL_CLIENTS
+            or not all(
+                isinstance(url, str) and url.startswith("https://")
+                for url in evidence.values()
+            )
+        ):
+            failures.append(
+                f"skills-lock.json: {name} cannot be promoted without "
+                "authenticated Codex and Claude model-eval evidence"
+            )
 
 
 def validate_claude_ievo_marketplace(
@@ -302,6 +459,81 @@ def link_target(raw_target: str) -> str:
     return unquote(target.split("#", 1)[0])
 
 
+def display_path(path: Path, root: Path) -> Path:
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
+
+
+def validate_alpha_skill_contracts(
+    skills_root: Path,
+    failures: list[str],
+    root: Path = ROOT,
+) -> None:
+    for name in ("pycc", "pycc-feedback"):
+        path = skills_root / name / "SKILL.md"
+        relative = display_path(path, root)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as error:
+            failures.append(f"{relative}: could not read alpha skill: {error}")
+            continue
+        if "alpha" not in text.lower():
+            failures.append(f"{relative}: must remain visibly alpha")
+
+        evals_path = skills_root / name / "evals" / "evals.json"
+        evals_relative = display_path(evals_path, root)
+        try:
+            evals = json.loads(evals_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            failures.append(f"{evals_relative}: invalid evals: {error}")
+            continue
+        cases = evals.get("evals") if isinstance(evals, dict) else None
+        skill_name = evals.get("skill_name") if isinstance(evals, dict) else None
+        if skill_name != name or not isinstance(cases, list) or len(cases) < 2:
+            failures.append(
+                f"{evals_relative}: must define at least two evals for {name}"
+            )
+            continue
+        if not all(
+            isinstance(case, dict)
+            and isinstance(case.get("id"), int)
+            and isinstance(case.get("prompt"), str)
+            and bool(case["prompt"].strip())
+            and isinstance(case.get("expected_output"), str)
+            and bool(case["expected_output"].strip())
+            for case in cases
+        ):
+            failures.append(f"{evals_relative}: contains a malformed eval")
+            continue
+        identifiers = [case["id"] for case in cases]
+        if len(identifiers) != len(set(identifiers)):
+            failures.append(f"{evals_relative}: eval ids must be unique")
+        runners = {
+            case["runner"]
+            for case in cases
+            if isinstance(case.get("runner"), str)
+        }
+        if runners != ALPHA_EVAL_RUNNERS[name]:
+            failures.append(
+                f"{evals_relative}: must bind the complete executable runner set"
+            )
+
+    feedback_path = skills_root / "pycc-feedback" / "SKILL.md"
+    try:
+        feedback = feedback_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    normalized_feedback = " ".join(feedback.split())
+    for required in FEEDBACK_CONSENT_GUARDS:
+        if required not in normalized_feedback:
+            failures.append(
+                f"{display_path(feedback_path, root)}: missing consent guard "
+                f"{required!r}"
+            )
+
+
 def validate_skill_documents(failures: list[str]) -> None:
     skill_names = {path.parent.name for path in SKILLS_ROOT.glob("*/SKILL.md")}
     markdown_files = sorted(SKILLS_ROOT.rglob("*.md"))
@@ -367,10 +599,13 @@ def validate_skill_documents(failures: list[str]) -> None:
             "the canonical decision log"
         )
 
+    validate_alpha_skill_contracts(SKILLS_ROOT, failures)
+
 
 def main() -> int:
     failures: list[str] = []
     validate_marketplaces(failures)
+    validate_skill_lock(failures)
     validate_skill_documents(failures)
     if failures:
         for failure in failures:

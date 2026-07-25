@@ -1,0 +1,25 @@
+{
+  "skill_name": "i-have-an-issue",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Our incremental compiler cache sometimes returns stale artifacts after target flags change. Before we redesign the cache key, research how mature compilers hit and fixed this class of bug.",
+      "expected_output": "An evidence-backed preventive brief that selects relevant compiler repositories, traces reports to fixes or tests, distinguishes shipped fixes from closed issues, evaluates cache-key applicability, and recommends concrete regression tests."
+    },
+    {
+      "id": 2,
+      "prompt": "A Python extension crashes only when used from subinterpreters on Python 3.13. Has anyone upstream run into this, and what should we check first?",
+      "expected_output": "A reactive investigation tied to Python 3.13 and subinterpreter constraints, with primary links, version-aware applicability, competing hypotheses, and a minimal discriminating experiment rather than a list of superficially similar crashes."
+    },
+    {
+      "id": 3,
+      "prompt": "We're planning cooperative cancellation in an async runtime. Look at Rust, Go, and JavaScript runtimes and tell us which cancellation mistakes caused production bugs and which invariants we should test.",
+      "expected_output": "A cross-project mechanism-oriented analysis that explains why the selected runtimes are comparable, deduplicates recurring cancellation failure modes, labels analogical evidence, and derives tests for resource cleanup, ordering, and cancellation propagation."
+    },
+    {
+      "id": 4,
+      "prompt": "Search open-source projects for evidence that our obscure custom bytecode opcode causes this benchmark's 2% regression. If there is no credible precedent, don't guess.",
+      "expected_output": "Either a cited and applicable precedent or an explicit negative result documenting repository and query coverage, rejected weak leads, residual uncertainty, and the next benchmark or profiler experiment."
+    }
+  ]
+}

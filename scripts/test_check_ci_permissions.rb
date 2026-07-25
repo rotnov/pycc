@@ -6,6 +6,14 @@ require "tmpdir"
 require_relative "check_ci_permissions"
 
 class WorkflowPermissionsTest < Minitest::Test
+  ACTIVE_TRUST_ANCHOR = WORKFLOW_DIRECTORY / TRUST_ANCHOR_FILENAME
+  REVIEWED_TRUST_ANCHOR_SNAPSHOT =
+    Pathname(__dir__).parent / "tests/fixtures/workflow-policy-roadmap-evidence.yml"
+  ACTIVE_TRUST_ANCHOR_SHA256 =
+    "4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6"
+  RETIRED_TRUST_ANCHOR_SHA256 =
+    "3a8b56776e7d44f32759301f0691220800ee6f3184b2702d13c01a28f82ce277"
+
   def workflow(test_job = "runs-on: ubuntu-latest", trigger: "pull_request", extra_jobs: nil)
     lines = [
       "name: Test",
@@ -278,8 +286,25 @@ class WorkflowPermissionsTest < Minitest::Test
     validate_policy_set([anchor])
   end
 
-  def test_trust_anchor_audits_head_roadmap_with_base_checker
-    anchor = Psych.load((WORKFLOW_DIRECTORY / TRUST_ANCHOR_FILENAME).read)
+  def test_active_trust_anchor_matches_the_reviewed_snapshot
+    assert ACTIVE_TRUST_ANCHOR.file?, "missing active trust anchor"
+    assert REVIEWED_TRUST_ANCHOR_SNAPSHOT.file?,
+           "missing reviewed trust-anchor snapshot"
+    return unless ACTIVE_TRUST_ANCHOR.file? && REVIEWED_TRUST_ANCHOR_SNAPSHOT.file?
+
+    assert_equal REVIEWED_TRUST_ANCHOR_SNAPSHOT.read, ACTIVE_TRUST_ANCHOR.read
+    digest = Digest::SHA256.file(ACTIVE_TRUST_ANCHOR).hexdigest
+    assert_equal ACTIVE_TRUST_ANCHOR_SHA256, digest
+    assert_includes TRUST_ANCHOR_SHA256_ALLOWLIST, digest
+    refute_includes TRUST_ANCHOR_SHA256_ALLOWLIST, RETIRED_TRUST_ANCHOR_SHA256
+  end
+
+  def test_active_trust_anchor_audits_head_roadmap_with_base_checker
+    return unless ACTIVE_TRUST_ANCHOR.file?
+
+    text = ACTIVE_TRUST_ANCHOR.read
+    validate_workflow(text, ACTIVE_TRUST_ANCHOR.to_s)
+    anchor = Psych.load(text)
     steps = anchor.fetch("jobs").fetch("audit").fetch("steps")
 
     checkout = steps.find { |step| step["name"] == "Check out trusted policy implementation" }

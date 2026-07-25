@@ -1,0 +1,4 @@
+interface:
+  display_name: "pycc Alpha"
+  short_description: "Use and troubleshoot the pycc alpha compiler"
+  default_prompt: "Use $pycc to compile this typed Python program with the current alpha toolchain."

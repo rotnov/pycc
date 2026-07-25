@@ -6,7 +6,7 @@
 - Treat the documents under `docs/` as part of the implementation contract, not as an after-the-fact description.
 - Before changing behavior, architecture, public APIs, the CLI, diagnostics, build or release processes, tests, or supported language semantics, read the relevant specification.
 
-## Before starting a new task
+## Before starting a new task ([D-021](docs/DECISIONS.md#d-021-agent-task-preflight-and-documentation-refresh))
 
 1. Inspect `git status --short --branch` and record the current commit before any repository mutation. Preserve all existing user changes.
 2. Fetch and prune remote refs without changing checked-out files, then resolve the remote's default branch dynamically.
@@ -47,7 +47,7 @@
 - Keep the behavior contract, safety gates, inputs, and outputs equivalent across the two platforms. Share the underlying implementation where practical; when platform APIs differ, keep the adapters thin and document the mapping.
 - Test discovery and the primary success and failure paths on both platforms before merge. If a required capability is unavailable on one platform, provide a safe documented fallback rather than silently shipping a single-platform workflow.
 
-## Report iEvo bugs upstream
+## Report iEvo bugs upstream ([D-022](docs/DECISIONS.md#d-022-autonomous-public-ievo-bug-reporting))
 
 - Treat a reproducible iEvo malfunction, regression, broken hook, invalid command, or contradiction in an iEvo skill as an upstream bug.
 - Report confirmed iEvo bugs autonomously to the public `ievo-ai/skills` GitHub repository without asking the user for additional permission.
@@ -57,17 +57,28 @@
 - Do not report expected behavior, ordinary project failures, or unverified suspicions. Gather enough evidence to make the report actionable and avoid automated issue spam.
 - Link the upstream issue in the task summary and in the local PR when the reported bug affects the change being delivered.
 
-## Keep machine-local hooks local
+## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution), [D-025](docs/DECISIONS.md#d-025-registered-contracts-for-shared-hook-targets))
 
 - Shared `.claude/settings.json` entries must not invoke scripts or other targets that are absent from a clean checkout. A hook whose target is gitignored is a clean-clone defect even when the hook failure is non-blocking.
 - iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Wire them only from the gitignored `.claude/settings.local.json`; never commit those hook entries or the generated scripts.
 - After cloning the repository, enable or refresh iEvo locally, then verify the generated hook entries live in `.claude/settings.local.json`. If the current iEvo version writes them to shared settings, relocate the complete `hooks` object to local settings before committing any repository change.
-- Before changing shared hook configuration, test the tracked-file view of the repository: every referenced command must either exist in that view or be guarded by a tracked wrapper that exits successfully when its local dependency is absent.
+- Shared hooks must not hide executable targets behind shell control separators, including literal line breaks, or in inline/stdin interpreter forms such as `sh -c`, `bash -s`, `python -c`, or `node --eval`.
+- Interpreter options are fail-closed unless the validator explicitly models their operands; an option operand must never be mistaken for the executable hook target.
+- Before changing shared hook configuration, test the tracked-file view of the repository. Every referenced filesystem target must be tracked and registered in `FAIL_SILENT_WRAPPER_CONTRACTS` with a tracked `scripts/test_*.py` contract that runs in required CI.
+- A wrapper contract must simulate a clean clone without generated local hooks and prove that an absent local dependency produces a silent successful no-op. Adding a registered wrapper requires the D-025 security review; a merely tracked script is not sufficient.
+
+## Protect main ([D-024](docs/DECISIONS.md#d-024-protected-main-and-audited-emergency-bypass))
+
+- `main` accepts changes only through pull requests. Branch protection requires the current CI check, resolved conversations, and an up-to-date branch.
+- While the repository has only one maintainer, require zero approving reviews so the PR path remains usable; enable an independent approving review when a second human maintainer is available.
+- Administrators and automation credentials do not bypass the rule for ordinary work. The emergency procedure, audit expectations, and recovery steps live in [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md).
+- A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
+- The push audit executes the pre-push `main` revision of `scripts/check_main_history.py`, with an immutable reviewed bootstrap fallback when that parent predates the checker; it never executes the revision being audited. Its workflow definition is still supplied by the pushed revision, so treat the job as defense-in-depth: the external repository monitor must verify the workflow content and expected run independently.
 
 ## Testing and hard coverage gate
 
 - One hundred percent line and region coverage is a hard merge invariant under D-014, not a target or guideline.
-- CI must run `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` on every pull request. Do not merge while this gate is missing, skipped, cancelled, failing, or still in progress.
+- CI must run `run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` on every pull request inside the checker-approved, sanitized `nobody` boundary and without an earlier head-controlled script. Do not merge while this gate is missing, skipped, cancelled, failing, or still in progress.
 - Every behavior change must include tests for its success, failure, and relevant edge paths so the gate is satisfied by meaningful execution rather than incidental line hits.
 - Never lower either threshold, remove either flag, disable the job, narrow the measured workspace, or exclude code merely to make a pull request pass.
 - The only permitted exemption is a whole-file `--ignore-filename-regex` entry justified by an accepted design constraint and recorded in the exemption table in `docs/TESTING.md`. An undocumented exemption is a review-blocking defect.
@@ -91,7 +102,18 @@
 ### GitHub Codex review loop
 
 - After opening a pull request, request a GitHub Codex review with the exact comment `@codex review`.
-- Request at most one Codex review per head commit. After fixes produce a new head commit, request another review only when the previous findings may no longer describe the current diff.
+- Permit at most one accepted or started Codex review per head commit. One retry on
+  the unchanged head is allowed after a 15-minute timeout with no review or check.
+  A standalone bot comment is not enough to unlock an early retry because GitHub
+  does not associate top-level comments with the request that triggered them; a
+  delayed response from an older head must not consume the new head's retry budget.
+  Never make more than two request attempts on one head.
+- Before a first request or retry, run
+  `python3 scripts/check_codex_review_retry.py <owner/repo> <pr-number>`. Proceed only
+  when it prints `REQUEST_ALLOWED` or `RETRY_ALLOWED`; preserve its evidence URL or
+  timeout timestamps in the task log. `WAIT`, `ARTIFACT_EXISTS`, and
+  `RETRY_LIMIT_REACHED` forbid another request on that head.
+- After fixes produce a new head commit, request another review only when the previous findings may no longer describe the current diff.
 - Monitor the resulting standard GitHub review, inline comments, issue comments, reactions, and unresolved review threads. Treat actionable inline comments as unfinished work.
 - Address every verified P0/P1 finding and every other actionable correctness or contract finding before merge. Keep fixes focused, push them to the pull request branch, and re-run the review and CI gates.
 - Merge only when required checks, including the 100% coverage gate, are green and no unresolved actionable review thread remains.
