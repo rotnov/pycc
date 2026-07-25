@@ -112,6 +112,16 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
+The reviewed PR-4 prospective digest also introduces the required frontend
+performance gate. Its cache lifecycle is fail-closed: the current timing is
+promoted and cached only after the benchmark, checker self-test, and comparison
+steps succeed (or the legitimate first-baseline bootstrap succeeds), so a
+failed regression cannot become the baseline for a passing rerun. Checkout and
+cache actions that control this merge invariant use reviewed immutable commit
+pins. The trusted checker validates the exact ordered lifecycle whenever
+`frontend-perf-gate` is present in the candidate workflow, in addition to
+requiring the exact reviewed digest.
+
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
 violate the trusted setup sequence. The authority is the required read-only

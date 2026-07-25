@@ -13,6 +13,66 @@ cp -R "$repo_root/site" "$fixture_root/site"
 
 SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
 
+python3 - "$fixture_root/site/styles.css" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+responsive_footer = """  footer > div {
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    justify-self: stretch;
+  }"""
+assert responsive_footer in content
+path.write_text(
+    content.replace(
+        responsive_footer,
+        responsive_footer.replace("flex-wrap: wrap", "flex-wrap: nowrap"),
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted non-wrapping narrow footer links" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/styles.css" "$fixture_root/site/styles.css"
+
+python3 - "$fixture_root/site/styles.css" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+mobile_footer = """  footer {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 24px 0;
+  }"""
+assert mobile_footer in content
+path.write_text(
+    content.replace(
+        mobile_footer,
+        mobile_footer.replace(
+            "grid-template-columns: 1fr",
+            "grid-template-columns: 1fr auto",
+        ),
+        1,
+    )
+)
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a two-column narrow footer" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/styles.css" "$fixture_root/site/styles.css"
+
 python3 - "$repo_root" "$fixture_root/site" <<'PY'
 from pathlib import Path
 import os
@@ -369,6 +429,7 @@ cp "$repo_root/site/3361fe03d0f44ab7cdbb1a3ce1461821.txt" \
 for content_page in \
   status/index.html \
   architecture/index.html \
+  python-aot-compilers/index.html \
   ai-native/index.html
 do
   if [ ! -f "$fixture_root/site/$content_page" ]; then
@@ -377,12 +438,14 @@ do
   fi
 done
 
-mv "$fixture_root/site/status/index.html" "$fixture_root/site/status/index.html.missing"
+mv "$fixture_root/site/python-aot-compilers/index.html" \
+  "$fixture_root/site/python-aot-compilers/index.html.missing"
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted a site with a missing evidence page" >&2
   exit 1
 fi
-mv "$fixture_root/site/status/index.html.missing" "$fixture_root/site/status/index.html"
+mv "$fixture_root/site/python-aot-compilers/index.html.missing" \
+  "$fixture_root/site/python-aot-compilers/index.html"
 
 python3 - "$fixture_root/site/architecture/index.html" <<'PY'
 from pathlib import Path
@@ -402,6 +465,61 @@ fi
 
 cp "$repo_root/site/architecture/index.html" \
   "$fixture_root/site/architecture/index.html"
+
+python3 - "$fixture_root/site/python-aot-compilers/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+source = "https://docs.exaloop.io/language/overview/"
+assert source in content
+path.write_text(content.replace(source, "https://example.com/codon/", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a comparison page without its official source link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/python-aot-compilers/index.html" \
+  "$fixture_root/site/python-aot-compilers/index.html"
+python3 - "$fixture_root/site/python-aot-compilers/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+disclosure = "Do not choose pycc for production today."
+assert disclosure in content
+path.write_text(content.replace(disclosure, "Choose pycc for production today.", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a comparison page without its pre-alpha warning" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/python-aot-compilers/index.html" \
+  "$fixture_root/site/python-aot-compilers/index.html"
+python3 - "$fixture_root/site/python-aot-compilers/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+disclosure = "Benchmarks</strong> none claimed"
+assert disclosure in content
+path.write_text(content.replace(disclosure, "Benchmarks</strong> not disclosed", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a comparison page without its no-benchmark disclosure" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/python-aot-compilers/index.html" \
+  "$fixture_root/site/python-aot-compilers/index.html"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
 from pathlib import Path
 import sys
@@ -409,7 +527,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 required = """  <url>
-    <loc>https://rotnov.github.io/pycc/status/</loc>"""
+    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>"""
 assert required in content
 start = content.index(required)
 end = content.index("  </url>", start) + len("  </url>\n")
