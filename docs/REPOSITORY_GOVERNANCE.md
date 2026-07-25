@@ -23,9 +23,11 @@ enforce the normal delivery path.
   non-expired `frontend-perf-current` artifact from the exact successful
   predecessor, compares untrusted PR timing through the hash-verified
   main-owned checker, and fails closed when that artifact is unavailable.
-  Only the reviewed steady-state workflow digest remains authorized. The
-  standalone `agent-policy` job provides faster feedback until its exact
-  context has run successfully on `main` and is added to branch protection.
+  The reviewed D-048 steady-state digest remains active; D-051 additionally
+  authorizes one inert paired-runner successor digest for a separate
+  byte-exact activation. The standalone `agent-policy` job provides faster
+  feedback until its exact context has run successfully on `main` and is
+  added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
   Requiring the author's own approval would deadlock every pull request. Enable one
   independent approval, stale-approval dismissal, and last-push approval when a
@@ -60,6 +62,33 @@ exact `before` SHA. Missing, expired, cancelled, or non-exact predecessor
 evidence is a hard failure; there is no reusable bootstrap or administrative
 feature flag. D-048 and D-050 preserve the historical activation lifecycle and
 the reason it was bounded.
+
+### Staged paired-runner successor (D-051)
+
+Three complete CI attempts for PR #107 measured a documentation-and-test-only
+candidate at `+80.82%`, `+12.82%`, and `+7.30%` against the same exact
+predecessor. The third candidate estimate had a narrow 95% confidence interval,
+so longer sampling on that host would not remove the observed cross-host
+offset. Re-running until a convenient hosted machine passes is not acceptable
+merge evidence.
+
+The reviewed `tests/fixtures/d51-paired-ci.yml` successor therefore checks out
+the exact predecessor and candidate, verifies their revisions and the complete
+bound benchmark-definition and build-configuration contract, and measures both
+sequentially on one runner with separate target state. It seals the predecessor
+artifact before candidate code runs, so a lingering same-user process cannot
+rewrite the trusted side of the pair. The gate binds both downloads to the
+distinct numeric artifact IDs emitted by the trusted upload steps, so deleting
+and replacing an artifact under the same name fails closed. Its isolated gate
+keeps the 2% threshold and hash-verified review boundary while using an
+exact-predecessor median comparator that is robust to isolated high outliers
+and accepts exactly two regular-file estimates. In this staging commit the
+fixture and digest are inert: `.github/workflows/ci.yml` remains byte-identical
+to the D-048 steady-state fixture, and the artifact lifecycle above remains the
+enforced contract. Activation requires a new up-to-date pull request that
+replaces the workflow byte-for-byte with the staged fixture, retires the D-048
+authorization, passes independent review and all required checks, and then
+succeeds on exact `main`.
 
 When a new check is introduced, first merge and observe it successfully on `main`,
 then add its exact reported context to branch protection. Never require a guessed or
