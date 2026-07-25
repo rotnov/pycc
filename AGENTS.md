@@ -107,6 +107,12 @@
   dependencies, then dispatches the most comprehensive eligible read-only
   reviewer in an independent local context. The current default engine is the
   pinned iEvo `deep-reviewer`.
+- Load the review workflow and execute its preparation helper only from the
+  exact merge-base commit with the refreshed remote default branch, never from
+  the pull-request branch, index, or working tree being reviewed. If that
+  trusted base predates the helper, use the documented bootstrap procedure with
+  host-provided read-only primitives; do not execute the newly introduced
+  helper before it has landed on the protected default branch.
 - The skill reviews staged or working-tree changes before commit. For an
   existing pull request with a clean tree, it reviews the full committed branch
   diff from its merge base with the refreshed remote default branch, not a

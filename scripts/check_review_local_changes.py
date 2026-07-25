@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.util
 import json
@@ -129,13 +130,24 @@ def validate_entrypoint(
     if client == "codex":
         wrapper = CODEX_WRAPPER.read_text(encoding="utf-8")
         assert ".claude/skills/review-local-changes/SKILL.md" in wrapper
+        assert "exact merge-base commit" in wrapper
+        assert "Never substitute the branch" in wrapper
     else:
         assert canonical_text.startswith("---\nname: review-local-changes\n")
     assert "scripts/prepare_review.py" in canonical_text
     assert "content_sources" in canonical_text
     assert "top-level `state`" in canonical_text
+    assert "git cat-file blob" in canonical_text
+    assert "untracked_added_content" in canonical_text
+    assert (
+        "python3 .claude/skills/review-local-changes/scripts/prepare_review.py"
+        not in canonical_text
+    )
     assert CODEX_METADATA.read_bytes() == CLAUDE_METADATA.read_bytes()
-    assert HELPER.read_text(encoding="utf-8").count('"--no-textconv"') == 8
+    helper_text = HELPER.read_text(encoding="utf-8")
+    assert helper_text.count('"--no-textconv"') == 8
+    assert '"GIT_OPTIONAL_LOCKS"] = "0"' in helper_text
+    assert '"--no-optional-locks"' in helper_text
 
     helper = load_helper()
     helper.validate_repository_pin(ROOT)
@@ -148,11 +160,14 @@ def validate_entrypoint(
         safe_manifest = root / "safe-reviewer.md"
         write_reviewer(safe_manifest, safe=True)
         safe_digest = hashlib.sha256(safe_manifest.read_bytes()).hexdigest()
+        index_path = repo / ".git/index"
+        index_before = index_path.read_bytes()
         result = helper.prepare_review(
             repo,
             safe_manifest,
             expected_reviewer_sha256=safe_digest,
         )
+        assert index_path.read_bytes() == index_before
         assert [scope["name"] for scope in result["scopes"]] == [
             "committed",
             "staged",
@@ -175,6 +190,17 @@ def validate_entrypoint(
             and len(source["sha256"]) == 64
             for source in working["content_sources"].values()
         )
+        untracked_payload = working["untracked_added_content"]["untracked.txt"]
+        assert untracked_payload["encoding"] == "base64"
+        assert base64.b64decode(untracked_payload["data"]) == b"untracked\n"
+        assert untracked_payload["sha256"] == hashlib.sha256(
+            b"untracked\n"
+        ).hexdigest()
+        assert untracked_payload["size"] == len(b"untracked\n")
+        assert (
+            untracked_payload["sha256"]
+            == working["content_sources"]["untracked.txt"]["sha256"]
+        )
         assert result["state"]["head"] == git_output(repo, "rev-parse", "HEAD")
         assert len(result["state"]["index_sha256"]) == 64
         assert len(result["state"]["status_sha256"]) == 64
@@ -196,6 +222,27 @@ def validate_entrypoint(
             != original_state["working_content_sources"]
         )
         tracked.write_text("working\n", encoding="utf-8")
+
+        untracked = repo / "untracked.txt"
+        untracked.write_text("secret-sentinel\n", encoding="utf-8")
+        same_status_untracked = helper.prepare_review(
+            repo,
+            safe_manifest,
+            expected_reviewer_sha256=safe_digest,
+        )
+        assert (
+            same_status_untracked["state"]["status_sha256"]
+            == original_state["status_sha256"]
+        )
+        changed_payload = same_status_untracked["state"][
+            "untracked_added_content"
+        ]["untracked.txt"]
+        assert base64.b64decode(changed_payload["data"]) == b"secret-sentinel\n"
+        assert (
+            changed_payload
+            != original_state["untracked_added_content"]["untracked.txt"]
+        )
+        untracked.write_text("untracked\n", encoding="utf-8")
 
         stable_state = helper.prepare_review(
             repo,
@@ -252,6 +299,28 @@ def validate_entrypoint(
             old_head,
             moved_head,
         )
+
+        flags_root = root / "index-flags-fixture"
+        flags_root.mkdir()
+        flags_repo = build_fixture(flags_root)
+        flags_tracked = flags_repo / "tracked.txt"
+        flags_tracked.write_text("base\n", encoding="utf-8")
+        for enable, disable, label in [
+            ("--assume-unchanged", "--no-assume-unchanged", "assume-unchanged"),
+            ("--skip-worktree", "--no-skip-worktree", "skip-worktree"),
+        ]:
+            git(flags_repo, "update-index", enable, "tracked.txt")
+            try:
+                helper.prepare_review(
+                    flags_repo,
+                    safe_manifest,
+                    expected_reviewer_sha256=safe_digest,
+                )
+            except helper.ReviewPreparationError as error:
+                assert label in str(error)
+            else:
+                raise AssertionError(f"{label} index entry was accepted")
+            git(flags_repo, "update-index", disable, "tracked.txt")
 
         unsafe_manifest = root / "unsafe-reviewer.md"
         write_reviewer(unsafe_manifest, safe=False)

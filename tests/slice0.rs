@@ -12,6 +12,10 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
     path
 }
 
+fn rendered_diagnostic_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 #[test]
 fn a_missing_input_file_is_a_clean_error_not_a_panic() {
     // Regression test (found in PR review): an earlier version used
@@ -771,7 +775,7 @@ fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         assert_eq!(output.status.code(), Some(1));
-        assert!(stderr.contains(&format!("{}:2:1", src.display())));
+        assert!(stderr.contains(&format!("{}:2:1", rendered_diagnostic_path(&src))));
         assert!(stderr.contains("2 | x = 1\n"));
         assert!(!stderr.contains("x = 1\r"));
     }
@@ -889,12 +893,12 @@ fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(stderr.contains(invalid.to_str().unwrap()));
+    assert!(stderr.contains(&rendered_diagnostic_path(&invalid)));
     assert!(stderr.contains("L0001"));
-    assert!(stderr.contains(&format!("{}:2:1", invalid.display())));
+    assert!(stderr.contains(&format!("{}:2:1", rendered_diagnostic_path(&invalid))));
     assert!(stderr.contains("2 | $"));
     assert!(stderr.contains("  | ^"));
-    assert!(stderr.contains(missing.to_str().unwrap()));
+    assert!(stderr.contains(&rendered_diagnostic_path(&missing)));
     assert!(stderr.contains("could not read"));
 }
 
@@ -914,7 +918,7 @@ fn check_rejects_a_currently_unsupported_construct_without_panicking() {
 
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr.contains("C0001"));
-    assert!(stderr.contains(&format!("{}:2:5", src.display())));
+    assert!(stderr.contains(&format!("{}:2:5", rendered_diagnostic_path(&src))));
     assert!(stderr.contains("2 |     x = 1"));
     assert!(stderr.contains("  |     ^^^^^ unsupported by this pycc version"));
     assert!(!stderr.contains("panicked"));
@@ -934,7 +938,7 @@ fn check_aligns_a_diagnostic_caret_after_tab_indentation() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains(&format!("{}:2:2", src.display())));
+    assert!(stderr.contains(&format!("{}:2:2", rendered_diagnostic_path(&src))));
     assert!(stderr.contains("2 | \tx = 1"));
     assert!(stderr.contains("  | \t^^^^^"));
 }
@@ -985,7 +989,7 @@ fn check_sizes_the_diagnostic_gutter_for_three_digit_line_numbers() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr.contains(&format!("{}:100:1", src.display())));
+    assert!(stderr.contains(&format!("{}:100:1", rendered_diagnostic_path(&src))));
     assert!(stderr.contains("100 | x = 1"));
     assert!(stderr.contains("    | ^^^^^"));
 }

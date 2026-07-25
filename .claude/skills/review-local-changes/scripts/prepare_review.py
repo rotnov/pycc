@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -26,9 +27,12 @@ class ReviewPreparationError(RuntimeError):
 
 
 def run_git(repo: Path, *args: str, allow_failure: bool = False) -> bytes:
+    environment = os.environ.copy()
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
     result = subprocess.run(
-        ["git", "-C", os.fspath(repo), *args],
+        ["git", "--no-optional-locks", "-C", os.fspath(repo), *args],
         check=False,
+        env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -551,7 +555,23 @@ def ref_object_id(repo: Path, reference: str) -> str:
 
 
 def index_identity(repo: Path) -> str:
-    return sha256_bytes(run_git(repo, "ls-files", "--stage", "-z"))
+    stage_entries = run_git(repo, "ls-files", "--stage", "-z")
+    flag_entries = run_git(repo, "ls-files", "-v", "-z")
+    for record in flag_entries.split(b"\0"):
+        if not record:
+            continue
+        if len(record) < 3 or record[1:2] != b" ":
+            raise ReviewPreparationError("could not parse Git index flags")
+        tag = chr(record[0])
+        if tag == "S" or tag.islower():
+            path = os.fsdecode(record[2:])
+            raise ReviewPreparationError(
+                "review requires ordinary tracked-file visibility; "
+                f"clear assume-unchanged/skip-worktree for {path!r}"
+            )
+    return sha256_bytes(
+        stage_entries + b"\0review-index-flags\0" + flag_entries
+    )
 
 
 def status_identity(repo: Path) -> str:
@@ -566,11 +586,17 @@ def status_identity(repo: Path) -> str:
     )
 
 
-def worktree_content_sources(
+def worktree_content_state(
     repo: Path,
     relative_paths: list[str],
-) -> dict[str, dict[str, object]]:
+    untracked_paths: list[str],
+) -> tuple[
+    dict[str, dict[str, object]],
+    dict[str, dict[str, object]],
+]:
     sources: dict[str, dict[str, object]] = {}
+    untracked = set(untracked_paths)
+    added_content: dict[str, dict[str, object]] = {}
     for relative_path in relative_paths:
         raw = read_regular_file_without_symlinks(repo, relative_path)
         sources[relative_path] = {
@@ -578,7 +604,14 @@ def worktree_content_sources(
             "sha256": sha256_bytes(raw),
             "size": len(raw),
         }
-    return sources
+        if relative_path in untracked:
+            added_content[relative_path] = {
+                "encoding": "base64",
+                "data": base64.b64encode(raw).decode("ascii"),
+                "sha256": sha256_bytes(raw),
+                "size": len(raw),
+            }
+    return sources, added_content
 
 
 def resolve_default_ref(repo: Path, explicit: str | None) -> str:
@@ -607,10 +640,12 @@ def append_scope(
     files: list[str],
     excluded_entries: list[dict[str, str]] | None = None,
     content_sources: dict[str, dict[str, object]] | None = None,
+    untracked_added_content: dict[str, dict[str, object]] | None = None,
 ) -> None:
     entries = excluded_entries or []
     sources = content_sources or {}
-    if diff or files or entries:
+    added_content = untracked_added_content or {}
+    if diff or files or entries or added_content:
         scopes.append(
             {
                 "name": name,
@@ -619,6 +654,9 @@ def append_scope(
                 "excluded_entries": entries,
                 "content_sources": {
                     path: sources[path] for path in sorted(sources)
+                },
+                "untracked_added_content": {
+                    path: added_content[path] for path in sorted(added_content)
                 },
             }
         )
@@ -769,7 +807,11 @@ def prepare_review(
         repo,
         [*working_files, *untracked_files],
     )
-    working_sources = worktree_content_sources(repo, working_regular)
+    working_sources, working_added_content = worktree_content_state(
+        repo,
+        working_regular,
+        untracked_files,
+    )
     append_scope(
         scopes,
         "working",
@@ -777,6 +819,7 @@ def prepare_review(
         working_regular,
         working_excluded,
         working_sources,
+        working_added_content,
     )
 
     final_head = head_object_id(repo)
@@ -809,9 +852,13 @@ def prepare_review(
         repo,
         [*final_working_files, *final_untracked_files],
     )
-    final_working_sources = worktree_content_sources(
+    (
+        final_working_sources,
+        final_working_added_content,
+    ) = worktree_content_state(
         repo,
         final_working_regular,
+        final_untracked_files,
     )
     if (
         final_head != prepared_head
@@ -824,6 +871,7 @@ def prepare_review(
         or final_working_regular != working_regular
         or final_working_excluded != working_excluded
         or final_working_sources != working_sources
+        or final_working_added_content != working_added_content
     ):
         raise ReviewPreparationError(
             "repository state changed while review scopes were prepared"
@@ -843,6 +891,7 @@ def prepare_review(
             "index_sha256": prepared_index,
             "status_sha256": prepared_status,
             "working_content_sources": working_sources,
+            "untracked_added_content": working_added_content,
         },
         "scopes": scopes,
     }

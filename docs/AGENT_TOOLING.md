@@ -34,9 +34,11 @@ script replaces a same-named registration from another checkout, registers this
 repository as the marketplace, and installs only the pinned iEvo plugin.
 Repository-owned Codex entry points live under `.agents/skills/`, so Codex discovers
 them only while this checkout is active; they are never installed globally or made
-available to unrelated repositories. The entry points load the canonical workflow
-bodies from this checkout's `.claude/skills/`, and CI requires the two skill sets and
-their discovery metadata to stay in lockstep.
+available to unrelated repositories. Ordinary entry points load canonical workflow
+bodies from this checkout's `.claude/skills/`; the security-sensitive local-review
+entrypoint instead loads its canonical body from the exact merge-base commit with the
+refreshed protected default branch. CI requires the two skill sets and their discovery
+metadata to stay in lockstep.
 Claude Code reads the project-scoped marketplace declaration after the repository is
 trusted and enables the configured plugin without enabling automatic updates.
 The `Agent assets` workflow repeats the validators plus isolated Codex and Claude Code
@@ -241,6 +243,17 @@ non-ignored files. A future engine becomes eligible only after it passes the
 reviewed update process and is added to the repository-owned wrapper and pin
 table.
 
+The orchestrator never executes the helper from the branch, index, or working
+tree under review. It resolves the exact merge base with the refreshed remote
+default branch, loads the helper from that immutable protected-branch Git blob,
+and executes those trusted bytes without writing them into the checkout. A
+bootstrap pull request whose trusted base predates the helper uses only
+client-hosted read-only Git and file primitives to prepare equivalent scopes
+and reviews the proposed helper as inert source. It must not execute the new
+helper merely because that copy is available in the pull-request checkout.
+After the bootstrap lands, later helper changes are prepared by the previous
+trusted default-branch implementation.
+
 The helper binds preparation to iEvo commit
 `7d5f3e12d0556cb6c5df2974e2babe0433674186` and reviewer SHA-256
 `b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2`.
@@ -253,7 +266,10 @@ committed, staged, tracked-working, and untracked path is classified before
 dispatch. Only regular non-symlink files enter the reviewer's file-read list;
 symlinks, symlinked path components, gitlinks, and deleted paths are described
 as inert metadata without following them. Preparation fails closed on a
-platform that cannot provide the race-safe no-follow primitive.
+platform that cannot provide the race-safe no-follow primitive. Every helper
+Git subprocess disables optional locks, and preparation rejects
+assume-unchanged or skip-worktree index entries instead of allowing those flags
+to hide a tracked-file mutation.
 
 For uncommitted work, the selected skill reviews the staged or working-tree
 diff. For a clean pull-request branch, it reviews the committed range from the
@@ -282,9 +298,13 @@ subagent receives the same verified instructions, no mutation or network
 authority, and the workflow rejects the run if a before/after Git status
 snapshot changes. Preparation also records exact commit and default-ref IDs,
 the index identity, worktree/untracked content hashes, and immutable blob IDs
-for committed and staged file reads. The helper is rerun after dispatch; any
-state or content-source mismatch invalidates the review even when porcelain
-status text stayed unchanged.
+for committed and staged file reads. Because ordinary Git diffs omit untracked
+files, their complete bytes are carried separately as base64-encoded
+authoritative added-content payloads; the reviewer verifies their hashes and
+includes them in every checklist category, including leaked-secret review.
+The trusted-base helper is rerun after dispatch; any state, content-source, or
+untracked-payload mismatch invalidates the review even when porcelain status
+text stayed unchanged.
 
 ## Rollback
 
