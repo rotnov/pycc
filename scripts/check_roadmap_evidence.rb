@@ -15,7 +15,7 @@ EVIDENCE_CLAIMS = {
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
-  "/Users/runner/.cargo/bin/cargo-llvm-cov --workspace " \
+  "/Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace " \
   "--fail-under-lines 100 --fail-under-regions 100"
 COVERAGE_SCRIPT = <<~SHELL.strip
   set -euo pipefail
@@ -25,7 +25,7 @@ COVERAGE_SCRIPT = <<~SHELL.strip
   cd "$RUNNER_TEMP"
   /Users/runner/.cargo/bin/cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
   cd "$GITHUB_WORKSPACE"
-  /Users/runner/.cargo/bin/cargo-llvm-cov --version
+  /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --version
   #{COVERAGE_COMMAND}
 SHELL
 TRUSTED_COVERAGE_ENV = {

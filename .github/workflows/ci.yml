@@ -47,8 +47,8 @@ jobs:
           cd "$RUNNER_TEMP"
           /Users/runner/.cargo/bin/cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
           cd "$GITHUB_WORKSPACE"
-          /Users/runner/.cargo/bin/cargo-llvm-cov --version
-          /Users/runner/.cargo/bin/cargo-llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+          /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --version
+          /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
 
       - name: Check workflow permission policy
         run: |

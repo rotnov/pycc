@@ -14,7 +14,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
-    "/Users/runner/.cargo/bin/cargo-llvm-cov --workspace " \
+    "/Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace " \
     "--fail-under-lines 100 --fail-under-regions 100"
 
   def coverage_workflow(command = COVERAGE_COMMAND)
@@ -45,7 +45,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
                 cd "$RUNNER_TEMP"
                 /Users/runner/.cargo/bin/cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
                 cd "$GITHUB_WORKSPACE"
-                /Users/runner/.cargo/bin/cargo-llvm-cov --version
+                /Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --version
                 #{command}
     YAML
   end
@@ -146,7 +146,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(
       roadmap: roadmap,
       workflow: coverage_workflow(
-        "/Users/runner/.cargo/bin/cargo-llvm-cov --workspace " \
+        "/Users/runner/.cargo/bin/cargo-llvm-cov llvm-cov --workspace " \
         "--fail-under-lines 99 --fail-under-regions 100"
       )
     )
