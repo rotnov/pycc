@@ -31,6 +31,15 @@ pub fn execute() -> ExitCode {
 /// failure. `?` inside this function needs a `Result`, not an `ExitCode`
 /// directly -- `run` then just propagates whatever `Err` it gets.
 fn try_build(path: &str, out: &str) -> Result<(), ExitCode> {
+    let workspace = report_workspace_result(create_temp_workspace())?;
+    try_build_in(path, std::path::Path::new(out), workspace.path())
+}
+
+fn try_build_in(
+    path: &str,
+    out: &std::path::Path,
+    workspace: &std::path::Path,
+) -> Result<(), ExitCode> {
     let source = std::fs::read_to_string(path).map_err(|e| {
         eprintln!("error: could not read `{path}`: {e}");
         ExitCode::from(2)
@@ -46,7 +55,7 @@ fn try_build(path: &str, out: &str) -> Result<(), ExitCode> {
     pycc_types::check(&hir).expect("v0.1's type checker is a no-op passthrough; it never fails");
     let mir = pycc_mir::build(&hir);
 
-    let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
+    let obj_path = workspace.join("program.o");
     emit_and_link(
         &mir,
         &obj_path,
@@ -62,7 +71,7 @@ type RuntimeWriter = fn(&std::path::Path) -> std::io::Result<()>;
 fn emit_and_link(
     mir: &pycc_mir::MirModule,
     obj_path: &std::path::Path,
-    out: &str,
+    out: &std::path::Path,
     codegen: CodegenFn,
     write_runtime: RuntimeWriter,
 ) -> Result<(), ExitCode> {
@@ -72,8 +81,32 @@ fn emit_and_link(
     report_link_result(pycc_codegen::link_object_with_runtime(
         obj_path,
         &rt_source_path,
-        std::path::Path::new(out),
+        out,
     ))
+}
+
+fn create_temp_workspace() -> std::io::Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("pycc-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    builder.tempdir()
+}
+
+fn report_workspace_result(
+    result: std::io::Result<tempfile::TempDir>,
+) -> Result<tempfile::TempDir, ExitCode> {
+    match result {
+        Ok(workspace) => Ok(workspace),
+        Err(error) => {
+            eprintln!("error: could not create a private temporary workspace: {error}");
+            Err(ExitCode::from(1))
+        }
+    }
 }
 
 fn report_codegen_result(result: Result<(), String>) -> Result<(), ExitCode> {
@@ -107,11 +140,12 @@ fn report_link_result(result: Result<(), String>) -> Result<(), ExitCode> {
 }
 
 fn run(path: &str, args: &[std::ffi::OsString]) -> ExitCode {
-    let out = run_output_path(std::process::id());
-    if let Err(code) = try_build(
-        path,
-        out.to_str().expect("temp dir path should be valid UTF-8"),
-    ) {
+    let workspace = match report_workspace_result(create_temp_workspace()) {
+        Ok(workspace) => workspace,
+        Err(code) => return code,
+    };
+    let out = run_output_path(workspace.path());
+    if let Err(code) = try_build_in(path, &out, workspace.path()) {
         return code;
     }
     let status = program_command(&out, args)
@@ -120,11 +154,8 @@ fn run(path: &str, args: &[std::ffi::OsString]) -> ExitCode {
     ExitCode::from(status.code().unwrap_or(1) as u8)
 }
 
-fn run_output_path(process_id: u32) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "pycc_run_{process_id}{}",
-        std::env::consts::EXE_SUFFIX
-    ))
+fn run_output_path(workspace: &std::path::Path) -> std::path::PathBuf {
+    workspace.join(format!("program{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn program_command(path: &std::path::Path, args: &[std::ffi::OsString]) -> std::process::Command {
@@ -154,12 +185,45 @@ mod tests {
     }
 
     #[test]
-    fn run_output_uses_the_platform_executable_suffix() {
-        let path = run_output_path(42);
+    fn run_output_stays_inside_the_private_workspace() {
+        let workspace = std::path::Path::new("private-workspace");
+        let path = run_output_path(workspace);
+        assert_eq!(path.parent(), Some(workspace));
         assert_eq!(
             path.file_name().and_then(std::ffi::OsStr::to_str),
-            Some(format!("pycc_run_42{}", std::env::consts::EXE_SUFFIX).as_str())
+            Some(format!("program{}", std::env::consts::EXE_SUFFIX).as_str())
         );
+    }
+
+    #[test]
+    fn workspace_creation_failures_map_to_compile_error_exit_code() {
+        assert_eq!(
+            report_workspace_result(Err(std::io::Error::other("temp unavailable"))).err(),
+            Some(ExitCode::from(1))
+        );
+    }
+
+    #[test]
+    fn temporary_workspaces_are_unique_and_private() {
+        let first = create_temp_workspace().unwrap();
+        let second = create_temp_workspace().unwrap();
+        assert_ne!(first.path(), second.path());
+        assert!(first.path().starts_with(std::env::temp_dir()));
+        assert!(second.path().starts_with(std::env::temp_dir()));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                std::fs::metadata(first.path())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
     }
 
     #[test]
@@ -173,7 +237,7 @@ mod tests {
             emit_and_link(
                 &mir,
                 std::path::Path::new("unused.o"),
-                "unused",
+                std::path::Path::new("unused"),
                 fail_codegen,
                 pycc_rt::write_c_runtime,
             ),
@@ -199,7 +263,7 @@ mod tests {
             emit_and_link(
                 &mir,
                 std::path::Path::new("unused.o"),
-                "unused",
+                std::path::Path::new("unused"),
                 succeed_codegen,
                 fail_runtime,
             ),
@@ -209,11 +273,11 @@ mod tests {
 
     #[test]
     fn emit_and_link_succeeds_with_the_real_codegen_and_runtime() {
-        let dir =
-            std::env::temp_dir().join(format!("pycc_driver_unit_success_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let obj_path = dir.join("program.o");
-        let bin_path = dir.join(format!("program{}", std::env::consts::EXE_SUFFIX));
+        let dir = create_temp_workspace().unwrap();
+        let obj_path = dir.path().join("program.o");
+        let bin_path = dir
+            .path()
+            .join(format!("program{}", std::env::consts::EXE_SUFFIX));
         let mir = pycc_mir::MirModule {
             items: vec![pycc_mir::MirItem::TopLevelStmt(
                 pycc_mir::MirInstr::CallPrint { arg: 42 },
@@ -224,7 +288,7 @@ mod tests {
             emit_and_link(
                 &mir,
                 &obj_path,
-                bin_path.to_str().unwrap(),
+                &bin_path,
                 pycc_codegen::compile_to_object,
                 pycc_rt::write_c_runtime,
             ),
@@ -236,11 +300,9 @@ mod tests {
 
     #[test]
     fn emit_and_link_reports_a_linker_failure() {
-        let dir =
-            std::env::temp_dir().join(format!("pycc_driver_unit_link_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let obj_path = dir.join("program.o");
-        let bad_bin_path = dir.join("missing").join("program");
+        let dir = create_temp_workspace().unwrap();
+        let obj_path = dir.path().join("program.o");
+        let bad_bin_path = dir.path().join("missing").join("program");
         let mir = pycc_mir::MirModule {
             items: vec![pycc_mir::MirItem::TopLevelStmt(
                 pycc_mir::MirInstr::CallPrint { arg: 42 },
@@ -251,7 +313,7 @@ mod tests {
             emit_and_link(
                 &mir,
                 &obj_path,
-                bad_bin_path.to_str().unwrap(),
+                &bad_bin_path,
                 pycc_codegen::compile_to_object,
                 pycc_rt::write_c_runtime,
             ),

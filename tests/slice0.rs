@@ -151,6 +151,31 @@ fn run_subcommand_propagates_a_build_failure() {
 }
 
 #[test]
+fn build_and_run_report_private_workspace_creation_failures() {
+    let parent = tempfile::tempdir().unwrap();
+    let missing_temp_root = parent.path().join("does-not-exist");
+
+    for arguments in [
+        vec!["build", "unused.py", "-o", "unused"],
+        vec!["run", "unused.py"],
+    ] {
+        let output = Command::new(pycc_bin())
+            .args(arguments)
+            .env("TMPDIR", &missing_temp_root)
+            .env("TMP", &missing_temp_root)
+            .env("TEMP", &missing_temp_root)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains("could not create a private temporary workspace"),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
 fn version_flag_prints_something() {
     let output = Command::new(pycc_bin())
         .args(["version", "--verbose"])

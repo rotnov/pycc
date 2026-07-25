@@ -6,14 +6,22 @@ requirement — see ARCHITECTURE.md).
 
 The v0.1 bootstrap is deliberately narrower than the final runtime: the `pycc_rt` Rust
 crate embeds a target-independent C implementation of the two available ABI helpers
-(`print(i64)` and `NameError`). The compiler materializes that source and passes it to
-the same target-aware Clang driver as the generated object. The driver always receives
-LLVM's exact effective target triple; MSVC targets additionally select bundled LLD,
-so a `cc` executable that happens to resolve to MinGW cannot consume an MSVC object.
+(`print(i64)` and `NameError`). LLVM's native `TargetMachine` emits the program object
+directly. The link step materializes the C source, independently obtains LLVM's native
+target triple, and passes that triple to a Clang-compatible driver that compiles the
+bootstrap and links it with the program object. MSVC targets additionally select
+bundled LLD, so a `cc` executable that happens to resolve to MinGW cannot consume an
+MSVC object. This v0.1 path is host-native; the planned `--target` implementation must
+thread one explicit target through both LLVM emission and Clang compilation/linking.
 `PYCC_CLANG_<NORMALIZED_TARGET>` and then `PYCC_CLANG` provide explicit,
 Clang-compatible tool overrides; an unavailable driver is a clean compile error. This
 makes the runtime a real packaged dependency without looking up Cargo's profile- or
 target-specific static-library artifacts.
+
+Every compilation uses a newly created private temporary directory for its object and
+materialized runtime source. `pycc run` also places the executable there and retains
+the directory guard until the child process exits, preventing predictable shared-temp
+paths, symlink truncation, and replacement between link and execution.
 
 The bootstrap writes protocol output as exact bytes. On Windows it switches the C
 stdout/stderr descriptors to binary mode before emitting `\n`, preventing the CRT

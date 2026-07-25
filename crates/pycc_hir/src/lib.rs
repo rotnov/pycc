@@ -159,10 +159,10 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
     }
 }
 
-// The callable core namespace reported by CPython 3.14 with site initialization
-// disabled (`python3.14 -S`), plus the existing `help` surface. Keeping exception
-// classes and interpreter helpers here prevents unsupported builtins from being
-// misclassified as user functions.
+// The callable namespace reported by CPython 3.14, including the helpers that
+// `site` installs during normal startup. Keeping exception classes and interpreter
+// helpers here prevents unsupported builtins from being misclassified as user
+// functions.
 const PYTHON_314_CALLABLE_BUILTINS: &[&str] = &[
     "ArithmeticError",
     "AssertionError",
@@ -254,6 +254,8 @@ const PYTHON_314_CALLABLE_BUILTINS: &[&str] = &[
     "classmethod",
     "compile",
     "complex",
+    "copyright",
+    "credits",
     "delattr",
     "dict",
     "dir",
@@ -261,6 +263,7 @@ const PYTHON_314_CALLABLE_BUILTINS: &[&str] = &[
     "enumerate",
     "eval",
     "exec",
+    "exit",
     "filter",
     "float",
     "format",
@@ -278,6 +281,7 @@ const PYTHON_314_CALLABLE_BUILTINS: &[&str] = &[
     "issubclass",
     "iter",
     "len",
+    "license",
     "list",
     "locals",
     "map",
@@ -292,6 +296,7 @@ const PYTHON_314_CALLABLE_BUILTINS: &[&str] = &[
     "pow",
     "print",
     "property",
+    "quit",
     "range",
     "repr",
     "reversed",
@@ -424,7 +429,17 @@ mod tests {
 
     #[test]
     fn builtin_callable_classes_and_helpers_are_compile_diagnostics() {
-        for name in ["ValueError", "Exception", "TypeError", "__build_class__"] {
+        for name in [
+            "ValueError",
+            "Exception",
+            "TypeError",
+            "__build_class__",
+            "quit",
+            "exit",
+            "copyright",
+            "credits",
+            "license",
+        ] {
             assert_unsupported(&format!("{name}()\n"), &format!("Python builtin `{name}`"));
         }
     }

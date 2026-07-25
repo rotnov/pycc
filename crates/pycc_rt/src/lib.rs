@@ -2,10 +2,11 @@
 //!
 //! Generated object files call C-ABI functions from this runtime. The
 //! target-independent C source is embedded in `pycc` through this crate and
-//! compiled by the same compiler driver, for the same target, as the
-//! generated object. This avoids a hidden dependency on a sibling
-//! `target/debug` archive and keeps release builds, custom
-//! `CARGO_TARGET_DIR` values, and cross-target builds on the same path.
+//! compiled by a target-aware compiler driver during the final link for the
+//! same native target as the LLVM-emitted object. This avoids a hidden
+//! dependency on a sibling `target/debug` archive and keeps release builds
+//! and custom `CARGO_TARGET_DIR` values on the same path. Explicit
+//! cross-target selection remains future work.
 
 use std::path::Path;
 
@@ -63,5 +64,25 @@ mod tests {
         assert_eq!(std::fs::read_to_string(path).unwrap(), C_RUNTIME_SOURCE);
         assert!(C_RUNTIME_SOURCE.contains("exit(101);"));
         assert!(C_RUNTIME_SOURCE.contains("_setmode(_fileno(stream), _O_BINARY)"));
+    }
+
+    #[test]
+    fn exported_helpers_match_the_v0_1_abi_allowlist() {
+        let exported_helpers = C_RUNTIME_SOURCE
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("void pycc_rt_"))
+            .map(|definition| {
+                let suffix = definition
+                    .split_once('(')
+                    .expect("an exported runtime helper must be a function definition")
+                    .0;
+                format!("pycc_rt_{suffix}")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            exported_helpers,
+            ["pycc_rt_print_i64", "pycc_rt_name_error"]
+        );
     }
 }

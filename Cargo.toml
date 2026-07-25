@@ -40,3 +40,4 @@ pycc_types = { path = "crates/pycc_types" }
 pycc_mir = { path = "crates/pycc_mir" }
 pycc_codegen = { path = "crates/pycc_codegen" }
 pycc_rt = { path = "crates/pycc_rt" }
+tempfile = "3"
