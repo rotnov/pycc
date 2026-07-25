@@ -12,9 +12,23 @@ jobs:
   main-history-audit:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the history under audit
+        uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          path: audited-repository
+
+      - name: Check out the trusted audit implementation
+        uses: actions/checkout@v4
+        with:
+          # Reviewed independently of the pushed revision. Update only after
+          # the replacement implementation passes its tests and review.
+          ref: 2d9fcd1b4135caef19b6ebad7bf96f7111f2258d
+          fetch-depth: 1
+          path: audit-implementation
+          sparse-checkout: scripts/check_main_history.py
+          sparse-checkout-cone-mode: false
 
       - name: Require every pushed main commit to belong to a merged PR
         env:
@@ -24,4 +38,5 @@ jobs:
           AUDIT_AFTER: ${{ github.sha }}
           AUDIT_CREATED: ${{ github.event.created }}
           AUDIT_FORCED: ${{ github.event.forced }}
-        run: python3 scripts/check_main_history.py
+        working-directory: audited-repository
+        run: python3 ../audit-implementation/scripts/check_main_history.py

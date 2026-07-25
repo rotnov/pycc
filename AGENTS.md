@@ -67,6 +67,7 @@
 - While the repository has only one maintainer, require zero approving reviews so the PR path remains usable; enable an independent approving review when a second human maintainer is available.
 - Administrators and automation credentials do not bypass the rule for ordinary work. The emergency procedure, audit expectations, and recovery steps live in [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md).
 - A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
+- The push audit must execute an immutable reviewed `scripts/check_main_history.py`, never the revision being audited. Update its pinned commit only after the replacement implementation passes its focused tests and current-head review.
 
 ## Testing and hard coverage gate
 
