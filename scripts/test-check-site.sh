@@ -503,14 +503,20 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "and greater-than-2% regression gate are seeding their first",
+        "and greater-than-2% regression gate are active",
         "and the regression gate remains informational during activation",
         "status page without the required activation-phase gate",
     ),
     (
         site_dir / "status" / "index.html",
-        "main-owned baseline, or the gate is in bootstrap-free steady state.",
-        "main-owned baseline.",
+        "retained both before and after that artifact is published",
+        "retained only until that artifact is published",
+        "status page that covers only the pre-seed activation interval",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "or the gate is in bootstrap-free steady state.",
+        "and the activation phase remains indefinitely.",
         "status page without the bootstrap-free steady phase",
     ),
     (

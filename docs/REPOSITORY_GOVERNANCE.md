@@ -23,9 +23,11 @@ enforce the normal delivery path.
   authorize both the activation and bootstrap-free steady-state workflow
   digests, preserve the pre-split bytes for transition tests, and pre-stage
   D-050's phase-aware status wording. The tracked `ci.yml` bytes determine
-  whether the performance jobs are still absent, active under the one-shot
-  bootstrap, or active in bootstrap-free steady state. Activation must use the
-  final reviewed workflow-only head recorded in `PERF_ACTIVATION_HEAD`, and the
+  whether the performance jobs are still absent, active in the activation
+  phase with the bootstrap path retained both before and after its first
+  artifact is published, or active in bootstrap-free steady state. Activation
+  must use the final reviewed workflow-only head recorded in
+  `PERF_ACTIVATION_HEAD`, and the
   variable/bootstrap/activation digest must be removed after the first main
   artifact while the steady-state digest remains. The
   standalone `agent-policy` job provides faster feedback until its exact

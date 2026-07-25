@@ -86,12 +86,15 @@ and an immediate post-seed cleanup. D-049 preserves the exact pre-split
 workflow as an inert predecessor fixture so activation tests remain hermetic
 after the live workflow changes. D-050 pre-stages phase-aware current-status
 wording so the required workflow-only activation commit cannot make the
-repository or public status stale: the tracked workflow's byte identity selects the pre-split,
-activation, or steady-state claim. D-048 remains in transition until the
-tracked workflow reaches steady state and cleanup removes the bootstrap state;
-PR-5 does not proceed before then. This remains deliberately lightweight and distinct from
-the full pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer
-7), which stays out of scope until v0.2.
+repository or public status stale: the tracked workflow's byte identity
+selects the pre-split, activation, or steady-state claim without inferring
+whether the first artifact has already been published from
+activation-workflow bytes. D-048 remains in
+transition until the tracked workflow reaches steady state and cleanup removes
+the bootstrap state; PR-5 does not proceed before then. This remains
+deliberately lightweight and distinct from the full
+pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which
+stays out of scope until v0.2.
 
 ## Autonomy policy ("no questions" mechanics)
 
