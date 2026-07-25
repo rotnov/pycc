@@ -95,6 +95,74 @@ class CodexReviewRetryTests(unittest.TestCase):
         self.assertEqual(comments[1]["headRefOid"], HEAD)
         self.assertEqual(comments[1]["author"]["login"], gate.CODEX_LOGIN)
 
+    def test_timeline_force_push_uses_github_commit_id_shape(self) -> None:
+        events = [
+            {
+                "event": "head_ref_force_pushed",
+                "commit_id": HEAD,
+            },
+            {
+                "event": "commented",
+                "user": {"login": "owner"},
+                "author_association": "OWNER",
+                "body": "@codex review",
+                "created_at": "2026-07-24T20:06:00Z",
+                "html_url": "https://example.test/request",
+            },
+        ]
+        comments = gate.timeline_comments(events)
+        self.assertEqual(comments[0]["headRefOid"], HEAD)
+        self.assertEqual(
+            gate.classify(
+                {
+                    **payload(),
+                    "comments": comments,
+                },
+                NOW,
+            )[0],
+            "RETRY_ALLOWED",
+        )
+
+    def test_timeline_force_push_supports_legacy_after_commit_shapes(self) -> None:
+        for key in ("sha", "oid"):
+            with self.subTest(key=key):
+                events = [
+                    {
+                        "event": "head_ref_force_pushed",
+                        "after_commit": {key: HEAD},
+                    },
+                    {
+                        "event": "commented",
+                        "user": {"login": "owner"},
+                        "author_association": "OWNER",
+                        "body": "@codex review",
+                        "created_at": "2026-07-24T20:55:00Z",
+                        "html_url": "https://example.test/request",
+                    },
+                ]
+                comments = gate.timeline_comments(events)
+                self.assertEqual(comments[0]["headRefOid"], HEAD)
+                self.assertEqual(
+                    gate.classify(
+                        {
+                            **payload(),
+                            "comments": comments,
+                        },
+                        NOW,
+                    )[0],
+                    "WAIT",
+                )
+
+    def test_unknown_force_push_shape_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no target commit"):
+            gate.timeline_comments(
+                [
+                    {
+                        "event": "head_ref_force_pushed",
+                    }
+                ]
+            )
+
     def test_old_request_does_not_consume_new_head_budget(self) -> None:
         data = payload()
         data["comments"] = [
