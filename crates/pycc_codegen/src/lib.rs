@@ -6,7 +6,7 @@ use inkwell::targets::{
 };
 use inkwell::types::IntType;
 use inkwell::values::FunctionValue;
-use pycc_mir::{MirExpr, MirInstr, MirItem, MirModule};
+use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -62,8 +62,8 @@ pub fn compile_to_object(
     let entry_block = context.append_basic_block(entry_fn, "entry");
     builder.position_at_end(entry_block);
     for item in &mir.items {
-        if let MirItem::TopLevelStmt(instr) = item {
-            emit_instr(&builder, print_fn, &user_functions, i64_type, instr)?;
+        if let MirItem::TopLevelStmt(stmt) = item {
+            emit_stmt(&builder, print_fn, &user_functions, i64_type, stmt)?;
         }
     }
     // See the module-level comment block below for why these .expect()s
@@ -82,12 +82,12 @@ pub fn compile_to_object(
     // Second pass: fill in each user function's body, now that every
     // function (including ones a body might call) is already declared.
     for item in &mir.items {
-        if let MirItem::Function { name, body } = item {
+        if let MirItem::Function { name, body, .. } = item {
             let f = user_functions[name.as_str()];
             let block = context.append_basic_block(f, "entry");
             builder.position_at_end(block);
-            for instr in body {
-                emit_instr(&builder, print_fn, &user_functions, i64_type, instr)?;
+            for stmt in body {
+                emit_stmt(&builder, print_fn, &user_functions, i64_type, stmt)?;
             }
             builder
                 .build_return(None)
@@ -179,40 +179,68 @@ fn verify_module(module: &inkwell::module::Module<'_>) {
     );
 }
 
-fn emit_instr<'ctx>(
+/// Only the two statement shapes existing tests already exercise (a
+/// `print(<int literal>)` call and a zero-arg user-function call) are
+/// handled here -- every other `MirStmt`/`MirExpr` shape `pycc_mir` can now
+/// represent (control flow, arithmetic, string/float/bool values, functions
+/// with real parameters, ...) hits an explicit panic naming this crate: a
+/// deliberate, temporary boundary this PR's later tasks replace arm by arm,
+/// not new codegen work landing in this task.
+fn emit_stmt<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     print_fn: FunctionValue<'ctx>,
     user_functions: &HashMap<&str, FunctionValue<'ctx>>,
     i64_type: IntType<'ctx>,
-    instr: &MirInstr,
+    stmt: &MirStmt,
 ) -> Result<(), String> {
-    match instr {
-        MirInstr::CallPrint {
-            arg: MirExpr::IntLiteral(n),
-        } => {
-            let arg_value = i64_type.const_int(*n as u64, true);
-            builder
-                .build_call(print_fn, &[arg_value.into()], "call_print")
-                .expect("build_call should not fail for a well-formed print call");
-            Ok(())
-        }
-        MirInstr::CallUserFunction { name } => {
+    match stmt {
+        MirStmt::ExprStmt(MirExpr::Call { callee, args, .. }) if callee == "print" => match args.as_slice() {
+            [MirExpr::IntLiteral(n)] => {
+                let arg_value = i64_type.const_int(*n as u64, true);
+                builder
+                    .build_call(print_fn, &[arg_value.into()], "call_print")
+                    .expect("build_call should not fail for a well-formed print call");
+                Ok(())
+            }
+            _ => panic!("pycc_codegen: this print() argument shape is not supported yet"),
+        },
+        MirStmt::ExprStmt(MirExpr::Call { callee, args, .. }) if args.is_empty() => {
             let f = user_functions
-                .get(name.as_str())
-                .ok_or_else(|| format!("pycc_codegen v0.1: call to undefined function `{name}`"))?;
+                .get(callee.as_str())
+                .ok_or_else(|| format!("pycc_codegen v0.1: call to undefined function `{callee}`"))?;
             builder
                 .build_call(*f, &[], "call_user_fn")
                 .expect("build_call should not fail for a well-formed zero-arg call");
             Ok(())
         }
+        other => panic!("pycc_codegen: this statement kind's codegen is not supported yet: {other:?}"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pycc_mir::{MirExpr, MirInstr, MirItem, MirModule};
+    use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt, Ty};
     use std::process::Command;
+
+    /// `print(<n>)` as a `MirStmt` -- the only `print()` argument shape
+    /// `emit_stmt` handles so far (see its doc comment).
+    fn call_print(n: i64) -> MirStmt {
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::IntLiteral(n)],
+            ty: Ty::None,
+        })
+    }
+
+    /// A zero-arg call to a user-defined function as a `MirStmt`.
+    fn call_user_fn(name: &str) -> MirStmt {
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee: name.to_string(),
+            args: vec![],
+            ty: Ty::None,
+        })
+    }
 
     #[test]
     fn defining_main_without_calling_it_produces_no_output() {
@@ -223,9 +251,9 @@ mod tests {
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "main".to_string(),
-                body: vec![MirInstr::CallPrint {
-                    arg: MirExpr::IntLiteral(42),
-                }],
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![call_print(42)],
             }],
         };
         let dir = tempfile_dir("slice0_uncalled_main");
@@ -243,13 +271,11 @@ mod tests {
             items: vec![
                 MirItem::Function {
                     name: "main".to_string(),
-                    body: vec![MirInstr::CallPrint {
-                        arg: MirExpr::IntLiteral(42),
-                    }],
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![call_print(42)],
                 },
-                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
-                    name: "main".to_string(),
-                }),
+                MirItem::TopLevelStmt(call_user_fn("main")),
             ],
         };
         let dir = tempfile_dir("slice0");
@@ -264,9 +290,7 @@ mod tests {
     #[test]
     fn compiles_top_level_statement_with_no_main() {
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
-                arg: MirExpr::IntLiteral(42),
-            })],
+            items: vec![MirItem::TopLevelStmt(call_print(42))],
         };
         let dir = tempfile_dir("slice0_toplevel");
         let obj_path = dir.join("slice0_toplevel.o");
@@ -286,18 +310,14 @@ mod tests {
         // statement, not a special auto-invoked case.
         let mir = MirModule {
             items: vec![
-                MirItem::TopLevelStmt(MirInstr::CallPrint {
-                    arg: MirExpr::IntLiteral(1),
-                }),
+                MirItem::TopLevelStmt(call_print(1)),
                 MirItem::Function {
                     name: "main".to_string(),
-                    body: vec![MirInstr::CallPrint {
-                        arg: MirExpr::IntLiteral(2),
-                    }],
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![call_print(2)],
                 },
-                MirItem::TopLevelStmt(MirInstr::CallUserFunction {
-                    name: "main".to_string(),
-                }),
+                MirItem::TopLevelStmt(call_user_fn("main")),
             ],
         };
         let dir = tempfile_dir("slice0_combined");
@@ -312,9 +332,7 @@ mod tests {
     #[test]
     fn calling_an_undefined_function_at_top_level_is_rejected() {
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallUserFunction {
-                name: "does_not_exist".to_string(),
-            })],
+            items: vec![MirItem::TopLevelStmt(call_user_fn("does_not_exist"))],
         };
         let dir = tempfile_dir("slice0_undefined_fn");
         let obj_path = dir.join("slice0_undefined_fn.o");
@@ -330,9 +348,9 @@ mod tests {
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "main".to_string(),
-                body: vec![MirInstr::CallUserFunction {
-                    name: "also_does_not_exist".to_string(),
-                }],
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![call_user_fn("also_does_not_exist")],
             }],
         };
         let dir = tempfile_dir("slice0_undefined_fn_nested");
@@ -351,6 +369,8 @@ mod tests {
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "helper".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
                 body: vec![],
             }],
         };
@@ -368,9 +388,7 @@ mod tests {
         // clean_error below covers this function's other genuine failure
         // mode, Target::from_triple.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
-                arg: MirExpr::IntLiteral(42),
-            })],
+            items: vec![MirItem::TopLevelStmt(call_print(42))],
         };
         let bad_path = std::env::temp_dir()
             .join(format!(
@@ -393,9 +411,7 @@ mod tests {
         // object file's actual architecture, not just that codegen didn't
         // error.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
-                arg: MirExpr::IntLiteral(42),
-            })],
+            items: vec![MirItem::TopLevelStmt(call_print(42))],
         };
         let dir = tempfile_dir("cross_x64");
         let obj_path = dir.join("cross_x64.o");
@@ -429,15 +445,52 @@ mod tests {
     #[test]
     fn an_unknown_target_triple_is_a_clean_error() {
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirInstr::CallPrint {
-                arg: MirExpr::IntLiteral(42),
-            })],
+            items: vec![MirItem::TopLevelStmt(call_print(42))],
         };
         let dir = tempfile_dir("bad_triple");
         let obj_path = dir.join("bad_triple.o");
         let err = compile_to_object(&mir, &obj_path, Some("not-a-real-target-triple"))
             .expect_err("an unrecognized target triple should be rejected");
         assert!(!err.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "this print() argument shape is not supported yet")]
+    fn printing_more_than_one_argument_is_not_yet_supported_by_codegen() {
+        // `emit_stmt`'s `print`-call arm only handles a single int-literal
+        // argument so far (see its doc comment) -- everything else HIR/MIR
+        // can now represent for `print` (multiple args, a float, a name
+        // reference, ...) hits this explicit panic until a later task in
+        // this plan replaces it.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
+                ty: Ty::None,
+            }))],
+        };
+        let dir = tempfile_dir("print_multi_arg_panics");
+        let obj_path = dir.join("print_multi_arg_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "this statement kind's codegen is not supported yet")]
+    fn an_assignment_statement_is_not_yet_supported_by_codegen() {
+        // `emit_stmt` only handles the two `MirStmt::ExprStmt(MirExpr::Call
+        // { .. })` shapes existing tests exercise -- every other `MirStmt`
+        // variant (`Assign`, `If`, `While`, `ForRange`, `Return`, ...) hits
+        // this catch-all until later tasks in this plan implement real
+        // codegen for it.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::IntLiteral(1),
+            })],
+        };
+        let dir = tempfile_dir("assign_stmt_panics");
+        let obj_path = dir.join("assign_stmt_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {
