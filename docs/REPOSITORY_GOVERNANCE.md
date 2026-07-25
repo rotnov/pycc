@@ -39,11 +39,20 @@ The one-time activation is complete. The successful
 [`main` CI run](https://github.com/rotnov/pycc/actions/runs/30168696265) for
 merge commit `9bed86027e3efe0e0ab9dd906457953d8ba09956` published the non-expired
 90-day `frontend-perf-current` artifact `8622316274`; `frontend-perf-gate` and
-the aggregate `ci-gate` both succeeded. The repository Actions API confirmed
-that `PERF_ACTIVATION_HEAD` was absent after that run at
-2026-07-25T18:13:08Z. The active workflow is byte-identical to the reviewed
-steady-state fixture, and the activation variable, bootstrap branches,
-pre-split fixture, activation fixture, and retired digests are absent.
+the aggregate `ci-gate` both succeeded. The deletion readback for
+`PERF_ACTIVATION_HEAD` returned `404` at 2026-07-25T17:59:51Z, eight seconds
+before the artifact was created, because stale-attempt cleanup raced the
+activation merge. This deviated from the planned post-run deletion ordering,
+but did not weaken the executed boundary: the activation push bootstrap did
+not read the variable, remained bound to the exact event and reviewed
+predecessor, and `frontend-perf-gate` started after deletion and succeeded.
+The repository Actions API confirmed continued absence after the full run at
+2026-07-25T18:13:08Z. The
+[post-merge audit](https://github.com/rotnov/pycc/pull/103#issuecomment-5079757567)
+records the timestamps and exact artifacts. The active workflow is
+byte-identical to the reviewed steady-state fixture, and the activation
+variable, bootstrap branches, pre-split fixture, activation fixture, and
+retired digests are absent.
 
 Every later pull request must locate the non-expired artifact from the exact
 successful `main` run at its base SHA. Every later `main` push must use the

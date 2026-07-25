@@ -647,6 +647,20 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes error.message, "reviewed isolated comparison job"
   end
 
+  def test_rejects_steady_state_gate_that_can_skip_the_comparison
+    workflow = split_perf_workflow do |jobs|
+      compare = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Compare against canonical main baseline"
+      end
+      compare["if"] = "${{ false }}"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed isolated comparison job"
+  end
+
   def test_rejects_split_measurement_with_a_mutable_upload_action
     workflow = split_perf_workflow do |jobs|
       upload = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
