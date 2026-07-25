@@ -11,16 +11,42 @@ require "tmpdir"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
+  COVERAGE_STEP_HEADER =
+    "      - name: Hard coverage gate — 100% lines + regions (D-014)"
+  COVERAGE_COMMAND =
+    "/Users/runner/.cargo/bin/cargo-llvm-cov --workspace " \
+    "--fail-under-lines 100 --fail-under-regions 100"
 
-  def coverage_workflow(command = "cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100")
+  def coverage_workflow(command = COVERAGE_COMMAND)
     <<~YAML
       on:
         pull_request:
+      env:
+        CARGO_LLVM_COV_VERSION: "0.8.7"
       jobs:
         build-test-coverage:
+          runs-on: macos-14
           steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              with:
+                persist-credentials: false
+            - name: Show pinned toolchain
+              run: rustup show
+            - name: Install LLVM 22 (D-015)
+              run: brew install llvm@22
+            - name: Install llvm-tools-preview
+              run: rustup component add llvm-tools-preview
             - name: Hard coverage gate — 100% lines + regions (D-014)
-              run: #{command}
+              run: |
+                set -euo pipefail
+                LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
+                export LLVM_SYS_221_PREFIX="$LLVM_SYS_221_PREFIX_VALUE"
+                /Users/runner/.cargo/bin/cargo build --workspace
+                cd "$RUNNER_TEMP"
+                /Users/runner/.cargo/bin/cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+                cd "$GITHUB_WORKSPACE"
+                /Users/runner/.cargo/bin/cargo-llvm-cov --version
+                #{command}
     YAML
   end
 
@@ -120,7 +146,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(
       roadmap: roadmap,
       workflow: coverage_workflow(
-        "cargo llvm-cov --workspace --fail-under-lines 99 --fail-under-regions 100"
+        "/Users/runner/.cargo/bin/cargo-llvm-cov --workspace " \
+        "--fail-under-lines 99 --fail-under-regions 100"
       )
     )
 
@@ -135,14 +162,48 @@ class RoadmapEvidenceCliTest < Minitest::Test
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
     MARKDOWN
     workflow = coverage_workflow.sub(
-      "        run:",
-      "        if: false\n        run:"
+      "#{COVERAGE_STEP_HEADER}\n        run:",
+      "#{COVERAGE_STEP_HEADER}\n        if: false\n        run:"
     )
 
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
     assert_includes stderr, "coverage evidence must run unconditionally"
+  end
+
+  def test_rejects_a_preceding_step_that_can_shadow_cargo
+    roadmap = <<~MARKDOWN
+      ### v0.1 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+    workflow = coverage_workflow.sub(
+      "    steps:\n",
+      "    steps:\n      - name: Shadow cargo\n        run: echo fake-cargo >> \"$GITHUB_PATH\"\n"
+    )
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    refute status.success?
+    assert_includes stderr, "coverage setup steps do not match the trusted sequence"
+  end
+
+  def test_rejects_environment_that_can_shadow_coverage_tools
+    roadmap = <<~MARKDOWN
+      ### v0.1 acceptance checklist
+
+      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
+    MARKDOWN
+    workflow = coverage_workflow.sub(
+      "  CARGO_LLVM_COV_VERSION: \"0.8.7\"\n",
+      "  CARGO_LLVM_COV_VERSION: \"0.8.7\"\n  PATH: /tmp/fake-bin\n"
+    )
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    refute status.success?
+    assert_includes stderr, "coverage workflow environment does not match the trusted values"
   end
 
   def test_accepts_explicit_continue_on_error_false
@@ -152,8 +213,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
     MARKDOWN
     workflow = coverage_workflow.sub(
-      "        run:",
-      "        continue-on-error: false\n        run:"
+      "#{COVERAGE_STEP_HEADER}\n        run:",
+      "#{COVERAGE_STEP_HEADER}\n        continue-on-error: false\n        run:"
     )
 
     stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
@@ -208,8 +269,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
     MARKDOWN
     workflow = coverage_workflow.sub(
-      "        run:",
-      "        shell: 'true {0}'\n        run:"
+      "#{COVERAGE_STEP_HEADER}\n        run:",
+      "#{COVERAGE_STEP_HEADER}\n        shell: 'true {0}'\n        run:"
     )
 
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)

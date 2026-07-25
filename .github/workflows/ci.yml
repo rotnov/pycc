@@ -19,17 +19,9 @@ jobs:
   build-test-coverage:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Check workflow permission policy
-        run: |
-          ruby scripts/test_check_ci_permissions.rb
-          ruby scripts/check_ci_permissions.rb
-
-      - name: Check roadmap evidence
-        run: |
-          ruby scripts/test_check_roadmap_evidence.rb
-          ruby scripts/check_roadmap_evidence.rb
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Show pinned toolchain
         run: rustup show
@@ -41,11 +33,32 @@ jobs:
       - name: Install LLVM 22 (D-015)
         run: brew install llvm@22
 
-      - name: Export LLVM_SYS_221_PREFIX
-        run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
 
-      - name: cargo build --workspace
-        run: cargo build --workspace
+      # Hard merge invariant from D-014. These thresholds must never be
+      # lowered or bypassed to make a pull request pass.
+      - name: Hard coverage gate — 100% lines + regions (D-014)
+        run: |
+          set -euo pipefail
+          LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
+          export LLVM_SYS_221_PREFIX="$LLVM_SYS_221_PREFIX_VALUE"
+          /Users/runner/.cargo/bin/cargo build --workspace
+          cd "$RUNNER_TEMP"
+          /Users/runner/.cargo/bin/cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+          cd "$GITHUB_WORKSPACE"
+          /Users/runner/.cargo/bin/cargo-llvm-cov --version
+          /Users/runner/.cargo/bin/cargo-llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+
+      - name: Check workflow permission policy
+        run: |
+          ruby scripts/test_check_ci_permissions.rb
+          ruby scripts/check_ci_permissions.rb
+
+      - name: Check roadmap evidence
+        run: |
+          ruby scripts/test_check_roadmap_evidence.rb
+          ruby scripts/check_roadmap_evidence.rb
 
       - name: cargo test --workspace
         run: cargo test --workspace
@@ -54,17 +67,3 @@ jobs:
         run: |
           rustup component add clippy
           cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Install cargo-llvm-cov (pinned)
-        run: cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
-
-      - name: Install llvm-tools-preview
-        run: rustup component add llvm-tools-preview
-
-      - name: Coverage gate smoke check
-        run: cargo llvm-cov --version
-
-      # Hard merge invariant from D-014. These thresholds must never be
-      # lowered or bypassed to make a pull request pass.
-      - name: Hard coverage gate — 100% lines + regions (D-014)
-        run: cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100

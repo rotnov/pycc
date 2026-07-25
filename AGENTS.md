@@ -67,7 +67,7 @@
 ## Testing and hard coverage gate
 
 - One hundred percent line and region coverage is a hard merge invariant under D-014, not a target or guideline.
-- CI must run `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` on every pull request. Do not merge while this gate is missing, skipped, cancelled, failing, or still in progress.
+- CI must run `/Users/runner/.cargo/bin/cargo-llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` on every pull request, after the checker-approved setup prefix and without an earlier head-controlled script. Do not merge while this gate is missing, skipped, cancelled, failing, or still in progress.
 - Every behavior change must include tests for its success, failure, and relevant edge paths so the gate is satisfied by meaningful execution rather than incidental line hits.
 - Never lower either threshold, remove either flag, disable the job, narrow the measured workspace, or exclude code merely to make a pull request pass.
 - The only permitted exemption is a whole-file `--ignore-filename-regex` entry justified by an accepted design constraint and recorded in the exemption table in `docs/TESTING.md`. An undocumented exemption is a review-blocking defect.
