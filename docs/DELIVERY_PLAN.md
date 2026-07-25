@@ -80,19 +80,15 @@ ARCHITECTURE.md requires benchmarks in CI on every PR with a >2% frontend-regres
 **D-047 was a temporary deferral, superseded by D-048 after PR-4 merged.**
 The competing trust-anchor work no longer blocks the compiler deliverable, and
 the reviewed replacement no longer relies on ref-scoped cache fallback. The
-gate is now delivered through a staged trust digest, an exact reviewed
-activation head, exact-predecessor artifacts from successful `main` pushes,
-and an immediate post-seed cleanup. D-049 preserves the exact pre-split
-workflow as an inert predecessor fixture so activation tests remain hermetic
-after the live workflow changes. D-050 pre-stages phase-aware current-status
-wording so the required workflow-only activation commit cannot make the
-repository or public status stale: the tracked workflow's byte identity
-selects the pre-split, activation, or steady-state claim without inferring
-whether the first artifact has already been published from
-activation-workflow bytes. D-048 remains in
-transition until the tracked workflow reaches steady state and cleanup removes
-the bootstrap state; PR-5 does not proceed before then. This remains
-deliberately lightweight and distinct from the full
+gate is now in bootstrap-free steady state: every PR records a
+`frontend-perf-current` measurement, and the isolated gate requires the
+non-expired artifact from the exact successful `main` predecessor before
+applying the greater-than-2% regression block. The first successful activation
+run published that artifact, and cleanup removed the administrative variable,
+bootstrap branches, retired digests, and transition fixtures. D-048 through
+D-050 preserve the staged activation rationale; they no longer describe live
+configuration. PR-5 may proceed with the performance invariant already active.
+This remains deliberately lightweight and distinct from the full
 pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which
 stays out of scope until v0.2.
 
