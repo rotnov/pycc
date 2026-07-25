@@ -20,8 +20,14 @@ fn assert_diagnostic_matches_fixture(fixture_stem: &str) {
     let expected_path = repo_root
         .join("tests/diagnostics")
         .join(format!("{fixture_stem}.expected.txt"));
+    // pycc's diagnostic renderer always emits `\n` line endings, matching
+    // DIAGNOSTICS.md's byte-identical-across-platforms bar. Git on Windows
+    // checks these fixtures out with `\r\n` under the default `core.autocrlf`
+    // text conversion, so the raw file bytes must be normalized before
+    // comparison rather than compared as checked out.
     let expected = std::fs::read_to_string(&expected_path)
-        .unwrap_or_else(|e| panic!("could not read {}: {e}", expected_path.display()));
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", expected_path.display()))
+        .replace("\r\n", "\n");
 
     let relative_py_path = format!("tests/diagnostics/{fixture_stem}.py");
     let output = Command::new(pycc_bin())
