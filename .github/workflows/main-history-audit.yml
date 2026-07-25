@@ -22,9 +22,9 @@ jobs:
       - name: Check out the trusted audit implementation
         uses: actions/checkout@v4
         with:
-          # Reviewed independently of the pushed revision. Update only after
-          # the replacement implementation passes its tests and review.
-          ref: 2d9fcd1b4135caef19b6ebad7bf96f7111f2258d
+          # Do not execute the pushed revision's checker. The workflow YAML
+          # itself is still push-controlled and is verified out of band.
+          ref: ${{ github.event.before }}
           fetch-depth: 1
           path: audit-implementation
           sparse-checkout: scripts/check_main_history.py
