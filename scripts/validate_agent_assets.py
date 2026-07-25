@@ -231,6 +231,14 @@ class WorkflowMappingEntry(NamedTuple):
     value: str
 
 
+class AgentScriptReference(NamedTuple):
+    """A repository script reference and the cwd inherited by that script."""
+
+    reference: str
+    resolution_directory: str
+    execution_directory: str
+
+
 def load_json(
     relative_path: str,
     failures: list[str],
@@ -1112,6 +1120,7 @@ def reject_unsupported_workflow_structure(
     lines: list[str],
     entries: list[WorkflowMappingEntry],
     jobs_entry: int | None,
+    additional_structural_entries: Iterable[int] = (),
 ) -> None:
     for line_index, line in enumerate(lines, start=1):
         if (
@@ -1143,11 +1152,16 @@ def reject_unsupported_workflow_structure(
         if jobs_entry is not None
         else set()
     )
+    structural_entries = set(additional_structural_entries)
     for entry_index, entry in enumerate(entries):
         value = entry.value.lstrip()
         if not value or value[0] not in {"{", "[", "*"}:
             continue
-        if entry.key in structural_keys or entry_index in job_entries:
+        if (
+            entry.key in structural_keys
+            or entry_index in job_entries
+            or entry_index in structural_entries
+        ):
             raise RuntimeError(
                 f"workflow line {entry.line_index + 1}: flow-style or aliased "
                 "workflow structure is not supported by agent asset discovery"
@@ -1241,8 +1255,8 @@ def step_working_directory_references(
     steps_entry: int,
     inherited_default: int | None,
     document_kind: str,
-) -> set[tuple[str, str]]:
-    references: set[tuple[str, str]] = set()
+) -> set[AgentScriptReference]:
+    references: set[AgentScriptReference] = set()
     step_entries = workflow_direct_children(entries, steps_entry)
     item_starts = [
         index
@@ -1304,7 +1318,11 @@ def step_working_directory_references(
                 )
             working_directory = resolved_directory
         references.update(
-            (reference, working_directory)
+            AgentScriptReference(
+                reference,
+                working_directory,
+                working_directory,
+            )
             for reference in run_references
         )
     return references
@@ -1312,7 +1330,7 @@ def step_working_directory_references(
 
 def workflow_working_directory_references(
     text: str,
-) -> set[tuple[str, str]]:
+) -> set[AgentScriptReference]:
     lines = text.splitlines()
     entries = workflow_mapping_entries(lines)
     top_level = [
@@ -1348,7 +1366,7 @@ def workflow_working_directory_references(
             ("run", "working-directory"),
         )
 
-    references: set[tuple[str, str]] = set()
+    references: set[AgentScriptReference] = set()
     for job_entry in workflow_direct_children(entries, jobs_entry):
         job_default = workflow_descendant_entry(
             entries,
@@ -1375,9 +1393,10 @@ def workflow_working_directory_references(
     return references
 
 
-def action_working_directory_references(
+def action_execution_references(
     text: str,
-) -> set[tuple[str, str]]:
+    action_directory: str,
+) -> set[AgentScriptReference]:
     lines = text.splitlines()
     entries = workflow_mapping_entries(lines)
     top_level = [
@@ -1393,19 +1412,53 @@ def action_working_directory_references(
         ),
         None,
     )
-    reject_unsupported_workflow_structure(lines, entries, None)
-    if runs_entry is None:
-        return set()
-    steps_entry = workflow_child_entry(entries, runs_entry, "steps")
-    if steps_entry is None:
-        return set()
-    return step_working_directory_references(
+    action_execution_entries = (
+        {
+            index
+            for index in workflow_direct_children(entries, runs_entry)
+            if entries[index].key in {"main", "pre", "post", "image"}
+        }
+        if runs_entry is not None
+        else set()
+    )
+    reject_unsupported_workflow_structure(
         lines,
         entries,
-        steps_entry,
         None,
-        "action",
+        action_execution_entries,
     )
+    if runs_entry is None:
+        return set()
+
+    references: set[AgentScriptReference] = set()
+    steps_entry = workflow_child_entry(entries, runs_entry, "steps")
+    if steps_entry is not None:
+        references.update(
+            step_working_directory_references(
+                lines,
+                entries,
+                steps_entry,
+                None,
+                "action",
+            )
+        )
+
+    for key in ("main", "pre", "post", "image"):
+        entry_index = workflow_child_entry(entries, runs_entry, key)
+        if entry_index is None:
+            continue
+        reference = local_script_reference(
+            yaml_inline_scalar(entries[entry_index].value)
+        )
+        if reference is not None:
+            references.add(
+                AgentScriptReference(
+                    reference,
+                    action_directory,
+                    "",
+                )
+            )
+    return references
 
 
 def resolve_working_directory_reference(
@@ -1694,17 +1747,27 @@ def required_agent_files(
         if relative.parts[:2] == (".github", "workflows"):
             references = workflow_working_directory_references(text)
         elif relative.name in LOCAL_ACTION_MANIFESTS:
-            references = action_working_directory_references(text)
+            action_directory = relative.parent.as_posix()
+            if action_directory == ".":
+                action_directory = ""
+            references = action_execution_references(
+                text,
+                action_directory,
+            )
         else:
             references = {
-                (reference, working_directory)
+                AgentScriptReference(
+                    reference,
+                    working_directory,
+                    working_directory,
+                )
                 for reference in referenced_interpreter_scripts(text)
             }
-        for reference, reference_directory in references:
+        for script_reference in references:
             try:
                 resolved_reference = resolve_working_directory_reference(
-                    reference,
-                    reference_directory,
+                    script_reference.reference,
+                    script_reference.resolution_directory,
                 )
             except RuntimeError as error:
                 raise RuntimeError(
@@ -1721,7 +1784,9 @@ def required_agent_files(
                     f"{resolved_reference}: required agent assets must not be symlinks"
                 )
             paths.add(target)
-            pending.append((target, reference_directory))
+            pending.append(
+                (target, script_reference.execution_directory)
+            )
     return sorted(paths)
 
 

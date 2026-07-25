@@ -151,6 +151,11 @@ helpers without leaking from one step or job into another. Quoted mapping keys a
 block sequences with standalone `-` entries are supported. Dynamic or non-repository
 working directories, YAML merge keys, aliases in structural positions, and flow-style
 job/step structures fail validation when they cannot be resolved safely.
+For non-composite actions, local JavaScript `main`, `pre`, and `post` entrypoints and
+Docker `image` build files are resolved relative to the action manifest and scanned;
+JavaScript entrypoints retain the repository workspace as their runtime working
+directory for recursive helper discovery. External `docker://` images remain external
+coordinates rather than repository paths.
 Ignored caches and dependency checkouts therefore cannot make local validation
 disagree with a clean CI checkout.
 Required agent assets stored as Git symlinks are rejected rather than followed outside

@@ -1637,6 +1637,217 @@ class AgentAssetValidationTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn("tools/demo/helper", failures[0])
 
+    def test_non_composite_action_entrypoints_are_scanned_relative_to_manifest(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "  using: node20\n"
+                "  main: main\n",
+                "ci/check/main",
+                "main",
+            ),
+            (
+                "  using: node20\n"
+                "  main: dist/index.js\n"
+                "  pre: setup\n",
+                "ci/check/setup",
+                "setup",
+            ),
+            (
+                "  using: node20\n"
+                "  main: dist/index.js\n"
+                "  post: cleanup\n",
+                "ci/check/cleanup",
+                "cleanup",
+            ),
+            (
+                "  using: docker\n"
+                "  image: Containerfile\n",
+                "ci/check/Containerfile",
+                "Containerfile",
+            ),
+            (
+                "  using: node20\n"
+                "  main: ../main\n",
+                "ci/main",
+                "main",
+            ),
+        )
+        for runs_body, entrypoint_path, shadow_name in cases:
+            with self.subTest(entrypoint=entrypoint_path):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    action = root / "ci" / "check" / "action.yml"
+                    action.parent.mkdir(parents=True)
+                    action.write_text(
+                        "name: check\n"
+                        "runs:\n"
+                        f"{runs_body}",
+                        encoding="utf-8",
+                    )
+                    root_shadow = root / shadow_name
+                    root_shadow.write_text(
+                        "Use only repository-owned tooling.\n",
+                        encoding="utf-8",
+                    )
+                    entrypoint = root / entrypoint_path
+                    entrypoint.parent.mkdir(parents=True, exist_ok=True)
+                    entrypoint.write_text(
+                        f"Run /{FEATURE_DEV} before continuing.\n",
+                        encoding="utf-8",
+                    )
+
+                    failures = self.optional_boundary_failures(
+                        {
+                            "enabledPlugins": {
+                                (
+                                    f"{FEATURE_DEV}@"
+                                    f"{CLAUDE_PLUGIN_MARKETPLACE}"
+                                ): True,
+                                "ievo@ievo-skills": True,
+                            }
+                        },
+                        root,
+                        [
+                            (action, "100644"),
+                            (root_shadow, "100644"),
+                            (entrypoint, "100644"),
+                        ],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(entrypoint_path, failures[0])
+
+    def test_external_docker_action_image_is_not_a_repository_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            action = root / "ci" / "check" / "action.yaml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                "name: check\n"
+                "runs:\n"
+                "  using: docker\n"
+                "  image: docker://example.com/optional-image:latest\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                self.claude_settings(),
+                root,
+                [(action, "100644")],
+            )
+
+            self.assertEqual(failures, [])
+
+    def test_action_input_names_do_not_become_execution_fields(self) -> None:
+        for input_name in ("main", "pre", "post", "image"):
+            with self.subTest(input_name=input_name):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    action = root / "ci" / "check" / "action.yml"
+                    action.parent.mkdir(parents=True)
+                    action.write_text(
+                        "name: check\n"
+                        "inputs:\n"
+                        f"  {input_name}: "
+                        '{description: "input", required: false}\n'
+                        "runs:\n"
+                        "  using: node20\n"
+                        "  main: dist/index.js\n",
+                        encoding="utf-8",
+                    )
+
+                    failures = self.optional_boundary_failures(
+                        self.claude_settings(),
+                        root,
+                        [(action, "100644")],
+                    )
+
+                    self.assertEqual(failures, [])
+
+    def test_action_execution_fields_reject_flow_or_alias_values(
+        self,
+    ) -> None:
+        cases = (
+            ("main", "{path: main}", "flow-style"),
+            ("pre", "{path: setup}", "flow-style"),
+            ("post", "{path: cleanup}", "flow-style"),
+            ("image", "*container", "aliased"),
+        )
+        for field, value, message in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    action = root / "ci" / "check" / "action.yml"
+                    action.parent.mkdir(parents=True)
+                    action.write_text(
+                        "name: check\n"
+                        "container: &container Dockerfile\n"
+                        "runs:\n"
+                        "  using: node20\n"
+                        f"  {field}: {value}\n",
+                        encoding="utf-8",
+                    )
+
+                    failures = self.optional_boundary_failures(
+                        self.claude_settings(),
+                        root,
+                        [(action, "100644")],
+                    )
+
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn(message, failures[0])
+
+    def test_non_composite_entrypoint_inherits_repository_runtime_cwd(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            action = root / "ci" / "check" / "action.yml"
+            action.parent.mkdir(parents=True)
+            action.write_text(
+                "name: check\n"
+                "runs:\n"
+                "  using: node20\n"
+                "  main: main\n",
+                encoding="utf-8",
+            )
+            entrypoint = root / "ci" / "check" / "main"
+            entrypoint.write_text("python nested\n", encoding="utf-8")
+            action_relative_nested = root / "ci" / "check" / "nested"
+            action_relative_nested.write_text(
+                "Use only repository-owned tooling.\n",
+                encoding="utf-8",
+            )
+            repository_nested = root / "nested"
+            repository_nested.write_text(
+                f"Run /{FEATURE_DEV} before continuing.\n",
+                encoding="utf-8",
+            )
+
+            failures = self.optional_boundary_failures(
+                {
+                    "enabledPlugins": {
+                        f"{FEATURE_DEV}@{CLAUDE_PLUGIN_MARKETPLACE}": True,
+                        "ievo@ievo-skills": True,
+                    }
+                },
+                root,
+                [
+                    (action, "100644"),
+                    (entrypoint, "100644"),
+                    (action_relative_nested, "100644"),
+                    (repository_nested, "100644"),
+                ],
+            )
+
+            self.assertEqual(len(failures), 1)
+            self.assertIn("nested", failures[0])
+            self.assertNotIn("ci/check/nested", failures[0])
+
     def test_dynamic_composite_action_working_directory_fails_closed(
         self,
     ) -> None:
