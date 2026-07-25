@@ -2229,6 +2229,50 @@ class AgentPolicyValidationTests(unittest.TestCase):
                     ".ievo/hooks/capture.sh"
                 ),
             ),
+            (
+                "--script=C:local-hook",
+                ("shared hook target must not be drive-relative: C:local-hook"),
+            ),
+            (
+                "--script=../.ievo/hooks/capture.sh",
+                ("shared hook target is not tracked: ../.ievo/hooks/capture.sh"),
+            ),
+            (
+                r"--script=..\.ievo\hooks\capture.sh",
+                ("shared hook target is not tracked: ../.ievo/hooks/capture.sh"),
+            ),
+            (
+                "--script=tools/local-hook.py",
+                "shared hook target is not tracked: tools/local-hook.py",
+            ),
+            (
+                "tools/missing.sh",
+                "shared hook target is not tracked: tools/missing.sh",
+            ),
+            (
+                "--script=safe/../../.ievo/hooks/capture",
+                ("shared hook target is not tracked: safe/../../.ievo/hooks/capture"),
+            ),
+            (
+                r"--script=safe\..\..\.ievo\hooks\capture",
+                ("shared hook target is not tracked: safe/../../.ievo/hooks/capture"),
+            ),
+            (
+                "--script:../.ievo/hooks/capture",
+                ("shared hook target is not tracked: ../.ievo/hooks/capture"),
+            ),
+            (
+                r"--script:..\.ievo\hooks\capture",
+                ("shared hook target is not tracked: ../.ievo/hooks/capture"),
+            ),
+            (
+                "-s../.ievo/hooks/capture",
+                ("shared hook target is not tracked: ../.ievo/hooks/capture"),
+            ),
+            (
+                r"-s..\.ievo\hooks\capture",
+                ("shared hook target is not tracked: ../.ievo/hooks/capture"),
+            ),
         ):
             with self.subTest(argument=argument):
                 settings = {

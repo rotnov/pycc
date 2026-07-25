@@ -305,20 +305,31 @@ def trailing_filesystem_targets(
 ) -> list[str]:
     targets: list[str] = []
     for token in tokens:
-        candidates = (
-            [token.split("=", 1)[1]]
-            if token.startswith("-") and "=" in token
-            else [token]
-        )
+        candidates = [token]
+        if token.startswith("--"):
+            for separator in ("=", ":"):
+                if separator in token:
+                    candidates = [token.split(separator, 1)[1]]
+                    break
+        elif token.startswith("-") and len(token) > 2:
+            candidates = [token[2:].lstrip("=:")]
         for candidate in candidates:
             normalized, explicit_project_path = normalize_hook_token(
                 candidate,
                 project_expansion,
             )
+            risky_relative_target = (
+                WINDOWS_DRIVE_RELATIVE_PATH.match(normalized) is not None
+                or ".." in normalized.replace("\\", "/").split("/")
+                or normalized.lower().endswith(SCRIPT_SUFFIXES)
+            )
             if (
                 explicit_project_path
                 or normalized.casefold().startswith(LOCAL_PREFIXES)
-                or (include_relative and is_relative_script_path(normalized))
+                or (
+                    is_relative_script_path(normalized)
+                    and (include_relative or risky_relative_target)
+                )
                 or is_home_relative_script_path(normalized)
                 or is_absolute_script_path(normalized)
             ):
