@@ -54,45 +54,41 @@ authorization. The gate is not deferred PR-6 work. PR-6 is the first point
 the full pipeline runs end-to-end on all five Tier-1 platforms — treat it
 as the highest-uncertainty remaining slice, not a formality.
 
-**PR-5 recovery boundary:** at this snapshot the PR-5 branch is a
-machine-local branch in the originating shared repository, not a remote
-ref. This entry records its state but does not authorize publishing or
-changing another session's in-flight work. A session using that same
-repository can locate the linked worktree without relying on a personal
-path:
+**PR-5 recovery boundary:** the local-only state above is historical, not
+the current recovery path. A later read-only check found the snapshot commit
+in the ancestry of published branch
+`origin/feat/v0-1-pr5-codegen-depth`, with observed remote head
+`453e7dd9b23effe0390770d8ad7c264c33150bdd` and open
+[PR #132](https://github.com/rotnov/pycc/pull/132) based on
+`main@6ec86a8e89c7775f9f41a9aa9b12a1a2660952de`. A clean clone can recover
+the work without any machine-local path:
 
 ```sh
-pr5_worktree="$(
-  git worktree list --porcelain |
-    awk '$1 == "worktree" { path = substr($0, 10) }
-         $1 == "branch" && $2 == "refs/heads/feat/v0-1-pr5-codegen-depth" {
-           print path
-           exit
-         }'
-)"
-test -n "$pr5_worktree" || {
-  printf '%s\n' 'PR-5 worktree is not present in this repository' >&2
-  exit 1
-}
-git -C "$pr5_worktree" status --short --branch
-git -C "$pr5_worktree" rev-parse HEAD
+git fetch --prune origin main feat/v0-1-pr5-codegen-depth
+git rev-parse origin/main origin/feat/v0-1-pr5-codegen-depth
+git merge-base --is-ancestor \
+  c70ac5696ff908770350a587ed87210cd6edd80b \
+  origin/feat/v0-1-pr5-codegen-depth
+git log --oneline --decorate \
+  origin/main..origin/feat/v0-1-pr5-codegen-depth
 ```
 
-The expected snapshot commit is
-`c70ac5696ff908770350a587ed87210cd6edd80b`. If the worktree is absent or
-its head has moved, stop and coordinate with the branch owner; a clean
-clone cannot recover this unpublished snapshot from `origin`, and the
-commands below are valid only after the local branch has been found.
+The exact historical snapshot remains
+`c70ac5696ff908770350a587ed87210cd6edd80b`. If the published head differs
+from the observed head above, treat the remote and PR as newer state: inspect
+them before acting and never reset, force-push, or overwrite an existing
+owner's local worktree to recreate this older snapshot.
 
 **Where to look to resume:**
-- Run `git status --short --branch` in the PR-5 worktree first; the branch
-  is active, so this snapshot must never be used to overwrite newer local
-  work.
+- Read [PR #132](https://github.com/rotnov/pycc/pull/132) and compare its
+  current remote head with the observed head above. If an existing PR-5
+  worktree is present, run `git status --short --branch` there before any
+  mutation; never use this snapshot to overwrite newer local work.
 - `docs/DELIVERY_PLAN.md` — PR breakdown and autonomy policy.
 - `docs/ROADMAP.md` — current delivery status and the v0.1 acceptance
   checklist (source of truth for what's actually done vs. claimed).
-- `git show feat/v0-1-pr5-codegen-depth:docs/superpowers/plans/2026-07-25-pr5-codegen-depth.md`
+- `git show origin/feat/v0-1-pr5-codegen-depth:docs/superpowers/plans/2026-07-25-pr5-codegen-depth.md`
   — the branch's complete active plan, task-by-task, if PR-5 is not merged
   yet; do not mistake the shorter `main` copy for the whole plan.
-- `git log --oneline feat/v0-1-pr5-codegen-depth` (if that branch still
-  exists) for the actual commit-by-commit state.
+- `git log --oneline origin/main..origin/feat/v0-1-pr5-codegen-depth`
+  for the published commit-by-commit state.
