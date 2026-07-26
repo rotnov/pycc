@@ -198,11 +198,10 @@ while i < 11:
 
 #[test]
 fn iterative_fibonacci_overflows_into_a_bigint_and_prints_only_decimal_digits() {
-    // `fib(100)` genuinely exceeds `i64::MAX` (19 decimal digits) -- this
-    // asserts the *shape* of the result (more digits than `i64::MAX` can
-    // hold, an optional leading `-` aside, no digits lost/garbled)
-    // rather than a hand-computed 21-digit reference value, which this
-    // plan has no way to verify independently without executing Python.
+    // `fib(100)` genuinely exceeds `i64::MAX` (19 decimal digits).
+    // 354224848179261915075 is independently verified (`python3`'s own
+    // iterative fibonacci, not this compiler's bigint path), so this
+    // asserts the exact mathematical value rather than only its shape.
     let source = "\
 def fib_iter(n: int) -> int:
     a = 0
@@ -219,16 +218,23 @@ print(fib_iter(100))
 ";
     let output = build_and_run("fib_iterative_bigint", source);
     assert!(output.status.success());
-    let text = String::from_utf8(output.stdout).expect("output should be valid UTF-8");
-    let digits = text.trim_end_matches('\n');
-    assert!(
-        digits.chars().all(|c| c.is_ascii_digit()),
-        "expected only decimal digits, got {digits:?}"
-    );
-    assert!(
-        digits.len() > 19, // i64::MAX ("9223372036854775807") is 19 digits
-        "expected a value exceeding i64::MAX's own digit count, got {digits:?}"
-    );
+    assert_eq!(output.stdout, b"354224848179261915075\n");
+}
+
+#[test]
+fn a_power_expression_links_and_runs_through_the_real_cli_needing_libm() {
+    // Regression coverage for `src/main.rs`'s Linux-only `add_linux_system_libs`
+    // fix: `pycc_rt_float_pow` calls into `libm`'s `pow`, which only resolves
+    // at link time through the real `pycc build` CLI path (unlike
+    // `pycc_codegen`'s own in-process `compile_to_object` tests, which never
+    // invoke the host linker at all).
+    let source = "\
+print(2 ** 10)
+print(2.0 ** 0.5)
+";
+    let output = build_and_run("power_expression_libm", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1024\n1.4142135623730951\n");
 }
 
 #[test]
