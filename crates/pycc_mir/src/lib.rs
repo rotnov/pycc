@@ -606,7 +606,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "has no recorded type")]
     fn referencing_an_unbound_name_panics_with_an_internal_error() {
-        // By construction (see this module's doc comment / D-056 discussion
+        // By construction (see this module's doc comment / D-057 discussion
         // in the task brief), every `Ty` reaching `pycc_mir` is already
         // concrete and every name already resolved by `pycc_types::check`
         // -- this HIR could never come from a real `check_and_resolve`

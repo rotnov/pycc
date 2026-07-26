@@ -331,7 +331,7 @@ def run_pycc_boundary(
     normalized_skill = " ".join(skill_text.split())
     for contract in (
         "smallest self-contained",
-        "D-063",
+        "D-064",
         "intentional temporary alpha boundary",
         "$pycc-feedback",
     ):
@@ -375,7 +375,7 @@ def run_pycc_boundary(
         ):
             raise EvalError(
                 "backend fixture must reproduce the exact current exit-101 "
-                "D-063 codegen panic"
+                "D-064 codegen panic"
             )
 
 
@@ -442,7 +442,7 @@ def run_feedback_case(
         state = SubmissionState(False, False, True)
         required = (
             "Must reproduce",
-            "read D-063",
+            "read D-064",
             "not reportable",
             "no GitHub payload",
         )

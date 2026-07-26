@@ -91,7 +91,7 @@ This remains deliberately lightweight and distinct from the full
 pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which
 stays out of scope until v0.2.
 
-D-051 records, and D-053 corrects, the active transport after repeated docs-only
+D-051 records, and D-053 corrects, the paired transport after repeated docs-only
 CI runs proved that absolute estimates from two different hosted runners can
 exceed the 2% threshold despite narrow within-run confidence intervals. The
 exact predecessor and candidate are measured on one runner, and their paired
@@ -101,9 +101,19 @@ workspace manifests, local build scripts, lockfile, Rust toolchain, and Cargo
 configuration; it seals the predecessor artifact before candidate code runs,
 binds both downloads to the distinct artifact IDs returned by their trusted
 upload steps, flattens each single-ID download into its own exact destination,
-and requires any contract drift to use its own reviewed transition. Its active
-bytes equal the reviewed D-051 fixture; only that digest is authorized. The
-threshold, required `ci-gate` fan-in, and benchmark itself remain unchanged.
+and requires any contract drift to use its own reviewed transition. D-056 keeps
+this transport, threshold, required `ci-gate` fan-in, and benchmark unchanged.
+
+D-056 is active for residual same-runner order variance. Main
+run 30198852753 failed at `+3.14%` even though `src/`, `crates/`, and every
+already-bound benchmark/build input were unchanged; run 30199477003 later
+passed the same unchanged-input class at `+0.86%`. The active workflow
+therefore retains both timings as telemetry but makes them non-blocking only
+when a pre-execution trusted comparison proves the complete executable inputs
+identical. Any `src/` or `crates/` difference still enters the unchanged
+greater-than-2% median comparison. The live workflow is byte-identical to the
+reviewed D-056 fixture and only its digest is authorized; D-051 remains
+historical audit evidence rather than an accepted live workflow.
 
 ## Autonomy policy ("no questions" mechanics)
 

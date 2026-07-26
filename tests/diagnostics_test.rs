@@ -47,6 +47,33 @@ fn assert_diagnostic_matches_fixture(fixture_stem: &str) {
     );
 }
 
+fn assert_json_diagnostic_matches_fixture(fixture_stem: &str) {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let expected_path = repo_root
+        .join("tests/diagnostics")
+        .join(format!("{fixture_stem}.expected.json"));
+    let expected = std::fs::read_to_string(&expected_path)
+        .unwrap_or_else(|e| panic!("could not read {}: {e}", expected_path.display()))
+        .replace("\r\n", "\n");
+
+    let relative_py_path = format!("tests/diagnostics/{fixture_stem}.py");
+    let output = Command::new(pycc_bin())
+        .args(["check", &relative_py_path, "--error-format", "json"])
+        .current_dir(repo_root)
+        .output()
+        .unwrap();
+    let actual = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        actual, expected,
+        "JSON diagnostic output for {fixture_stem} did not match its .expected.json fixture"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{fixture_stem} should be a compile error"
+    );
+}
+
 #[test]
 fn d0001_missing_public_annotation() {
     assert_diagnostic_matches_fixture("d0001_missing_public_annotation");
@@ -60,6 +87,12 @@ fn d0002_any_forbidden() {
 #[test]
 fn d0021_range_argument_type() {
     assert_diagnostic_matches_fixture("d0021_range_argument_type");
+}
+
+#[test]
+fn d0021_unbound_local() {
+    assert_diagnostic_matches_fixture("d0021_unbound_local");
+    assert_json_diagnostic_matches_fixture("d0021_unbound_local");
 }
 
 #[test]

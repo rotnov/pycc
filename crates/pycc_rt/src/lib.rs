@@ -34,7 +34,7 @@ fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
 }
 
-/// See D-060: every `Ty::Int` value is one LLVM `i64`. Its low bit is the
+/// See D-061: every `Ty::Int` value is one LLVM `i64`. Its low bit is the
 /// discriminant -- `1` means the high 63 bits (arithmetic-shift-recovered)
 /// are the real value; `0` means the full 64 bits are a heap `BigInt`
 /// pointer. `tag_bigint` (Task 9) constructs the `0` case on arithmetic
@@ -66,13 +66,13 @@ fn require_smallint(tagged: i64, context: &str) {
     }
 }
 
-/// D-057: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
+/// D-058: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
 /// no trailing zero limbs except a single `[0]` representing zero
-/// itself. Never freed (leaked) -- unlike `PyStrObj`, D-059 only commits
+/// itself. Never freed (leaked) -- unlike `PyStrObj`, D-060 only commits
 /// `str` to real refcounting; a bigint is a rare, overflow-only path
 /// with no v0.1 construct that could leak it in a hot loop the way an
 /// unbounded string-building loop could (this is a deliberate, narrower
-/// "simplest safe default" than `str`'s, recorded alongside D-060).
+/// "simplest safe default" than `str`'s, recorded alongside D-061).
 struct BigIntObj {
     negative: bool,
     limbs: Vec<u32>,
@@ -169,7 +169,7 @@ fn tag_bigint(b: BigIntObj) -> i64 {
 }
 
 /// # Safety
-/// `tagged` must be a `BigIntObj` pointer (an even bit pattern -- D-060);
+/// `tagged` must be a `BigIntObj` pointer (an even bit pattern -- D-061);
 /// every call site below checks `!is_smallint(tagged)` first.
 unsafe fn bigint_ref<'a>(tagged: i64) -> &'a BigIntObj {
     unsafe { &*(tagged as *const BigIntObj) }
@@ -325,7 +325,7 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
     // against the classic hardware trap on a raw `i64::MIN / -1` (the
     // mathematical quotient `2^63` doesn't fit `i64`, and Rust's checked
     // `/`/`%` themselves panic/trap on that exact pair). That guard is
-    // unreachable dead code under D-060's fixed tagged representation:
+    // unreachable dead code under D-061's fixed tagged representation:
     // `a`/`b` here are already `untag_smallint`-ed from a valid tagged
     // `i64` argument, and for *every* `i64` value `t`, `t >> 1` (what
     // `untag_smallint` computes) lands in `[i64::MIN >> 1, i64::MAX >>
@@ -364,14 +364,14 @@ fn int_floormod(a: i64, b: i64) -> i64 {
     // Deviation from the task brief: the brief's own code special-cased
     // `a == i64::MIN && b == -1` here (mirroring `int_floordiv`'s
     // original guard) to sidestep the same raw `%` hardware trap. Under
-    // D-060's fixed tagged representation this is unreachable for the
+    // D-061's fixed tagged representation this is unreachable for the
     // same reason `int_floordiv`'s removed guard was (see its comment):
     // an already-tagged operand's untagged form can never equal
     // `i64::MIN`. Floor-mod's *result* can't overflow the taggable range
     // either -- unlike floor-division, which the comment on
     // `int_floordiv` explains can: floor-mod's result always satisfies
     // `|result| < |b|`, and every already-tagged `b` satisfies `|b| <=
-    // 2^62` (D-060's 63-bit range), so `floored` always re-fits and the
+    // 2^62` (D-061's 63-bit range), so `floored` always re-fits and the
     // `fits_smallint` round-trip check the brief had here (like
     // `int_floordiv`'s) is provably always-`Some` -- confirmed by
     // `cargo llvm-cov`: its `None` arm never executed under any test.
@@ -513,7 +513,7 @@ pub extern "C" fn pycc_rt_range_continue(i: i64, stop: i64, step: i64) -> i8 {
     range_continue(i, stop, step)
 }
 
-/// Converts a tagged `int` (D-060) to its `f64` value -- the `int` half of
+/// Converts a tagged `int` (D-061) to its `f64` value -- the `int` half of
 /// Python's `int`/`float` arithmetic promotion (Task 6). Can panic (via
 /// `require_smallint`'s bigint-rejection path), so -- per this crate's
 /// established convention, see the implementation note above `int_add` --
@@ -560,12 +560,12 @@ pub extern "C" fn pycc_rt_float_pow(a: f64, b: f64) -> f64 {
     a.powf(b)
 }
 
-/// D-058's `str` representation: up to 22 bytes are stored inline directly
+/// D-059's `str` representation: up to 22 bytes are stored inline directly
 /// in the `PyStrObj` allocation itself (no separate heap allocation for the
 /// byte payload); anything longer heap-allocates a second, separate byte
 /// buffer. Either way, `PyStrObj` itself (its refcount included) is always
 /// exactly one heap allocation -- `pycc_codegen` never sees anything but an
-/// opaque pointer to it (the same ABI-avoidance principle D-060 already
+/// opaque pointer to it (the same ABI-avoidance principle D-061 already
 /// applies to `int`'s `BigInt`: no struct ever crosses the LLVM/Rust
 /// boundary by value).
 enum PyStrPayload {
@@ -600,7 +600,7 @@ impl PyStrObj {
 }
 
 /// Allocates a fresh `PyStrObj` with refcount `1`, choosing the inline or
-/// heap `PyStrPayload` per D-058's 22-byte threshold. Shared by every
+/// heap `PyStrPayload` per D-059's 22-byte threshold. Shared by every
 /// `pycc_rt_str_*` entry point below that constructs a brand-new string (a
 /// literal, or a concatenation result) rather than merely operating on
 /// already-existing ones.
@@ -678,7 +678,7 @@ pub unsafe extern "C" fn pycc_rt_str_truthy(s: *mut PyStrObj) -> i8 {
     i8::from(!unsafe { &*s }.bytes().is_empty())
 }
 
-/// D-059's unconditional refcounting for `str`: increments `s`'s refcount by
+/// D-060's unconditional refcounting for `str`: increments `s`'s refcount by
 /// one. A no-op on a null pointer -- not something Task 7's own codegen
 /// ever actually passes, but a documented, tested part of this function's
 /// contract nonetheless (mirroring how a null check is cheap insurance
@@ -696,7 +696,7 @@ pub unsafe extern "C" fn pycc_rt_str_incref(s: *mut PyStrObj) {
     obj.rc.set(obj.rc.get() + 1);
 }
 
-/// D-059's unconditional refcounting for `str`: decrements `s`'s refcount by
+/// D-060's unconditional refcounting for `str`: decrements `s`'s refcount by
 /// one, freeing the allocation once it reaches zero. A no-op on a null
 /// pointer, same rationale as `pycc_rt_str_incref` above.
 ///
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "bigint-valued")]
     fn pycc_rt_int_cmp_on_a_bigint_tagged_operand_panics() {
-        // Bit pattern `0` (even) is what D-060 reserves for a heap `BigInt`
+        // Bit pattern `0` (even) is what D-061 reserves for a heap `BigInt`
         // pointer -- no real allocation needed to exercise this rejection.
         int_cmp(0, tag_smallint(1));
     }
@@ -1108,7 +1108,7 @@ mod tests {
     #[test]
     fn a_long_literal_round_trips_through_the_heap_representation() {
         unsafe {
-            let long = "x".repeat(23); // one byte past the 22-byte inline cap (D-058)
+            let long = "x".repeat(23); // one byte past the 22-byte inline cap (D-059)
             let s = pycc_rt_str_from_literal(long.as_ptr(), long.len() as i64);
             assert_eq!((*s).bytes(), long.as_bytes());
             pycc_rt_str_decref(s);
@@ -1374,7 +1374,7 @@ mod tests {
     fn a_bigint_that_would_fit_back_in_smallint_range_still_formats_correctly() {
         // Two already-promoted values that sum back to something small
         // (mathematically representable as a smallint) are not required to
-        // shrink back down (D-060/this task's own "simplest correct" choice
+        // shrink back down (D-061/this task's own "simplest correct" choice
         // -- once a value touches the bigint path, it stays represented as
         // one) -- but the printed *value* must still be exactly right.
         let a = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1)); // a bigint
