@@ -995,6 +995,44 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_rejects_paired_gate_without_explicit_download_flattening
+    [
+      "Download sealed predecessor frontend timing",
+      "Download candidate frontend timing"
+    ].each do |step_name|
+      workflow = paired_perf_workflow do |jobs|
+        download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+          step["name"] == step_name
+        end
+        download.fetch("with").delete("merge-multiple")
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed isolated comparison job"
+    end
+  end
+
+  def test_rejects_paired_gate_with_disabled_or_invalid_download_flattening
+    [
+      "Download sealed predecessor frontend timing",
+      "Download candidate frontend timing"
+    ].product([false, "flatten"]).each do |step_name, merge_multiple|
+      workflow = paired_perf_workflow do |jobs|
+        download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+          step["name"] == step_name
+        end
+        download.fetch("with")["merge-multiple"] = merge_multiple
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed isolated comparison job"
+    end
+  end
+
   def test_paired_timing_requirement_accepts_exactly_two_regular_files
     _stdout, stderr, status = run_paired_timing_requirement do |root|
       %w[previous current].each do |revision|

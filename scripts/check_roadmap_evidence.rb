@@ -36,7 +36,7 @@ EVIDENCE_SECTIONS = {
 D48_STEADY_PERF_CI_WORKFLOW_SHA256 =
   "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
 D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
-  "3a214c67b104c4fe0a413a8f60061e1cf63bc1d2a20b0a1130ae678e3c755831"
+  "ae56ed634854da6da37aafdcdd7a8323f6bdd07273b32ebf95537f9d9c97384c"
 TIER1_CI_WORKFLOW_SHA256S = [
   D48_STEADY_PERF_CI_WORKFLOW_SHA256,
   D51_PAIRED_PERF_CI_WORKFLOW_SHA256
@@ -483,6 +483,7 @@ PAIRED_PERF_GATE_STEPS = [
     "with" => {
       "artifact-ids" =>
         "${{ needs.frontend-perf-measure.outputs.predecessor_artifact_id }}",
+      "merge-multiple" => "true",
       "path" => "target/criterion/pycc_check_frontend_fixture/previous"
     }
   },
@@ -492,6 +493,7 @@ PAIRED_PERF_GATE_STEPS = [
     "with" => {
       "artifact-ids" =>
         "${{ needs.frontend-perf-measure.outputs.current_artifact_id }}",
+      "merge-multiple" => "true",
       "path" => "target/criterion/pycc_check_frontend_fixture/current"
     }
   },

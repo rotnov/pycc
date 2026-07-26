@@ -103,8 +103,12 @@ boundary. The prospective workflow binds the benchmark sources, root and
 workspace manifests, local build scripts, lockfile, Rust toolchain, and Cargo
 configuration; it seals the predecessor artifact before candidate code runs,
 binds both downloads to the distinct artifact IDs returned by their trusted
-upload steps, and requires any contract drift to use its own reviewed
-transition. The threshold, required `ci-gate` fan-in, and benchmark itself do
+upload steps, explicitly flattens each single selected archive into its
+requested revision directory, and requires any contract drift to use its own
+reviewed transition. The first activation attempt proved that exact-ID
+selection alone preserves an artifact-name subdirectory; its digest was
+retired and the corrected inert fixture adds `merge-multiple: true` to both
+downloads. The threshold, required `ci-gate` fan-in, and benchmark itself do
 not change.
 
 ## Autonomy policy ("no questions" mechanics)
