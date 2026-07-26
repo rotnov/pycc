@@ -172,6 +172,27 @@ local paired validation with identical Rust and benchmark code produced a
 high outliers, while the medians differed by `-0.56%`. The merge threshold
 remains greater than 2%, and the comparator remains isolated and digest-bound.
 
+D-056 stages a source-aware successor after the active paired gate still
+produced a `+3.14%` false failure for identical executable inputs in main run
+[30198852753](https://github.com/rotnov/pycc/actions/runs/30198852753), followed
+by a `+0.86%` pass for the same unchanged-input class in run
+[30199477003](https://github.com/rotnov/pycc/actions/runs/30199477003). The
+prospective [`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml)
+keeps both measurements and every D-051 provenance control. Before candidate
+code runs, it classifies the complete `src/` and `crates/` trees as identical
+or changed; the existing contract independently binds every benchmark,
+manifest, lockfile, toolchain, Cargo configuration, and local build script.
+The prospective comparator treats a timing delta as non-blocking environment
+telemetry only for the exact `true` identity, while any changed executable
+input keeps the same greater-than-2% failure. Boolean validation, complete-path
+classification, step ordering, output propagation, comparator binding, and
+the unchanged failure path have focused positive and negative tests.
+
+This paragraph describes staged evidence, not current behavior. The active
+workflow remains byte-identical to the reviewed D-051 fixture until a separate
+fresh-base activation pull request replaces it byte-for-byte with D-056 and
+retires the older authorization.
+
 The byte-exact activation retired the D-048 workflow digest and fixture. No
 administrative bootstrap is required because each D-051 run measures both sides
 of its own comparison. D-054's one-shot staging recovery is historical audit
