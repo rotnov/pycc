@@ -28,40 +28,34 @@ never a merge gate.
 
 ---
 
-## 2026-07-26 — This file's own introducing PR collided with a parallel agent writing the same file
+## 2026-07-26 — A parallel agent changed this file's introducing PR branch
 
 **What happened:** while this pull request (adding this very file and
 `docs/SESSION_LOG.md`, originally drafted as ADR `D-054`) was still open,
-a second, independent agent session — working toward the same
-`/goal release version 0.1` directive, apparently over the same
-underlying facts — pushed its own commit directly to this PR's branch
-containing an almost line-for-line equivalent pair of documents (same
-file names, same structure, the same renumbering to `D-055` after
-noticing the identical `D-054` collision independently). The two
-versions differed in only a few words of phrasing, plus one factual
-error in the other version: it described this branch's PR-5 collision as
-"six ADRs, D-048 through D-053," when the actual count is five
-(`D-048` through `D-052` — `D-053` was never used on the PR-5 branch).
+a second, independent agent session pushed a new commit to this PR's
+branch. That commit rewrote the PR-5 snapshot from six colliding ADRs
+(`D-048` through `D-053`) to five on the assumption that PR-5 had never
+used `D-053`. Branch-scoped inspection showed that assumption was false:
+the PR-5 branch has a `D-053` table entry as well as references to it in
+the detailed `D-052` section.
 
 **Root cause:** two agent sessions, given the same standing goal and the
-same repository state, independently produced nearly identical prose
-because they were describing the same real events — but "nearly
-identical" still left room for one to introduce a small counting error
-the other didn't make.
+same repository state, edited the same active PR branch without first
+coordinating ownership or verifying their branch-specific claim against
+the referenced PR-5 commit. A plausible prose correction was treated as
+authoritative before the exact source snapshot was inspected.
 
-**What fixed it:** adopted the already-pushed version (`git reset --hard`
-to the remote branch, since it was equivalent-or-better and already
-public) rather than force-pushing a competing version over it, then
-corrected the one verifiable factual error in both files rather than
-assuming either version was authoritative by default.
+**What fixed it:** fetched the new remote head, confirmed it was a direct
+descendant of the reviewed head, and fast-forwarded the clean local
+worktree. Then compared the remote commit rather than overwriting it,
+verified the count with a branch-scoped `git diff`, and restored the six
+actual colliding IDs in both files.
 
-**Lesson:** when a concurrent actor has already pushed an equivalent
-solution to a branch this session owns, prefer reconciling with it over
-re-asserting a locally-authored version — but "prefer" does not mean
-"trust wholesale": verify concrete, checkable claims (a count, an ID, a
-commit SHA) against the actual repository state before accepting them,
-even from a version that reads as authoritative and even when it mostly
-matches what this session independently concluded.
+**Lesson:** before changing an active PR branch, confirm ownership and
+current head; after any unexpected remote advance, preserve it and audit
+the exact delta before proceeding. Verify concrete claims against the
+named snapshot with branch-scoped commands — never infer a feature
+branch's contents from `main` or from prose in the competing change.
 
 ## 2026-07-26 — Two three-way ADR ID collisions from a concurrent independent actor
 
@@ -92,8 +86,8 @@ carried a defensive note ("re-verify the actual next-free ID at execution
 time... this branch keeps integrating `main`"), which caught the
 divergence before it caused a real conflict — but only because a human
 question happened to prompt a fresh `git log`/`grep` check partway
-through. Renumbering the branch's D-048 through D-052 (5 IDs: D-048
-through D-051 are table-row-only entries, D-052 is a detailed section) to
+through. Renumbering the branch's D-048 through D-053 (6 IDs: D-048
+through D-053 are table entries, with a detailed section for D-052) to
 whatever is actually free on `main` at merge time is a mechanical fix,
 tracked as a pre-merge cleanup step for that branch.
 

@@ -33,13 +33,13 @@ integration, ADR renumbering, full current-base validation, PR creation,
 and the PR review loop have not yet completed.
 
 **Known follow-up required before PR-5 merges:** integrate the latest
-`main` without overwriting any newer local work. Its five locally
-recorded ADRs D-048 through D-052 (D-048–D-051 are table-row-only
-entries; D-052 is a detailed section) collide with unrelated decisions
+`main` without overwriting any newer local work. Its six locally
+recorded ADRs D-048 through D-053 (all six are table entries; D-052 also
+has a detailed section) collide with unrelated decisions
 that entered `main` through concurrent reviewed pull requests. Re-check
-the live ADR tail immediately before editing and renumber all five PR-5
+the live ADR tail immediately before editing and renumber all six PR-5
 decisions to the then-free IDs; after this snapshot's D-055, D-056
-through D-060 are only the current candidates, not reservations. Full
+through D-061 are only the current candidates, not reservations. Full
 detail is in `docs/AGENT_RETROSPECTIVE.md`.
 
 **After PR-5 merges:** PR-6 (conformance and acceptance benchmarking —
