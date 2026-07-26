@@ -33,14 +33,12 @@ integration, ADR renumbering, full current-base validation, PR creation,
 and the PR review loop have not yet completed.
 
 **Known follow-up required before PR-5 merges:** integrate the latest
-`main` without overwriting any newer local work. Its six locally
-recorded ADRs D-048 through D-053 (all six are table entries; D-052 also
-has a detailed section) collide with unrelated decisions
-that entered `main` through concurrent reviewed pull requests. Re-check
-the live ADR tail immediately before editing and renumber all six PR-5
-decisions to the then-free IDs; after this snapshot's D-057, D-058
-through D-063 are only the current candidates, not reservations. Full
-detail is in `docs/AGENT_RETROSPECTIVE.md`.
+`main` without overwriting any newer local work. Published PR #132 now
+carries D-057 through D-065, while current `main` owns a conflicting
+D-062 and this journal uses D-066. PR #132 must reconcile that colliding
+tail before merge. Re-check the live ADR tail immediately before editing;
+later IDs are candidates, not reservations. Full detail is in
+`docs/AGENT_RETROSPECTIVE.md`.
 
 **After PR-5 merges:** PR-6 (conformance and acceptance benchmarking —
 `pycc_testkit`, `fib`/`mandelbrot-ascii` vs. pinned CPython on all 5

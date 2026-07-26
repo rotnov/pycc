@@ -38,6 +38,12 @@ D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
   "4b1d11afba108745a2bc375e3447d92ecde843376c3bea95ab32f76b3fc53249"
 D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
   "c696da18f4f8b876d4398c43f94fe574e870579badd84cf579fbe91fbd9d7b4b"
+D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
+  "a5135f7a8ebe2b0c0924ad026612ef9c90ade105c9a4fd484f803e10cf5b5c8d"
+REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
+  D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+  D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
+].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
 PINNED_ARTIFACT_UPLOAD_ACTION =
@@ -52,6 +58,10 @@ D56_PERF_CHECKER_SHA256 =
   "55ce7259ff164a43a98187cb7b611794a8417dc3dfddf3f4fb689776ab83adcb"
 D56_PERF_CHECKER_TEST_SHA256 =
   "b5ccd35af90dcff6f9fff30ec9075ab9d780694fc9941954913f5bd4407b2b34"
+REPLICATED_PERF_CHECKER_SHA256 =
+  "d296e48859b1813685f06244c6d401119de57ec1842fe7c47d8ecbbdb1318c06"
+REPLICATED_PERF_CHECKER_TEST_SHA256 =
+  "bdda7c21cf96d35ee00af6893493b9f84025b35998e5a4bcba88019604757b10"
 PAIRED_PERF_CHECKER_VERIFY_SCRIPT = <<~SHELL.strip
   printf '%s  %s\\n' \\
     #{PAIRED_PERF_CHECKER_SHA256} \\
@@ -66,6 +76,14 @@ D56_PERF_CHECKER_VERIFY_SCRIPT = <<~SHELL.strip
     scripts/check_source_aware_perf_regression.rb \\
     #{D56_PERF_CHECKER_TEST_SHA256} \\
     scripts/test_check_source_aware_perf_regression.rb |
+    shasum -a 256 --check
+SHELL
+REPLICATED_PERF_CHECKER_VERIFY_SCRIPT = <<~SHELL.strip
+  printf '%s  %s\\n' \\
+    #{REPLICATED_PERF_CHECKER_SHA256} \\
+    scripts/check_replicated_paired_perf_regression.rb \\
+    #{REPLICATED_PERF_CHECKER_TEST_SHA256} \\
+    scripts/test_check_replicated_paired_perf_regression.rb |
     shasum -a 256 --check
 SHELL
 PAIRED_PERF_PREDECESSOR_SCRIPT = <<~'SHELL'.strip
@@ -221,6 +239,64 @@ D56_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
   ruby scripts/check_source_aware_perf_regression.rb \
     target/criterion/pycc_check_frontend_fixture/current/estimates.json \
     target/criterion/pycc_check_frontend_fixture/previous/estimates.json \
+    "$EXECUTABLE_INPUTS_EQUAL"
+SHELL
+REPLICATED_PERF_PREVIOUS_BENCHMARK_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  previous_target="$RUNNER_TEMP/pycc-paired-perf-previous"
+  timing_dir="$(mktemp -d "$RUNNER_TEMP/pycc-previous-timing.XXXXXX")"
+  for round in 1 2 3 4 5; do
+    baseline="replicate-$round"
+    (
+      cd previous
+      CARGO_TARGET_DIR="$previous_target" \
+        cargo bench --locked --bench check_bench -- --save-baseline "$baseline"
+    )
+    previous_timing="$previous_target/criterion/pycc_check_frontend_fixture/$baseline/estimates.json"
+    cp "$previous_timing" "$timing_dir/round-$round.json"
+  done
+  printf 'timing_path=%s\n' "$timing_dir" >> "$GITHUB_OUTPUT"
+SHELL
+REPLICATED_PERF_CURRENT_BENCHMARK_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  current_target="$RUNNER_TEMP/pycc-paired-perf-current"
+  timing_dir="$(mktemp -d "$RUNNER_TEMP/pycc-current-timing.XXXXXX")"
+  for round in 1 2 3 4 5; do
+    baseline="replicate-$round"
+    (
+      cd current
+      CARGO_TARGET_DIR="$current_target" \
+        cargo bench --locked --bench check_bench -- --save-baseline "$baseline"
+    )
+    current_timing="$current_target/criterion/pycc_check_frontend_fixture/$baseline/estimates.json"
+    cp "$current_timing" "$timing_dir/round-$round.json"
+  done
+  printf 'timing_path=%s\n' "$timing_dir" >> "$GITHUB_OUTPUT"
+SHELL
+REPLICATED_PERF_REQUIRE_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  timing_root="target/criterion/pycc_check_frontend_fixture"
+  for revision in previous current; do
+    for round in 1 2 3 4 5; do
+      timing="$timing_root/$revision/round-$round.json"
+      if [ ! -f "$timing" ] || [ -L "$timing" ]; then
+        echo "replicated frontend timing is missing $revision/round-$round.json" >&2
+        exit 1
+      fi
+    done
+  done
+  file_count="$(find "$timing_root" -type f | wc -l | tr -d '[:space:]')"
+  entry_count="$(find "$timing_root" -mindepth 1 | wc -l | tr -d '[:space:]')"
+  if [ "$file_count" -ne 10 ] || [ "$entry_count" -ne 12 ] || \
+      find "$timing_root" -type l | grep -q .; then
+    echo "replicated frontend timing must contain exactly two directories and ten regular files" >&2
+    exit 1
+  fi
+SHELL
+REPLICATED_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
+  ruby scripts/check_replicated_paired_perf_regression.rb \
+    target/criterion/pycc_check_frontend_fixture/current \
+    target/criterion/pycc_check_frontend_fixture/previous \
     "$EXECUTABLE_INPUTS_EQUAL"
 SHELL
 PAIRED_PERF_MEASURE_STEPS = [
@@ -466,6 +542,43 @@ D56_SOURCE_AWARE_PERF_GATE_JOB = {
   },
   "steps" => D56_SOURCE_AWARE_PERF_GATE_STEPS
 }.freeze
+REPLICATED_PERF_MEASURE_STEPS =
+  D56_SOURCE_AWARE_PERF_MEASURE_STEPS.map do |step|
+    replicated_step = Marshal.load(Marshal.dump(step))
+    case replicated_step["name"]
+    when "Benchmark exact predecessor"
+      replicated_step["run"] = REPLICATED_PERF_PREVIOUS_BENCHMARK_SCRIPT
+    when "Benchmark exact candidate"
+      replicated_step["run"] = REPLICATED_PERF_CURRENT_BENCHMARK_SCRIPT
+    end
+    replicated_step
+  end.freeze
+REPLICATED_PERF_GATE_STEPS =
+  D56_SOURCE_AWARE_PERF_GATE_STEPS.map do |step|
+    replicated_step = Marshal.load(Marshal.dump(step))
+    case replicated_step["name"]
+    when "Check out only the reviewed performance checker"
+      replicated_step.fetch("with")["sparse-checkout"] =
+        "scripts/check_replicated_paired_perf_regression.rb\n" \
+        "scripts/test_check_replicated_paired_perf_regression.rb"
+    when "Verify reviewed performance checker"
+      replicated_step["run"] = REPLICATED_PERF_CHECKER_VERIFY_SCRIPT
+    when "Test reviewed performance checker"
+      replicated_step["run"] =
+        "ruby scripts/test_check_replicated_paired_perf_regression.rb"
+    when "Require exact predecessor and candidate timing"
+      replicated_step["run"] = REPLICATED_PERF_REQUIRE_SCRIPT
+    when "Compare exact predecessor and candidate"
+      replicated_step["run"] = REPLICATED_PERF_COMPARE_SCRIPT
+    end
+    replicated_step
+  end.freeze
+REPLICATED_PERF_MEASURE_JOB = D56_SOURCE_AWARE_PERF_MEASURE_JOB.merge(
+  "steps" => REPLICATED_PERF_MEASURE_STEPS
+).freeze
+REPLICATED_PERF_GATE_JOB = D56_SOURCE_AWARE_PERF_GATE_JOB.merge(
+  "steps" => REPLICATED_PERF_GATE_STEPS
+).freeze
 PAIRED_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
   "native-build-test",
@@ -776,9 +889,16 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
   end
   measure_job =
     yaml_value(measure_job_node, "#{source} frontend-perf-measure job")
-  unless measure_job == D56_SOURCE_AWARE_PERF_MEASURE_JOB
+  expected_perf_job =
+    if measure_job == D56_SOURCE_AWARE_PERF_MEASURE_JOB
+      D56_SOURCE_AWARE_PERF_GATE_JOB
+    elsif measure_job == REPLICATED_PERF_MEASURE_JOB
+      REPLICATED_PERF_GATE_JOB
+    end
+  unless expected_perf_job
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-measure must match the reviewed source-aware measurement job"
+          "#{source}: frontend-perf-measure must match the reviewed source-aware measurement job " \
+          "or its fixed-replicate successor"
   end
 
   unless perf_job_node
@@ -786,9 +906,10 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
           "#{source}: source-aware gate requires frontend-perf-gate"
   end
   perf_job = yaml_value(perf_job_node, "#{source} frontend-perf-gate job")
-  unless perf_job == D56_SOURCE_AWARE_PERF_GATE_JOB
+  unless perf_job == expected_perf_job
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate must match the reviewed source-aware comparison job"
+          "#{source}: frontend-perf-gate must match the reviewed source-aware comparison job " \
+          "for the selected measurement design"
   end
 
   ci_gate_node = jobs["ci-gate"]
@@ -1027,13 +1148,11 @@ def validate_evidence(root, _evidence_ids)
           "#{workflow}: evidence does not provide the exact 100% line and region gate"
   end
   digest = Digest::SHA256.hexdigest(workflow_text)
-  case digest
-  when D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
-    validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
-  else
+  unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match the reviewed active D-056 CI workflow"
+          "#{workflow}: does not match a reviewed active or staged performance CI workflow"
   end
+  validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
 end
 
 def main(arguments)
