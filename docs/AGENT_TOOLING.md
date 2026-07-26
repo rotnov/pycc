@@ -205,6 +205,42 @@ revision, provide the equivalent Codex capability or a safe documented fallback,
 extend the pinned-marketplace and parity checks in the same pull request before adding
 the required reference.
 
+## Machine-local iEvo hook lifecycle
+
+The tracked `.ievo/evo-auto.flag` shares corrections-only intent, but generated
+hook code and its client configuration remain per-clone under D-023. After running
+the installed iEvo enable or refresh workflow, normalize and verify the result with:
+
+```sh
+python3 scripts/manage_ievo_hooks.py localize
+python3 scripts/manage_ievo_hooks.py check --smoke
+```
+
+`localize` recognizes only iEvo's three generated script targets and their known
+Claude events. It moves those exact entries out of `.claude/settings.json`, merges
+them into ignored `.claude/settings.local.json`, and leaves every unrelated setting
+or hook in place. Codex's `.codex/hooks.json` is also ignored and checked as local
+state. If a newer iEvo release rewrites `.gitignore` to propose tracked dispatcher
+shims, the helper removes only those known exception lines and restores the
+repository's whole-directory `.ievo/hooks/` ignore rule. Missing or symlinked targets
+fail closed before configuration is relocated.
+
+Use the repository's clone-local inverse rather than generic disable alone:
+
+```sh
+python3 scripts/manage_ievo_hooks.py disable
+```
+
+It parses all present shared and local configurations before changing any of them,
+removes only exact iEvo entries from both Claude locations and the Codex hook file,
+then removes the generated scripts/companions and their vendored fallback directory.
+The tracked `.ievo/evo-auto.flag` remains unchanged because it records repository
+intent and is required by agent-policy validation; disabling that shared intent is a
+separate reviewed repository change under D-023. Repeating either lifecycle operation
+is safe. The full enable/refresh → smoke → disable path and malformed-input behavior
+are exercised by `scripts/test_manage_ievo_hooks.py` in every required Python
+test-discovery run.
+
 ## Reviewed update process
 
 1. Open a dependency pull request that changes both pins to the same upstream release.

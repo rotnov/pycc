@@ -256,6 +256,23 @@ base revision's roadmap tests and checker against those inputs. A pull request
 that replaces its own checker therefore cannot replace the implementation that
 authorizes its checked roadmap markers.
 
+### Agent hook lifecycle
+
+The required Python discovery run includes
+`scripts/test_manage_ievo_hooks.py`. Its isolated synthetic repository covers the
+complete D-067 lifecycle: shared Claude entries plus pre-existing local state are
+localized without duplicates; unrelated settings and hooks survive; both Claude and
+Codex hook scripts execute successfully with a no-op payload; upstream tracked-shim
+ignore exceptions are removed; repeated localize and disable operations are stable;
+and disable removes every exact iEvo entry before its generated targets while
+preserving the tracked shared-intent flag. The full lifecycle also verifies that the
+tracked view returns to clean after upstream-style enable mutations are normalized.
+Separate
+negative cases prove a missing target or malformed local JSON fails before mutation.
+`scripts/validate_agent_policies.py` additionally requires both
+`.claude/settings.local.json` and `.codex/hooks.json` to remain ignored in the real
+tracked checkout.
+
 ## CI privilege policy
 
 Every GitHub Actions workflow declares an explicit workflow-level permission
