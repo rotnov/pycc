@@ -2144,7 +2144,6 @@ def validate_skill_parity(
                     "invocation gate"
                 )
 
-
 def validate_instruction_parity(
     failures: list[str],
     root: Path = ROOT,

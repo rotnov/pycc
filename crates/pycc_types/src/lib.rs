@@ -437,7 +437,30 @@ fn contains_return(body: &[HirStmt]) -> bool {
     })
 }
 
-fn infer_function_signatures(
+fn concrete_function_signatures(hir: &HirModule) -> Option<HashMap<String, (Vec<Ty>, Ty)>> {
+    let mut signatures = HashMap::new();
+    for item in &hir.items {
+        let HirItem::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
+            return None;
+        }
+        signatures.insert(
+            name.clone(),
+            (params.iter().map(|(_, ty)| *ty).collect(), *return_ty),
+        );
+    }
+    Some(signatures)
+}
+
+fn infer_function_signatures_with_solver(
     hir: &HirModule,
     function_local_names: &[Vec<&str>],
 ) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
@@ -599,6 +622,26 @@ fn infer_function_signatures(
         resolved.insert(name.clone(), (param_tys, return_ty));
     }
     Ok(resolved)
+}
+
+fn checked_function_signatures(
+    hir: &HirModule,
+    function_local_names: &[Vec<&str>],
+) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
+    // Fully annotated valid modules have no inference variables to constrain.
+    // Validate them once and avoid the preceding constraint-collection walk.
+    // If validation fails, deliberately fall back to the historical
+    // solver-first sequence so modules with multiple errors retain the same
+    // first diagnostic as before this fast path existed.
+    if let Some(signatures) = concrete_function_signatures(hir)
+        && check_with_signatures(hir, &signatures, function_local_names).is_ok()
+    {
+        return Ok(signatures);
+    }
+
+    let signatures = infer_function_signatures_with_solver(hir, function_local_names)?;
+    check_with_signatures(hir, &signatures, function_local_names)?;
+    Ok(signatures)
 }
 
 pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
@@ -1006,8 +1049,7 @@ fn check_stmt_in_function(
 /// generation.
 pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     let function_local_names = module_function_local_names(hir);
-    let signatures = infer_function_signatures(hir, &function_local_names)?;
-    check_with_signatures(hir, &signatures, &function_local_names)?;
+    let signatures = checked_function_signatures(hir, &function_local_names)?;
 
     let mut resolved_hir = hir.clone();
     for item in &mut resolved_hir.items {
@@ -1081,8 +1123,7 @@ fn check_with_signatures(
 /// private-helper signatures in the returned HIR.
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     let function_local_names = module_function_local_names(hir);
-    let signatures = infer_function_signatures(hir, &function_local_names)?;
-    check_with_signatures(hir, &signatures, &function_local_names)
+    checked_function_signatures(hir, &function_local_names).map(|_| ())
 }
 
 #[cfg(test)]
@@ -1093,6 +1134,213 @@ mod tests {
     fn v0_1_slice_always_type_checks() {
         let hir = HirModule { items: vec![] };
         assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn concrete_signatures_take_the_validation_only_fast_path() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "identity".to_string(),
+                params: vec![("value".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+            }],
+        };
+
+        assert_eq!(
+            concrete_function_signatures(&hir).unwrap()["identity"],
+            (vec![Ty::Int], Ty::Int)
+        );
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn inferred_signatures_keep_the_constraint_solver_path() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_identity".to_string(),
+                params: vec![("value".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+            }],
+        };
+
+        assert!(concrete_function_signatures(&hir).is_none());
+    }
+
+    #[test]
+    fn concrete_fast_path_preserves_solver_first_diagnostic_selection() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "takes_int".to_string(),
+                    params: vec![("value".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::Return(None)],
+                },
+                HirItem::Function {
+                    name: "broken".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "takes_int".to_string(),
+                            args: vec![HirExpr::StringLiteral("wrong".to_string())],
+                        }),
+                        HirStmt::Return(Some(HirExpr::StringLiteral("wrong".to_string()))),
+                    ],
+                },
+            ],
+        };
+        let local_names = module_function_local_names(&hir);
+        let concrete = concrete_function_signatures(&hir).unwrap();
+        let validation_first = check_with_signatures(&hir, &concrete, &local_names).unwrap_err();
+        let solver_first = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        let fast_path = checked_function_signatures(&hir, &local_names).unwrap_err();
+
+        assert_eq!(validation_first.code, "T0021");
+        assert_eq!(solver_first.code, "T0022");
+        assert_eq!(fast_path.code, solver_first.code);
+        assert_eq!(fast_path.message, solver_first.message);
+    }
+
+    #[test]
+    fn constraint_collection_rejects_bound_and_unbound_local_call_targets() {
+        for (body, expected_message) in [
+            (
+                vec![
+                    HirStmt::Assign {
+                        target: "helper".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                    HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }),
+                ],
+                "name `helper` is bound to a non-callable value",
+            ),
+            (
+                vec![
+                    HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }),
+                    HirStmt::Assign {
+                        target: "helper".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                ],
+                "local name `helper` is not bound before this use",
+            ),
+        ] {
+            let hir = HirModule {
+                items: vec![HirItem::Function {
+                    name: "_caller".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body,
+                }],
+            };
+
+            assert_eq!(check(&hir).unwrap_err().message, expected_message);
+        }
+    }
+
+    #[test]
+    fn constraint_collection_skips_already_concrete_call_arguments() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "takes_int".to_string(),
+                    params: vec![("value".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::Return(None)],
+                },
+                HirItem::Function {
+                    name: "_caller".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "takes_int".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    })],
+                },
+            ],
+        };
+
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn constraint_collection_reuses_a_top_level_for_binding() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "item".to_string(),
+                    value: HirExpr::IntLiteral(0),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ForRange {
+                    var: "item".to_string(),
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                    body: vec![],
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn constraint_collection_rejects_a_non_integer_top_level_for_binding() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "item".to_string(),
+                    value: HirExpr::StringLiteral("not an integer".to_string()),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ForRange {
+                    var: "item".to_string(),
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                    body: vec![],
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+
+        assert_eq!(check(&hir).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn constraint_collection_leaves_top_level_return_to_validation() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Return(Some(HirExpr::IntLiteral(1)))),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+
+        assert_eq!(check(&hir).unwrap_err().code, "T0024");
     }
 
     #[test]
