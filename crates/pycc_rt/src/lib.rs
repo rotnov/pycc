@@ -813,6 +813,65 @@ pub extern "C" fn pycc_rt_float_to_str(value: f64) -> *mut PyStrObj {
     float_to_str(value)
 }
 
+/// Writes a `PyStrObj`'s bytes to stdout with no trailing newline (Task 10)
+/// -- `print`'s new fully-general dispatch converts every argument to a
+/// `str` via `to_str` first (reusing `pycc_rt_int_to_str`/`float_to_str`/
+/// `bool_to_str`) and writes each one with this, separated by
+/// `pycc_rt_print_space` and finished by `pycc_rt_print_newline`. Distinct
+/// from Task 3's `pycc_rt_int_print`, which stays newline-inclusive and
+/// int-only and is no longer called by `pycc_codegen`'s print dispatch
+/// (still exercised by its own direct unit tests below). Never panics --
+/// `String::from_utf8_lossy` cannot fail -- so this needs no
+/// private-logic/public-wrapper split (same reasoning as `pycc_rt_str_from_
+/// literal`'s own doc comment).
+///
+/// Deviation from the task brief: the brief's own version of this function
+/// signature was a plain (non-`unsafe`) `pub extern "C" fn`, matching its
+/// dereference of `s` (`*s`) inside its own internal `unsafe { }` block.
+/// That doesn't compile clean under this crate's `-D warnings` clippy gate
+/// -- `clippy::not_unsafe_ptr_arg_deref` (`#[deny]`d by default) rejects
+/// exactly this shape: a public function taking a raw pointer and
+/// dereferencing it without the function itself being `unsafe`. Every other
+/// function in this file that dereferences a `*mut PyStrObj`
+/// (`pycc_rt_str_from_literal`/`_concat`/`_cmp`/`_truthy`/`_incref`/
+/// `_decref`) is already `pub unsafe extern "C" fn` for exactly this
+/// reason; fixed the same way here, and documented with its own `# Safety`
+/// section per that same established convention.
+///
+/// # Safety
+/// `s` must be a live `*mut PyStrObj` previously returned by one of this
+/// crate's own str-producing functions (same contract as
+/// `pycc_rt_str_incref`/`pycc_rt_str_decref`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_print_write_str(s: *mut PyStrObj) {
+    print!("{}", String::from_utf8_lossy(unsafe { &*s }.bytes()));
+}
+
+/// Prints a single space with no newline (Task 10) -- `print`'s separator
+/// between arguments, matching CPython's default `sep=" "`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_print_space() {
+    print!(" ");
+}
+
+/// Prints `print`'s single trailing newline (Task 10), matching CPython's
+/// default `end="\n"`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_print_newline() {
+    println!();
+}
+
+/// Prints the literal `None`, capitalized, with no trailing newline (Task
+/// 10) -- CPython's `str(None)` -- for the narrow `print(f(...))` shape
+/// where `f` returns `Ty::None` (see this task's own scope note: no v0.1
+/// expression can construct a `None` *value* other than this exact
+/// call-result shape, so there is no `PyStrObj`-producing `none_to_str` to
+/// route through `pycc_rt_print_write_str` instead).
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_print_none() {
+    print!("None");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1381,5 +1440,31 @@ mod tests {
         let b = bigint_from_i128(0);
         assert!(!b.negative);
         assert_eq!(b.limbs, vec![0]);
+    }
+
+    #[test]
+    fn print_write_str_writes_bytes_with_no_trailing_newline() {
+        // stdout is captured by the test harness; this only proves the call
+        // itself doesn't panic/crash (same rationale as this file's other
+        // direct extern-fn exercises). `pycc_rt_str_from_literal`/`pycc_rt_
+        // str_decref`/`pycc_rt_print_write_str` (see that function's own
+        // doc comment for why it's `unsafe` too, a fix over the task
+        // brief's own version) are all `unsafe extern "C" fn`s, so every
+        // call below needs an `unsafe` block -- the task brief's own test
+        // listing omitted it entirely, a genuine compile-error bug, fixed
+        // here the same way this file's other direct `pycc_rt_str_from_
+        // literal` call sites already do it.
+        unsafe {
+            let s = pycc_rt_str_from_literal(b"hi".as_ptr(), 2);
+            pycc_rt_print_write_str(s);
+            pycc_rt_str_decref(s);
+        }
+    }
+
+    #[test]
+    fn print_space_and_newline_and_none_do_not_panic() {
+        pycc_rt_print_space();
+        pycc_rt_print_newline();
+        pycc_rt_print_none();
     }
 }

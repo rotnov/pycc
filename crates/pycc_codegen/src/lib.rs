@@ -51,7 +51,6 @@ struct RtFns<'ctx> {
     int_floormod: FunctionValue<'ctx>,
     int_pow: FunctionValue<'ctx>,
     int_cmp: FunctionValue<'ctx>,
-    int_print: FunctionValue<'ctx>,
     int_truthy: FunctionValue<'ctx>,
     range_continue: FunctionValue<'ctx>,
     int_to_float: FunctionValue<'ctx>,
@@ -67,6 +66,10 @@ struct RtFns<'ctx> {
     int_to_str: FunctionValue<'ctx>,
     float_to_str: FunctionValue<'ctx>,
     bool_to_str: FunctionValue<'ctx>,
+    print_write_str: FunctionValue<'ctx>,
+    print_space: FunctionValue<'ctx>,
+    print_newline: FunctionValue<'ctx>,
+    print_none: FunctionValue<'ctx>,
 }
 
 fn declare_rt_functions<'ctx>(
@@ -110,7 +113,6 @@ fn declare_rt_functions<'ctx>(
             "pycc_rt_int_cmp",
             i32_type.fn_type(&[i64_type.into(), i64_type.into()], false),
         ),
-        int_print: declare("pycc_rt_int_print", void_type.fn_type(&[i64_type.into()], false)),
         int_truthy: declare(
             "pycc_rt_int_truthy",
             context.i8_type().fn_type(&[i64_type.into()], false),
@@ -156,6 +158,10 @@ fn declare_rt_functions<'ctx>(
             "pycc_rt_bool_to_str",
             ptr_type.fn_type(&[context.i8_type().into()], false),
         ),
+        print_write_str: declare("pycc_rt_print_write_str", void_type.fn_type(&[ptr_type.into()], false)),
+        print_space: declare("pycc_rt_print_space", void_type.fn_type(&[], false)),
+        print_newline: declare("pycc_rt_print_newline", void_type.fn_type(&[], false)),
+        print_none: declare("pycc_rt_print_none", void_type.fn_type(&[], false)),
     }
 }
 
@@ -680,6 +686,18 @@ fn emit_expr<'ctx>(
                         .expect_basic("this function is declared to return str")
                         .into_pointer_value(),
                 ),
+                Ty::None => {
+                    // A `None`-returning call's LLVM function returns
+                    // `void` -- there is no value to extract, and this
+                    // crate has no `Scalar::None` (Task 6's finding: no
+                    // v0.1 expression can construct a `None` *value* other
+                    // than this exact call-result shape). The only caller
+                    // that ever evaluates a `Ty::None`-typed expression is
+                    // `emit_stmt`'s `print` dispatch below, which discards
+                    // this placeholder and prints the literal `"None"`
+                    // instead of using it.
+                    Scalar::Bool(context.i8_type().const_int(0, false))
+                }
                 other => panic!("pycc_codegen: a `{other:?}`-typed call result is not supported yet"),
             }
         }
@@ -1317,12 +1335,90 @@ fn verify_module(module: &inkwell::module::Module<'_>) {
     );
 }
 
+/// Emits one `print()` argument (Task 10), called once per element of
+/// `emit_stmt`'s `print`-call arm's `args`, in order, with the separator
+/// space between arguments already built by that arm itself (not here) --
+/// `Ty::None` (only ever reachable as a direct `Call` result, per Task
+/// 6/10's own scope note: there is no `MirExpr::NoneLiteral`, and a `Name`
+/// bound to a `None`-typed variable stays an explicit, narrow "not
+/// supported yet" here, since `emit_expr`'s `Name` arm has no `Ty::None`
+/// case at all) evaluates `arg` for its side effects (the call itself must
+/// still run) and discards the placeholder `Scalar` `emit_expr` returns for
+/// it (see that arm's own doc comment on `emit_expr`'s `Call` arm),
+/// printing the literal `"None"` instead of using it; every other v0.1
+/// scalar type converts to `str` via `to_str` (reusing `pycc_rt_int_to_str`/
+/// `float_to_str`/`bool_to_str`, the same conversions f-string
+/// interpolation already uses) and writes it with `pycc_rt_print_write_str`,
+/// then immediately decrefs the fresh `str` `to_str` built -- it's never
+/// retained beyond this one print call (same ownership pattern as
+/// `emit_expr`'s `FString` arm's own intermediate concatenation results).
+///
+/// Pulled out of `emit_stmt`'s own `print`-call arm into its own named
+/// function, rather than left inlined in that arm's `for` loop body as the
+/// task brief's own version had it, for two reasons: it matches this file's
+/// established style of extracting each self-contained unit of IR-building
+/// logic into its own helper (see `to_str`/`incref_if_str_duplicate`/
+/// `truthy` above, all extracted the same way); and, empirically, it fixes
+/// a `cargo llvm-cov` region-attribution quirk this task's own development
+/// hit -- with this logic left inlined directly inside `emit_stmt`'s large
+/// `match`, the lines building the `None` branch's `emit_expr`/
+/// `rt.print_none` calls were reported as 0-hit ("uncovered") by `cargo
+/// llvm-cov --show-missing-lines` even though a `eprintln!` placed on
+/// exactly those lines confirmed, via a direct `cargo test -p pycc_codegen
+/// -- --nocapture` run, that they really do execute for `compiles_print_
+/// of_a_void_returning_call_as_none`. Restructuring the same logic (first
+/// as a plain `if`, ruling out `let-else` specifically as the cause, then)
+/// into its own top-level function made the exact same code report 100%
+/// covered with no further changes -- behavior is provably identical
+/// either way (every test in this file, including the runtime-stdout ones,
+/// still passes), so this is treated as a coverage-instrumentation
+/// measurement artifact of a large `match` arm's own inlining/region
+/// mapping, not a real gap, and worked around structurally rather than by
+/// reaching for a `--ignore-filename-regex` exemption (D-014's own policy:
+/// that exemption is for a documented design constraint, not a
+/// measurement quirk with an available structural fix).
+fn emit_print_arg<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
+    locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    arg: &MirExpr,
+) {
+    if arg.ty() == pycc_mir::Ty::None {
+        if !matches!(arg, MirExpr::Call { .. }) {
+            panic!(
+                "pycc_codegen: printing a `None`-typed value that isn't a direct \
+                 call result is not supported yet"
+            );
+        }
+        emit_expr(context, builder, module, rt, user_functions, locals, arg);
+        builder
+            .build_call(rt.print_none, &[], "print_none")
+            .expect("build_call should not fail for a well-formed print of None");
+    } else {
+        let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+        let scalar = incref_if_str_duplicate(builder, rt, arg, scalar);
+        let str_ptr = to_str(builder, rt, scalar);
+        builder
+            .build_call(rt.print_write_str, &[str_ptr.into()], "print_write")
+            .expect("build_call should not fail for a well-formed print write");
+        builder
+            .build_call(rt.str_decref, &[str_ptr.into()], "print_decref_temp")
+            .expect("build_call should not fail for a well-formed decref");
+    }
+}
+
 /// Handles every `MirStmt` shape in v0.1 (this match is exhaustive over
-/// `MirStmt`, no catch-all arm): a `print()` call of a single `int`-typed
-/// expression, any other bare expression statement (a user-function call
-/// with any number of arguments included -- see `emit_expr`'s `Call` arm,
-/// which this now delegates to uniformly instead of special-casing
-/// zero-arg calls here), a local-variable assignment, `If`/`While`/
+/// `MirStmt`, no catch-all arm): a `print()` call of any number of
+/// `int`/`float`/`bool`/`str` arguments plus the narrow `print(f(...))`
+/// `None`-result shape (Task 10, space-separated, one trailing newline,
+/// matching CPython's `print(*args)`; see that arm's own doc comment), any
+/// other bare expression statement (a user-function call with any number of
+/// arguments included -- see `emit_expr`'s `Call` arm, which this now
+/// delegates to uniformly instead of special-casing zero-arg calls here), a
+/// local-variable assignment, `If`/`While`/
 /// `ForRange` control flow (Task 4) -- real basic blocks, conditional
 /// branches, and loop back-edges, using `truthy` for the shared `if`/
 /// `while` truthiness check and `emit_body_then_branch`/an inline
@@ -1341,21 +1437,18 @@ fn emit_stmt<'ctx>(
 ) -> Result<(), String> {
     match stmt {
         MirStmt::ExprStmt(MirExpr::Call { callee, args, .. }) if callee == "print" => {
-            match args.as_slice() {
-                [expr] if expr.ty() == pycc_mir::Ty::Int => {
-                    let Scalar::Int(v) = emit_expr(context, builder, module, rt, user_functions, locals, expr) else {
-                        unreachable!("Ty::Int always evaluates to Scalar::Int")
-                    };
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
                     builder
-                        .build_call(rt.int_print, &[v.into()], "print_int")
-                        .expect("build_call should not fail for a well-formed print call");
-                    Ok(())
+                        .build_call(rt.print_space, &[], "print_sep")
+                        .expect("build_call should not fail for a well-formed print separator");
                 }
-                _ => panic!(
-                    "pycc_codegen: this print() argument shape is not supported yet \
-                     (multi-arg / non-int print lands in Task 10)"
-                ),
+                emit_print_arg(context, builder, module, rt, user_functions, locals, arg);
             }
+            builder
+                .build_call(rt.print_newline, &[], "print_end")
+                .expect("build_call should not fail for a well-formed print newline");
+            Ok(())
         }
         // A user-function call whose declared return type is `None`, used
         // as a bare statement (e.g. `main()`) -- must go through
@@ -1548,8 +1641,11 @@ mod tests {
     use pycc_mir::{BinOpKind, CmpOpKind, MirExpr, MirItem, MirModule, MirStmt, Ty};
     use std::process::Command;
 
-    /// `print(<n>)` as a `MirStmt` -- the only `print()` argument shape
-    /// `emit_stmt` handles so far (see its doc comment).
+    /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
+    /// shape reused by many of this file's older tests (`emit_stmt`'s
+    /// `print` dispatch itself now handles any number of arguments of any
+    /// v0.1 scalar type, plus the narrow `None`-result shape; see its own
+    /// doc comment, Task 10).
     fn call_print(n: i64) -> MirStmt {
         MirStmt::ExprStmt(MirExpr::Call {
             callee: "print".to_string(),
@@ -1780,22 +1876,123 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "this print() argument shape is not supported yet")]
-    fn printing_more_than_one_argument_is_not_yet_supported_by_codegen() {
-        // `emit_stmt`'s `print`-call arm only handles a single int-literal
-        // argument so far (see its doc comment) -- everything else HIR/MIR
-        // can now represent for `print` (multiple args, a float, a name
-        // reference, ...) hits this explicit panic until a later task in
-        // this plan replaces it.
+    fn compiles_a_zero_argument_print_producing_just_a_newline() {
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                 callee: "print".to_string(),
-                args: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
+                args: vec![],
                 ty: Ty::None,
             }))],
         };
-        let dir = tempfile_dir("print_multi_arg_panics");
-        let obj_path = dir.join("print_multi_arg_panics.o");
+        let dir = tempfile_dir("print_zero_args");
+        let obj_path = dir.join("print_zero_args.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("print_zero_args");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"\n");
+    }
+
+    #[test]
+    fn compiles_a_multi_argument_print_with_mixed_types_space_separated() {
+        // `print(1, 2.5, True, "hi")` -- prints `1 2.5 True hi\n`.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![
+                    MirExpr::IntLiteral(1),
+                    MirExpr::FloatLiteral(2.5),
+                    MirExpr::BoolLiteral(true),
+                    MirExpr::StringLiteral("hi".to_string()),
+                ],
+                ty: Ty::None,
+            }))],
+        };
+        let dir = tempfile_dir("print_mixed_multi");
+        let obj_path = dir.join("print_mixed_multi.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("print_mixed_multi");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1 2.5 True hi\n");
+    }
+
+    #[test]
+    fn compiles_print_of_a_bool_false() {
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::BoolLiteral(false)],
+                ty: Ty::None,
+            }))],
+        };
+        let dir = tempfile_dir("print_false");
+        let obj_path = dir.join("print_false.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("print_false");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"False\n");
+    }
+
+    #[test]
+    fn compiles_print_of_a_void_returning_call_as_none() {
+        // `def f() -> None: return` ; `print(f())` -- prints `None`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(None)],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::None,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("print_none_from_call");
+        let obj_path = dir.join("print_none_from_call.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("print_none_from_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"None\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "printing a `None`-typed value that isn't a direct call result is not supported yet")]
+    fn printing_a_none_typed_name_that_isnt_a_direct_call_result_panics() {
+        // `print(y)` where `y` is (hypothetically) `None`-typed but not
+        // itself a `Call` -- the narrow gap this task's own scope note
+        // documents (Task 6's finding: a `Name` bound to a `None`-typed
+        // variable is legal Python but stays unsupported here, since
+        // `emit_expr`'s `Name` arm has no `Ty::None` case at all). Real
+        // `pycc_types` has no way to produce a `None`-typed `Name` in v0.1
+        // (there is no `x = None`-shaped source, and even `x =
+        // some_void_function()` would need `emit_expr`'s own `Name` arm to
+        // support reading it back, which it deliberately doesn't) -- this
+        // is deliberately malformed MIR exercising `emit_stmt`'s own
+        // defensive guard for that shape directly, matching this file's
+        // established convention for internal-error tests. The panic
+        // fires purely from `arg`'s own shape (`matches!(arg, MirExpr::
+        // Call { .. })`), before any name lookup, so `y` is never actually
+        // bound in `locals`.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Name { name: "y".to_string(), ty: Ty::None }],
+                ty: Ty::None,
+            }))],
+        };
+        let dir = tempfile_dir("print_none_typed_name_panics");
+        let obj_path = dir.join("print_none_typed_name_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
     }
 
@@ -1888,7 +2085,8 @@ mod tests {
     fn compiles_a_comparison_result_stored_in_a_bool_local() {
         // `b = 1 < 2` -- exercises `Compare` codegen and a `bool`-typed
         // (`i8`) local's own `alloca`, distinct from `int`'s tagged `i64`.
-        // Nothing yet reads `b` back out (print(bool) is Task 10's job), so
+        // Nothing here reads `b` back out (a dedicated runtime `print(bool)`
+        // test exists separately -- `compiles_print_of_a_bool_false`), so
         // this only proves the assignment itself doesn't crash/miscompile;
         // `verify_module`'s `module.verify()` call (non-Windows) is the
         // actual proof the generated IR is well-formed.
@@ -2142,8 +2340,9 @@ mod tests {
         // test); Task 6's `Compare` codegen now promotes the `bool`
         // operand via `to_tagged_int` instead of rejecting it (same
         // rewrite rationale as the `BinOp` tests above). Nothing reads
-        // the result back (print(bool) is Task 10's job), so this only
-        // proves the comparison itself doesn't crash/miscompile, same as
+        // the result back here (see `compiles_print_of_a_bool_false` for a
+        // dedicated runtime `print(bool)` test), so this only proves the
+        // comparison itself doesn't crash/miscompile, same as
         // `compiles_a_comparison_result_stored_in_a_bool_local`.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
@@ -2234,17 +2433,30 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Ty::Int always evaluates to Scalar::Int")]
-    fn printing_a_mistyped_compare_expression_hits_the_internal_consistency_check() {
+    fn printing_a_mistyped_compare_expression_prints_the_actual_runtime_value() {
         // Deliberately malformed MIR: `pycc_mir::build` always lowers
         // `Compare` with `ty: Ty::Bool` (see `pycc_mir`'s own
         // `builds_a_compare_expression_with_bool_type` test) -- no real
-        // pipeline could ever produce `ty: Ty::Int` here. This directly
-        // exercises `emit_stmt`'s defensive `unreachable!()`, genuinely
-        // unlike the bool/int-mixing cases above (which real source *can*
-        // reach): `emit_expr`'s `Compare` arm always returns `Scalar::Bool`
-        // regardless of what the (lied-about) `ty` field claims, so the
-        // print branch's `Ty::Int`-guarded call still gets a `Scalar::Bool`.
+        // pipeline could ever produce `ty: Ty::Int` here.
+        //
+        // Before Task 10, `emit_stmt`'s `print` arm dispatched on this
+        // (lied-about) declared `ty` field -- a `Ty::Int`-guarded arm then
+        // pattern-matched the actual `Scalar` back out with a `let
+        // Scalar::Int(v) = ... else { unreachable!(...) }`, which this test
+        // used to prove panics for a mismatched `ty`. Task 10's fully
+        // general dispatch removed that per-argument `ty`-based branch
+        // entirely: it only ever inspects `arg.ty()` to tell a `None`-typed
+        // argument apart from every other one (see that arm's own doc
+        // comment), and then hands whatever `Scalar` `emit_expr` actually
+        // produced straight to `to_str`, which matches on the real `Scalar`
+        // variant, never the caller-declared `ty`. So this exact
+        // mismatched-`ty` shape can no longer desync from reality -- it
+        // just prints the real `Scalar::Bool` value `Compare` always
+        // produces (`1 < 2` is `True`), regardless of what `ty` claims.
+        // Kept (renamed, no longer `#[should_panic]`) as a regression test
+        // documenting this behavior change rather than being deleted
+        // outright, same rationale as `a_none_typed_call_result_used_as_a_
+        // nested_expression_no_longer_panics` above.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                 callee: "print".to_string(),
@@ -2257,9 +2469,13 @@ mod tests {
                 ty: Ty::None,
             }))],
         };
-        let dir = tempfile_dir("print_mistyped_compare_panics");
-        let obj_path = dir.join("print_mistyped_compare_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let dir = tempfile_dir("print_mistyped_compare_prints_actual_value");
+        let obj_path = dir.join("print_mistyped_compare_prints_actual_value.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("print_mistyped_compare_prints_actual_value");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"True\n");
     }
 
     #[test]
@@ -3015,15 +3231,27 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a `None`-typed call result is not supported yet")]
-    fn a_none_typed_call_result_used_as_a_nested_expression_is_not_supported() {
+    fn a_none_typed_call_result_used_as_a_nested_expression_no_longer_panics() {
         // Deliberately malformed MIR: a `None`-returning function's result
         // can only legitimately appear as a bare statement (see
-        // `emit_stmt`'s own void-call arm) -- real `pycc_types` would
-        // never type an `Assign`'s value as `Ty::None` this way (there is
-        // no `x = None`-shaped source this could come from in v0.1).
-        // Exercises `emit_expr`'s `Call` arm's own defensive `other =>`
-        // catch-all on `ty`.
+        // `emit_stmt`'s own void-call arm) or as one of `print`'s own
+        // arguments (see `emit_stmt`'s `print` dispatch) -- real
+        // `pycc_types` would never type an `Assign`'s value as `Ty::None`
+        // this way (there is no `x = None`-shaped source this could come
+        // from in v0.1). Before Task 10, this hit `emit_expr`'s `Call`
+        // arm's defensive `other =>` catch-all and panicked with "a
+        // `None`-typed call result is not supported yet"; Task 10 gives
+        // that arm its own explicit `Ty::None` case instead (a placeholder
+        // `Scalar`, needed so `emit_stmt`'s `print` dispatch can call
+        // `emit_expr` on a `None`-typed argument at all -- see that arm's
+        // own doc comment), so this exact malformed shape now silently
+        // produces a placeholder `bool` local instead of panicking. Kept
+        // (renamed, no longer `#[should_panic]`) as a regression test
+        // documenting that specific, intentional behavior change rather
+        // than being deleted outright -- `an_infer_typed_call_result_used_
+        // as_a_nested_expression_is_not_supported` below takes over this
+        // test's original job of exercising the `other =>` catch-all
+        // itself, via the one `Ty` variant that still reaches it.
         let mir = MirModule {
             items: vec![
                 MirItem::Function {
@@ -3038,8 +3266,37 @@ mod tests {
                 }),
             ],
         };
-        let dir = tempfile_dir("none_typed_call_result_panics");
-        let obj_path = dir.join("none_typed_call_result_panics.o");
+        let dir = tempfile_dir("none_typed_call_result_no_longer_panics");
+        let obj_path = dir.join("none_typed_call_result_no_longer_panics.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    #[should_panic(expected = "a `Infer`-typed call result is not supported yet")]
+    fn an_infer_typed_call_result_used_as_a_nested_expression_is_not_supported() {
+        // Exercises `emit_expr`'s `Call` arm's own defensive `other =>`
+        // catch-all on `ty` -- `Ty::Infer` (an HIR-only inference
+        // placeholder no real MIR ever carries this far, same rationale as
+        // `ty_to_basic_type`'s own `an_infer_typed_return_value_is_not_yet_
+        // supported` test above) is the one `Ty` variant left that still
+        // reaches it, now that Task 10 gives `Ty::None` its own explicit
+        // (non-panicking) case there (see the test directly above).
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(1)))],
+                },
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::Call { callee: "f".to_string(), args: vec![], ty: Ty::Infer },
+                }),
+            ],
+        };
+        let dir = tempfile_dir("infer_typed_call_result_panics");
+        let obj_path = dir.join("infer_typed_call_result_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
     }
 
@@ -3543,11 +3800,13 @@ mod tests {
         // `Ty::Float` result -- `Add`/`Sub`/`Mul` go through `build_float_*`
         // directly, `FloorDiv`/`Mod`/`Pow` through the `pycc_rt_float_*`
         // runtime calls -- mirroring `compiles_and_runs_add_sub_mul_mod_
-        // and_pow_binops`'s `int` coverage. `print(float)` doesn't exist
-        // until Task 10 (same limitation as `compiles_true_division_of_
-        // two_ints_as_float_arithmetic`/`compiles_mixed_int_and_float_
-        // addition` above), so this only proves each arm compiles and
-        // verifies, not a runtime stdout value.
+        // and_pow_binops`'s `int` coverage. This test itself doesn't print
+        // any of these results (same limitation as `compiles_true_division_
+        // of_two_ints_as_float_arithmetic`/`compiles_mixed_int_and_float_
+        // addition` above -- `print(float)` runtime output is exercised
+        // separately, e.g. via `compiles_a_multi_argument_print_with_mixed_
+        // types_space_separated`'s `2.5` argument), so this only proves
+        // each arm compiles and verifies, not a runtime stdout value.
         fn float_binop(op: BinOpKind, left: f64, right: f64) -> MirStmt {
             MirStmt::Assign {
                 target: format!("{op:?}").to_lowercase(),
