@@ -167,6 +167,27 @@ fn run_subcommand_propagates_a_build_failure() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("L0001"));
 }
 
+#[cfg(unix)]
+#[test]
+fn run_subcommand_maps_a_signal_terminated_compiled_program_to_exit_code_101() {
+    // A `pycc_rt` panic crosses a plain (non-unwinding) `extern "C"`
+    // boundary and aborts the child process via `SIGABRT` (see pycc_rt's
+    // own panic-across-FFI convention), so on Unix `Command::status()`'s
+    // `.code()` is `None` (the child was killed by a signal, not a normal
+    // exit) -- `run`'s previous `.unwrap_or(1)` silently mapped that to
+    // exit code 1 instead of the `101` CLI_SPEC.md promises for "compiled
+    // program panicked/uncaught exception".
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_run_signal_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "div_zero_run.py", "print(1.0 / 0.0)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(101));
+}
+
 #[test]
 fn version_flag_prints_something() {
     let output = Command::new(pycc_bin())

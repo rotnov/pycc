@@ -306,7 +306,21 @@ fn run(path: &str) -> ExitCode {
     let status = std::process::Command::new(&out)
         .status()
         .expect("built binary should run");
-    ExitCode::from(status.code().unwrap_or(1) as u8)
+    ExitCode::from(exit_code_for_run(status) as u8)
+}
+
+/// `Command::status()` blocks until the child has fully exited, so
+/// `.code()` is `None` only on Unix, and only when the child was
+/// terminated by a signal rather than exiting normally (Rust's own docs:
+/// "this will return `None` on Unix if the process was terminated by a
+/// signal" -- Windows processes always report a definite code). That is
+/// exactly what happens when a `pycc_rt` panic crosses a plain
+/// (non-unwinding) `extern "C"` boundary and aborts the process
+/// (`SIGABRT`), so it maps to the `101` CLI_SPEC.md promises for
+/// "compiled program panicked/uncaught exception" instead of silently
+/// falling back to `1`.
+fn exit_code_for_run(status: std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(101)
 }
 
 /// `target: None` (the common case) returns this workspace's ordinary
