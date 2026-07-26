@@ -165,14 +165,16 @@ separately afterward. The prospective gate checks out and hash-verifies the
 dedicated median comparator and its tests from the exact predecessor, validates
 the distinct numeric artifact identities returned by the trusted upload steps,
 downloads both same-run inputs by those exact IDs rather than replaceable
-names, requires exactly both regular files with no symlinks or extras, and
-remains an exact `ci-gate` dependency. Missing or zero predecessor SHAs,
+names, explicitly flattens each single selected archive into its dedicated
+destination, requires exactly both regular files with no symlinks or extras,
+and remains an exact `ci-gate` dependency. Missing or zero predecessor SHAs,
 unsupported events, a mutable action, revision mismatch, removal of any bound
 contract path or local-manifest/build-script binding, shared target state,
 candidate execution before the sealed predecessor upload, a broad artifact
 upload, a missing, repeated, or non-numeric artifact identity, a name-based
-download, either missing estimate, an extra file, a symlink, a skippable
-comparison, or a mixed old/new job pair fails closed in focused tests.
+download, missing or false exact-ID flattening, either missing estimate, an
+extra file, a symlink, a skippable comparison, or a mixed old/new job pair
+fails closed in focused tests.
 
 Median point estimates are deliberate rather than a threshold relaxation. A
 local paired validation with identical Rust and benchmark code produced a

@@ -103,9 +103,10 @@ boundary. The prospective workflow binds the benchmark sources, root and
 workspace manifests, local build scripts, lockfile, Rust toolchain, and Cargo
 configuration; it seals the predecessor artifact before candidate code runs,
 binds both downloads to the distinct artifact IDs returned by their trusted
-upload steps, and requires any contract drift to use its own reviewed
-transition. The threshold, required `ci-gate` fan-in, and benchmark itself do
-not change.
+upload steps, explicitly flattens each single selected archive into its
+dedicated destination, and requires any contract drift to use its own reviewed
+transition. The trusted checker rejects a missing or false flattening input.
+The threshold, required `ci-gate` fan-in, and benchmark itself do not change.
 
 ## Autonomy policy ("no questions" mechanics)
 
