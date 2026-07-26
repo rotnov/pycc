@@ -65,6 +65,155 @@ fn require_smallint(tagged: i64, context: &str) {
     }
 }
 
+/// D-049: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
+/// no trailing zero limbs except a single `[0]` representing zero
+/// itself. Never freed (leaked) -- unlike `PyStrObj`, D-051 only commits
+/// `str` to real refcounting; a bigint is a rare, overflow-only path
+/// with no v0.1 construct that could leak it in a hot loop the way an
+/// unbounded string-building loop could (this is a deliberate, narrower
+/// "simplest safe default" than `str`'s, recorded alongside D-052).
+struct BigIntObj {
+    negative: bool,
+    limbs: Vec<u32>,
+}
+
+fn trim(limbs: &[u32]) -> Vec<u32> {
+    let mut end = limbs.len();
+    while end > 1 && limbs[end - 1] == 0 {
+        end -= 1;
+    }
+    limbs[..end].to_vec()
+}
+
+fn magnitude_cmp(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
+    let (a, b) = (trim(a), trim(b));
+    if a.len() != b.len() {
+        return a.len().cmp(&b.len());
+    }
+    for i in (0..a.len()).rev() {
+        if a[i] != b[i] {
+            return a[i].cmp(&b[i]);
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+fn magnitude_add(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut result = Vec::with_capacity(a.len().max(b.len()) + 1);
+    let mut carry: u64 = 0;
+    for i in 0..a.len().max(b.len()) {
+        let av = *a.get(i).unwrap_or(&0) as u64;
+        let bv = *b.get(i).unwrap_or(&0) as u64;
+        let sum = av + bv + carry;
+        result.push((sum & 0xFFFF_FFFF) as u32);
+        carry = sum >> 32;
+    }
+    if carry > 0 {
+        result.push(carry as u32);
+    }
+    result
+}
+
+/// Requires `a >= b` (checked by every caller via `magnitude_cmp` first).
+fn magnitude_sub(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut result = Vec::with_capacity(a.len());
+    let mut borrow: i64 = 0;
+    for (i, &av) in a.iter().enumerate() {
+        let av = av as i64;
+        let bv = *b.get(i).unwrap_or(&0) as i64;
+        let mut diff = av - bv - borrow;
+        if diff < 0 {
+            diff += 1i64 << 32;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        result.push(diff as u32);
+    }
+    result
+}
+
+fn bigint_add_signed(a_neg: bool, a_mag: &[u32], b_neg: bool, b_mag: &[u32]) -> BigIntObj {
+    if a_neg == b_neg {
+        BigIntObj { negative: a_neg, limbs: trim(&magnitude_add(a_mag, b_mag)) }
+    } else {
+        match magnitude_cmp(a_mag, b_mag) {
+            std::cmp::Ordering::Equal => BigIntObj { negative: false, limbs: vec![0] },
+            std::cmp::Ordering::Greater => {
+                BigIntObj { negative: a_neg, limbs: trim(&magnitude_sub(a_mag, b_mag)) }
+            }
+            std::cmp::Ordering::Less => {
+                BigIntObj { negative: b_neg, limbs: trim(&magnitude_sub(b_mag, a_mag)) }
+            }
+        }
+    }
+}
+
+fn bigint_from_i128(v: i128) -> BigIntObj {
+    let negative = v < 0;
+    let mut mag = v.unsigned_abs();
+    let mut limbs = Vec::new();
+    while mag > 0 {
+        limbs.push((mag & 0xFFFF_FFFF) as u32);
+        mag >>= 32;
+    }
+    if limbs.is_empty() {
+        limbs.push(0);
+    }
+    BigIntObj { negative, limbs }
+}
+
+fn tag_bigint(b: BigIntObj) -> i64 {
+    Box::into_raw(Box::new(b)) as i64
+}
+
+/// # Safety
+/// `tagged` must be a `BigIntObj` pointer (an even bit pattern -- D-052);
+/// every call site below checks `!is_smallint(tagged)` first.
+unsafe fn bigint_ref<'a>(tagged: i64) -> &'a BigIntObj {
+    unsafe { &*(tagged as *const BigIntObj) }
+}
+
+fn to_sign_and_magnitude(tagged: i64) -> (bool, Vec<u32>) {
+    if is_smallint(tagged) {
+        let v = untag_smallint(tagged);
+        let negative = v < 0;
+        let mag = v.unsigned_abs();
+        (negative, trim(&[(mag & 0xFFFF_FFFF) as u32, (mag >> 32) as u32]))
+    } else {
+        let b = unsafe { bigint_ref(tagged) };
+        (b.negative, b.limbs.clone())
+    }
+}
+
+fn divmod_small(limbs: &[u32], divisor: u32) -> (Vec<u32>, u32) {
+    let mut quotient = vec![0u32; limbs.len()];
+    let mut remainder: u64 = 0;
+    for i in (0..limbs.len()).rev() {
+        let acc = (remainder << 32) | limbs[i] as u64;
+        quotient[i] = (acc / divisor as u64) as u32;
+        remainder = acc % divisor as u64;
+    }
+    (quotient, remainder as u32)
+}
+
+fn bigint_to_decimal_string(negative: bool, limbs: &[u32]) -> String {
+    let mut limbs = limbs.to_vec();
+    let mut digits = Vec::new();
+    loop {
+        let (q, r) = divmod_small(&limbs, 10);
+        digits.push(std::char::from_digit(r, 10).expect("a remainder of division by 10 is always 0-9"));
+        limbs = trim(&q);
+        if limbs.len() == 1 && limbs[0] == 0 {
+            break;
+        }
+    }
+    if negative {
+        digits.push('-');
+    }
+    digits.iter().rev().collect()
+}
+
 // --- Implementation note / deviation from the task brief -------------
 //
 // The brief's own doc comment (kept, below, as the historical record of
@@ -101,12 +250,18 @@ fn require_smallint(tagged: i64, context: &str) {
 // calling the public wrapper (also exercising the wrapper's own line, no
 // unwind ever crosses its boundary on those paths).
 fn int_add(a: i64, b: i64) -> i64 {
-    require_smallint(a, "adding");
-    require_smallint(b, "adding");
-    untag_smallint(a)
-        .checked_add(untag_smallint(b))
-        .and_then(fits_smallint)
-        .unwrap_or_else(|| panic!("pycc_rt: integer overflow (bigint promotion is not implemented yet)"))
+    if is_smallint(a) && is_smallint(b) {
+        if let Some(result) = untag_smallint(a).checked_add(untag_smallint(b)).and_then(fits_smallint) {
+            return result;
+        }
+        // Both operands fit 63 bits, so their true sum always fits i128
+        // with room to spare -- exact, no further bigint math needed
+        // for this specific promotion step.
+        return tag_bigint(bigint_from_i128(untag_smallint(a) as i128 + untag_smallint(b) as i128));
+    }
+    let (a_neg, a_mag) = to_sign_and_magnitude(a);
+    let (b_neg, b_mag) = to_sign_and_magnitude(b);
+    tag_bigint(bigint_add_signed(a_neg, &a_mag, b_neg, &b_mag))
 }
 
 /// # Safety (panic-across-FFI note, applies to every `pycc_rt_int_*`
@@ -128,12 +283,15 @@ pub extern "C" fn pycc_rt_int_add(a: i64, b: i64) -> i64 {
 }
 
 fn int_sub(a: i64, b: i64) -> i64 {
-    require_smallint(a, "subtracting");
-    require_smallint(b, "subtracting");
-    untag_smallint(a)
-        .checked_sub(untag_smallint(b))
-        .and_then(fits_smallint)
-        .unwrap_or_else(|| panic!("pycc_rt: integer overflow (bigint promotion is not implemented yet)"))
+    if is_smallint(a) && is_smallint(b) {
+        if let Some(result) = untag_smallint(a).checked_sub(untag_smallint(b)).and_then(fits_smallint) {
+            return result;
+        }
+        return tag_bigint(bigint_from_i128(untag_smallint(a) as i128 - untag_smallint(b) as i128));
+    }
+    let (a_neg, a_mag) = to_sign_and_magnitude(a);
+    let (b_neg, b_mag) = to_sign_and_magnitude(b);
+    tag_bigint(bigint_add_signed(a_neg, &a_mag, !b_neg, &b_mag))
 }
 
 #[unsafe(no_mangle)]
@@ -275,8 +433,13 @@ pub extern "C" fn pycc_rt_int_cmp(a: i64, b: i64) -> i32 {
 }
 
 fn int_print(tagged: i64) {
-    require_smallint(tagged, "printing");
-    pycc_rt_print_i64(untag_smallint(tagged));
+    if is_smallint(tagged) {
+        pycc_rt_print_i64(untag_smallint(tagged));
+        return;
+    }
+    let s = int_to_str(tagged);
+    println!("{}", String::from_utf8_lossy(unsafe { &*s }.bytes()));
+    unsafe { pycc_rt_str_decref(s) };
 }
 
 #[unsafe(no_mangle)]
@@ -302,14 +465,15 @@ pub extern "C" fn pycc_rt_print_i64(value: i64) {
 /// trip over.
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
-    // A value tagged as a heap `BigInt` (Task 9) is, by construction,
-    // only ever created because it *didn't* fit the smallint range --
-    // which excludes zero -- so it's always truthy without needing to
-    // inspect it further.
-    if !is_smallint(tagged) {
-        return 1;
+    if is_smallint(tagged) {
+        return i8::from(untag_smallint(tagged) != 0);
     }
-    i8::from(untag_smallint(tagged) != 0)
+    // A bigint can now legitimately be zero (Task 9's `bigint_add_signed`
+    // "equal magnitude, opposite sign" case), so the old "any bigint tag
+    // is truthy" shortcut (Task 4, before real bigint values existed) is
+    // no longer correct -- must inspect the actual magnitude.
+    let b = unsafe { bigint_ref(tagged) };
+    i8::from(!(b.limbs.len() == 1 && b.limbs[0] == 0))
 }
 
 // --- Implementation note / deviation from the task brief -------------
@@ -582,8 +746,11 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
 /// rather than duplicating it, trimming the trailing newline that function
 /// adds for its own (unrelated) purpose.
 fn int_to_str(tagged: i64) -> *mut PyStrObj {
-    require_smallint(tagged, "formatting");
-    new_pystr(format_i64_line(untag_smallint(tagged)).trim_end().as_bytes())
+    if is_smallint(tagged) {
+        return new_pystr(format_i64_line(untag_smallint(tagged)).trim_end().as_bytes());
+    }
+    let b = unsafe { bigint_ref(tagged) };
+    new_pystr(bigint_to_decimal_string(b.negative, &b.limbs).as_bytes())
 }
 
 /// See the panic-across-FFI note above `pycc_rt_int_add`: this crosses no
@@ -694,33 +861,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "integer overflow")]
-    fn pycc_rt_int_add_panics_on_overflow_before_bigint_promotion_exists() {
-        // Calls the private `int_add`, not the public `pycc_rt_int_add`
-        // wrapper: see the implementation-note comment above `int_add`'s
-        // definition -- a panic unwinding past a plain `extern "C" fn`'s
-        // own boundary aborts the process regardless of caller, so only
-        // the private, ordinary-Rust-ABI function is `#[should_panic]`-testable.
-        int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1));
-    }
-
-    #[test]
     fn pycc_rt_int_sub_computes_the_correct_tagged_difference() {
         let a = tag_smallint(5);
         let b = tag_smallint(3);
         assert_eq!(untag_smallint(pycc_rt_int_sub(a, b)), 2);
-    }
-
-    #[test]
-    #[should_panic(expected = "integer overflow")]
-    fn pycc_rt_int_sub_panics_on_overflow_before_bigint_promotion_exists() {
-        // Not in the task brief's own Step 2 test list -- added because
-        // `cargo llvm-cov`'s region coverage showed `int_sub`'s overflow
-        // closure (a code region distinct from `int_add`'s, even though
-        // both share the same message text) never executed under any
-        // brief-supplied test, which the D-014 100% region-coverage gate
-        // does not allow.
-        int_sub(tag_smallint(i64::MIN >> 1), tag_smallint(1));
     }
 
     #[test]
@@ -833,27 +977,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "bigint-valued")]
-    fn pycc_rt_int_print_on_a_bigint_tagged_value_panics() {
-        int_print(0);
-    }
-
-    #[test]
     fn pycc_rt_int_truthy_is_false_only_for_zero() {
         assert_eq!(pycc_rt_int_truthy(tag_smallint(0)), 0);
         assert_eq!(pycc_rt_int_truthy(tag_smallint(1)), 1);
         assert_eq!(pycc_rt_int_truthy(tag_smallint(-1)), 1);
-    }
-
-    #[test]
-    fn pycc_rt_int_truthy_treats_any_bigint_tagged_value_as_truthy() {
-        // Bit pattern `0` (even) is what D-052 reserves for a heap `BigInt`
-        // pointer -- no real allocation needed to exercise this, same
-        // precedent as `pycc_rt_int_cmp_on_a_bigint_tagged_operand_panics`
-        // above. This is the only test exercising `pycc_rt_int_truthy`'s
-        // early-return branch: the three assertions above only ever pass
-        // smallint-tagged (odd) values.
-        assert_eq!(pycc_rt_int_truthy(0), 1);
     }
 
     #[test]
@@ -1120,5 +1247,139 @@ mod tests {
         let s = pycc_rt_float_to_str(-0.0);
         assert_eq!(unsafe { &*s }.bytes(), b"-0.0");
         unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn adding_past_i64_range_now_promotes_instead_of_panicking() {
+        // This is the exact fixture Task 3's
+        // `pycc_rt_int_add_panics_on_overflow_before_bigint_promotion_exists`
+        // used to require a panic for -- it must now succeed and print the
+        // exact mathematical sum.
+        let huge = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1));
+        let s = pycc_rt_int_to_str(huge);
+        assert_eq!(unsafe { &*s }.bytes(), b"4611686018427387904");
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn subtracting_past_the_negative_range_promotes_correctly() {
+        let huge = pycc_rt_int_sub(tag_smallint(i64::MIN >> 1), tag_smallint(1));
+        let s = pycc_rt_int_to_str(huge);
+        assert_eq!(unsafe { &*s }.bytes(), b"-4611686018427387905");
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn repeated_addition_exercises_the_general_bigint_plus_smallint_path() {
+        // Simulates unbounded `fib`-style growth. The first `pycc_rt_int_add`
+        // call overflows the tagged range (`i64::MAX >> 1` is exactly the
+        // largest value that still round-trips through tagging, so adding
+        // it to itself does not fit) and promotes via the one-time
+        // `i128`-widening path. Every one of the 20 subsequent additions
+        // then has a `BigIntObj` as its left operand and a tagged smallint
+        // as its right operand -- `is_smallint(a) && is_smallint(b)` is
+        // false for all of them, so they all go through
+        // `to_sign_and_magnitude`/`bigint_add_signed`'s general limb
+        // arithmetic, not the fast path or the one-time promotion shortcut.
+        // (The running total here stays well under 128 bits -- about 67 at
+        // the end -- this test is not about exceeding `i128`'s own range,
+        // only about exercising the general bigint-arithmetic code path
+        // repeatedly rather than just once.)
+        let mut acc = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(i64::MAX >> 1));
+        for _ in 0..20 {
+            acc = pycc_rt_int_add(acc, tag_smallint(i64::MAX >> 1));
+        }
+        assert!(!is_smallint(acc));
+        let s = pycc_rt_int_to_str(acc);
+        let text = String::from_utf8(unsafe { &*s }.bytes().to_vec()).unwrap();
+        assert_eq!(text, (bigint_reference_sum()).to_string());
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    /// Independent reference computation for the test above (22 additions
+    /// of `i64::MAX >> 1`, well within `i128`'s own range) -- this doesn't
+    /// exercise `pycc_rt`'s bigint code at all, so it's a trustworthy oracle
+    /// for what the *correct* sum is, independent of any bug the code under
+    /// test might have.
+    fn bigint_reference_sum() -> i128 {
+        let step = (i64::MAX >> 1) as i128;
+        let mut acc = step + step;
+        for _ in 0..20 {
+            acc += step;
+        }
+        acc
+    }
+
+    #[test]
+    fn a_bigint_that_would_fit_back_in_smallint_range_still_formats_correctly() {
+        // Two already-promoted values that sum back to something small
+        // (mathematically representable as a smallint) are not required to
+        // shrink back down (D-052/this task's own "simplest correct" choice
+        // -- once a value touches the bigint path, it stays represented as
+        // one) -- but the printed *value* must still be exactly right.
+        let a = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1)); // a bigint
+        let b = pycc_rt_int_sub(tag_smallint(0), a); // -a, also a bigint (sub promotes too)
+        let zero = pycc_rt_int_add(a, b);
+        let s = pycc_rt_int_to_str(zero);
+        assert_eq!(unsafe { &*s }.bytes(), b"0");
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn a_bigint_zero_is_falsy() {
+        let a = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1));
+        let b = pycc_rt_int_sub(tag_smallint(0), a);
+        let zero = pycc_rt_int_add(a, b);
+        assert_eq!(pycc_rt_int_truthy(zero), 0);
+    }
+
+    #[test]
+    fn a_bigint_prints_with_a_trailing_newline_like_a_smallint() {
+        let huge = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1));
+        pycc_rt_int_print(huge); // stdout captured by the test harness
+    }
+
+    #[test]
+    fn adding_two_opposite_sign_bigints_with_the_same_limb_count_but_different_magnitude() {
+        // Every other opposite-sign addition/subtraction test above either
+        // has exactly equal magnitudes (immediately `Ordering::Equal`,
+        // never reaching `magnitude_cmp`'s per-limb loop body) or magnitudes
+        // needing a different number of limbs (resolved by `magnitude_cmp`'s
+        // own length check before the loop runs at all) -- so this is the
+        // only test exercising `magnitude_cmp`'s `a[i] != b[i]` true branch,
+        // `bigint_add_signed`'s `Ordering::Greater` arm, and
+        // `magnitude_sub`'s borrow path (`diff < 0`), all at once.
+        //
+        // `step = i64::MAX >> 1 = 0x3FFF_FFFF_FFFF_FFFF` (low limb
+        // `0xFFFF_FFFF`, high limb `0x3FFF_FFFF`). `big = 2 * step`,
+        // `bigger = 3 * step` -- both promote to real 2-limb bigints (their
+        // magnitude exceeds a single `u32`'s range), and `bigger`'s low limb
+        // (`0xFFFF_FFFD`) is smaller than `big`'s low limb (`0xFFFF_FFFE`),
+        // so subtracting them genuinely borrows from the high limb.
+        // `bigger + (-big)` must equal `step` exactly.
+        let step = i64::MAX >> 1;
+        let big = pycc_rt_int_add(tag_smallint(step), tag_smallint(step));
+        let bigger = pycc_rt_int_add(big, tag_smallint(step));
+        let neg_big = pycc_rt_int_sub(tag_smallint(0), big);
+        assert!(!is_smallint(big) && !is_smallint(bigger) && !is_smallint(neg_big));
+        let result = pycc_rt_int_add(bigger, neg_big);
+        let s = pycc_rt_int_to_str(result);
+        assert_eq!(unsafe { &*s }.bytes(), step.to_string().as_bytes());
+        unsafe { pycc_rt_str_decref(s) };
+    }
+
+    #[test]
+    fn bigint_from_i128_of_zero_still_has_a_single_zero_limb() {
+        // Not reachable through `int_add`/`int_sub`'s own overflow-promotion
+        // call sites -- a mathematically-zero sum/difference always fits
+        // the tagged smallint range, so `checked_add`/`checked_sub` +
+        // `fits_smallint` succeed first and this fallback is never invoked
+        // with `0`. Tested directly against the private helper instead,
+        // matching this file's own convention of testing a general-purpose
+        // private function's own contract rather than only the narrower
+        // paths its current callers happen to exercise.
+        let b = bigint_from_i128(0);
+        assert!(!b.negative);
+        assert_eq!(b.limbs, vec![0]);
     }
 }

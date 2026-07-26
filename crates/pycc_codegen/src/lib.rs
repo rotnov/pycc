@@ -4239,6 +4239,52 @@ mod tests {
         compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
     }
 
+    #[test]
+    fn compiles_a_loop_whose_accumulator_overflows_into_a_bigint() {
+        // `i = 0; acc = 4611686018427387903; while i < 3: acc = acc + acc; i = i + 1`
+        // `print(acc)` -- starts at `i64::MAX >> 1` and doubles 3 times,
+        // overflowing well past `i64::MAX` partway through; must print the
+        // exact mathematical result via real bigint arithmetic, not a
+        // wrapped/truncated one.
+        let start: i64 = i64::MAX >> 1;
+        let expected = (start as i128) * 8; // doubled 3 times
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "acc".to_string(),
+                    value: MirExpr::IntLiteral(start),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ForRange {
+                    var: "i".to_string(),
+                    start: MirExpr::IntLiteral(0),
+                    stop: MirExpr::IntLiteral(3),
+                    step: MirExpr::IntLiteral(1),
+                    body: vec![MirStmt::Assign {
+                        target: "acc".to_string(),
+                        value: MirExpr::BinOp {
+                            op: BinOpKind::Add,
+                            left: Box::new(MirExpr::Name { name: "acc".to_string(), ty: Ty::Int }),
+                            right: Box::new(MirExpr::Name { name: "acc".to_string(), ty: Ty::Int }),
+                            ty: Ty::Int,
+                        },
+                    }],
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name { name: "acc".to_string(), ty: Ty::Int }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("bigint_overflow_loop");
+        let obj_path = dir.join("bigint_overflow_loop.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("bigint_overflow_loop");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, format!("{expected}\n").into_bytes());
+    }
+
     fn tempfile_dir(label: &str) -> std::path::PathBuf {
         let dir =
             std::env::temp_dir().join(format!("pycc_codegen_test_{label}_{}", std::process::id()));
