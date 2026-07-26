@@ -21,14 +21,15 @@ complete pycc interface.
    planned, or unknown.
 
 At this alpha revision, `build`, `run`, `check`, and `version --verbose` have
-implementations. `check` runs the parser, checked HIR lowering, and strict
-type-checker subset and can render human or JSON diagnostics. `build` and
-`run` lower the implemented v0.1 language surface through MIR, LLVM, the host
-linker, and the native runtime, subject to the explicit gaps in
-`docs/ROADMAP.md`. `test`, `explain`, `init`, and `clean` return an explicit
-not-implemented error, and `check --fix` is not parsed yet. Re-verify these
-statements against source whenever using the skill; do not let this snapshot
-override newer code.
+implementations. `check` accepts one or more native file paths, runs the
+parser, checked HIR lowering, and strict type-checker subset for every
+supplied file, reports one current frontend diagnostic for each failing input,
+and can render human or JSON diagnostics. `build` and `run` lower the
+implemented v0.1 language subset through MIR, LLVM, the host linker, and the
+native runtime, subject to the explicit gaps in `docs/ROADMAP.md`. `test`,
+`explain`, `init`, and `clean` return an explicit not-implemented error, and
+`check --fix` is not parsed yet. Re-verify these statements against source
+whenever using the skill; do not let this snapshot override newer code.
 
 ## Build and run
 
@@ -45,12 +46,16 @@ the user chose a destination. For example, on POSIX:
 output_dir=$(mktemp -d "${TMPDIR:-/tmp}/pycc-skill.XXXXXX")
 cargo run --bin pycc -- build path/to/program.py -o "$output_dir/program"
 cargo run --bin pycc -- run path/to/program.py
+cargo run --bin pycc -- check -- path/to/program.py
 cargo run --bin pycc -- version --verbose
 ```
 
 On Windows, create a unique directory under the native temporary directory
 instead of translating the POSIX path literally. Never use a predictable
 shared filename or overwrite a user binary or source file implicitly.
+Use the `--` boundary for `check` so a selected path that starts with `-`
+remains a path. Do not claim that the planned `--fix` option works until it is
+present in both `src/cli.rs` and the current tests.
 
 ## Check and inspect diagnostics
 

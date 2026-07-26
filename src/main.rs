@@ -1,7 +1,10 @@
 mod cli;
+mod source;
 
 use clap::Parser;
 use cli::{Cli, Command, ErrorFormat};
+use pycc_diag::Diagnostic;
+use std::path::Path;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -16,12 +19,10 @@ fn main() -> ExitCode {
             println!("pycc 0.1.0 (rustc 1.97.1, LLVM 22.1.1)");
             ExitCode::SUCCESS
         }
-        Command::Check { path, error_format } => {
-            match try_check(path.as_deref().unwrap_or("."), error_format) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(code) => code,
-            }
-        }
+        Command::Check {
+            paths,
+            error_format,
+        } => check_paths(&paths, error_format),
         Command::Test | Command::Explain { .. } | Command::Init { .. } | Command::Clean => {
             eprintln!("pycc: this subcommand is not yet implemented");
             ExitCode::from(2)
@@ -32,33 +33,22 @@ fn main() -> ExitCode {
 /// `pycc check`: parse + HIR-lowering + type-checking only, no codegen --
 /// CLI_SPEC.md's contract for this subcommand (ruff-fast, no codegen).
 /// `error_format`: "human" (default) or "json", matching CLI_SPEC.md's
-/// `--error-format` flag. Any diagnostic is printed to stdout and reported
-/// as exit code 1; a missing/unreadable file is a clean exit-2 error (same
-/// convention as `try_build`).
-fn try_check(path: &str, error_format: ErrorFormat) -> Result<(), ExitCode> {
-    let source = std::fs::read_to_string(path).map_err(|e| {
-        eprintln!("error: could not read `{path}`: {e}");
-        ExitCode::from(2)
-    })?;
-    let report = |diag: pycc_diag::Diagnostic| -> ExitCode {
-        match error_format {
-            ErrorFormat::Human => print!("{}", pycc_diag::render_human(&diag, path, &source)),
-            ErrorFormat::Json => println!("{}", pycc_diag::render_json(&diag, path, &source)),
-        }
-        ExitCode::from(1)
-    };
-    let module = match pycc_parser::parse(&source) {
-        Ok(m) => m,
-        Err(diag) => return Err(report(diag)),
-    };
-    let hir = match pycc_hir::lower_checked(&module) {
-        Ok(h) => h,
-        Err(diag) => return Err(report(diag)),
-    };
-    match pycc_types::check(&hir) {
-        Ok(()) => Ok(()),
-        Err(diag) => Err(report(diag)),
+/// `--error-format` flag. Compile diagnostics are printed to stdout; input
+/// errors are printed to stderr. Every supplied file is checked before the
+/// highest-precedence exit code is returned.
+fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitCode {
+    if paths.is_empty() {
+        eprintln!("error: `pycc check` requires at least one Python file in v0.1");
+        return ExitCode::from(2);
     }
+
+    let mut exit_code = 0;
+    for path in paths {
+        if let Err(failure) = check_frontend(path) {
+            exit_code = exit_code.max(report_check_failure(path, failure, error_format));
+        }
+    }
+    ExitCode::from(exit_code)
 }
 
 /// `Ok(())` on success, `Err(code)` carrying the exit code to use on
@@ -70,22 +60,9 @@ fn try_check(path: &str, error_format: ErrorFormat) -> Result<(), ExitCode> {
 /// no sense). `Some(triple)` cross-compiles -- see `find_pycc_rt_lib_dir`
 /// for what that requires to actually be available.
 fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode> {
-    let source = std::fs::read_to_string(path).map_err(|e| {
-        eprintln!("error: could not read `{path}`: {e}");
-        ExitCode::from(2)
-    })?;
-    let module = pycc_parser::parse(&source).map_err(|diag| {
-        eprintln!("error[{}]: {}", diag.code, diag.message);
-        ExitCode::from(1)
-    })?;
-    let hir = pycc_hir::lower_checked(&module).map_err(|diag| {
-        eprintln!("error[{}]: {}", diag.code, diag.message);
-        ExitCode::from(1)
-    })?;
-    let typed_hir = pycc_types::check_and_resolve(&hir).map_err(|diag| {
-        eprintln!("error[{}]: {}", diag.code, diag.message);
-        ExitCode::from(1)
-    })?;
+    let path = Path::new(path);
+    let typed_hir = resolve_frontend(path)
+        .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
     let mir = pycc_mir::build(&typed_hir);
 
     let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
@@ -115,6 +92,84 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         Ok(())
     } else {
         Err(ExitCode::from(1))
+    }
+}
+
+enum FrontendFailure {
+    Input(String),
+    Compile {
+        diagnostic: Diagnostic,
+        source: String,
+    },
+}
+
+fn lower_frontend(path: &Path) -> Result<(pycc_hir::HirModule, String), FrontendFailure> {
+    let bytes = std::fs::read(path).map_err(|error| FrontendFailure::Input(error.to_string()))?;
+    let source = source::decode_python_source(&bytes).map_err(FrontendFailure::Input)?;
+    let module = match pycc_parser::parse(&source) {
+        Ok(module) => module,
+        Err(diagnostic) => {
+            return Err(FrontendFailure::Compile { diagnostic, source });
+        }
+    };
+    let hir = match pycc_hir::lower_checked(&module) {
+        Ok(hir) => hir,
+        Err(diagnostic) => {
+            return Err(FrontendFailure::Compile { diagnostic, source });
+        }
+    };
+    Ok((hir, source))
+}
+
+fn check_frontend(path: &Path) -> Result<(), FrontendFailure> {
+    let (hir, source) = lower_frontend(path)?;
+    pycc_types::check(&hir).map_err(|diagnostic| FrontendFailure::Compile { diagnostic, source })
+}
+
+fn resolve_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
+    let (hir, source) = lower_frontend(path)?;
+    pycc_types::check_and_resolve(&hir)
+        .map_err(|diagnostic| FrontendFailure::Compile { diagnostic, source })
+}
+
+fn report_check_failure(path: &Path, failure: FrontendFailure, error_format: ErrorFormat) -> u8 {
+    let path = path.to_string_lossy();
+    match failure {
+        FrontendFailure::Input(message) => {
+            eprintln!(
+                "error: could not read `{}`: {message}",
+                pycc_diag::display_path(&path)
+            );
+            2
+        }
+        FrontendFailure::Compile { diagnostic, source } => {
+            match error_format {
+                ErrorFormat::Human => {
+                    print!("{}", pycc_diag::render_human(&diagnostic, &path, &source));
+                }
+                ErrorFormat::Json => {
+                    println!("{}", pycc_diag::render_json(&diagnostic, &path, &source));
+                }
+            }
+            1
+        }
+    }
+}
+
+fn report_build_failure(path: &Path, failure: FrontendFailure) -> u8 {
+    let path = path.to_string_lossy();
+    match failure {
+        FrontendFailure::Input(message) => {
+            eprintln!(
+                "error: could not read `{}`: {message}",
+                pycc_diag::display_path(&path)
+            );
+            2
+        }
+        FrontendFailure::Compile { diagnostic, source } => {
+            eprint!("{}", pycc_diag::render_human(&diagnostic, &path, &source));
+            1
+        }
     }
 }
 
@@ -336,7 +391,7 @@ fn find_pycc_rt_lib_dir_in(
 }
 
 #[cfg(test)]
-mod tests {
+mod linker_tests {
     use super::*;
 
     #[test]

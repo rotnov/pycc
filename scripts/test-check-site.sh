@@ -509,7 +509,7 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "Unary operators are rejected earlier by\n              HIR lowering, including under <code>pycc check</code>.",
+        "Unary operators are rejected earlier by\n              HIR lowering with a spanned <code>C0001</code> capability diagnostic,\n              including under <code>pycc check</code>.",
         "Unary operators are rejected only by the backend.",
         "status page that misattributes the unary-expression boundary",
     ),

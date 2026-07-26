@@ -513,11 +513,9 @@ fn mandelbrot_ascii_produces_a_grid_of_the_expected_dimensions_and_palette() {
     // Deviation from the plan brief: the brief's fixture wrote the
     // plane offsets as unary-minus literals (`-2.0`, `-1.0`). Unary
     // operators (`Expr::UnaryOp` / `USub`/`UAdd`/`Not`/`Invert`) are not
-    // lowered anywhere in `pycc_hir`/`pycc_types`/`pycc_mir`/`pycc_codegen`
-    // -- confirmed empirically, `pycc build` panics with "pycc_hir:
-    // expression kind not supported yet: UnaryOp(...)" -- and this gap
-    // is not tracked in DECISIONS.md, TYPE_SYSTEM.md, or any PR-1..5
-    // plan. Rewritten as `0.0 - 2.0` / `0.0 - 1.0`, which is exactly
+    // lowered by the implemented HIR subset: the checked lowering path now
+    // reports a spanned `C0001` capability diagnostic before MIR/codegen.
+    // Rewritten as `0.0 - 2.0` / `0.0 - 1.0`, which is exactly
     // semantically equivalent (Python's left-to-right `+`/`-` makes
     // `0.0 - 2.0 + x` == `-2.0 + x`) and already exercised by this same
     // fixture's `x2 - y2` subtraction. See this task's report for the

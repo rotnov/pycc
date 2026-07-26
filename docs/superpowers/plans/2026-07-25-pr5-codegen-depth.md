@@ -67,7 +67,12 @@ git commit -m "docs: record PR-5 scope decisions (D-048 through D-051), graduate
 - Consumes: `pycc_hir::{HirExpr, HirStmt, HirItem, HirModule, Ty, BinOpKind, CmpOpKind, FStringPart}` (all already exist, unchanged by this task).
 - Produces: `MirExpr` (all HIR expression kinds, each carrying its resolved `Ty`), `MirStmt` (all HIR statement kinds), `MirItem::Function { name: String, params: Vec<(String, Ty)>, return_ty: Ty, body: Vec<MirStmt> }`, `MirItem::TopLevelStmt(MirStmt)`, `MirModule { items: Vec<MirItem> }`, `pub fn build(hir: &HirModule) -> MirModule`. Every later task's codegen work matches these exact names/shapes.
 
-By construction, every `Ty` reaching this module is concrete (`pycc_types::check` fully resolves `Ty::Infer` before returning `Ok`, and `try_check`/`try_build` in `src/main.rs` never call `pycc_mir::build` on a HIR that failed `check`) -- so `build` can assert this rather than handle `Ty::Infer` as a real case.
+By construction, every `Ty` reaching this module is concrete: the build path's
+`resolve_frontend` stage calls `pycc_types::check_and_resolve` before
+`pycc_mir::build`. The validation-only `check_frontend` path calls
+`pycc_types::check` without materializing a resolved HIR and never feeds its
+result to MIR. Therefore `build` can assert that `Ty::Infer` is absent rather
+than handle it as a real case.
 
 - [ ] **Step 1: Write the failing tests for the new MIR shape**
 

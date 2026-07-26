@@ -210,7 +210,8 @@
               The current backend deliberately rejects bigint comparisons and
               several bigint arithmetic operations and float formatting outside
               the accepted v0.1 range. Unary operators are rejected earlier by
-              HIR lowering, including under <code>pycc check</code>. Unbound string
+              HIR lowering with a spanned <code>C0001</code> capability diagnostic,
+              including under <code>pycc check</code>. Unbound string
               temporaries and function-scoped string values can still leak
               until ownership analysis lands. Containers,
               <code>Optional</code>, and narrowing are outside the current

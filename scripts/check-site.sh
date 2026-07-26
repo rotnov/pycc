@@ -460,7 +460,7 @@ PAGE_SPECS = {
             "byte-exact CLI snapshots cover",
             "Conformance and final v0.1 acceptance are next.",
             "PR-5 implements the v0.1 frontend surface through MIR, LLVM, and the native runtime.",
-            "Unary operators are rejected earlier by HIR lowering, including under pycc check",
+            "Unary operators are rejected earlier by HIR lowering with a spanned C0001 capability diagnostic, including under pycc check",
             "The required frontend measurement and greater-than-2% regression gate remain required through ci-gate",
             "This source-aware paired gate measures the exact predecessor and candidate sequentially on one hosted runner",
             "seals the predecessor timing before candidate code runs",

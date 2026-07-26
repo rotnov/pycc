@@ -15,13 +15,14 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 | [STDLIB_PLAN.md](./STDLIB_PLAN.md) | Builtins + module tiers with target versions, compat policy | `pycc_std` |
 | [TESTING.md](./TESTING.md) | 7 test layers, conformance harness, differential fuzzing, corpus bot | CI, `pycc_testkit` |
 | [ROADMAP.md](./ROADMAP.md) | Delivery status for the repository tree in the containing commit plus v0.1→v1.0 milestones with binary acceptance criteria | releases |
-| [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-062, D-066, D-070…D-074 (int repr, LLVM, UTF-8 str, no-GIL model, coverage, agent surfaces, CI trust, iEvo, repository governance, Windows CI, roadmap evidence, frontend depth, performance-gate activation and audited recovery, paired-runner, source-aware, and fixed-replicate stabilization, type-check environment sharing, local-binding classification, agent retrospective/session logs, PR-5 codegen depth: MIR/bigint/small-string/tagged-fixnum layout, corrected `str`-refcounting accepted-leak scope, PR-5's own thrice-renumbered ADR IDs, `print()` nested-expression boundary, PIC relocation model, backend lexical scope and representation preservation…) | irreversible calls |
+| [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-062, D-066…D-068, and D-070…D-074 (int representation, LLVM, UTF-8 strings, no-GIL model, coverage, agent surfaces, CI trust, iEvo, repository governance, Windows CI, roadmap evidence, frontend depth, performance-gate activation and audited recovery, paired-runner/source-aware/fixed-replicate stabilization, type-check environment sharing, local-binding classification, agent retrospective/session logs, source-installed pre-commit distribution, pinned local review, and PR-5 MIR/codegen/runtime boundaries including bigint and small-string layout, corrected string-refcounting scope, `print()` nested-expression handling, PIC relocation, backend lexical scope, and representation preservation) | irreversible calls |
 | [DELIVERY_PLAN.md](./DELIVERY_PLAN.md) | Milestone decomposition, verified environment baseline, v0.1 crate scope + PR breakdown, autonomy policy | execution order, PR sequencing |
 | [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md) | Protected-branch contract, required controls, emergency bypass, and audit response | GitHub settings, governance workflows |
 | [AGENT_RETROSPECTIVE.md](./AGENT_RETROSPECTIVE.md) | Informational process-mistake journal for autonomous agent work (not code bugs or normative requirements) | future-session process learning only |
 | [SESSION_LOG.md](./SESSION_LOG.md) | Informational handoff snapshot: overall delivery status, in-flight work, resume points (not normative requirements) | session continuity/handoff only |
 | [AGENT_TOOLING.md](./AGENT_TOOLING.md) | Agent plugin pins, reviewed update process, validation, and rollback | `.agents/`, `.claude/`, agent-asset CI |
 | [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
+| [DISTRIBUTION.md](./DISTRIBUTION.md) | Source-based pre-commit publication, hook contract, installation limits | `.pre-commit-hooks.yaml`, `pycc check`, release tags |
 | [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) | Chronological search-query measurements and ranking methodology | discoverability monitoring |
 
 ## Invariants (short version)
@@ -43,4 +44,4 @@ Spec change = PR touching the normative doc + the tests that enforce it, reviewe
 
 ## Not yet specced (known gaps)
 
-`docs/semantics.md` (deviation ledger — starts at v0.1 with D-007 str notes) · packaging/distribution of pycc itself (installers, `rustup`-style) · LSP protocol details (post-1.0) · release artifact signing and provenance (for example, sigstore).
+`docs/semantics.md` (deviation ledger — starts at v0.1 with D-007 str notes) · binary installers and `rustup`-style distribution beyond the source-based pre-commit integration · LSP protocol details (post-1.0) · release artifact signing and provenance (for example, sigstore).

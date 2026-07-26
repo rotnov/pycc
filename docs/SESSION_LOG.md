@@ -11,51 +11,148 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-26 — PR #132 review fixes validated before current-main integration
+## 2026-07-26 — PR #132 current-main merge validated; concurrent head pending integration
 
-**Snapshot evidence:** local task branch `codex/fix-pr132-review-0764` is at
-`b57481a7dda629536bf29c280639454f9eba4e1e`, with the reviewed PR #132 fix
-set still uncommitted at this checkpoint. That branch previously integrated
-`main@128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`; during the independent
-review loop the remote default branch advanced to
-`78f5dcc0c3fd7c88fdc87e716e294fb0fc5cdb53`, while the published PR head
-remained `1ae1b3c90749836aeaa340ad0d8a067dc605d464`. The containing patch commit
-preserves the validated work before any current-`main` integration; it is not
-yet pushed or merged.
+**Snapshot evidence:** local task branch `codex/fix-pr132-review-0764` has
+patch parent `0f19f225f81ebca5166708cec74b010d2d47336e` and a staged, uncommitted
+merge with exact refreshed `origin/main@78f5dcc0c3fd7c88fdc87e716e294fb0fc5cdb53`.
+The published [PR #132](https://github.com/rotnov/pycc/pull/132) advanced
+concurrently to `c63de02be35321b4a8b66821fb5cd04774056558`; GitHub reports it open,
+non-draft, conflicting, and based on the earlier `main@128285f`. Its only
+current check is a successful trusted `audit`; required PR CI has not started.
+The latest GitHub Codex review added four unresolved live findings: bigint
+multiplication promotion, pre-initialization globals, CPython-compatible float
+floor division, and explicit float division-by-zero failure. Older review
+threads also remain unresolved, although several are already outdated.
 
-**Validated fix set:** all current PR #132 Codex findings are addressed across
-MIR, LLVM codegen, runtime-facing safety, tests, and the owning documentation.
-Functions see completed module bindings; globals and maybe-bound
-non-parameter locals carry runtime initialization flags; parameters remain
-initialized and reassignable; local allocations dominate their uses; accepted
-`bool`→`int` boundaries use the tagged representation; a `for` uses hidden SSA
-induction state so empty ranges, post-loop targets, negative steps, and body
-reassignment match Python; two-return merges are terminated; and `None` in an
-f-string renders as `None`. Current docs and site projections describe the
-implemented subset and remaining gaps without attributing unary rejection to
-the backend.
+**Validated local merge:** functions see completed module bindings; globals
+and maybe-bound non-parameter locals carry runtime initialization flags;
+parameters remain initialized and reassignable; local allocations dominate
+their uses; accepted `bool`→`int` boundaries use the tagged representation; a
+`for` uses hidden SSA induction state so empty ranges, post-loop targets,
+negative steps, and body reassignment match Python; two-return merges are
+terminated; and `None` in an f-string renders as `None`. Current docs and site
+projections describe unary rejection as a spanned `C0001` capability diagnostic
+before MIR/backend lowering. This staged tree already addresses the new
+pre-initialization-global finding; the other three newest findings remain to be
+reconciled after the concurrent remote head is integrated.
 
 **Local evidence:** the exact hard command
 `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
-passed with 13,499/13,499 regions and 9,426/9,426 lines. Workspace tests,
-Clippy with `-D warnings`, `cargo doc`, site checks and mutation self-tests,
-242 Python policy tests, Ruby CI-permission and roadmap-evidence suites,
-agent policy/assets validation, Codex/Claude alpha-skill evals, both marketplace
-checks, and `git diff --check` passed. The final independent iEvo deep-review
-rerun covered all 11 dimensions and reported no blocker or warning. The known
-iEvo stale-catalog defect remains deduplicated in upstream
+passed with 14,850/14,850 regions and 10,485/10,485 lines. Workspace tests,
+Clippy with `-D warnings`, fresh `cargo doc`, site checks and mutation
+self-tests, 220 Python policy tests, Ruby CI-permission and roadmap-evidence
+suites, agent policy/assets validation, Codex/Claude alpha-skill evals, both
+marketplace checks, and `git diff --check` passed. The pinned staged iEvo review
+found only the stale version of this handoff entry; implementation and
+normative docs were otherwise clean. The known iEvo stale-catalog defect remains
+deduplicated in upstream
 [`ievo-ai/skills#459`](https://github.com/ievo-ai/skills/issues/459); no new
 confirmed iEvo defect was found.
 
-**Required next steps:** commit this clean reviewed patch, integrate exact
-`origin/main@78f5dcc` with `--no-commit`, resolve additively, refresh this
-snapshot immediately before the merge commit, and rerun proportionate full
-validation. Then push normally to `feat/v0-1-pr5-codegen-depth`, resolve only
-the verified fixed/outdated review threads, request one exact `@codex review`
-for the new head, and wait for all required CI including the hard coverage and
-performance gates. Monitor only current open PRs, new merges, current checks,
-and current review threads; PR #119/#125 references are historical governance
-records, not live monitoring targets.
+**Required next steps:** rerun the pinned staged review after this refresh,
+commit the current `origin/main` merge, then integrate concurrent PR head
+`c63de02` additively without overwriting it. Resolve overlap, address all four
+new live findings, rerun the full hard coverage/policy/documentation/local-review
+loop, push normally to `feat/v0-1-pr5-codegen-depth`, and resolve only findings
+verified against the resulting remote head. D-068 makes GitHub Codex review
+optional, but the user explicitly requested it; request one exact
+`@codex review` only for a resulting head not already reviewed, and do not treat
+asynchronous availability as a required gate. Merge only after required CI is
+green and no actionable thread remains. Monitor current open PRs, new merges,
+current checks, and current review threads; PR #119/#125 references are
+historical governance records, not live monitoring targets.
+
+## 2026-07-26 — PR #51 performance repair integrated with current main
+
+**Snapshot evidence:** the containing merge integrates local performance-repair
+parent `a7f048d` with refreshed `main@128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`.
+[PR #51](https://github.com/rotnov/pycc/pull/51) remained open and non-draft at
+remote head `c1e855590a23307bcd8472979ff37f8bbfd0f8d9` before this local integration
+was pushed. That remote head ran required CI as run `30206099702` from
+active-D-062 `main@45545bb057f5cd9e8712610c6137f53ef56d3aae`.
+Immediately before preparing the follow-up commit, a fetch confirmed
+`origin/main` still at `128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`; GitHub
+still reported the old remote head as open, non-draft, and dirty, with one
+unresolved P1 review thread.
+
+**Gate result:** trusted audit, agent checks, 100% coverage, Linux/macOS,
+cross-compile, and the 5+5 measurement job passed. The isolated comparator
+correctly blocked the changed-source candidate at `+10.7215%`: predecessor
+aggregate median `7964.08 ns`, candidate `8817.95 ns`. This was not retried or
+waived. The benchmark does not execute the changed root CLI sources, but it
+exposed an existing redundant type-checker walk that could be removed without
+changing the gate.
+
+**Repair:** `pycc_types::check` now constructs already-concrete
+function signatures directly and reserves constraint collection for modules
+that contain real `Ty::Infer` signatures; a failed concrete validation falls
+back to the historical solver-first order so diagnostic selection is stable.
+The workspace coverage gate passes at 100% lines and regions, including
+explicit fast-path, diagnostic-parity, solver-path, and collector edge cases;
+workspace clippy, Rust documentation, roadmap evidence, and agent-asset checks
+also pass. An initial local Criterion comparison improved from about `7.15 µs`
+to `5.85 µs` (`−18.0%`); a later run after the diagnostic-order fallback
+measured `6.99 µs` (about `−2.3%` from the same original observation). This
+single-host evidence is noisy and is not selected as the gate result; the next
+fixed 5+5 CI comparison remains authoritative.
+
+**Pre-merge review repair:** the unresolved thread correctly found that valid
+but unsupported Python could still panic during HIR lowering, aborting the
+pre-commit batch with exit 101. The follow-up converts every user-reachable HIR
+capability rejection to a spanned `C0001` diagnostic, keeps only an internal
+parser-invariant assertion, and proves both exact CLI rendering and continued
+multi-file checking after an unsupported construct. The workspace coverage
+gate passes at 100% lines and regions; clippy, Rust documentation, roadmap
+evidence, and agent-asset checks pass as well.
+
+**Local review:** the exact pinned staged-diff reviewer found no implementation,
+contract, security, test, or documentation defect in the repair; its only
+finding was that the previous handoff text still listed that now-completed
+review as pending. This paragraph replaces that stale instruction.
+The subsequent full-range review found that adding a direct `ruff_text_size`
+dependency would violate D-062's byte-identical manifest/lock precondition and
+block CI before measurement. The fix keeps `Cargo.toml` and `Cargo.lock`
+identical to the predecessor and exposes byte ranges through the existing
+`pycc_ast` facade instead; an exhaustive facade test covers every upstream
+statement and expression variant at 100% line and region coverage.
+
+**Where to resume:** commit and push the verified repair, repeat exact-revision
+`pre-commit try-repo`, and resolve the P1 thread only after the remote head
+contains the verified fix. Treat the new CI run as new candidate evidence, not
+a rerun of the failed head, and merge only if every required check is green
+with no unresolved actionable review thread.
+
+## 2026-07-26 — PR #51 pre-commit hook awaiting final CI and merge
+
+**Snapshot evidence:** the checked-out `codex/pre-commit-hook` branch was at
+commit `171eceb` with a clean tree before integrating refreshed
+`origin/main@841048ec37e20d85a5a0406778f9ec8b66224b04`. The integration was in
+progress with its documentation conflicts resolved but not yet committed at
+this snapshot. [PR #51](https://github.com/rotnov/pycc/pull/51) is open and no
+longer a draft.
+
+**Overall status:** the pull request publishes `pycc-check` from the main
+repository as a serial, read-only `language: rust` pre-commit hook; extends
+`pycc check` to aggregate diagnostics across native input paths and supported
+source encodings; and replaces required asynchronous GitHub review comments
+with the immutable pinned local-review loop. D-067 and D-068 record the two
+project-wide choices after confirming PR #132's reconciled D-057…D-061 and
+D-070…D-073 allocations.
+
+**Validation already observed:** the Rust workspace tests, clippy, generated
+API documentation, agent-policy and marketplace checks, roadmap checks, and
+100% line/region coverage passed before the latest default-branch integration.
+An isolated `pre-commit try-repo` install selected exact revision `10a0502`
+and passed `pycc check`; the final merged revision still needs the same check,
+the pinned full-range local review, required pull-request CI, and normal
+protected-branch merge.
+
+**Where to resume:** finish and review the `841048e` merge, rerun affected
+checks, push `codex/pre-commit-hook`, wait for every required PR #51 check and
+conversation to clear, then merge normally and verify the post-merge
+`main-history-audit`. Do not request `@codex review`; D-068 makes that external
+service optional rather than a required gate.
 
 ## 2026-07-26 — PR #138 merged; D-062 blocks PR #132
 
@@ -159,7 +256,6 @@ request Codex review through the retry guard, and monitor required CI plus
 all review surfaces. Merge only after required checks are green and no
 actionable review thread remains; then verify the post-merge `main` run and
 history audit.
-
 ## 2026-07-26 — D-062 activation PR #137 green; refresh onto current main in progress
 
 **Snapshot evidence:** draft [PR #137](https://github.com/rotnov/pycc/pull/137)
