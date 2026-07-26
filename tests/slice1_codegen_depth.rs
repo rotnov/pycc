@@ -156,6 +156,36 @@ print(f\"{label} = {n}\")
 }
 
 #[test]
+fn a_multi_argument_print_space_separates_mixed_str_int_float_and_bool_values() {
+    // Second fix-round finding (same overclaim class as the `for`/`range`
+    // gap fixed above): `docs/ROADMAP.md`'s "Compiler pipeline" row cites
+    // this file (jointly with `tests/slice0.rs`) as proving "type-aware
+    // multi-argument `print`", and the "Language surface" row claims
+    // `print` for every v0.1 scalar type (`int`/`float`/`bool`/`str`) --
+    // but every `print(...)` call in both files was single-argument, and
+    // neither file ever printed a `float` or a `bool`. That left the
+    // multi-argument space-separator path (`pycc_rt_print_space`, emitted
+    // between `print` arguments) and the float/bool `to_str` paths
+    // (`pycc_rt_float_to_str`/`pycc_rt_bool_to_str`) with zero e2e coverage
+    // even though the row asserts all of them work. All are genuinely
+    // implemented (`emit_print_arg`'s own doc comment: "any number of
+    // int/float/bool/str arguments"), so this closes a missing e2e
+    // citation, not a missing feature -- one mixed-type fixture covering
+    // every v0.1 scalar type at once rather than a separate test per type.
+    // Exact expected output verified directly against `pycc build`/run
+    // before being added here: Rust's `f64` `Display` (which
+    // `pycc_rt_float_to_str` uses) renders `2.5` as `"2.5"`, matching
+    // CPython's own `str(2.5)`, and `pycc_rt_bool_to_str` renders `True`
+    // capitalized, matching CPython's own `str(True)`.
+    let source = "\
+print(\"x\", 1, 2.5, True)
+";
+    let output = build_and_run("print_multi_arg_mixed_types", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"x 1 2.5 True\n");
+}
+
+#[test]
 fn mandelbrot_ascii_produces_a_grid_of_the_expected_dimensions_and_palette() {
     // A first-cut, deliberately small (20x40) rendering exercising
     // nested `while` loops, `float` arithmetic (including true
