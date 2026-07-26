@@ -810,6 +810,34 @@ fn check_accepts_every_staged_file_in_one_invocation() {
 }
 
 #[test]
+fn check_reports_capability_errors_and_continues_the_batch() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_capability_batch_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let unsupported = write_fixture(&dir, "unsupported.py", "if True:\n    pass\n");
+    let syntax_error = write_fixture(&dir, "syntax_error.py", "$\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&unsupported)
+        .arg(&syntax_error)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout.contains("error[C0001]"));
+    assert!(stdout.contains(&format!("{}:2:5", rendered_diagnostic_path(&unsupported))));
+    assert!(stdout.contains("2 |     pass"));
+    assert!(stdout.contains("error[L0001]"));
+    assert!(stdout.contains(&rendered_diagnostic_path(&syntax_error)));
+    assert!(!stderr.contains("panicked"));
+}
+
+#[test]
 fn check_accepts_a_pep_263_latin_1_source_file() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_latin1_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

@@ -84,9 +84,11 @@ paths = ["tests/"]
 
 ## Exit codes
 
-`0` ok · `1` compile errors · `2` bad invocation or unreadable input · `101`
-compiled program panicked/uncaught exception (matches process exit conventions
-per-OS).
+`0` ok · `1` compile errors (including `C0001` version-capability gaps) · `2`
+bad invocation or unreadable input · `101` compiled program panicked/uncaught
+exception, or the temporary D-035 MIR/backend boundary was reached by
+`build`/`run` (matches process exit conventions per-OS). Unsupported HIR input
+to `check` is a normal exit-1 diagnostic, not exit 101.
 
 `pycc check` reports all supplied-file failures. If different files produce
 both compile errors and unreadable-input errors, it exits `2`; otherwise any

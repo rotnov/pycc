@@ -47,8 +47,12 @@ the AST. `pycc_hir::lower_checked` preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,
 calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. Function items
 carry their parameter and return types, while call expressions retain only the
-callee name; HIR does not yet assign binding identities or build and memoize a
-call graph. `pycc_types::check` validates the lowered module against the
+bare callee name plus ordered argument expressions; HIR does not yet assign
+binding identities or build and memoize a
+call graph. Syntactically valid constructs outside that implemented HIR subset
+return a spanned `C0001` capability diagnostic, so `pycc check` never turns an
+unsupported statement or expression into an uncaught lowering panic.
+`pycc_types::check` validates the lowered module against the
 inferred signature table without cloning HIR. Compiler stages that need
 concrete private-helper signatures use `pycc_types::check_and_resolve`, which
 performs the same validation and returns HIR with those signatures
