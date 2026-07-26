@@ -69,6 +69,16 @@ Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by o
 - Memory: arenas + interned strings/types; no `Rc<RefCell<…>>` in hot paths.
 - Benchmarks in CI on every PR; >2% frontend regression blocks merge.
 
+The check-only frontend path validates the original HIR against its inferred
+signature table without materializing a resolved HIR clone. Compiler stages
+that need concrete private-helper signatures use `check_and_resolve` and pay
+for that returned clone; `pycc check` does not construct and discard it.
+Per-function checking also shares the immutable module function registry
+through an `Arc`-backed copy-on-write table. Function-local environments still
+clone global bindings so parameter and assignment changes remain isolated, but
+they no longer copy every registered function name and signature or clone the
+registered parameter vector merely to read it.
+
 ## Cross-platform (hard requirement)
 
 Tier 1 — build, test, CI-gated from MVP:

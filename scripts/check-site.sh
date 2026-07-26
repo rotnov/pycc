@@ -444,6 +444,7 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
+        "date_modified": "2026-07-26",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
@@ -456,6 +457,14 @@ PAGE_SPECS = {
             "Validated frontend codes",
             "byte-exact CLI snapshots cover",
             "Code generation and runtime breadth are next.",
+            "The required frontend measurement and greater-than-2% regression gate run independently of that compiler sequence through ci-gate",
+            "This source-aware paired gate measures the exact predecessor and candidate sequentially on one hosted runner",
+            "seals the predecessor timing before candidate code runs",
+            "Before candidate code runs, it classifies the complete src/ and crates/ trees",
+            "Identical executable inputs keep the timing delta as visible, non-blocking environment telemetry.",
+            "Changed source keeps the hard greater-than-2% median regression block.",
+            "The gate compares through a hash-verified predecessor-owned checker.",
+            "Revision, benchmark-contract, executable-input identity, artifact-identity, and comparison drift fail closed.",
         ),
     },
     "architecture": {
@@ -758,7 +767,8 @@ for path_value in sys.argv[1:]:
         raise SystemExit(
             f"{slug} WebPage description must match meta description"
         )
-    if web_page.get("dateModified") != "2026-07-25":
+    expected_modified = spec.get("date_modified", "2026-07-25")
+    if web_page.get("dateModified") != expected_modified:
         raise SystemExit(f"{slug} WebPage dateModified is stale")
     if web_page.get("isPartOf") != {"@id": f"{ROOT}#webpage"}:
         raise SystemExit(f"{slug} WebPage must reference the root WebPage")

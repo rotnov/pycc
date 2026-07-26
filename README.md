@@ -14,6 +14,15 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > private-helper signatures, and rendering human or JSON diagnostics.
 > `pycc build` and `pycc run` still compile only the original narrow native
 > slice; code-generation and runtime breadth are the next delivery step.
+> The frontend performance measurement and isolated greater-than-2% regression
+> gate are required through `ci-gate` independently of that compiler sequence.
+> The source-aware paired gate measures the exact predecessor and candidate
+> sequentially on one hosted runner and seals the predecessor timing before
+> candidate code runs. It classifies all repository-owned executable inputs
+> before that execution: identical inputs keep the observed timing as
+> non-blocking environment telemetry, while changed `src/` or `crates/` inputs
+> retain the hard greater-than-2% regression block. Revision, benchmark-contract,
+> executable-input identity, artifact-identity, and comparison drift fail closed.
 > See the [current status](https://rotnov.github.io/pycc/status/) and
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 

@@ -50,7 +50,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what remains planned for v0.1, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-07-25",
+            "dateModified": "2026-07-26",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -110,7 +110,7 @@
       </nav>
 
       <header class="page-hero">
-        <p class="eyebrow">Evidence page · Updated 2026-07-25</p>
+        <p class="eyebrow">Evidence page · Updated 2026-07-26</p>
         <h1>What pycc can do <span>today.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14.
@@ -253,7 +253,7 @@
                 <a href="https://github.com/rotnov/pycc/actions/workflows/ci.yml">
                   Required CI workflow
                 </a>
-                <span>Build, test, coverage, and Tier-1 target evidence.</span>
+                <span>Build, test, coverage, performance, and Tier-1 target evidence.</span>
               </li>
               <li>
                 <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">
@@ -271,8 +271,22 @@
               The next compiler slice lowers the implemented v0.1 frontend
               constructs through MIR and LLVM, then expands the runtime for
               integers, floats, strings, booleans, control flow, recursion, and
-              basic f-strings. The conformance testkit, named demos, frontend
-              performance gate, and final v0.1 acceptance pass follow.
+              basic f-strings. The required frontend measurement and
+              greater-than-2% regression gate run independently of that compiler
+              sequence through <code>ci-gate</code>. This source-aware paired gate
+              measures the exact predecessor and candidate sequentially on one
+              hosted runner and seals the predecessor timing before candidate code
+              runs. Before candidate code runs, it classifies the complete
+              <code>src/</code> and <code>crates/</code> trees; the existing contract
+              independently binds every benchmark and build input. Identical
+              executable inputs keep the timing delta as visible, non-blocking
+              environment telemetry. Changed source keeps the hard greater-than-2%
+              median regression block. The gate compares through a hash-verified
+              predecessor-owned checker. Revision, benchmark-contract,
+              executable-input identity, artifact-identity, and comparison drift
+              fail closed.
+              The conformance testkit, named demos, and final v0.1 acceptance pass
+              follow the code-generation and runtime work.
             </p>
             <div class="page-links">
               <a href="../architecture/">

@@ -189,6 +189,7 @@ class AgentAssetValidationTests(unittest.TestCase):
         remove_feedback_text: str | None = None,
         pycc_eval_count: int | None = None,
         remove_pycc_runner: bool = False,
+        remove_feedback_runner: bool = False,
     ) -> list[str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -213,6 +214,11 @@ class AgentAssetValidationTests(unittest.TestCase):
                 evals = json.loads(evals_path.read_text(encoding="utf-8"))
                 evals["evals"][0].pop("runner")
                 evals_path.write_text(json.dumps(evals), encoding="utf-8")
+            if remove_feedback_runner:
+                evals_path = root / "pycc-feedback" / "evals" / "evals.json"
+                evals = json.loads(evals_path.read_text(encoding="utf-8"))
+                evals["evals"][0].pop("runner")
+                evals_path.write_text(json.dumps(evals), encoding="utf-8")
             failures: list[str] = []
             validator.validate_alpha_skill_contracts(
                 root,
@@ -229,15 +235,25 @@ class AgentAssetValidationTests(unittest.TestCase):
             any("sanitize every outbound query" in item for item in failures)
         )
 
+    def test_feedback_skill_preserves_the_accepted_pr5_boundary(self) -> None:
+        for contract in ("codegen lands in PR-5", "intentional temporary"):
+            with self.subTest(contract=contract):
+                failures = self.alpha_contract_failures(
+                    remove_feedback_text=contract
+                )
+                self.assertTrue(any(contract in item for item in failures))
+
     def test_alpha_skill_requires_multiple_evals(self) -> None:
         failures = self.alpha_contract_failures(pycc_eval_count=1)
         self.assertTrue(any("at least two evals" in item for item in failures))
 
     def test_alpha_skill_requires_executable_eval_runners(self) -> None:
-        failures = self.alpha_contract_failures(remove_pycc_runner=True)
-        self.assertTrue(
-            any("complete executable runner set" in item for item in failures)
-        )
+        for option in ("remove_pycc_runner", "remove_feedback_runner"):
+            with self.subTest(option=option):
+                failures = self.alpha_contract_failures(**{option: True})
+                self.assertTrue(
+                    any("malformed eval" in item for item in failures)
+                )
 
     def write_skill(
         self,
