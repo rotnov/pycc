@@ -11,6 +11,45 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-07-26 — PR #157 makes repository monitoring event-driven
+
+**Authoritative checkpoint:** immediately before this entry, the refreshed
+remote default branch was exact `main@2d9c2c4599f9c07b74404d14e0efc361aa4f5c50`.
+That commit is the merge of [PR #140](https://github.com/rotnov/pycc/pull/140),
+whose final branch head was `1682cc1aeebfe8f3f1b074c6788113fc654e6b3a`;
+[#34](https://github.com/rotnov/pycc/issues/34) is closed. The four exact-SHA
+post-merge workflows (`CI`, `Agent assets`, `Agent policy`, and `Main history
+audit`) all completed successfully. No later default-branch merge or new PR
+event was observed before the task branch started.
+
+**Active work:** draft [PR #157](https://github.com/rotnov/pycc/pull/157) is
+`OPEN` from `codex/monitor-new-events-only-0764` at source-policy head
+`0faa94cd3bee0338a4c62f15ec2c5d17d4564406`, based directly on the checkpoint
+above. It adds D-078's checkpointed, event-driven monitoring rule to canonical
+`AGENTS.md`, the repository-governance specification, and the roadmap, then
+makes agent-asset validation fail closed if the essential live-set, historical
+target, PR-state, superseded-head, or checkpoint-advance clauses disappear.
+The policy is shared with Claude Code through the existing exact `CLAUDE.md`
+import, so no separate client-specific rule is needed.
+
+**Historical boundary:** D-054's issue #125 and PR #119 remain durable evidence
+for the completed emergency recovery, but neither is a live monitoring target.
+Do not poll either object from this entry or another documentation citation.
+After this checkpoint, inspect only a new default-branch commit, a new or
+changed PR, or a state/review/check/head change on PR #157 while it remains
+task-active. A future issue enters scope only when the active task explicitly
+names it for a bounded audit.
+
+**Local evidence and next gates:** all 240 discovered Python tests, both agent
+validators, roadmap evidence (99 runs and 432 assertions), Ruff, fresh Rust API
+documentation, and `git diff --check` pass. The pinned iEvo reviewer found and
+closed validation gaps for the historical-target and superseded-head semantics;
+its source-policy rerun is clean across all 11 checklist areas. Re-run that
+review over this containing session-log update, push the resulting final head,
+request exactly one `@codex review` for that head, resolve every actionable
+inline thread, and merge only after the hard 100% line/region coverage gate and
+all other required checks are green.
+
 ## 2026-07-26 — PR #140 addresses final exact-head review findings
 
 **Snapshot evidence:** immediately before the containing repair commit, draft
