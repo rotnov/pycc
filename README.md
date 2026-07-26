@@ -9,7 +9,20 @@
 
 Written in Rust (1.97+). Built to be extremely fast — both the compiler itself and the binaries it produces.
 
-> Status: early design / pre-alpha. The supported-language roadmap lives in [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
+> Status: pre-alpha. `pycc check` now parses and type-checks the v0.1
+> frontend surface, enforcing public annotations, rejecting `Any`, inferring
+> private-helper signatures, and rendering human or JSON diagnostics.
+> `pycc build` and `pycc run` still compile only the original narrow native
+> slice; code-generation and runtime breadth are the next delivery step.
+> The frontend performance measurement and isolated greater-than-2% regression
+> gate are required through `ci-gate` independently of that compiler sequence.
+> The paired gate measures the exact predecessor and candidate sequentially on
+> one hosted runner, seals the predecessor timing before candidate code runs,
+> and compares their medians through a hash-verified predecessor-owned checker.
+> Revision, benchmark-contract, artifact-identity, and comparison drift fail
+> closed.
+> See the [current status](https://rotnov.github.io/pycc/status/) and
+> [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 
 Python 3.14 is the v1.0 target, not a permanent language ceiling. Later
 standard Python language levels may enter only through explicit versioned

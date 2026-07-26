@@ -352,19 +352,20 @@
         <div class="status-card">
           <div>
             <p class="eyebrow">04 · Honest status</p>
-            <h2 id="status-title">The first vertical slice exists. The compiler is not ready for production.</h2>
+            <h2 id="status-title">The v0.1 frontend exists. The compiler is not ready for production.</h2>
           </div>
           <div class="status-copy">
             <p>
-              The repository proves the first path through parsing, HIR,
-              type-stage scaffolding, MIR, LLVM code generation, linking, and
-              execution. Broader Python support is being built against an
-              explicit, test-driven specification.
+              <code>pycc check</code> now runs the broadened v0.1 frontend:
+              parsing, HIR lowering, strict type checking, private-helper
+              inference, and stable human or JSON diagnostics. The native
+              <code>build</code>/<code>run</code> path remains limited to the
+              original executable slice.
             </p>
             <ul>
+              <li><span aria-hidden="true">✓</span> Strict v0.1 frontend and diagnostic snapshots</li>
               <li><span aria-hidden="true">✓</span> End-to-end native-code slice</li>
-              <li><span aria-hidden="true">✓</span> Rust workspace and LLVM backend</li>
-              <li><span aria-hidden="true">→</span> Language coverage and diagnostics in progress</li>
+              <li><span aria-hidden="true">→</span> Full code generation and runtime breadth are next</li>
             </ul>
           </div>
         </div>

@@ -35,6 +35,23 @@ material for humans, conventional search engines, and retrieval systems. They
 must remain concise projections of the repository specifications, not a second
 independent source of product truth.
 
+The current commit-relative boundary is deliberately explicit across the
+landing, status, architecture, comparison, Markdown, and `llms.txt` surfaces:
+`pycc check` owns the broadened v0.1 parser → HIR → strict-type-checker path,
+including stable human and JSON frontend diagnostics, while `pycc build` and
+`pycc run` retain only the original narrow MIR → LLVM → native-executable
+slice. Code-generation and runtime breadth are the next delivery step. These
+facts must move with the authoritative roadmap whenever implementation depth
+changes.
+
+The status page presents D-051/D-053's active paired gate independently of
+later compiler slices. It states that the frontend measurement and
+greater-than-2% regression gate are required through `ci-gate`, measure the
+exact predecessor and candidate sequentially on one hosted runner, seal the
+predecessor timing before candidate code runs, compare medians through a
+hash-verified predecessor-owned checker, and fail closed on revision,
+benchmark-contract, artifact-identity, or comparison drift.
+
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile
 Python to a native binary”, but must not repeat phrases solely to manipulate
@@ -74,8 +91,16 @@ site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
 missing official comparison sources, missing LPython alpha-status evidence, a
 missing pre-alpha comparison warning, or required metadata. The self-test
 independently removes LPython's official project source and alpha positioning
-so a newly covered compiler model cannot silently disappear. The landing-page
-contract also requires exactly one
+so a newly covered compiler model cannot silently disappear. It also mutates
+the landing, status, architecture, comparison, Markdown, and `llms.txt`
+frontend/backend claims independently, preventing a structurally valid site
+from silently describing a superseded compiler milestone. It also removes the
+status page's paired same-runner measurement, exact-revision provenance,
+predecessor-before-candidate sealing, and fail-closed
+revision/contract/artifact/comparison requirements independently so the
+validator rejects a public performance-gate claim that no longer matches CI. The
+landing-page contract also requires
+exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
 classic-script reference to relative `site.js` with no `type` override.
 The stylesheet tag permits only `rel="stylesheet"` and `href="styles.css"`;
@@ -94,11 +119,15 @@ make browser behavior disagree with the checked attribute values.
 The landing-page hero grid lets both children shrink so the code example does
 not widen the document beyond a narrow viewport. Browser QA at 320 and 390 CSS
 pixels confirmed that the document width remains equal to the viewport while
-wide comparison tables scroll only inside their containers. At viewports up to
-680 CSS pixels, the footer must stack into one grid column and its navigation
-group must wrap within the available width; the validator and an independent
-negative mutation preserve that footer contract as the evidence-page link set
-grows.
+wide comparison tables scroll only inside their containers. Prose inline code
+uses `overflow-wrap: anywhere` so qualified identifiers such as
+`pycc_types::check_and_resolve` cannot widen a narrow evidence page; fresh-page
+browser QA confirms equal document and viewport widths for the landing, status,
+architecture, and comparison pages at both representative widths. At
+viewports up to 680 CSS pixels, the footer must stack into one grid column and
+its navigation group must wrap within the available width; the validator and
+an independent negative mutation preserve that footer contract as the
+evidence-page link set grows.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots

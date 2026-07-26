@@ -112,15 +112,76 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The reviewed PR-4 prospective digest also introduces the required frontend
-performance gate. Its cache lifecycle is fail-closed: the current timing is
-promoted and cached only after the benchmark, checker self-test, and comparison
-steps succeed (or the legitimate first-baseline bootstrap succeeds), so a
-failed regression cannot become the baseline for a passing rerun. Checkout and
-cache actions that control this merge invariant use reviewed immutable commit
-pins. The trusted checker validates the exact ordered lifecycle whenever
-`frontend-perf-gate` is present in the candidate workflow, in addition to
-requiring the exact reviewed digest.
+The historical D-048 workflow established the split trust boundary:
+`frontend-perf-measure` executed pull-request benchmark code and uploaded only
+Criterion estimates as untrusted data, while `frontend-perf-gate` executed the
+hash-verified main-owned comparator against an exact successful-main artifact.
+D-051/D-053 retain that isolation while retiring the cross-run artifact
+dependency, the D-048 digest, and its fixture. Artifact and checkout actions
+remain immutable reviewed pins.
+
+The active `.github/workflows/ci.yml` is byte-identical to
+`tests/fixtures/d51-paired-ci.yml`. The checker allowlist contains only that
+whole-file digest, and structural mutation tests exercise the complete paired
+job shapes. The D-048 steady-state, pre-split, and activation fixtures, their
+digests, and their bootstrap tests are absent.
+The retired D-048 mean comparator and its standalone test are absent too;
+references to those paths in the historical D-042/D-044 decisions describe
+the repository state when those decisions were accepted, not active tooling.
+
+The paired lifecycle is fail-closed and predecessor-owned without an external
+baseline. Both performance jobs remain exact literal-success dependencies of
+`ci-gate`; the trusted checker validates their complete shapes and the aggregate
+fan-in. Each run derives the predecessor exclusively from
+`pull_request.base.sha` or `push.before`, rejects missing, zero, or unsupported
+event inputs, and measures both revisions inside that same run. There is no
+missing-evidence exception, reusable bootstrap, repository variable, cache
+fallback, older convenient SHA, or failed-run artifact path.
+
+D-051/D-053 remove between-runner timing from the live comparison without
+changing the 2% threshold. The active measurement job
+resolves `pull_request.base.sha` or `push.before`, checks out that exact
+predecessor and `github.sha` into separate directories, verifies both
+revisions, and rejects drift in the bound benchmark-definition and
+build-configuration contract: `benches/`, the root `Cargo.toml` and
+`Cargo.lock`, both root Rust toolchain filenames, root `.cargo/`, every
+workspace-member `Cargo.toml`, and every tracked local `build.rs`. It
+benchmarks both revisions on one hosted runner using separate Cargo target
+directories. The predecessor
+JSON is uploaded through the pinned v4 artifact action before candidate code
+executes, closing the same-user background-process race that a local
+hash-then-copy sequence would leave open; the candidate JSON is uploaded
+separately afterward. The active gate checks out and hash-verifies the
+dedicated median comparator and its tests from the exact predecessor, validates
+the distinct numeric artifact identities returned by the trusted upload steps,
+downloads both same-run inputs by those exact IDs rather than replaceable
+names, flattens each single-ID download into its own exact destination,
+requires exactly both regular files with no symlinks or extras, and
+remains an exact `ci-gate` dependency. Missing or zero predecessor SHAs,
+unsupported events, a mutable action, revision mismatch, removal of any bound
+contract path or local-manifest/build-script binding, shared target state,
+candidate execution before the sealed predecessor upload, a broad artifact
+upload, a missing, repeated, or non-numeric artifact identity, a name-based
+download, a non-flat artifact download, either missing estimate, an extra file,
+a symlink, a skippable comparison, or a mixed old/new job pair fails closed in
+focused tests.
+
+Median point estimates are deliberate rather than a threshold relaxation. A
+local paired validation with identical Rust and benchmark code produced a
+`-2.94%` mean difference after the predecessor sample accumulated 15 severe
+high outliers, while the medians differed by `-0.56%`. The merge threshold
+remains greater than 2%, and the comparator remains isolated and digest-bound.
+
+The byte-exact activation retired the D-048 workflow digest and fixture. No
+administrative bootstrap is required because each D-051 run measures both sides
+of its own comparison. D-054's one-shot staging recovery is historical audit
+evidence only; normal `audit` plus `ci-gate` protection was restored before this
+activation branch was created and is not encoded in repository configuration.
+A pull request that changes a bound manifest, local build script, lockfile,
+toolchain, Cargo configuration, or benchmark source must first stage a
+reviewed transition for that benchmark contract; the gate intentionally does
+not guess whether such a change affects only product code or also the
+measurement harness.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would
@@ -195,11 +256,11 @@ Branch protection is strict and requires `ci-gate` and `audit`, bound to the
 GitHub Actions app. `ci-gate` (D-032) is a single stable-named job in
 `ci.yml` that fans in every job in that workflow (`build-test-coverage`, all
 four `native-build-test` Tier-1 legs, `cross-compile-build`,
-`cross-compile-verify`) so branch protection enforces the whole Tier-1
-matrix through one required-check name that survives matrix edits, rather
-than naming each matrix leg directly (whose GitHub-generated name bakes in
-the matrix values and would go stale the moment an `os`/`target` entry
-changes). The switch from directly requiring `build-test-coverage` to
+`cross-compile-verify`, `frontend-perf-measure`, and
+`frontend-perf-gate`) so branch protection enforces the whole Tier-1 matrix
+and performance invariant through one required-check name that survives
+matrix edits, rather than naming each generated context directly. The switch
+from directly requiring `build-test-coverage` to
 requiring `ci-gate` happened once `ci-gate` existed on `main` (PR #19,
 merged 2026-07-25) -- it was deliberately not done inside that same PR,
 since flipping it earlier, while other branches were still open against a

@@ -417,6 +417,8 @@ required_disclosures = (
     "Built entirely by AI.",
     "Managed by a human.",
     "No project code is handwritten by a human.",
+    "pycc check now runs the broadened v0.1 frontend",
+    "Full code generation and runtime breadth are next",
 )
 for disclosure in required_disclosures:
     if disclosure not in visible_body_text:
@@ -442,11 +444,24 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
+        "date_modified": "2026-07-26",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
             "implements today, what remains planned for v0.1, and the CI "
             "evidence behind each claim."
+        ),
+        "required_visible_text": (
+            "pycc check runs the broadened parser → HIR → strict type checker",
+            "Strict checking and inference",
+            "Validated frontend codes",
+            "byte-exact CLI snapshots cover",
+            "Code generation and runtime breadth are next.",
+            "The required frontend measurement and greater-than-2% regression gate run independently of that compiler sequence through ci-gate",
+            "This paired gate measures the exact predecessor and candidate sequentially on one hosted runner",
+            "seals the predecessor timing before candidate code runs",
+            "and compares their medians through a hash-verified predecessor-owned checker.",
+            "Revision, benchmark-contract, artifact-identity, and comparison drift fail closed.",
         ),
     },
     "architecture": {
@@ -456,6 +471,13 @@ PAGE_SPECS = {
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
             "current crate boundaries, and the planned path from typed "
             "Python 3.14 to native binaries."
+        ),
+        "required_visible_text": (
+            "Frontend v0.1 checked",
+            "Resolve and type-check",
+            "pycc_types::check_and_resolve",
+            "MIR and code generation remain slice-only",
+            "Strict checking and inference",
         ),
     },
     "python-aot-compilers": {
@@ -484,6 +506,10 @@ PAGE_SPECS = {
         "required_visible_text": (
             "Tools six projects",
             "Alpha; focused on numerical and array-oriented typed Python",
+            (
+                "frontend checker implemented for the v0.1 subset, while "
+                "native code generation remains slice-only"
+            ),
             "Do not choose pycc for production today.",
             "Benchmarks none claimed",
         ),
@@ -738,7 +764,8 @@ for path_value in sys.argv[1:]:
         raise SystemExit(
             f"{slug} WebPage description must match meta description"
         )
-    if web_page.get("dateModified") != "2026-07-25":
+    expected_modified = spec.get("date_modified", "2026-07-25")
+    if web_page.get("dateModified") != expected_modified:
         raise SystemExit(f"{slug} WebPage dateModified is stale")
     if web_page.get("isPartOf") != {"@id": f"{ROOT}#webpage"}:
         raise SystemExit(f"{slug} WebPage must reference the root WebPage")
@@ -879,6 +906,11 @@ for disclosure in (
 ):
     if disclosure not in llms or disclosure not in markdown:
         raise SystemExit(f"LLM-readable files are missing disclosure: {disclosure}")
+current_status = "`pycc check` now parses and type-checks the v0.1"
+if current_status not in llms or current_status not in markdown:
+    raise SystemExit(
+        "LLM-readable files are missing the current frontend status"
+    )
 for evidence_link in (
     f"[Current implementation status]({canonical}status/)",
     f"[Compiler architecture]({canonical}architecture/)",

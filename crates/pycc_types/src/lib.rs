@@ -4,11 +4,12 @@ use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
 use pycc_hir::{BinOpKind, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Default, Clone)]
 pub struct Environment {
     bindings: HashMap<String, Ty>,
-    functions: HashMap<String, (Vec<Ty>, Ty)>,
+    functions: Arc<HashMap<String, (Vec<Ty>, Ty)>>,
 }
 
 impl Environment {
@@ -25,7 +26,7 @@ impl Environment {
     }
 
     pub fn bind_function(&mut self, name: String, param_tys: Vec<Ty>, return_ty: Ty) {
-        self.functions.insert(name, (param_tys, return_ty));
+        Arc::make_mut(&mut self.functions).insert(name, (param_tys, return_ty));
     }
 
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
@@ -725,9 +726,10 @@ pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
 
 /// Checks one function's body, resolving sibling calls and module-level
 /// global reads against a clone of `module_env` (see D-040/D-041) instead
-/// of an isolated, self-only scope. Cloning (not sharing) `module_env`
-/// means a function's own parameter bindings and local assignments never
-/// leak back into the module scope or into any other function's check.
+/// of an isolated, self-only scope. The clone owns independent value bindings
+/// while sharing the immutable function registry through copy-on-write storage,
+/// so a function's parameters and local assignments never leak back into the
+/// module scope or into any other function's check.
 fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(), Diagnostic> {
     let HirItem::Function {
         name,
@@ -738,11 +740,14 @@ fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(),
     else {
         panic!("check_function called with a non-Function HirItem");
     };
-    let mut env = module_env.clone();
-    let (resolved_params, resolved_return) = module_env
-        .lookup_function(name)
-        .cloned()
-        .unwrap_or_else(|| (params.iter().map(|(_, ty)| *ty).collect(), *return_ty));
+    let standalone_params;
+    let (resolved_params, resolved_return, signature_was_registered) =
+        if let Some((param_tys, return_ty)) = module_env.lookup_function(name) {
+            (param_tys.as_slice(), *return_ty, true)
+        } else {
+            standalone_params = params.iter().map(|(_, ty)| *ty).collect::<Vec<_>>();
+            (standalone_params.as_slice(), *return_ty, false)
+        };
     if resolved_params.contains(&Ty::Infer) || resolved_return == Ty::Infer {
         return Err(Diagnostic::error(
             "T0021",
@@ -750,8 +755,11 @@ fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(),
             Span::new(0, 0),
         ));
     }
-    env.bind_function(name.clone(), resolved_params.clone(), resolved_return);
-    for ((param_name, _), param_ty) in params.iter().zip(resolved_params) {
+    let mut env = module_env.clone();
+    if !signature_was_registered {
+        env.bind_function(name.clone(), resolved_params.to_vec(), resolved_return);
+    }
+    for ((param_name, _), param_ty) in params.iter().zip(resolved_params.iter().copied()) {
         env.bind(param_name.clone(), param_ty);
     }
     for stmt in body {
@@ -854,12 +862,15 @@ fn check_stmt_in_function(
     }
 }
 
-/// Type-checks a module and returns HIR whose function signatures contain
-/// only the concrete types resolved by private-helper inference. Consumers
-/// after the type boundary must use this module rather than the unresolved
-/// lowering result so `Ty::Infer` can never leak into MIR or code generation.
+/// Type-checks a module and returns a cloned HIR whose function signatures
+/// contain only the concrete types resolved by private-helper inference.
+/// Consumers after the type boundary must use this module rather than the
+/// unresolved lowering result so `Ty::Infer` can never leak into MIR or code
+/// generation.
 pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     let signatures = infer_function_signatures(hir)?;
+    check_with_signatures(hir, &signatures)?;
+
     let mut resolved_hir = hir.clone();
     for item in &mut resolved_hir.items {
         let HirItem::Function {
@@ -880,13 +891,20 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         *return_ty = *resolved_return;
     }
 
+    Ok(resolved_hir)
+}
+
+fn check_with_signatures(
+    hir: &HirModule,
+    signatures: &HashMap<String, (Vec<Ty>, Ty)>,
+) -> Result<(), Diagnostic> {
     let mut env = Environment::new();
     // Pass 1: register every function's signature before checking any
     // statement body, matching Python's own "a module runs top to bottom,
     // but any def already executed is callable" semantics -- top-level
     // code and other function bodies (D-040) both need to see every
     // function regardless of its position in the file.
-    for item in &resolved_hir.items {
+    for item in &hir.items {
         if let HirItem::Function { name, .. } = item {
             let (param_tys, return_ty) = signatures
                 .get(name)
@@ -898,7 +916,7 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // `env`'s bindings as module-level assignments are encountered --
     // ordinary top-level code is still checked top-to-bottom (a top-level
     // forward reference to a not-yet-assigned name is a genuine error).
-    for item in &resolved_hir.items {
+    for item in &hir.items {
         if let HirItem::TopLevelStmt(stmt) = item {
             check_stmt(&mut env, stmt)?;
         }
@@ -910,17 +928,21 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // assignment in the file, since real Python only evaluates a function
     // body when it's *called*, typically after the module has finished
     // running top to bottom.
-    for item in &resolved_hir.items {
+    for item in &hir.items {
         if let HirItem::Function { .. } = item {
             check_function_in(&env, item)?;
         }
     }
-    Ok(resolved_hir)
+    Ok(())
 }
 
+/// Type-checks a module without materializing a resolved HIR clone.
+///
+/// Use [`check_and_resolve`] when a downstream compiler stage needs concrete
+/// private-helper signatures in the returned HIR.
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
-    check_and_resolve(hir)?;
-    Ok(())
+    let signatures = infer_function_signatures(hir)?;
+    check_with_signatures(hir, &signatures)
 }
 
 #[cfg(test)]
@@ -931,6 +953,25 @@ mod tests {
     fn v0_1_slice_always_type_checks() {
         let hir = HirModule { items: vec![] };
         assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_cloned_environment_keeps_later_function_bindings_isolated() {
+        let mut original = Environment::new();
+        original.bind_function("original".to_string(), vec![Ty::Int], Ty::Int);
+
+        let mut cloned = original.clone();
+        cloned.bind_function("cloned".to_string(), vec![], Ty::None);
+
+        assert!(original.lookup_function("cloned").is_none());
+        assert_eq!(
+            cloned.lookup_function("cloned"),
+            Some(&(Vec::new(), Ty::None))
+        );
+        assert_eq!(
+            original.lookup_function("original"),
+            Some(&(vec![Ty::Int], Ty::Int))
+        );
     }
 
     #[test]

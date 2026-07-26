@@ -77,7 +77,33 @@ Each row above absorbs one gap an automated repo audit found in the original ver
 
 ARCHITECTURE.md requires benchmarks in CI on every PR with a >2% frontend-regression merge block. This was originally scheduled to start immediately once PR-4 made the frontend non-trivially executable, deliberately not deferred to a single check in PR-6 (D-042/D-044): every subsequent PR would record a `pycc check` timing run and fail if it regressed >2% against the latest baseline published by a successful `main` run, with pull-request code running only in `frontend-perf-measure` and the separate hash-verified `frontend-perf-gate` consuming its Criterion JSON as untrusted data, restoring the fresh main-only cache namespace but never publishing to it so repeated heads cannot ratchet or shadow the canonical comparison (D-046).
 
-**Superseded by D-047:** that early-start timeline is overridden. While landing PR-4, `scripts/check_roadmap_evidence.rb`'s CI-trust-anchor validation for this exact gate came under active, independent, concurrent development by another automated actor, and reconciling PR-4's own gate design against its evolving structural expectations failed to converge across multiple staged-digest attempts. Rather than keep blocking PR-4's actual frontend-depth deliverable on unrelated, moving CI-trust-anchor plumbing, the whole performance-gate feature (measurement job, hash-verified gate job, its structural lifecycle validator, D-046's cache-scoping fix) is deferred as a unit to PR-6, its originally-planned fallback per this same section's earlier design discussion. This is a real schedule slip, not a relocation of already-working code: PR-5 loses the early per-PR frontend-regression detection this section originally required, until PR-6 lands it. It still ships within v0.1, before release. This is deliberately lightweight and distinct from the full pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which stays out of scope until v0.2 as already planned.
+**D-047 was a temporary deferral, superseded by D-048 after PR-4 merged.**
+D-048's exact-successful-main artifact gate established the required isolated
+boundary and retired the earlier cache transport. D-051/D-053 now supersede
+only its cross-run timing transport: every run measures the exact predecessor
+and candidate sequentially on one hosted runner, seals the predecessor timing
+before candidate code runs, and applies the unchanged greater-than-2% median
+regression block through the predecessor-owned hash-verified comparator. The
+D-048 activation variable, bootstrap branches, digest, and fixture are absent;
+D-048 through D-050 remain historical rationale rather than live configuration.
+PR-5 may proceed with the performance invariant already active.
+This remains deliberately lightweight and distinct from the full
+pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which
+stays out of scope until v0.2.
+
+D-051 records, and D-053 corrects, the active transport after repeated docs-only
+CI runs proved that absolute estimates from two different hosted runners can
+exceed the 2% threshold despite narrow within-run confidence intervals. The
+exact predecessor and candidate are measured on one runner, and their paired
+estimates are passed to a dedicated hash-verified median comparator inside the
+same isolated review boundary. The active workflow binds the benchmark sources, root and
+workspace manifests, local build scripts, lockfile, Rust toolchain, and Cargo
+configuration; it seals the predecessor artifact before candidate code runs,
+binds both downloads to the distinct artifact IDs returned by their trusted
+upload steps, flattens each single-ID download into its own exact destination,
+and requires any contract drift to use its own reviewed transition. Its active
+bytes equal the reviewed D-051 fixture; only that digest is authorized. The
+threshold, required `ci-gate` fan-in, and benchmark itself remain unchanged.
 
 ## Autonomy policy ("no questions" mechanics)
 

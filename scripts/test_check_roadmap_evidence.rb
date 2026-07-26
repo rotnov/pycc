@@ -13,6 +13,8 @@ require_relative "check_roadmap_evidence"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
+  D51_PAIRED_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d51-paired-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -94,46 +96,120 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
-  def perf_gate_workflow(
-    promote_if: nil,
-    save_if: nil,
-    restore_action: PINNED_CACHE_RESTORE_ACTION,
-    missing_step: nil,
-    swap_comparison_and_promotion: false,
-    comparison_continue_on_error: nil,
-    job_continue_on_error: nil
-  )
-    steps = [
-      {
-        "uses" => PINNED_CHECKOUT_ACTION,
-        "with" => { "persist-credentials" => false }
-      },
-      *TRUSTED_PERF_LIFECYCLE_STEPS.map(&:dup)
-    ]
-    restore = steps.find do |step|
-      step["name"] == "Restore previous frontend-perf baseline"
-    end
-    restore["uses"] = restore_action
-    comparison = steps.find do |step|
-      step["name"] == "Compare against previous baseline (if one was restored)"
-    end
-    comparison["continue-on-error"] = comparison_continue_on_error unless comparison_continue_on_error.nil?
-    promote = steps.find do |step|
-      step["name"] == "Save this run's timing as the next run's baseline"
-    end
-    promote["if"] = promote_if if promote_if
-    save = steps.find { |step| step["name"] == "Cache this run's baseline" }
-    save["if"] = save_if if save_if
-    steps.reject! { |step| step["name"] == missing_step } if missing_step
-    if swap_comparison_and_promotion
-      comparison_index = steps.index(comparison)
-      promote_index = steps.index(promote)
-      steps[comparison_index], steps[promote_index] = steps[promote_index], steps[comparison_index]
-    end
+  def paired_perf_workflow
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_GATE_JOB)),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_CI_GATE_JOB))
+    }
+    yield jobs if block_given?
+    { "jobs" => jobs }.to_yaml
+  end
 
-    perf_job = { "steps" => steps }
-    perf_job["continue-on-error"] = job_continue_on_error unless job_continue_on_error.nil?
-    { "jobs" => { "frontend-perf-gate" => perf_job } }.to_yaml
+  def without_workflow_jobs(workflow, *job_names)
+    skipping = false
+    workflow.lines.reject do |line|
+      if (match = /^  (?<name>[a-z0-9-]+):\s*$/.match(line))
+        skipping = job_names.include?(match[:name])
+      end
+      skipping
+    end.join
+  end
+
+  def roadmap_with_tier1_claim(state)
+    claim =
+      "The five-target native CI matrix and one cross-host compilation " \
+      "path are live on `main`."
+    item =
+      case state
+      when :unchecked
+        "- [ ] #{claim}"
+      when :absent
+        nil
+      else
+        raise ArgumentError, "unsupported Tier-1 claim state: #{state}"
+      end
+    ["# pycc Roadmap", item].compact.join("\n") + "\n"
+  end
+
+  def retired_d48_workflow
+    coverage_workflow.sub(
+      "jobs:\n",
+      <<~YAML
+        jobs:
+          frontend-perf-measure:
+            runs-on: macos-14
+            steps:
+              - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+              - name: Run frontend benchmark
+                run: cargo bench --bench check_bench -- --save-baseline current
+          frontend-perf-gate:
+            needs: frontend-perf-measure
+            runs-on: macos-14
+            steps:
+              - name: Compare against canonical main baseline
+                run: ruby scripts/check_perf_regression.rb current.json previous.json
+      YAML
+    )
+  end
+
+  def run_paired_predecessor_resolution(
+    event_name:,
+    pr_base_sha: "exact-base-sha",
+    push_before_sha: "exact-before-sha"
+  )
+    Dir.mktmpdir do |directory|
+      output = Pathname(directory) / "github-output"
+      output.write("")
+      env = {
+        "GITHUB_OUTPUT" => output.to_s,
+        "GITHUB_EVENT_NAME" => event_name,
+        "PR_BASE_SHA" => pr_base_sha,
+        "PUSH_BEFORE_SHA" => push_before_sha
+      }
+      stdout, stderr, status = Open3.capture3(
+        env,
+        "bash",
+        "-s",
+        stdin_data: PAIRED_PERF_PREDECESSOR_SCRIPT,
+        chdir: directory
+      )
+      return [stdout, stderr, status, output.read]
+    end
+  end
+
+  def run_paired_timing_requirement
+    Dir.mktmpdir do |directory|
+      root =
+        Pathname(directory) /
+        "target/criterion/pycc_check_frontend_fixture"
+      FileUtils.mkdir_p(root)
+      yield root
+      return Open3.capture3(
+        "bash",
+        "-s",
+        stdin_data: PAIRED_PERF_REQUIRE_SCRIPT,
+        chdir: directory
+      )
+    end
+  end
+
+  def run_paired_artifact_identity_requirement(
+    previous_artifact_id:,
+    current_artifact_id:
+  )
+    Open3.capture3(
+      {
+        "PREVIOUS_ARTIFACT_ID" => previous_artifact_id,
+        "CURRENT_ARTIFACT_ID" => current_artifact_id
+      },
+      "bash",
+      "-s",
+      stdin_data: PAIRED_PERF_ARTIFACT_ID_REQUIRE_SCRIPT
+    )
   end
 
   def test_rejects_false_completed_item_without_evidence
@@ -406,7 +482,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     hidden_items.each do |hidden_item|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{hidden_item}",
-        workflow: coverage_workflow
+        workflow: D51_PAIRED_WORKFLOW_FIXTURE.read
       )
 
       assert status.success?, stderr
@@ -425,7 +501,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: coverage_workflow
+      workflow: D51_PAIRED_WORKFLOW_FIXTURE.read
     )
 
     assert status.success?, stderr
@@ -445,7 +521,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: coverage_workflow
+      workflow: D51_PAIRED_WORKFLOW_FIXTURE.read
     )
 
     assert status.success?, stderr
@@ -456,7 +532,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     ["    - [x] Root code example.\n", ">     - [x] Quoted code example.\n"].each do |example|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{example}",
-        workflow: coverage_workflow
+        workflow: D51_PAIRED_WORKFLOW_FIXTURE.read
       )
 
       assert status.success?, stderr
@@ -546,9 +622,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   def test_tier1_workflow_authorization_is_an_allowlist
-    assert_kind_of Array, TIER1_CI_WORKFLOW_SHA256S
-    assert_includes(
-      TIER1_CI_WORKFLOW_SHA256S,
+    assert_equal(
+      D51_PAIRED_PERF_CI_WORKFLOW_SHA256,
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
@@ -556,102 +631,554 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   def test_tier1_workflow_allowlist_retires_the_pre_alpha_eval_digest
-    refute_includes(
-      TIER1_CI_WORKFLOW_SHA256S,
+    refute_equal(
+      D51_PAIRED_PERF_CI_WORKFLOW_SHA256,
       "58e2d5026b59e7c921b57c882d24b6507c95dd8f99e390c0a68af217e5e038c8"
     )
   end
 
-  def test_tier1_workflow_allowlist_stages_the_frontend_perf_gate_digest
-    # Per docs/TESTING.md's staged-update procedure: the reviewed prospective
-    # digest for the pending frontend-perf-gate ci.yml revision (adding the
-    # frontend-perf-gate job and requiring it in ci-gate) is appended here
-    # while the current digest remains active, ahead of the pull request that
-    # actually activates that workflow and retires this repository's current
-    # digest.
-    assert_includes(
-      TIER1_CI_WORKFLOW_SHA256S,
-      PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256
+  def test_tier1_workflow_allowlist_retains_only_the_active_d51_digest
+    assert_equal(
+      "4b1d11afba108745a2bc375e3447d92ecde843376c3bea95ab32f76b3fc53249",
+      D51_PAIRED_PERF_CI_WORKFLOW_SHA256
     )
   end
 
-  def test_accepts_a_perf_baseline_published_only_after_success
+  def test_tier1_workflow_allowlist_retires_the_d48_steady_digest
+    refute_equal(
+      D51_PAIRED_PERF_CI_WORKFLOW_SHA256,
+      "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
+    )
+  end
+
+  def test_d51_paired_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D51_PAIRED_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D51_PAIRED_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_equal(
+      PAIRED_PERF_CHECKER_SHA256,
+      Digest::SHA256.file(
+        Pathname(__dir__).parent / "scripts/check_paired_perf_regression.rb"
+      ).hexdigest
+    )
+    assert_equal(
+      PAIRED_PERF_CHECKER_TEST_SHA256,
+      Digest::SHA256.file(
+        Pathname(__dir__).parent / "scripts/test_check_paired_perf_regression.rb"
+      ).hexdigest
+    )
     assert validate_perf_gate_baseline_lifecycle(
-      perf_gate_workflow,
+      D51_PAIRED_WORKFLOW_FIXTURE.read,
+      D51_PAIRED_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_tier1_workflow_allowlist_retires_the_superseded_single_job_digest
+    refute_equal(
+      D51_PAIRED_PERF_CI_WORKFLOW_SHA256,
+      "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
+    )
+  end
+
+  def test_accepts_the_reviewed_paired_perf_trust_boundary
+    assert validate_perf_gate_baseline_lifecycle(
+      paired_perf_workflow,
       "ci.yml"
     )
   end
 
-  def test_rejects_promoting_a_perf_baseline_after_a_failed_comparison
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(promote_if: "always()"),
-        "ci.yml"
-      )
-    end
-    assert_includes error.message, "fail-closed sequence"
+  def test_public_cli_rejects_an_active_workflow_without_both_perf_jobs
+    workflow = without_workflow_jobs(
+      D51_PAIRED_WORKFLOW_FIXTURE.read,
+      "frontend-perf-measure",
+      "frontend-perf-gate"
+    )
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "active paired gate requires frontend-perf-measure"
   end
 
-  def test_rejects_caching_a_perf_baseline_after_a_failed_comparison
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(save_if: "always()"),
-        "ci.yml"
-      )
-    end
-    assert_includes error.message, "fail-closed sequence"
+  def test_public_cli_rejects_retired_d48_with_unchecked_tier1_claim
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:unchecked),
+      workflow: retired_d48_workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "reviewed paired measurement job"
   end
 
-  def test_rejects_a_mutable_perf_cache_action
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(restore_action: "actions/cache/restore@v4"),
-        "ci.yml"
-      )
-    end
-    assert_includes error.message, "reviewed immutable pins"
+  def test_public_cli_rejects_retired_d48_without_a_tier1_claim
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: retired_d48_workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "reviewed paired measurement job"
   end
 
-  def test_rejects_a_missing_perf_comparison
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(
-          missing_step: "Compare against previous baseline (if one was restored)"
-        ),
-        "ci.yml"
-      )
-    end
-    assert_includes error.message, "ordered baseline lifecycle"
+  def test_public_cli_requires_active_digest_without_a_tier1_claim
+    workflow = D51_PAIRED_WORKFLOW_FIXTURE.read + "\n# unreviewed drift\n"
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "does not match the reviewed active D-051 CI workflow"
   end
 
-  def test_rejects_a_reordered_perf_comparison
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(swap_comparison_and_promotion: true),
-        "ci.yml"
-      )
-    end
-    assert_includes error.message, "ordered baseline lifecycle"
+  def test_paired_measurement_resolves_the_exact_pull_request_base
+    _stdout, stderr, status, output = run_paired_predecessor_resolution(
+      event_name: "pull_request"
+    )
+
+    assert status.success?, stderr
+    assert_equal "sha=exact-base-sha\n", output
   end
 
-  def test_rejects_a_perf_comparison_that_can_hide_failure
-    error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(comparison_continue_on_error: true),
-        "ci.yml"
-      )
-    end
-    assert_includes error.message, "fail-closed sequence"
+  def test_paired_measurement_resolves_the_exact_push_predecessor
+    _stdout, stderr, status, output = run_paired_predecessor_resolution(
+      event_name: "push"
+    )
+
+    assert status.success?, stderr
+    assert_equal "sha=exact-before-sha\n", output
   end
 
-  def test_rejects_a_perf_job_that_can_hide_failure
+  def test_paired_measurement_rejects_an_unsupported_event
+    _stdout, stderr, status, output = run_paired_predecessor_resolution(
+      event_name: "workflow_dispatch"
+    )
+
+    refute status.success?
+    assert_includes stderr, "cannot resolve a performance predecessor"
+    assert_empty output
+  end
+
+  def test_paired_measurement_rejects_missing_or_zero_predecessors
+    [
+      ["pull_request", "", "unused"],
+      ["push", "unused", "0000000000000000000000000000000000000000"]
+    ].each do |event_name, pr_base_sha, push_before_sha|
+      _stdout, stderr, status, output = run_paired_predecessor_resolution(
+        event_name: event_name,
+        pr_base_sha: pr_base_sha,
+        push_before_sha: push_before_sha
+      )
+
+      refute status.success?
+      assert_includes stderr, "cannot resolve the exact performance predecessor SHA"
+      assert_empty output
+    end
+  end
+
+  def test_rejects_paired_measurement_without_an_exact_candidate_checkout
+    workflow = paired_perf_workflow do |jobs|
+      checkout = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+        step["name"] == "Check out candidate"
+      end
+      checkout.fetch("with")["ref"] = "${{ github.event.pull_request.head.sha }}"
+    end
+
     error = assert_raises(RoadmapEvidenceError) do
-      validate_perf_gate_baseline_lifecycle(
-        perf_gate_workflow(job_continue_on_error: true),
-        "ci.yml"
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed paired measurement job"
+  end
+
+  def test_rejects_paired_measurement_without_any_benchmark_contract_path
+    %w[
+      benches
+      Cargo.toml
+      Cargo.lock
+      rust-toolchain.toml
+      rust-toolchain
+      .cargo
+    ].each do |path|
+      workflow = paired_perf_workflow do |jobs|
+        verify = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+          step["name"] == "Verify exact benchmark revisions"
+        end
+        verify["run"] = verify.fetch("run").sub("  #{path}\n", "")
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed paired measurement job"
+    end
+  end
+
+  def test_rejects_paired_measurement_without_local_manifest_and_build_script_binding
+    [
+      "':(glob)crates/**/Cargo.toml'",
+      "':(glob)**/build.rs'"
+    ].each do |pathspec|
+      workflow = paired_perf_workflow do |jobs|
+        verify = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+          step["name"] == "Verify exact benchmark revisions"
+        end
+        verify["run"] = verify.fetch("run").sub(pathspec, "':(glob)missing'")
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed paired measurement job"
+    end
+  end
+
+  def test_rejects_paired_measurement_without_both_revision_checks
+    [
+      'test "$(git -C previous rev-parse HEAD)" = "$EXPECTED_PREDECESSOR_SHA"',
+      'test "$(git -C current rev-parse HEAD)" = "$EXPECTED_CURRENT_SHA"'
+    ].each do |revision_check|
+      workflow = paired_perf_workflow do |jobs|
+        verify = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+          step["name"] == "Verify exact benchmark revisions"
+        end
+        verify["run"] = verify.fetch("run").sub(revision_check, "true")
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed paired measurement job"
+    end
+  end
+
+  def test_rejects_paired_measurement_that_runs_candidate_before_sealing_predecessor
+    workflow = paired_perf_workflow do |jobs|
+      steps = jobs.fetch("frontend-perf-measure").fetch("steps")
+      upload_index = steps.index do |step|
+        step["name"] == "Upload sealed predecessor frontend timing"
+      end
+      upload = steps.delete_at(upload_index)
+      candidate_index = steps.index do |step|
+        step["name"] == "Benchmark exact candidate"
+      end
+      steps.insert(candidate_index + 1, upload)
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed paired measurement job"
+  end
+
+  def test_rejects_paired_measurement_with_shared_target_state
+    workflow = paired_perf_workflow do |jobs|
+      benchmark = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+        step["name"] == "Benchmark exact candidate"
+      end
+      benchmark["run"] = benchmark.fetch("run").sub(
+        'current_target="$RUNNER_TEMP/pycc-paired-perf-current"',
+        'current_target="$RUNNER_TEMP/pycc-paired-perf-previous"'
       )
     end
-    assert_includes error.message, "must propagate failures"
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed paired measurement job"
+  end
+
+  def test_rejects_mutable_actions_in_the_paired_jobs
+    [
+      ["frontend-perf-measure", "Check out candidate", "actions/checkout@v6"],
+      ["frontend-perf-measure", "Upload sealed predecessor frontend timing", "actions/upload-artifact@v4"],
+      ["frontend-perf-measure", "Upload candidate frontend timing", "actions/upload-artifact@v4"],
+      ["frontend-perf-gate", "Download sealed predecessor frontend timing", "actions/download-artifact@v4"],
+      ["frontend-perf-gate", "Download candidate frontend timing", "actions/download-artifact@v4"]
+    ].each do |job_name, step_name, mutable_action|
+      workflow = paired_perf_workflow do |jobs|
+        step = jobs.fetch(job_name).fetch("steps").find do |candidate|
+          candidate["name"] == step_name
+        end
+        step["uses"] = mutable_action
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed"
+    end
+  end
+
+  def test_rejects_paired_uploads_that_include_a_whole_timing_directory
+    [
+      ["Upload sealed predecessor frontend timing", "previous_benchmark"],
+      ["Upload candidate frontend timing", "current_benchmark"]
+    ].each do |step_name, step_id|
+      workflow = paired_perf_workflow do |jobs|
+        upload = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+          step["name"] == step_name
+        end
+        upload.fetch("with")["path"] =
+          "${{ steps.#{step_id}.outputs.timing_dir }}"
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed paired measurement job"
+    end
+  end
+
+  def test_rejects_paired_gate_that_checks_out_a_head_controlled_comparator
+    workflow = paired_perf_workflow do |jobs|
+      checkout = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Check out only the reviewed performance checker"
+      end
+      checkout.fetch("with").delete("ref")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed paired comparison job"
+  end
+
+  def test_paired_gate_requires_distinct_numeric_artifact_identities
+    _stdout, stderr, status = run_paired_artifact_identity_requirement(
+      previous_artifact_id: "123",
+      current_artifact_id: "456"
+    )
+    assert status.success?, stderr
+
+    [
+      ["", "456"],
+      ["previous", "456"],
+      ["123", ""],
+      ["123", "current"],
+      ["123", "123"]
+    ].each do |previous_artifact_id, current_artifact_id|
+      _stdout, stderr, status = run_paired_artifact_identity_requirement(
+        previous_artifact_id: previous_artifact_id,
+        current_artifact_id: current_artifact_id
+      )
+      refute status.success?
+      assert_match(/invalid artifact identity|distinct artifact identities/, stderr)
+    end
+  end
+
+  def test_rejects_paired_gate_that_downloads_artifacts_by_name
+    [
+      [
+        "Download sealed predecessor frontend timing",
+        "frontend-perf-previous"
+      ],
+      ["Download candidate frontend timing", "frontend-perf-current"]
+    ].each do |step_name, artifact_name|
+      workflow = paired_perf_workflow do |jobs|
+        download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+          step["name"] == step_name
+        end
+        download.fetch("with").delete("artifact-ids")
+        download.fetch("with")["name"] = artifact_name
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed paired comparison job"
+    end
+  end
+
+  def test_rejects_paired_gate_without_valid_flat_id_bound_downloads
+    [
+      "Download sealed predecessor frontend timing",
+      "Download candidate frontend timing"
+    ].each do |step_name|
+      [[:missing, nil], [:disabled, false], [:invalid, "flatten"]].each do |mutation, value|
+        workflow = paired_perf_workflow do |jobs|
+          download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+            step["name"] == step_name
+          end
+          inputs = download.fetch("with")
+          if mutation == :missing
+            inputs.delete("merge-multiple")
+          else
+            inputs["merge-multiple"] = value
+          end
+        end
+
+        error = assert_raises(RoadmapEvidenceError) do
+          validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+        end
+        assert_includes error.message, "reviewed paired comparison job"
+      end
+    end
+  end
+
+  def test_paired_timing_requirement_accepts_exactly_two_regular_files
+    _stdout, stderr, status = run_paired_timing_requirement do |root|
+      %w[previous current].each do |revision|
+        FileUtils.mkdir_p(root / revision)
+        (root / revision / "estimates.json").write("{}")
+      end
+    end
+
+    assert status.success?, stderr
+  end
+
+  def test_paired_timing_requirement_rejects_either_missing_estimate
+    %w[previous current].each do |present_revision|
+      _stdout, stderr, status = run_paired_timing_requirement do |root|
+        FileUtils.mkdir_p(root / present_revision)
+        (root / present_revision / "estimates.json").write("{}")
+      end
+
+      refute status.success?
+      missing_revision =
+        present_revision == "previous" ? "current" : "previous"
+      assert_includes stderr, "missing #{missing_revision}/estimates.json"
+    end
+  end
+
+  def test_paired_timing_requirement_rejects_an_extra_file
+    _stdout, stderr, status = run_paired_timing_requirement do |root|
+      %w[previous current].each do |revision|
+        FileUtils.mkdir_p(root / revision)
+        (root / revision / "estimates.json").write("{}")
+      end
+      (root / "unexpected.txt").write("extra")
+    end
+
+    refute status.success?
+    assert_includes stderr, "exactly two regular files"
+  end
+
+  def test_paired_timing_requirement_rejects_a_symlink
+    _stdout, stderr, status = run_paired_timing_requirement do |root|
+      FileUtils.mkdir_p(root / "previous")
+      FileUtils.mkdir_p(root / "current")
+      (root / "previous" / "estimates.json").write("{}")
+      File.symlink(
+        root / "previous" / "estimates.json",
+        root / "current" / "estimates.json"
+      )
+    end
+
+    refute status.success?
+    assert_includes stderr, "missing current/estimates.json"
+  end
+
+  def test_rejects_paired_gate_that_can_skip_the_comparison
+    workflow = paired_perf_workflow do |jobs|
+      compare = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Compare exact predecessor and candidate"
+      end
+      compare["if"] = "${{ false }}"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed paired comparison job"
+  end
+
+  def test_rejects_a_retired_d48_like_comparison_gate
+    workflow = paired_perf_workflow do |jobs|
+      gate = jobs.fetch("frontend-perf-gate")
+      compare = gate.fetch("steps").find do |step|
+        step["name"] == "Compare exact predecessor and candidate"
+      end
+      compare["name"] = "Compare against canonical main baseline"
+      compare["run"] =
+        "ruby scripts/check_perf_regression.rb current.json previous.json"
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed paired comparison job"
+  end
+
+  def test_rejects_paired_gate_without_a_measurement_dependency
+    workflow = paired_perf_workflow do |jobs|
+      jobs.fetch("frontend-perf-gate").delete("needs")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed paired comparison job"
+  end
+
+  def test_rejects_a_paired_gate_without_a_measurement_job
+    workflow = paired_perf_workflow do |jobs|
+      jobs.delete("frontend-perf-measure")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "requires frontend-perf-measure"
+  end
+
+  def test_rejects_paired_perf_jobs_not_required_by_ci_gate
+    workflow = paired_perf_workflow do |jobs|
+      jobs.fetch("ci-gate").fetch("needs").delete("frontend-perf-measure")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
+  end
+
+  def test_rejects_a_noop_paired_perf_ci_gate
+    workflow = paired_perf_workflow do |jobs|
+      jobs.fetch("ci-gate")["steps"] = [{ "run" => "true" }]
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
+  end
+
+  def test_rejects_a_paired_perf_ci_gate_that_can_be_skipped
+    workflow = paired_perf_workflow do |jobs|
+      jobs.fetch("ci-gate").delete("if")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed fail-closed aggregate job"
+  end
+
+  def test_rejects_each_missing_paired_perf_ci_gate_result_check
+    PAIRED_PERF_CI_GATE_NEEDS.each do |job_name|
+      workflow = paired_perf_workflow do |jobs|
+        gate_step = jobs.fetch("ci-gate").fetch("steps").first
+        predicate = "needs.#{job_name}.result != 'success'"
+        gate_step["if"] = gate_step.fetch("if").sub(
+          /(?: \|\| )?#{Regexp.escape(predicate)}/,
+          ""
+        )
+      end
+
+      error = assert_raises(RoadmapEvidenceError, job_name) do
+        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes(
+        error.message,
+        "reviewed fail-closed aggregate job",
+        job_name
+      )
+    end
   end
 
   def test_rejects_changed_tier1_matrix_workflow
@@ -673,7 +1200,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed Tier-1 CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-051 CI workflow"
   end
 
   def test_requires_the_hard_coverage_gate_while_its_roadmap_claim_is_unchecked
@@ -783,24 +1310,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   def test_accepts_explicit_continue_on_error_false
-    roadmap = <<~MARKDOWN
-      # pycc Roadmap
-
-      ## Current delivery status
-
-      ### v0.1 acceptance checklist
-
-      - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
-    MARKDOWN
     workflow = coverage_workflow.sub(
       "#{COVERAGE_STEP_HEADER}\n        run:",
       "#{COVERAGE_STEP_HEADER}\n        continue-on-error: false\n        run:"
     )
 
-    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
-
-    assert status.success?, stderr
-    assert_includes stdout, "Roadmap evidence policy passed."
+    assert coverage_gate_present?(workflow, "ci.yml")
   end
 
   def test_rejects_a_coverage_job_with_dependencies

@@ -14,26 +14,26 @@ use std::path::Path;
 
 /// One MIR-level value during codegen. Extended (never replaced) by later
 /// tasks: `Str` (Task 7) is a pointer to an opaque `pycc_rt::PyStrObj` --
-/// `pycc_codegen` never inspects its layout (D-050's inline/heap
+/// `pycc_codegen` never inspects its layout (D-058's inline/heap
 /// representation is entirely `pycc_rt`'s own concern), only ever passing
 /// it through to a `pycc_rt_str_*` call. `Ty::None` never needs a variant
 /// here -- no v0.1 `MirExpr` can actually construct a `None` *value* (see
 /// Task 6's note).
 enum Scalar<'ctx> {
-    /// Tagged per D-052. Always LLVM `i64`.
+    /// Tagged per D-060. Always LLVM `i64`.
     Int(IntValue<'ctx>),
-    /// `0`/`1`, LLVM `i8` -- not `i1` (D-052's ABI note: this project has
+    /// `0`/`1`, LLVM `i8` -- not `i1` (D-060's ABI note: this project has
     /// already hit real cross-platform storage/parameter footguns for
     /// sub-byte types, see D-027/D-028/D-029; `i1` is used only
     /// transiently for a `br` condition or an `icmp`/`fcmp` result,
     /// immediately zero-extended to `i8` before it's stored anywhere).
     Bool(IntValue<'ctx>),
     /// A plain, untagged LLVM `f64` -- unlike `int`, `float` needs no
-    /// tagging scheme (D-052's tagged-fixnum representation is specific
+    /// tagging scheme (D-060's tagged-fixnum representation is specific
     /// to `int`'s own overflow/bigint-promotion story); every `float`
     /// value is exactly one `f64`, always (Task 6).
     Float(FloatValue<'ctx>),
-    /// A pointer to a heap-allocated `pycc_rt::PyStrObj` (D-050/D-051,
+    /// A pointer to a heap-allocated `pycc_rt::PyStrObj` (D-058/D-059,
     /// Task 7) -- always refcounted, never inspected directly by this
     /// crate (see this enum's own doc comment).
     Str(PointerValue<'ctx>),
@@ -166,7 +166,7 @@ fn declare_rt_functions<'ctx>(
 }
 
 /// Mirrors `pycc_rt::tag_smallint` exactly (compile-time constant folding
-/// of the same encoding, see D-052) -- an `int` literal whose magnitude
+/// of the same encoding, see D-060) -- an `int` literal whose magnitude
 /// doesn't fit the tagged 63-bit range needs a real bigint *literal*,
 /// which doesn't exist until Task 9; this is a narrow, honest,
 /// compile-time "not supported yet" (not a silent truncation).
@@ -193,7 +193,7 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
 
 /// `bool` is an `int` subtype (Python/`pycc_types`'
 /// `numeric_or_bool_compatible`) -- widens a `Bool` scalar to a tagged
-/// `int` (D-052) via two trivial, unambiguous LLVM instructions (a
+/// `int` (D-060) via two trivial, unambiguous LLVM instructions (a
 /// zero-extend then a shift-and-or matching `pycc_rt::tag_smallint`
 /// exactly); an existing `Int` scalar passes through unchanged. Panics
 /// for `Float`, which is never `int`-coercible -- `pycc_types`'
@@ -231,7 +231,7 @@ fn to_tagged_int<'ctx>(
 
 /// Promotes any numeric `Scalar` to `f64`: an existing `Float` passes
 /// through; `Int` goes through `pycc_rt_int_to_float` (never a raw LLVM
-/// cast -- the value is D-052-tagged, so only `pycc_rt` may interpret its
+/// cast -- the value is D-060-tagged, so only `pycc_rt` may interpret its
 /// bits); `Bool` uses a plain unsigned-int-to-float conversion
 /// (unambiguous for a 0/1 value, no tagging involved).
 fn to_float<'ctx>(
@@ -819,7 +819,7 @@ fn build_call_to<'ctx>(
 /// Turns any supported `Scalar` into an LLVM `i1` for use as a `br`
 /// condition -- the shared truthiness check behind `if`/`while` (Task 4),
 /// now including `str` (Task 7): `False` only for the empty string,
-/// delegated to `pycc_rt_str_truthy` (D-050's representation is opaque to
+/// delegated to `pycc_rt_str_truthy` (D-058's representation is opaque to
 /// this crate).
 fn truthy<'ctx>(
     context: &'ctx Context,
@@ -969,7 +969,7 @@ fn emit_assign<'ctx>(
 /// makes this purely syntactic: every str-producing expression other than a
 /// bare `Name` (`StringLiteral`, string concatenation, a `Call`'s return
 /// value) freshly constructs its result and already owns exactly one
-/// reference (D-051, Task 7).
+/// reference (D-059, Task 7).
 fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
     matches!(expr, MirExpr::Name { .. })
 }
@@ -978,7 +978,7 @@ fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
 /// variable read (see `str_value_is_a_duplicate_reference`) -- binding a
 /// second owning reference to the same `PyStrObj` without this would leave
 /// the original binding's own eventual decref underflowing the refcount
-/// (D-051, Task 7). A no-op for every non-`Str` scalar.
+/// (D-059, Task 7). A no-op for every non-`Str` scalar.
 fn incref_if_str_duplicate<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
@@ -1001,7 +1001,7 @@ fn incref_if_str_duplicate<'ctx>(
 /// `locals` (this `Assign` is a reassignment, not a first binding), loads
 /// its current value and decrefs it before the new value overwrites it --
 /// otherwise reassigning a `str` local in a loop would leak its previous
-/// value every iteration (D-051/D-052, Task 7).
+/// value every iteration (D-059/D-060, Task 7).
 fn decref_old_str_if_reassigning<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -1158,7 +1158,7 @@ pub fn compile_to_object(
     }
     // Module-level Python code has no `return` (T0024) -- every top-level
     // `str` local's single exit point is program completion right here, so
-    // this is where its accepted refcounting scope (D-052's Task 7
+    // this is where its accepted refcounting scope (D-060's Task 7
     // addendum) decrefs it exactly once, before `main` itself returns.
     for (ptr, ty) in top_level_locals.values() {
         if *ty == pycc_mir::Ty::Str {
@@ -2403,7 +2403,7 @@ mod tests {
     #[should_panic(expected = "too large for the v0.1 fast path")]
     fn an_oversized_int_literal_is_not_yet_supported() {
         // `tag_smallint_const`'s own round-trip check: `i64::MAX` doesn't
-        // fit the 63-bit tagged range (D-052).
+        // fit the 63-bit tagged range (D-060).
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                 callee: "print".to_string(),
@@ -4042,7 +4042,7 @@ mod tests {
         // entry-block-hoisting fix through a loop back-edge instead of an
         // `if`/`else` merge. This is the only test in this file whose first
         // binding of a `str` local is itself inside a loop body, so it also
-        // pins D-052's accepted leak class (b) (see D-053): codegen visits
+        // pins D-060's accepted leak class (b) (see D-061): codegen visits
         // this `Assign` exactly once, when `s` is not yet in `locals`, so
         // `decref_old_str_if_reassigning` never fires for it and no decref is
         // emitted into the loop body at all. At runtime every iteration but
@@ -4309,7 +4309,7 @@ mod tests {
 
     #[test]
     fn compiles_a_string_literal_longer_than_the_inline_cap() {
-        let long = "y".repeat(30); // exceeds D-050's 22-byte inline threshold
+        let long = "y".repeat(30); // exceeds D-058's 22-byte inline threshold
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "s".to_string(),

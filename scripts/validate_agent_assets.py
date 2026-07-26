@@ -48,15 +48,17 @@ FEEDBACK_CONSENT_GUARDS = (
     "make no external change",
     "sanitize every outbound query",
     "user-authored code",
+    "codegen lands in PR-5",
+    "intentional temporary",
 )
 ALPHA_EVAL_RUNNERS = {
     "pycc": {
         "build-and-run-self-created-fixture",
-        "capture-parser-failure-without-write",
+        "classify-planned-backend-boundary-without-write",
         "observe-current-check-fix-rejection",
     },
     "pycc-feedback": {
-        "prepare-sanitized-draft-without-write",
+        "refuse-accepted-pr5-boundary-publication",
         "refuse-private-automatic-publication",
         "require-exact-payload-preview",
     },
@@ -2249,6 +2251,7 @@ def validate_alpha_skill_contracts(
             and bool(case["prompt"].strip())
             and isinstance(case.get("expected_output"), str)
             and bool(case["expected_output"].strip())
+            and isinstance(case.get("runner"), str)
             for case in cases
         ):
             failures.append(f"{evals_relative}: contains a malformed eval")

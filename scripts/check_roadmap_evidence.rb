@@ -33,68 +33,343 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ]
 }.freeze
-PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256 =
-  "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
-TIER1_CI_WORKFLOW_SHA256S = [
-  "b77ab0c1c3bcc69e69d3cb8f08e081f6eae246e7d5d19c9356455db1ff4291d2",
-  PR4_REQUIRED_PERF_CI_WORKFLOW_SHA256
-].freeze
+D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
+  "4b1d11afba108745a2bc375e3447d92ecde843376c3bea95ab32f76b3fc53249"
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
-PINNED_CACHE_RESTORE_ACTION =
-  "actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830"
-PINNED_CACHE_SAVE_ACTION =
-  "actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830"
-PERF_BASELINE_PATH = "target/criterion/pycc_check_frontend_fixture/previous"
-PERF_CURRENT_PATH = "target/criterion/pycc_check_frontend_fixture/current"
-PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
-  if [ -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
-    ruby scripts/check_perf_regression.rb \
-      target/criterion/pycc_check_frontend_fixture/current/estimates.json \
-      target/criterion/pycc_check_frontend_fixture/previous/estimates.json
-  else
-    echo "no previous baseline cached yet -- this run establishes it"
+PINNED_ARTIFACT_UPLOAD_ACTION =
+  "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+PINNED_ARTIFACT_DOWNLOAD_ACTION =
+  "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+PAIRED_PERF_CHECKER_SHA256 =
+  "257d37974b1d862de4df9561a9f37b05a125af0404aea7a6f0861271e5fbc56b"
+PAIRED_PERF_CHECKER_TEST_SHA256 =
+  "5c45928a89f099d6e175a1d30bccbef59c58501d89cac252963e84b9e00952c5"
+PAIRED_PERF_CHECKER_VERIFY_SCRIPT = <<~SHELL.strip
+  printf '%s  %s\\n' \\
+    #{PAIRED_PERF_CHECKER_SHA256} \\
+    scripts/check_paired_perf_regression.rb \\
+    #{PAIRED_PERF_CHECKER_TEST_SHA256} \\
+    scripts/test_check_paired_perf_regression.rb |
+    shasum -a 256 --check
+SHELL
+PAIRED_PERF_PREDECESSOR_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  case "$GITHUB_EVENT_NAME" in
+    pull_request)
+      predecessor_sha="$PR_BASE_SHA"
+      ;;
+    push)
+      predecessor_sha="$PUSH_BEFORE_SHA"
+      ;;
+    *)
+      echo "cannot resolve a performance predecessor for event $GITHUB_EVENT_NAME" >&2
+      exit 1
+      ;;
+  esac
+  if [ -z "$predecessor_sha" ] ||
+     [ "$predecessor_sha" = "0000000000000000000000000000000000000000" ]; then
+    echo "cannot resolve the exact performance predecessor SHA" >&2
+    exit 1
+  fi
+  printf 'sha=%s\n' "$predecessor_sha" >> "$GITHUB_OUTPUT"
+SHELL
+PAIRED_PERF_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  test "$(git -C previous rev-parse HEAD)" = "$EXPECTED_PREDECESSOR_SHA"
+  test "$(git -C current rev-parse HEAD)" = "$EXPECTED_CURRENT_SHA"
+  contract_paths=(
+    benches
+    Cargo.toml
+    Cargo.lock
+    rust-toolchain.toml
+    rust-toolchain
+    .cargo
+  )
+  for contract_path in "${contract_paths[@]}"; do
+    previous_path="previous/$contract_path"
+    current_path="current/$contract_path"
+    if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+       [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+      continue
+    fi
+    git diff --no-index --exit-code -- "$previous_path" "$current_path"
+  done
+  local_contract_digest() {
+    checkout="$1"
+    (
+      cd "$checkout"
+      git ls-files -z -- \
+        ':(glob)crates/**/Cargo.toml' \
+        ':(glob)**/build.rs' |
+        while IFS= read -r -d '' relative_path; do
+          file_digest="$(/usr/bin/shasum -a 256 "$relative_path" |
+            /usr/bin/awk '{print $1}')"
+          printf '%s\0%s\0' "$relative_path" "$file_digest"
+        done
+    ) | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+  }
+  test "$(local_contract_digest previous)" = \
+    "$(local_contract_digest current)"
+SHELL
+PAIRED_PERF_PREVIOUS_BENCHMARK_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  previous_target="$RUNNER_TEMP/pycc-paired-perf-previous"
+  (
+    cd previous
+    CARGO_TARGET_DIR="$previous_target" \
+      cargo bench --locked --bench check_bench -- --save-baseline paired
+  )
+  previous_timing="$previous_target/criterion/pycc_check_frontend_fixture/paired/estimates.json"
+  timing_dir="$(mktemp -d "$RUNNER_TEMP/pycc-previous-timing.XXXXXX")"
+  cp "$previous_timing" "$timing_dir/estimates.json"
+  printf 'timing_path=%s\n' "$timing_dir/estimates.json" >> "$GITHUB_OUTPUT"
+SHELL
+PAIRED_PERF_CURRENT_BENCHMARK_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  current_target="$RUNNER_TEMP/pycc-paired-perf-current"
+  (
+    cd current
+    CARGO_TARGET_DIR="$current_target" \
+      cargo bench --locked --bench check_bench -- --save-baseline paired
+  )
+  current_timing="$current_target/criterion/pycc_check_frontend_fixture/paired/estimates.json"
+  timing_dir="$(mktemp -d "$RUNNER_TEMP/pycc-current-timing.XXXXXX")"
+  cp "$current_timing" "$timing_dir/estimates.json"
+  printf 'timing_path=%s\n' "$timing_dir/estimates.json" >> "$GITHUB_OUTPUT"
+SHELL
+PAIRED_PERF_ARTIFACT_ID_REQUIRE_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  for artifact_id in "$PREVIOUS_ARTIFACT_ID" "$CURRENT_ARTIFACT_ID"; do
+    case "$artifact_id" in
+      ""|*[!0-9]*)
+        echo "paired frontend timing has an invalid artifact identity" >&2
+        exit 1
+        ;;
+    esac
+  done
+  if [ "$PREVIOUS_ARTIFACT_ID" = "$CURRENT_ARTIFACT_ID" ]; then
+    echo "paired frontend timings must have distinct artifact identities" >&2
+    exit 1
   fi
 SHELL
-PERF_PROMOTE_SCRIPT = <<~'SHELL'.strip
-  rm -rf target/criterion/pycc_check_frontend_fixture/previous
-  cp -r target/criterion/pycc_check_frontend_fixture/current target/criterion/pycc_check_frontend_fixture/previous
+PAIRED_PERF_REQUIRE_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  timing_root="target/criterion/pycc_check_frontend_fixture"
+  for revision in previous current; do
+    timing="$timing_root/$revision/estimates.json"
+    if [ ! -f "$timing" ] || [ -L "$timing" ]; then
+      echo "paired frontend timing is missing $revision/estimates.json" >&2
+      exit 1
+    fi
+  done
+  file_count="$(find "$timing_root" -type f | wc -l | tr -d '[:space:]')"
+  if [ "$file_count" -ne 2 ] || find "$timing_root" -type l | grep -q .; then
+    echo "paired frontend timing must contain exactly two regular files" >&2
+    exit 1
+  fi
 SHELL
-TRUSTED_PERF_LIFECYCLE_STEPS = [
+PAIRED_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
+  ruby scripts/check_paired_perf_regression.rb \
+    target/criterion/pycc_check_frontend_fixture/current/estimates.json \
+    target/criterion/pycc_check_frontend_fixture/previous/estimates.json
+SHELL
+PAIRED_PERF_MEASURE_STEPS = [
   {
-    "name" => "Restore previous frontend-perf baseline",
-    "uses" => PINNED_CACHE_RESTORE_ACTION,
+    "name" => "Resolve exact predecessor",
+    "id" => "predecessor",
+    "env" => {
+      "PR_BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
+      "PUSH_BEFORE_SHA" => "${{ github.event.before }}"
+    },
+    "run" => PAIRED_PERF_PREDECESSOR_SCRIPT
+  },
+  {
+    "name" => "Check out exact predecessor",
+    "uses" => PINNED_CHECKOUT_ACTION,
     "with" => {
-      "path" => PERF_BASELINE_PATH,
-      "key" => "frontend-perf-baseline-${{ github.run_id }}",
-      "restore-keys" => "frontend-perf-baseline-"
+      "persist-credentials" => "false",
+      "ref" => "${{ steps.predecessor.outputs.sha }}",
+      "path" => "previous"
     }
   },
   {
-    "name" => "Run frontend benchmark",
-    "run" => "cargo bench --bench check_bench -- --save-baseline current"
-  },
-  {
-    "name" => "Test perf regression checker",
-    "run" => "ruby scripts/test_check_perf_regression.rb"
-  },
-  {
-    "name" => "Compare against previous baseline (if one was restored)",
-    "run" => PERF_COMPARE_SCRIPT
-  },
-  {
-    "name" => "Save this run's timing as the next run's baseline",
-    "run" => PERF_PROMOTE_SCRIPT
-  },
-  {
-    "name" => "Cache this run's baseline",
-    "uses" => PINNED_CACHE_SAVE_ACTION,
+    "name" => "Check out candidate",
+    "uses" => PINNED_CHECKOUT_ACTION,
     "with" => {
-      "path" => PERF_BASELINE_PATH,
-      "key" => "frontend-perf-baseline-${{ github.run_id }}"
+      "persist-credentials" => "false",
+      "ref" => "${{ github.sha }}",
+      "path" => "current"
+    }
+  },
+  {
+    "name" => "Verify exact benchmark revisions",
+    "env" => {
+      "EXPECTED_PREDECESSOR_SHA" => "${{ steps.predecessor.outputs.sha }}",
+      "EXPECTED_CURRENT_SHA" => "${{ github.sha }}"
+    },
+    "run" => PAIRED_PERF_VERIFY_REVISIONS_SCRIPT
+  },
+  {
+    "name" => "Show pinned toolchain",
+    "run" => "rustup show"
+  },
+  {
+    "name" => "Install LLVM 22 (D-015)",
+    "run" => "brew install llvm@22"
+  },
+  {
+    "name" => "Export LLVM_SYS_221_PREFIX",
+    "run" => 'echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"'
+  },
+  {
+    "name" => "Benchmark exact predecessor",
+    "id" => "previous_benchmark",
+    "run" => PAIRED_PERF_PREVIOUS_BENCHMARK_SCRIPT
+  },
+  {
+    "name" => "Upload sealed predecessor frontend timing",
+    "id" => "previous_upload",
+    "uses" => PINNED_ARTIFACT_UPLOAD_ACTION,
+    "with" => {
+      "name" => "frontend-perf-previous",
+      "path" => "${{ steps.previous_benchmark.outputs.timing_path }}",
+      "if-no-files-found" => "error",
+      "retention-days" => "90"
+    }
+  },
+  {
+    "name" => "Benchmark exact candidate",
+    "id" => "current_benchmark",
+    "run" => PAIRED_PERF_CURRENT_BENCHMARK_SCRIPT
+  },
+  {
+    "name" => "Upload candidate frontend timing",
+    "id" => "current_upload",
+    "uses" => PINNED_ARTIFACT_UPLOAD_ACTION,
+    "with" => {
+      "name" => "frontend-perf-current",
+      "path" => "${{ steps.current_benchmark.outputs.timing_path }}",
+      "if-no-files-found" => "error",
+      "retention-days" => "90"
     }
   }
 ].freeze
+PAIRED_PERF_GATE_STEPS = [
+  {
+    "name" => "Check out only the reviewed performance checker",
+    "uses" => PINNED_CHECKOUT_ACTION,
+    "with" => {
+      "persist-credentials" => "false",
+      "ref" => "${{ needs.frontend-perf-measure.outputs.predecessor_sha }}",
+      "sparse-checkout" =>
+        "scripts/check_paired_perf_regression.rb\n" \
+        "scripts/test_check_paired_perf_regression.rb",
+      "sparse-checkout-cone-mode" => "false"
+    }
+  },
+  {
+    "name" => "Verify reviewed performance checker",
+    "run" => PAIRED_PERF_CHECKER_VERIFY_SCRIPT
+  },
+  {
+    "name" => "Test reviewed performance checker",
+    "run" => "ruby scripts/test_check_paired_perf_regression.rb"
+  },
+  {
+    "name" => "Require sealed artifact identities",
+    "env" => {
+      "PREVIOUS_ARTIFACT_ID" =>
+        "${{ needs.frontend-perf-measure.outputs.predecessor_artifact_id }}",
+      "CURRENT_ARTIFACT_ID" =>
+        "${{ needs.frontend-perf-measure.outputs.current_artifact_id }}"
+    },
+    "run" => PAIRED_PERF_ARTIFACT_ID_REQUIRE_SCRIPT
+  },
+  {
+    "name" => "Download sealed predecessor frontend timing",
+    "uses" => PINNED_ARTIFACT_DOWNLOAD_ACTION,
+    "with" => {
+      "artifact-ids" =>
+        "${{ needs.frontend-perf-measure.outputs.predecessor_artifact_id }}",
+      "path" => "target/criterion/pycc_check_frontend_fixture/previous",
+      "merge-multiple" => "true"
+    }
+  },
+  {
+    "name" => "Download candidate frontend timing",
+    "uses" => PINNED_ARTIFACT_DOWNLOAD_ACTION,
+    "with" => {
+      "artifact-ids" =>
+        "${{ needs.frontend-perf-measure.outputs.current_artifact_id }}",
+      "path" => "target/criterion/pycc_check_frontend_fixture/current",
+      "merge-multiple" => "true"
+    }
+  },
+  {
+    "name" => "Require exact predecessor and candidate timing",
+    "run" => PAIRED_PERF_REQUIRE_SCRIPT
+  },
+  {
+    "name" => "Compare exact predecessor and candidate",
+    "run" => PAIRED_PERF_COMPARE_SCRIPT
+  }
+].freeze
+PAIRED_PERF_MEASURE_JOB = {
+  "runs-on" => "macos-14",
+  "permissions" => { "contents" => "read" },
+  "outputs" => {
+    "predecessor_sha" => "${{ steps.predecessor.outputs.sha }}",
+    "predecessor_artifact_id" =>
+      "${{ steps.previous_upload.outputs.artifact-id }}",
+    "current_artifact_id" =>
+      "${{ steps.current_upload.outputs.artifact-id }}"
+  },
+  "steps" => PAIRED_PERF_MEASURE_STEPS
+}.freeze
+PAIRED_PERF_GATE_JOB = {
+  "needs" => "frontend-perf-measure",
+  "runs-on" => "macos-14",
+  "permissions" => {
+    "actions" => "read",
+    "contents" => "read"
+  },
+  "steps" => PAIRED_PERF_GATE_STEPS
+}.freeze
+PAIRED_PERF_CI_GATE_NEEDS = [
+  "build-test-coverage",
+  "native-build-test",
+  "cross-compile-build",
+  "cross-compile-verify",
+  "frontend-perf-measure",
+  "frontend-perf-gate"
+].freeze
+PAIRED_PERF_CI_GATE_FAILURE_CONDITION = [
+  "needs.build-test-coverage.result != 'success'",
+  "needs.native-build-test.result != 'success'",
+  "needs.cross-compile-build.result != 'success'",
+  "needs.cross-compile-verify.result != 'success'",
+  "needs.frontend-perf-measure.result != 'success'",
+  "needs.frontend-perf-gate.result != 'success'"
+].join(" || ").freeze
+PAIRED_PERF_CI_GATE_RUN = <<~'SHELL'.strip
+  echo "one or more required jobs did not succeed:"
+  echo '${{ toJSON(needs) }}'
+  exit 1
+SHELL
+PAIRED_PERF_CI_GATE_JOB = {
+  "needs" => PAIRED_PERF_CI_GATE_NEEDS,
+  "if" => "always()",
+  "runs-on" => "ubuntu-latest",
+  "permissions" => {},
+  "steps" => [
+    {
+      "name" => "Fail unless every required job succeeded",
+      "if" => PAIRED_PERF_CI_GATE_FAILURE_CONDITION,
+      "run" => PAIRED_PERF_CI_GATE_RUN
+    }
+  ]
+}.freeze
 COVERAGE_JOB = "build-test-coverage"
 COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
@@ -320,61 +595,39 @@ def validate_perf_gate_baseline_lifecycle(workflow_text, source)
   stream = Psych.parse_stream(workflow_text, filename: source)
   root = yaml_mapping(stream.children.first.root, source)
   jobs = yaml_mapping(root["jobs"], "#{source} jobs")
+  measure_job_node = jobs["frontend-perf-measure"]
   perf_job_node = jobs["frontend-perf-gate"]
-  return true unless perf_job_node
 
-  perf_job = yaml_mapping(perf_job_node, "#{source} frontend-perf-gate job")
-  if perf_job.key?("if")
+  unless measure_job_node
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate must run unconditionally"
+          "#{source}: active paired gate requires frontend-perf-measure"
   end
-  job_continue_on_error = perf_job["continue-on-error"]
-  if job_continue_on_error &&
-     yaml_scalar(
-       job_continue_on_error,
-       "#{source} frontend-perf-gate continue-on-error"
-     ).strip != "false"
+  measure_job =
+    yaml_value(measure_job_node, "#{source} frontend-perf-measure job")
+  unless measure_job == PAIRED_PERF_MEASURE_JOB
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate must propagate failures"
+          "#{source}: frontend-perf-measure must match the reviewed paired measurement job"
   end
 
-  steps_node = perf_job["steps"]
-  unless steps_node.is_a?(Psych::Nodes::Sequence)
+  unless perf_job_node
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate steps must be a sequence"
+          "#{source}: active paired gate requires frontend-perf-gate"
   end
-  steps = steps_node.children.map do |step_node|
-    yaml_value(step_node, "#{source} frontend-perf-gate step")
-  end
-  checkout = steps.find { |step| step["uses"]&.start_with?("actions/checkout@") }
-  unless checkout && checkout["uses"] == PINNED_CHECKOUT_ACTION
+  perf_job = yaml_value(perf_job_node, "#{source} frontend-perf-gate job")
+  unless perf_job == PAIRED_PERF_GATE_JOB
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate checkout must use the reviewed immutable pin"
-  end
-  unless checkout.dig("with", "persist-credentials") == "false"
-    raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate checkout must not persist credentials"
+          "#{source}: frontend-perf-gate must match the reviewed paired comparison job"
   end
 
-  lifecycle_names = TRUSTED_PERF_LIFECYCLE_STEPS.map { |step| step.fetch("name") }
-  lifecycle_indices = lifecycle_names.map do |name|
-    steps.index { |step| step["name"] == name }
-  end
-  if lifecycle_indices.any?(&:nil?) ||
-     lifecycle_indices !=
-       (lifecycle_indices.first...(lifecycle_indices.first + lifecycle_names.length)).to_a
+  ci_gate_node = jobs["ci-gate"]
+  unless ci_gate_node
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate must keep the reviewed ordered baseline lifecycle"
+          "#{source}: paired performance jobs must be required by ci-gate"
   end
-  lifecycle = lifecycle_indices.map { |index| steps.fetch(index) }
-  unless lifecycle.fetch(0)["uses"] == PINNED_CACHE_RESTORE_ACTION &&
-         lifecycle.fetch(5)["uses"] == PINNED_CACHE_SAVE_ACTION
+  ci_gate = yaml_value(ci_gate_node, "#{source} ci-gate job")
+  unless ci_gate == PAIRED_PERF_CI_GATE_JOB
     raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate cache steps must use reviewed immutable pins"
-  end
-  unless lifecycle == TRUSTED_PERF_LIFECYCLE_STEPS
-    raise RoadmapEvidenceError,
-          "#{source}: frontend-perf-gate lifecycle must match the reviewed fail-closed sequence"
+          "#{source}: ci-gate must match the reviewed fail-closed aggregate job"
   end
 
   true
@@ -594,7 +847,7 @@ def validate_roadmap(text)
   evidence_ids
 end
 
-def validate_evidence(root, evidence_ids)
+def validate_evidence(root, _evidence_ids)
   workflow = root / ".github/workflows/ci.yml"
   workflow_text = workflow.read
   unless coverage_gate_present?(workflow_text, workflow.to_s)
@@ -603,12 +856,10 @@ def validate_evidence(root, evidence_ids)
   end
   validate_perf_gate_baseline_lifecycle(workflow_text, workflow.to_s)
 
-  if evidence_ids.include?("ci-tier1-cross-compile")
-    digest = Digest::SHA256.hexdigest(workflow_text)
-    unless TIER1_CI_WORKFLOW_SHA256S.include?(digest)
-      raise RoadmapEvidenceError,
-            "#{workflow}: does not match the reviewed Tier-1 CI workflow"
-    end
+  digest = Digest::SHA256.hexdigest(workflow_text)
+  unless digest == D51_PAIRED_PERF_CI_WORKFLOW_SHA256
+    raise RoadmapEvidenceError,
+          "#{workflow}: does not match the reviewed active D-051 CI workflow"
   end
 end
 

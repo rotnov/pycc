@@ -119,8 +119,8 @@
           roadmap work.
         </p>
         <div class="page-meta" aria-label="Architecture summary">
-          <span><strong>Frontend</strong> vendored parser</span>
-          <span><strong>Backend</strong> LLVM 22</span>
+          <span><strong>Frontend</strong> v0.1 checked</span>
+          <span><strong>Backend</strong> LLVM 22 · slice-only</span>
           <span><strong>Output</strong> native executable</span>
         </div>
       </header>
@@ -155,29 +155,36 @@
                 <div>
                   <strong>Lower to HIR</strong>
                   <p>
-                    <code>pycc_hir</code> accepts the current small language
-                    slice and makes unsupported boundaries explicit.
+                    <code>pycc_hir</code> represents the full v0.1 frontend
+                    grammar: expressions, assignments, functions, control
+                    flow, primitive values, <code>range</code>, and basic
+                    f-strings.
                   </p>
                 </div>
               </li>
               <li>
                 <span>03</span>
                 <div>
-                  <strong>Pass through the type stage</strong>
+                  <strong>Resolve and type-check</strong>
                   <p>
-                    <code>pycc_types</code> preserves the pipeline boundary,
-                    but its current checker is a no-op. Strict enforcement is
-                    the next frontend milestone.
+                    <code>pycc_types::check_and_resolve</code> enforces public
+                    annotations, rejects <code>Any</code>, infers private
+                    helpers, validates expressions and control flow, and
+                    materializes concrete signatures before MIR.
                   </p>
                 </div>
               </li>
               <li>
                 <span>04</span>
                 <div>
-                  <strong>Lower to MIR</strong>
+                  <strong>Cross the backend boundary</strong>
                   <p>
-                    <code>pycc_mir</code> represents the operations needed by
-                    the first executable slice.
+                    MIR and code generation remain slice-only:
+                    <code>pycc_mir</code> currently lowers module-level
+                    integer-literal <code>print</code>, zero-argument function
+                    definitions, and explicit zero-argument calls. Other
+                    frontend constructs stop at an explicit v0.1 codegen
+                    boundary.
                   </p>
                 </div>
               </li>
@@ -202,12 +209,12 @@
               <div><code>pycc</code><span>CLI and orchestration</span></div>
               <div><code>pycc_ast</code><span>Current source model</span></div>
               <div><code>pycc_parser</code><span>Parser adapter</span></div>
-              <div><code>pycc_hir</code><span>High-level IR</span></div>
-              <div><code>pycc_types</code><span>Type-stage boundary</span></div>
-              <div><code>pycc_mir</code><span>Mid-level IR</span></div>
-              <div><code>pycc_codegen</code><span>LLVM backend</span></div>
+              <div><code>pycc_hir</code><span>v0.1 high-level IR</span></div>
+              <div><code>pycc_types</code><span>Strict checking and inference</span></div>
+              <div><code>pycc_mir</code><span>Slice-level mid-level IR</span></div>
+              <div><code>pycc_codegen</code><span>Slice-level LLVM backend</span></div>
               <div><code>pycc_rt</code><span>Minimal runtime</span></div>
-              <div><code>pycc_diag</code><span>Diagnostic data</span></div>
+              <div><code>pycc_diag</code><span>Human and JSON diagnostics</span></div>
             </div>
             <p>
               The architecture specification also reserves
@@ -222,11 +229,12 @@
             <p class="section-kicker">Design contract</p>
             <h2>The target pipeline is richer than the current slice.</h2>
             <p>
-              The planned architecture resolves names and scopes in HIR,
-              produces a fully typed IR, performs ownership and escape
-              analysis, lowers to typed SSA MIR, applies optimizations such as
-              reference-count elision and monomorphization, and links runtime
-              and standard-library components into the final binary.
+              The implemented frontend already resolves and checks the v0.1
+              primitive subset. The target architecture extends that checked
+              surface into fully typed SSA MIR, ownership and escape analysis,
+              optimizations such as reference-count elision and
+              monomorphization, and complete runtime and standard-library
+              components linked into the final binary.
             </p>
             <div class="callout">
               <strong>Standard Python, not a compiler dialect.</strong>
