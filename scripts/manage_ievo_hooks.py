@@ -277,20 +277,24 @@ def references_managed_hook_path(value: str) -> bool:
     # Windows separators, shell quote concatenation, repeated separators, or
     # lexical aliases such as `.ievo/tmp/../hooks`. Normalize those static
     # forms without resolving the path through the filesystem.
-    text = value.replace("\\", "/").replace('"', "").replace("'", "")
-    for match in re.finditer(r"\.ievo", text, flags=re.IGNORECASE | re.ASCII):
-        start = match.start()
-        end = start
-        while end < len(text):
-            character = text[end]
-            if character.isspace() or character in ";|&()<>":
-                break
-            end += 1
-        candidate = posixpath.normpath(text[start:end]).casefold()
-        if candidate == HOOK_DIRECTORY.as_posix() or candidate.startswith(
-            f"{HOOK_DIRECTORY.as_posix()}/"
-        ):
-            return True
+    unquoted = value.replace('"', "").replace("'", "")
+    windows_form = unquoted.replace("\\", "/")
+    posix_form = re.sub(r"\\\r?\n", "", unquoted)
+    posix_form = re.sub(r"\\(.)", r"\1", posix_form, flags=re.DOTALL)
+    for text in dict.fromkeys((windows_form, posix_form)):
+        for match in re.finditer(r"\.ievo", text, flags=re.IGNORECASE | re.ASCII):
+            start = match.start()
+            end = start
+            while end < len(text):
+                character = text[end]
+                if character.isspace() or character in ";|&()<>":
+                    break
+                end += 1
+            candidate = posixpath.normpath(text[start:end]).casefold()
+            if candidate == HOOK_DIRECTORY.as_posix() or candidate.startswith(
+                f"{HOOK_DIRECTORY.as_posix()}/"
+            ):
+                return True
     return False
 
 

@@ -230,9 +230,9 @@ whole-directory `.ievo/hooks/` ignore rule. Missing or symlinked targets fail cl
 before configuration is relocated. A reference to a managed target under an unknown
 event or command form also fails closed before mutation rather than allowing disable
 to delete a still-referenced script. Static path aliases are normalized across path
-separators, lexical `.`/`..` components, repeated separators, shell quote
-concatenation, case-insensitive filesystems, and unrelated Unicode text before
-the path before that check.
+separators, POSIX shell escapes, lexical `.`/`..` components, repeated
+separators, shell quote concatenation, case-insensitive filesystems, and
+unrelated Unicode text before the path before that check.
 
 Use the repository's clone-local inverse rather than generic disable alone:
 

@@ -646,6 +646,7 @@ class IevoHookLifecycleTests(unittest.TestCase):
             "sh .IEVO//hooks/scripts/future-capture.sh",
             'sh ".ievo"/hooks/scripts/future-capture.sh',
             "echo ß; sh .ievo/hooks/scripts/future-capture.sh",
+            r"sh .ievo/hoo\ks/scripts/future-capture.sh",
         )
         for alias in aliases:
             with self.subTest(alias=alias):
@@ -768,6 +769,40 @@ class IevoHookLifecycleTests(unittest.TestCase):
                             {
                                 "type": "command",
                                 "command": f"echo ß; sh {target.as_posix()}",
+                            }
+                        )
+                    ]
+                }
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            self.create_generated_files(root)
+            shared_before = (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "unsupported iEvo hook reference",
+            ):
+                manager.disable(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                shared_before,
+            )
+            self.assertTrue((root / target).is_file())
+
+    def test_disable_rejects_a_posix_escaped_managed_path_before_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["failure-capture"]
+            shared = {
+                "hooks": {
+                    "FutureEvent": [
+                        self.group(
+                            {
+                                "type": "command",
+                                "command": r"sh .ievo/hoo\ks/scripts/failure-capture.sh",
                             }
                         )
                     ]

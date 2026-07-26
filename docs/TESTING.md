@@ -271,7 +271,8 @@ It preserves unrelated empty hook groups/events and makes refreshed shared metad
 win over stale duplicate local metadata. Separate negative cases prove a missing
 target, malformed local JSON, or an unsupported reference to a managed target fails
 before mutation, including lexical and case-insensitive aliases of the managed hook
-directory and a managed path preceded by length-changing Unicode case-fold text.
+directory, POSIX shell-escaped path components, and a managed path preceded by
+length-changing Unicode case-fold text.
 `scripts/validate_agent_policies.py` additionally requires both
 `.claude/settings.local.json` and `.codex/hooks.json` to remain ignored in the real
 tracked checkout.

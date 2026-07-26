@@ -11,15 +11,17 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-26 — PR #140 is integrated with current `main` for final review
+## 2026-07-26 — PR #140 addresses final exact-head review findings
 
-**Snapshot evidence:** the containing merge commit combines the previously
-published draft [PR #140](https://github.com/rotnov/pycc/pull/140) head
-`4cd93f1bf10b3f1d4d3020261a834d31527b7114` with exact refreshed default branch
-`main@18ef34105a4f57c63e77c76dffa1948b29e32161`. Immediately before this
-checkpoint, the remote PR was inspected `OPEN`, draft, and `DIRTY` at that old
-head; this merge resolves the divergence locally without rewriting either
-parent. The change is not yet merged into `main`, and issue
+**Snapshot evidence:** immediately before the containing repair commit, draft
+[PR #140](https://github.com/rotnov/pycc/pull/140) was inspected `OPEN`, draft,
+and `BLOCKED` at remote head
+`d359685939098693f41cc1f66de5a3179c720f6c`. That head merges the previous PR
+head `4cd93f1bf10b3f1d4d3020261a834d31527b7114` with exact refreshed default
+branch `main@18ef34105a4f57c63e77c76dffa1948b29e32161`. Every exact-head CI job,
+including hard coverage and `ci-gate`, passed; two actionable GitHub Codex
+threads remained unresolved and are fixed by the containing repair. The change
+is not yet merged into `main`, and issue
 [#34](https://github.com/rotnov/pycc/issues/34) remains open until it lands. A
 resuming agent must inspect the authoritative remote head and state rather than
 assume this snapshot has already been published.
@@ -43,7 +45,7 @@ gaps; the final independent rerun is clean across all 11 checklist areas.
 Upstream `ievo-ai/skills#446` and merged PR #455 remain linked; their tracked
 dispatcher design does not supersede D-023/D-025's local-execution policy.
 
-**Local evidence:** all 237 discovered Python tests, the agent-policy and
+**Local evidence:** all 238 discovered Python tests, the agent-policy and
 agent-assets validators, ruff format/check, roadmap evidence (99 runs and 432
 assertions), `cargo fmt`, workspace build/test, clippy, fresh Rust API
 documentation, and `git diff --check` pass on the integrated tree. The
@@ -54,12 +56,18 @@ exact hard command `cargo llvm-cov --workspace --fail-under-lines 100
 The earlier exact-head GitHub reviews have no unresolved thread, but they cover
 only the superseded `4cd93f1` head and cannot approve this containing commit.
 
-**Required merge gates:** publish this integrated head, request the explicitly
-required exact `@codex review`, and monitor the standard review, inline threads,
-reactions, and every new exact-head CI job. Keep the PR draft until no actionable
-review finding remains and all required checks, including hard 100% coverage,
-are green. Then mark it ready, re-confirm that the branch is current and the
-head is unchanged, and merge through branch protection.
+**Remaining task-specific review and merge gates:** the user-requested GitHub
+Codex review of `d359685` found that POSIX shell escapes could still hide a
+managed target and that this snapshot incorrectly described the external
+review as repository-required. The containing repair recognizes both Windows
+separators and POSIX escapes, adds a fail-before-mutation regression, and
+clarifies that each new head receives one user-requested `@codex review` in
+this task without making the asynchronous service a repository merge gate.
+The pinned local reviewer remains the required review loop. Address findings
+from the completed task-specific GitHub review, keep the PR draft until all
+required CI checks including hard 100% coverage are green, then mark it ready,
+re-confirm that the branch is current and the head is unchanged, and merge
+through branch protection.
 
 ## 2026-07-26 — PR #143 follows up findings merged with PR #132
 
