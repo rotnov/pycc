@@ -17,10 +17,27 @@ pub enum MirExpr {
     FloatLiteral(f64),
     BoolLiteral(bool),
     StringLiteral(String),
-    Name { name: String, ty: Ty },
-    Call { callee: String, args: Vec<MirExpr>, ty: Ty },
-    BinOp { op: BinOpKind, left: Box<MirExpr>, right: Box<MirExpr>, ty: Ty },
-    Compare { op: CmpOpKind, left: Box<MirExpr>, right: Box<MirExpr>, ty: Ty },
+    Name {
+        name: String,
+        ty: Ty,
+    },
+    Call {
+        callee: String,
+        args: Vec<MirExpr>,
+        ty: Ty,
+    },
+    BinOp {
+        op: BinOpKind,
+        left: Box<MirExpr>,
+        right: Box<MirExpr>,
+        ty: Ty,
+    },
+    Compare {
+        op: CmpOpKind,
+        left: Box<MirExpr>,
+        right: Box<MirExpr>,
+        ty: Ty,
+    },
     FString(Vec<MirFStringPart>),
 }
 
@@ -48,16 +65,37 @@ impl MirExpr {
 #[derive(Debug, PartialEq)]
 pub enum MirStmt {
     ExprStmt(MirExpr),
-    Assign { target: String, value: MirExpr },
-    If { test: MirExpr, body: Vec<MirStmt>, orelse: Vec<MirStmt> },
-    While { test: MirExpr, body: Vec<MirStmt> },
-    ForRange { var: String, start: MirExpr, stop: MirExpr, step: MirExpr, body: Vec<MirStmt> },
+    Assign {
+        target: String,
+        value: MirExpr,
+    },
+    If {
+        test: MirExpr,
+        body: Vec<MirStmt>,
+        orelse: Vec<MirStmt>,
+    },
+    While {
+        test: MirExpr,
+        body: Vec<MirStmt>,
+    },
+    ForRange {
+        var: String,
+        start: MirExpr,
+        stop: MirExpr,
+        step: MirExpr,
+        body: Vec<MirStmt>,
+    },
     Return(Option<MirExpr>),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum MirItem {
-    Function { name: String, params: Vec<(String, Ty)>, return_ty: Ty, body: Vec<MirStmt> },
+    Function {
+        name: String,
+        params: Vec<(String, Ty)>,
+        return_ty: Ty,
+        body: Vec<MirStmt>,
+    },
     TopLevelStmt(MirStmt),
 }
 
@@ -73,28 +111,72 @@ pub fn build(hir: &HirModule) -> MirModule {
     // a recursive self-call all resolve to the right return type regardless
     // of where the callee's `def` appears in the module.
     for item in &hir.items {
-        if let HirItem::Function { name, return_ty, .. } = item {
+        if let HirItem::Function {
+            name, return_ty, ..
+        } = item
+        {
             bind(&mut scopes, format!("$fn:{name}"), *return_ty);
         }
     }
-    let items = hir.items.iter().map(|item| lower_item(item, &mut scopes)).collect();
+    // Lower module statements first, in source order, so the module scope is
+    // complete before any function body is lowered. This mirrors
+    // `pycc_types::check_with_signatures`'s D-041 three-pass contract:
+    // top-level forward reads stay invalid because these statements are still
+    // visited sequentially, while a function may read a global assigned after
+    // its `def` because function bodies are evaluated only when called.
+    let mut lowered: Vec<Option<MirItem>> = hir.items.iter().map(|_| None).collect();
+    for (index, item) in hir.items.iter().enumerate() {
+        if matches!(item, HirItem::TopLevelStmt(_)) {
+            lowered[index] = Some(lower_item(item, &mut scopes));
+        }
+    }
+    for (index, item) in hir.items.iter().enumerate() {
+        if matches!(item, HirItem::Function { .. }) {
+            lowered[index] = Some(lower_item(item, &mut scopes));
+        }
+    }
+    let items = lowered
+        .into_iter()
+        .map(|item| item.expect("every HIR item is either a function or a top-level statement"))
+        .collect();
     MirModule { items }
 }
 
 fn lower_item(item: &HirItem, scopes: &mut Vec<HashMap<String, Ty>>) -> MirItem {
     match item {
-        HirItem::Function { name, params, return_ty, body } => {
+        HirItem::Function {
+            name,
+            params,
+            return_ty,
+            body,
+        } => {
             scopes.push(params.iter().cloned().collect());
             let body = body.iter().map(|s| lower_stmt(s, scopes)).collect();
             scopes.pop();
-            MirItem::Function { name: name.clone(), params: params.clone(), return_ty: *return_ty, body }
+            MirItem::Function {
+                name: name.clone(),
+                params: params.clone(),
+                return_ty: *return_ty,
+                body,
+            }
         }
         HirItem::TopLevelStmt(stmt) => MirItem::TopLevelStmt(lower_stmt(stmt, scopes)),
     }
 }
 
 fn bind(scopes: &mut [HashMap<String, Ty>], name: String, ty: Ty) {
-    scopes.last_mut().expect("at least one scope is always present").insert(name, ty);
+    scopes
+        .last_mut()
+        .expect("at least one scope is always present")
+        .insert(name, ty);
+}
+
+fn bind_variable(scopes: &mut [HashMap<String, Ty>], name: String, ty: Ty) {
+    scopes
+        .last_mut()
+        .expect("at least one scope is always present")
+        .entry(name)
+        .or_insert(ty);
 }
 
 fn lookup(scopes: &[HashMap<String, Ty>], name: &str) -> Ty {
@@ -110,8 +192,15 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
         HirStmt::ExprStmt(expr) => MirStmt::ExprStmt(lower_expr(expr, scopes)),
         HirStmt::Assign { target, value } => {
             let value = lower_expr(value, scopes);
-            bind(scopes, target.clone(), value.ty());
-            MirStmt::Assign { target: target.clone(), value }
+            // The first assignment fixes a binding's representation.
+            // In particular, assigning `bool` to an existing `int` is
+            // accepted by the type checker but must not silently change the
+            // later MIR name type from tagged i64 to i8.
+            bind_variable(scopes, target.clone(), value.ty());
+            MirStmt::Assign {
+                target: target.clone(),
+                value,
+            }
         }
         HirStmt::If { test, body, orelse } => MirStmt::If {
             test: lower_expr(test, scopes),
@@ -122,13 +211,25 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
             test: lower_expr(test, scopes),
             body: body.iter().map(|s| lower_stmt(s, scopes)).collect(),
         },
-        HirStmt::ForRange { var, start, stop, step, body } => {
+        HirStmt::ForRange {
+            var,
+            start,
+            stop,
+            step,
+            body,
+        } => {
             let start = lower_expr(start, scopes);
             let stop = lower_expr(stop, scopes);
             let step = lower_expr(step, scopes);
-            bind(scopes, var.clone(), Ty::Int);
+            bind_variable(scopes, var.clone(), Ty::Int);
             let body = body.iter().map(|s| lower_stmt(s, scopes)).collect();
-            MirStmt::ForRange { var: var.clone(), start, stop, step, body }
+            MirStmt::ForRange {
+                var: var.clone(),
+                start,
+                stop,
+                step,
+                body,
+            }
         }
         HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes))),
     }
@@ -140,7 +241,10 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
         HirExpr::FloatLiteral(f) => MirExpr::FloatLiteral(*f),
         HirExpr::BoolLiteral(b) => MirExpr::BoolLiteral(*b),
         HirExpr::StringLiteral(s) => MirExpr::StringLiteral(s.clone()),
-        HirExpr::Name(name) => MirExpr::Name { name: name.clone(), ty: lookup(scopes, name) },
+        HirExpr::Name(name) => MirExpr::Name {
+            name: name.clone(),
+            ty: lookup(scopes, name),
+        },
         HirExpr::Call { callee, args } => {
             let args: Vec<MirExpr> = args.iter().map(|a| lower_expr(a, scopes)).collect();
             let ty = if callee == "print" {
@@ -148,13 +252,22 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
             } else {
                 lookup(scopes, &format!("$fn:{callee}"))
             };
-            MirExpr::Call { callee: callee.clone(), args, ty }
+            MirExpr::Call {
+                callee: callee.clone(),
+                args,
+                ty,
+            }
         }
         HirExpr::BinOp { op, left, right } => {
             let left = lower_expr(left, scopes);
             let right = lower_expr(right, scopes);
             let ty = binop_result_ty(*op, left.ty(), right.ty());
-            MirExpr::BinOp { op: *op, left: Box::new(left), right: Box::new(right), ty }
+            MirExpr::BinOp {
+                op: *op,
+                left: Box::new(left),
+                right: Box::new(right),
+                ty,
+            }
         }
         HirExpr::Compare { op, left, right } => MirExpr::Compare {
             op: *op,
@@ -167,7 +280,9 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
                 .iter()
                 .map(|p| match p {
                     FStringPart::Literal(s) => MirFStringPart::Literal(s.clone()),
-                    FStringPart::Interpolation(e) => MirFStringPart::Interpolation(Box::new(lower_expr(e, scopes))),
+                    FStringPart::Interpolation(e) => {
+                        MirFStringPart::Interpolation(Box::new(lower_expr(e, scopes)))
+                    }
                 })
                 .collect(),
         ),
@@ -221,7 +336,10 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "x".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int
+                    }],
                     ty: Ty::None,
                 })),
             ]
@@ -251,8 +369,14 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![MirStmt::Return(Some(MirExpr::BinOp {
                     op: BinOpKind::Add,
-                    left: Box::new(MirExpr::Name { name: "a".to_string(), ty: Ty::Int }),
-                    right: Box::new(MirExpr::Name { name: "b".to_string(), ty: Ty::Int }),
+                    left: Box::new(MirExpr::Name {
+                        name: "a".to_string(),
+                        ty: Ty::Int
+                    }),
+                    right: Box::new(MirExpr::Name {
+                        name: "b".to_string(),
+                        ty: Ty::Int
+                    }),
                     ty: Ty::Int,
                 }))],
             }]
@@ -313,7 +437,10 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![MirStmt::Return(Some(MirExpr::Call {
                     callee: "fact".to_string(),
-                    args: vec![MirExpr::Name { name: "n".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "n".to_string(),
+                        ty: Ty::Int
+                    }],
                     ty: Ty::Int,
                 }))],
             }]
@@ -403,7 +530,10 @@ mod tests {
                 step: MirExpr::IntLiteral(1),
                 body: vec![MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "i".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int
+                    }],
                     ty: Ty::None,
                 })],
             })]
@@ -604,6 +734,77 @@ mod tests {
     }
 
     #[test]
+    fn a_function_resolves_a_module_global_assigned_after_its_definition() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "read_x".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::Function {
+                name: "read_x".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Int,
+                }))],
+            }
+        );
+    }
+
+    #[test]
+    fn assigning_bool_to_an_existing_int_binding_preserves_its_mir_type() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::BoolLiteral(true),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[2],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Int,
+            }))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "has no recorded type")]
+    fn a_top_level_read_still_cannot_resolve_a_later_assignment() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+            ],
+        };
+        build(&hir);
+    }
+
+    #[test]
     #[should_panic(expected = "has no recorded type")]
     fn referencing_an_unbound_name_panics_with_an_internal_error() {
         // By construction (see this module's doc comment / D-057 discussion
@@ -626,9 +827,21 @@ mod tests {
         assert_eq!(MirExpr::BoolLiteral(true).ty(), Ty::Bool);
         assert_eq!(MirExpr::StringLiteral("s".to_string()).ty(), Ty::Str);
         assert_eq!(MirExpr::FString(vec![]).ty(), Ty::Str);
-        assert_eq!(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }.ty(), Ty::Int);
         assert_eq!(
-            MirExpr::Call { callee: "f".to_string(), args: vec![], ty: Ty::Bool }.ty(),
+            MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::Int
+            }
+            .ty(),
+            Ty::Int
+        );
+        assert_eq!(
+            MirExpr::Call {
+                callee: "f".to_string(),
+                args: vec![],
+                ty: Ty::Bool
+            }
+            .ty(),
             Ty::Bool
         );
         assert_eq!(

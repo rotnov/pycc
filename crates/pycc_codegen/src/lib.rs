@@ -9,7 +9,7 @@ use inkwell::targets::{
 use inkwell::types::BasicType;
 use inkwell::values::{FloatValue, FunctionValue, IntValue, PointerValue};
 use pycc_mir::{MirExpr, MirItem, MirModule, MirStmt};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 /// One MIR-level value during codegen. Extended (never replaced) by later
@@ -37,6 +37,24 @@ enum Scalar<'ctx> {
     /// Task 7) -- always refcounted, never inspected directly by this
     /// crate (see this enum's own doc comment).
     Str(PointerValue<'ctx>),
+}
+
+struct UserFunction<'ctx> {
+    value: FunctionValue<'ctx>,
+    param_tys: Vec<pycc_mir::Ty>,
+}
+
+#[derive(Clone, Copy)]
+struct StorageSlot<'ctx> {
+    ptr: PointerValue<'ctx>,
+    ty: pycc_mir::Ty,
+    /// Module globals and non-parameter locals can have storage before
+    /// execution reaches an assignment. Their separate flag prevents an
+    /// unexecuted control-flow path from exposing an LLVM initializer, `undef`,
+    /// or null as a fabricated Python value. Parameters are initialized at
+    /// entry and therefore need no flag; #118 separately owns static
+    /// definite-assignment diagnostics.
+    initialized: Option<PointerValue<'ctx>>,
 }
 
 /// Every `pycc_rt` function this crate calls, declared once in
@@ -70,6 +88,7 @@ struct RtFns<'ctx> {
     print_space: FunctionValue<'ctx>,
     print_newline: FunctionValue<'ctx>,
     print_none: FunctionValue<'ctx>,
+    trap: FunctionValue<'ctx>,
 }
 
 fn declare_rt_functions<'ctx>(
@@ -119,9 +138,14 @@ fn declare_rt_functions<'ctx>(
         ),
         range_continue: declare(
             "pycc_rt_range_continue",
-            context.i8_type().fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
+            context
+                .i8_type()
+                .fn_type(&[i64_type.into(), i64_type.into(), i64_type.into()], false),
         ),
-        int_to_float: declare("pycc_rt_int_to_float", f64_type.fn_type(&[i64_type.into()], false)),
+        int_to_float: declare(
+            "pycc_rt_int_to_float",
+            f64_type.fn_type(&[i64_type.into()], false),
+        ),
         float_floordiv: declare(
             "pycc_rt_float_floordiv",
             f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
@@ -150,18 +174,34 @@ fn declare_rt_functions<'ctx>(
             "pycc_rt_str_truthy",
             context.i8_type().fn_type(&[ptr_type.into()], false),
         ),
-        str_incref: declare("pycc_rt_str_incref", void_type.fn_type(&[ptr_type.into()], false)),
-        str_decref: declare("pycc_rt_str_decref", void_type.fn_type(&[ptr_type.into()], false)),
-        int_to_str: declare("pycc_rt_int_to_str", ptr_type.fn_type(&[i64_type.into()], false)),
-        float_to_str: declare("pycc_rt_float_to_str", ptr_type.fn_type(&[f64_type.into()], false)),
+        str_incref: declare(
+            "pycc_rt_str_incref",
+            void_type.fn_type(&[ptr_type.into()], false),
+        ),
+        str_decref: declare(
+            "pycc_rt_str_decref",
+            void_type.fn_type(&[ptr_type.into()], false),
+        ),
+        int_to_str: declare(
+            "pycc_rt_int_to_str",
+            ptr_type.fn_type(&[i64_type.into()], false),
+        ),
+        float_to_str: declare(
+            "pycc_rt_float_to_str",
+            ptr_type.fn_type(&[f64_type.into()], false),
+        ),
         bool_to_str: declare(
             "pycc_rt_bool_to_str",
             ptr_type.fn_type(&[context.i8_type().into()], false),
         ),
-        print_write_str: declare("pycc_rt_print_write_str", void_type.fn_type(&[ptr_type.into()], false)),
+        print_write_str: declare(
+            "pycc_rt_print_write_str",
+            void_type.fn_type(&[ptr_type.into()], false),
+        ),
         print_space: declare("pycc_rt_print_space", void_type.fn_type(&[], false)),
         print_newline: declare("pycc_rt_print_newline", void_type.fn_type(&[], false)),
         print_none: declare("pycc_rt_print_none", void_type.fn_type(&[], false)),
+        trap: module.add_function("llvm.trap", void_type.fn_type(&[], false), None),
     }
 }
 
@@ -187,7 +227,9 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         pycc_mir::Ty::Bool => context.i8_type().into(),
         pycc_mir::Ty::Float => context.f64_type().into(),
         pycc_mir::Ty::Str => context.ptr_type(inkwell::AddressSpace::default()).into(),
-        other => panic!("pycc_codegen: a `{other:?}`-typed parameter/return value is not supported yet"),
+        other => {
+            panic!("pycc_codegen: a `{other:?}`-typed parameter/return value is not supported yet")
+        }
     }
 }
 
@@ -225,6 +267,37 @@ fn to_tagged_int<'ctx>(
         }
         Scalar::Str(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got str")
+        }
+    }
+}
+
+/// Applies the one representation-changing assignment conversion accepted by
+/// the v0.1 type system: `bool` to tagged `int`. All other assignable
+/// source/target pairs already share the same LLVM representation.
+fn coerce_scalar_to_type<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    scalar: Scalar<'ctx>,
+    target_ty: pycc_mir::Ty,
+) -> Scalar<'ctx> {
+    match (target_ty, scalar) {
+        (pycc_mir::Ty::Int, Scalar::Bool(value)) => {
+            Scalar::Int(to_tagged_int(context, builder, Scalar::Bool(value)))
+        }
+        (_, scalar) => scalar,
+    }
+}
+
+fn range_operand_to_tagged_int<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    scalar: Scalar<'ctx>,
+    position: &str,
+) -> IntValue<'ctx> {
+    match scalar {
+        scalar @ (Scalar::Int(_) | Scalar::Bool(_)) => to_tagged_int(context, builder, scalar),
+        Scalar::Float(_) | Scalar::Str(_) => {
+            panic!("pycc_codegen: internal error: range() {position} did not evaluate to int")
         }
     }
 }
@@ -366,7 +439,11 @@ fn emit_string_literal<'ctx>(
     let ptr = global.as_pointer_value();
     let len = context.i64_type().const_int(bytes.len() as u64, false);
     builder
-        .build_call(rt.str_from_literal, &[ptr.into(), len.into()], "str_lit_obj")
+        .build_call(
+            rt.str_from_literal,
+            &[ptr.into(), len.into()],
+            "str_lit_obj",
+        )
         .expect("build_call should not fail for a well-formed string literal construction")
         .try_as_basic_value()
         .expect_basic("pycc_rt_str_from_literal returns a non-void pointer")
@@ -385,20 +462,57 @@ fn emit_expr<'ctx>(
     // underscore.
     module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
-    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
-    locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
     expr: &MirExpr,
 ) -> Scalar<'ctx> {
     use pycc_mir::Ty;
     match expr {
         MirExpr::IntLiteral(n) => Scalar::Int(tag_smallint_const(context, *n)),
         MirExpr::FloatLiteral(f) => Scalar::Float(context.f64_type().const_float(*f)),
-        MirExpr::StringLiteral(s) => Scalar::Str(emit_string_literal(context, builder, module, rt, s)),
+        MirExpr::StringLiteral(s) => {
+            Scalar::Str(emit_string_literal(context, builder, module, rt, s))
+        }
         MirExpr::Name { name, ty } => {
-            let (ptr, local_ty) = locals
-                .get(name)
-                .unwrap_or_else(|| panic!("pycc_codegen: internal error: `{name}` has no local slot"));
-            debug_assert_eq!(local_ty, ty, "pycc_codegen: internal error: local type drifted");
+            let slot = locals.get(name).unwrap_or_else(|| {
+                panic!("pycc_codegen: internal error: `{name}` has no local slot")
+            });
+            debug_assert_eq!(
+                &slot.ty, ty,
+                "pycc_codegen: internal error: local type drifted"
+            );
+            if let Some(initialized_ptr) = slot.initialized {
+                let initialized = builder
+                    .build_load(context.i8_type(), initialized_ptr, "global_initialized")
+                    .expect("build_load should not fail for a declared global flag")
+                    .into_int_value();
+                let is_initialized = builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        initialized,
+                        context.i8_type().const_zero(),
+                        "global_is_initialized",
+                    )
+                    .expect("build_int_compare should not fail for two i8 values");
+                let function = builder
+                    .get_insert_block()
+                    .expect("name reads are always emitted inside a basic block")
+                    .get_parent()
+                    .expect("the current basic block always belongs to a function");
+                let ready = context.append_basic_block(function, "global_ready");
+                let unbound = context.append_basic_block(function, "global_unbound");
+                builder
+                    .build_conditional_branch(is_initialized, ready, unbound)
+                    .expect("build_conditional_branch should not fail for an i1 condition");
+                builder.position_at_end(unbound);
+                builder
+                    .build_call(rt.trap, &[], "unbound_global")
+                    .expect("build_call should not fail for llvm.trap");
+                builder
+                    .build_unreachable()
+                    .expect("build_unreachable should not fail in a fresh block");
+                builder.position_at_end(ready);
+            }
             // Deviation from the task brief: the brief's version matched
             // `ty` twice -- once to pick `load_ty` (a `BasicTypeEnum`) for
             // `build_load`, once more to wrap the loaded value in the
@@ -416,36 +530,51 @@ fn emit_expr<'ctx>(
             match ty {
                 Ty::Int => {
                     let loaded = builder
-                        .build_load(context.i64_type(), *ptr, "load")
-                        .expect("build_load should not fail for a slot this function itself allocated");
+                        .build_load(context.i64_type(), slot.ptr, "load")
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
                     Scalar::Int(loaded.into_int_value())
                 }
                 Ty::Bool => {
                     let loaded = builder
-                        .build_load(context.i8_type(), *ptr, "load")
-                        .expect("build_load should not fail for a slot this function itself allocated");
+                        .build_load(context.i8_type(), slot.ptr, "load")
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
                     Scalar::Bool(loaded.into_int_value())
                 }
                 Ty::Float => {
                     let loaded = builder
-                        .build_load(context.f64_type(), *ptr, "load")
-                        .expect("build_load should not fail for a slot this function itself allocated");
+                        .build_load(context.f64_type(), slot.ptr, "load")
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
                     Scalar::Float(loaded.into_float_value())
                 }
                 Ty::Str => {
                     let loaded = builder
                         .build_load(
                             context.ptr_type(inkwell::AddressSpace::default()),
-                            *ptr,
+                            slot.ptr,
                             "load",
                         )
-                        .expect("build_load should not fail for a slot this function itself allocated");
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
                     Scalar::Str(loaded.into_pointer_value())
                 }
-                other => panic!("pycc_codegen: reading a `{other:?}`-typed local is not supported yet"),
+                other => {
+                    panic!("pycc_codegen: reading a `{other:?}`-typed local is not supported yet")
+                }
             }
         }
-        MirExpr::BinOp { op, left, right, ty } => {
+        MirExpr::BinOp {
+            op,
+            left,
+            right,
+            ty,
+        } => {
             // This inkwell version's `try_as_basic_value()` returns its own
             // `ValueKind` enum (not `either::Either` as in older inkwell
             // releases the task brief's original code was written against
@@ -535,13 +664,19 @@ fn emit_expr<'ctx>(
                 }
                 Ty::Str => {
                     let Scalar::Str(l) = l else {
-                        panic!("pycc_codegen: internal error: str BinOp operand did not evaluate to str")
+                        panic!(
+                            "pycc_codegen: internal error: str BinOp operand did not evaluate to str"
+                        )
                     };
                     let Scalar::Str(r) = r else {
-                        panic!("pycc_codegen: internal error: str BinOp operand did not evaluate to str")
+                        panic!(
+                            "pycc_codegen: internal error: str BinOp operand did not evaluate to str"
+                        )
                     };
                     if *op != pycc_mir::BinOpKind::Add {
-                        panic!("pycc_codegen: `str {op:?} str` is not supported yet (only concatenation is)");
+                        panic!(
+                            "pycc_codegen: `str {op:?} str` is not supported yet (only concatenation is)"
+                        );
                     }
                     let result = builder
                         .build_call(rt.str_concat, &[l.into(), r.into()], "str_concat")
@@ -553,7 +688,9 @@ fn emit_expr<'ctx>(
                 other => panic!("pycc_codegen: a `{other:?}`-result BinOp is not supported yet"),
             }
         }
-        MirExpr::Compare { op, left, right, .. } => {
+        MirExpr::Compare {
+            op, left, right, ..
+        } => {
             let left_ty = left.ty();
             let right_ty = right.ty();
             let l = emit_expr(context, builder, module, rt, user_functions, locals, left);
@@ -585,10 +722,14 @@ fn emit_expr<'ctx>(
                     .expect("build_int_z_extend should not fail widening i1 to i8")
             } else if left_ty == Ty::Str || right_ty == Ty::Str {
                 let Scalar::Str(l) = l else {
-                    panic!("pycc_codegen: internal error: str Compare operand did not evaluate to str")
+                    panic!(
+                        "pycc_codegen: internal error: str Compare operand did not evaluate to str"
+                    )
                 };
                 let Scalar::Str(r) = r else {
-                    panic!("pycc_codegen: internal error: str Compare operand did not evaluate to str")
+                    panic!(
+                        "pycc_codegen: internal error: str Compare operand did not evaluate to str"
+                    )
                 };
                 let ordering = builder
                     .build_call(rt.str_cmp, &[l.into(), r.into()], "str_cmp")
@@ -638,12 +779,12 @@ fn emit_expr<'ctx>(
             };
             Scalar::Bool(as_bool)
         }
-        MirExpr::BoolLiteral(b) => {
-            Scalar::Bool(context.i8_type().const_int(u64::from(*b), false))
-        }
+        MirExpr::BoolLiteral(b) => Scalar::Bool(context.i8_type().const_int(u64::from(*b), false)),
         MirExpr::Call { callee, args, ty } => {
             if callee == "print" {
-                panic!("pycc_codegen: using print()'s result as a nested expression is not supported yet");
+                panic!(
+                    "pycc_codegen: using print()'s result as a nested expression is not supported yet"
+                );
             }
             // Unlike `emit_stmt`'s void-call arm below, there is no
             // `Result` here to propagate a clean, user-facing error
@@ -654,13 +795,22 @@ fn emit_expr<'ctx>(
             // is a defensive backstop, not a rejection of legitimate
             // source (see `calling_an_undefined_function_as_a_nested_
             // expression_is_an_internal_error` below).
-            let f = *user_functions.get(callee.as_str()).unwrap_or_else(|| {
+            let user_function = user_functions.get(callee.as_str()).unwrap_or_else(|| {
                 panic!(
                     "pycc_codegen: internal error: call to undefined function `{callee}` \
                      should have been rejected by pycc_types before reaching codegen"
                 )
             });
-            let call_site = build_call_to(context, builder, module, rt, user_functions, locals, f, args);
+            let call_site = build_call_to(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                user_function,
+                args,
+            );
             match ty {
                 Ty::Int => Scalar::Int(
                     call_site
@@ -691,14 +841,16 @@ fn emit_expr<'ctx>(
                     // `void` -- there is no value to extract, and this
                     // crate has no `Scalar::None` (Task 6's finding: no
                     // v0.1 expression can construct a `None` *value* other
-                    // than this exact call-result shape). The only caller
-                    // that ever evaluates a `Ty::None`-typed expression is
-                    // `emit_stmt`'s `print` dispatch below, which discards
-                    // this placeholder and prints the literal `"None"`
-                    // instead of using it.
+                    // than this exact call-result shape). The only callers
+                    // that evaluate a `Ty::None`-typed expression are the
+                    // `print` and f-string paths below. Both discard this
+                    // placeholder after preserving the call's side effects
+                    // and materialize Python's literal `"None"`.
                     Scalar::Bool(context.i8_type().const_int(0, false))
                 }
-                other => panic!("pycc_codegen: a `{other:?}`-typed call result is not supported yet"),
+                other => {
+                    panic!("pycc_codegen: a `{other:?}`-typed call result is not supported yet")
+                }
             }
         }
         MirExpr::FString(parts) => {
@@ -729,17 +881,33 @@ fn emit_expr<'ctx>(
                         emit_string_literal(context, builder, module, rt, s)
                     }
                     pycc_mir::MirFStringPart::Interpolation(inner) => {
-                        let scalar =
+                        if inner.ty() == pycc_mir::Ty::None {
                             emit_expr(context, builder, module, rt, user_functions, locals, inner);
-                        let scalar = incref_if_str_duplicate(builder, rt, inner, scalar);
-                        to_str(builder, rt, scalar)
+                            emit_string_literal(context, builder, module, rt, "None")
+                        } else {
+                            let scalar = emit_expr(
+                                context,
+                                builder,
+                                module,
+                                rt,
+                                user_functions,
+                                locals,
+                                inner,
+                            );
+                            let scalar = incref_if_str_duplicate(builder, rt, inner, scalar);
+                            to_str(builder, rt, scalar)
+                        }
                     }
                 };
                 acc = Some(match acc {
                     None => part_str,
                     Some(prev) => {
                         let joined = builder
-                            .build_call(rt.str_concat, &[prev.into(), part_str.into()], "fstring_concat")
+                            .build_call(
+                                rt.str_concat,
+                                &[prev.into(), part_str.into()],
+                                "fstring_concat",
+                            )
                             .expect("build_call should not fail for a well-formed concatenation")
                             .try_as_basic_value()
                             .expect_basic("pycc_rt_str_concat returns a non-void pointer")
@@ -793,16 +961,18 @@ fn build_call_to<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
-    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
-    locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
-    f: FunctionValue<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    user_function: &UserFunction<'ctx>,
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
     let arg_values: Vec<inkwell::values::BasicMetadataValueEnum> = args
         .iter()
-        .map(|a| {
+        .zip(&user_function.param_tys)
+        .map(|(a, param_ty)| {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
+            let scalar = coerce_scalar_to_type(context, builder, scalar, *param_ty);
             match scalar {
                 Scalar::Int(v) => v.into(),
                 Scalar::Bool(v) => v.into(),
@@ -812,7 +982,7 @@ fn build_call_to<'ctx>(
         })
         .collect();
     builder
-        .build_call(f, &arg_values, "call_user_fn")
+        .build_call(user_function.value, &arg_values, "call_user_fn")
         .expect("build_call should not fail for a well-formed user function call")
 }
 
@@ -856,102 +1026,85 @@ fn truthy<'ctx>(
             .into_int_value(),
     };
     builder
-        .build_int_compare(IntPredicate::NE, as_i8, context.i8_type().const_int(0, false), "truthy")
+        .build_int_compare(
+            IntPredicate::NE,
+            as_i8,
+            context.i8_type().const_int(0, false),
+            "truthy",
+        )
         .expect("build_int_compare should not fail comparing two i8 operands")
 }
 
-/// Allocates a pointer-typed slot for a `str` local in the *entry* block of
-/// the function currently being emitted -- never wherever `builder` happens
-/// to be positioned -- and stores an explicit null pointer into it there,
-/// before restoring `builder`'s original position. Fixes a review finding
-/// against this file's first `str`-codegen task: `emit_assign`'s general
-/// path (below) builds a local's backing `alloca` at the *current* builder
-/// position, which is fine for `Int`/`Bool`/`Float` (nothing outside this
-/// task ever reads a local's slot from a block the assignment doesn't
-/// dominate), but is wrong for `str`: this file also reads a `str` local's
-/// slot from *outside* the assignment's own block, at two sites --
-/// `decref_old_str_if_reassigning`'s reassignment load, and
-/// `compile_to_object`'s top-level-locals completion-decref loop right
-/// before `main` returns. If a `str` local's *first* assignment happens
-/// inside an `if`/`while`/`for` body, its `alloca` would live in that
-/// branch's own block, which does not dominate the merge/after block (or,
-/// for a top-level local, the point right before `main`'s `build_return`)
-/// -- `module.verify()` correctly rejects the resulting IR, and on Windows
-/// (where `verify_module` is a no-op, see D-029) the malformed IR would
-/// reach LLVM directly. The entry block dominates every other block in its
-/// function by construction, so an `alloca` placed there -- at any position
-/// within it, since entry has no predecessor and everything else in the
-/// function is only reachable through it -- dominates every later read
-/// regardless of which nested block the local's first real assignment
-/// happens to execute in. The explicit null store (rather than leaving the
-/// slot's initial value as LLVM `undef`) is what lets the null guard
-/// already built into `pycc_rt_str_incref`/`pycc_rt_str_decref` safely no-op
-/// on a path that never reaches this local's assignment at all -- an
-/// `undef` load, unlike a real null, has no defined value a guard could
-/// check.
-fn alloca_str_at_entry<'ctx>(context: &'ctx Context, builder: &inkwell::builder::Builder<'ctx>) -> PointerValue<'ctx> {
-    let current_block = builder
-        .get_insert_block()
-        .expect("builder is always positioned inside some block while a statement is being emitted");
+/// Allocates a local slot in the current function's entry block, which
+/// dominates every branch, loop, and merge that may read it. String slots are
+/// initialized to null so the first emitted decref is a safe no-op. A guarded
+/// non-parameter slot also receives an `i8` initialized flag, because #118's
+/// static definite-assignment joins have not landed yet and a syntactically
+/// present assignment may not execute at runtime.
+fn storage_slot_at_entry<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    ty: pycc_mir::Ty,
+    name: &str,
+    guard_reads: bool,
+) -> StorageSlot<'ctx> {
+    let current_block = builder.get_insert_block().expect(
+        "builder is always positioned inside some block while a statement is being emitted",
+    );
     let function = current_block
         .get_parent()
         .expect("the block builder is currently positioned in always belongs to a function");
-    let entry_block = function
-        .get_first_basic_block()
-        .expect("compile_to_object always appends a function's entry block before emitting its body");
-    match entry_block.get_terminator() {
-        Some(terminator) => builder.position_before(&terminator),
-        None => builder.position_at_end(entry_block),
-    }
-    let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+    let entry_block = function.get_first_basic_block().expect(
+        "compile_to_object always appends a function's entry block before emitting its body",
+    );
+    builder.position_at_end(entry_block);
     let ptr = builder
-        .build_alloca(ptr_type, "str_slot")
-        .expect("build_alloca should not fail for a pointer-typed slot");
-    builder
-        .build_store(ptr, ptr_type.const_null())
-        .expect("build_store should not fail immediately after this function's own alloca");
+        .build_alloca(ty_to_basic_type(context, ty), name)
+        .expect("build_alloca should not fail for a supported local type");
+    if ty == pycc_mir::Ty::Str {
+        builder
+            .build_store(
+                ptr,
+                context
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .const_null(),
+            )
+            .expect("build_store should not fail immediately after this function's own alloca");
+    }
+    let initialized = if guard_reads {
+        let initialized_ptr = builder
+            .build_alloca(context.i8_type(), &format!("{name}_initialized"))
+            .expect("build_alloca should not fail for an i8 initialization flag");
+        builder
+            .build_store(initialized_ptr, context.i8_type().const_zero())
+            .expect("build_store should not fail for a fresh initialization flag");
+        Some(initialized_ptr)
+    } else {
+        None
+    };
     builder.position_at_end(current_block);
-    ptr
+    StorageSlot {
+        ptr,
+        ty,
+        initialized,
+    }
 }
 
-/// Allocates (on first assignment) or reuses (on reassignment) the
-/// `alloca` backing `target`, stores `value` into it, and records/updates
-/// its entry in `locals`. A local's `Ty` never changes across
-/// reassignment (`pycc_types` ties one static type to each binding), so
-/// reusing an existing slot never needs a type check beyond the
-/// `debug_assert_eq!` in `emit_expr`'s `Name` arm above.
-///
-/// A `str` local's *first* assignment hoists its `alloca` to the function's
-/// entry block instead of building it at the current position -- see
-/// `alloca_str_at_entry`'s own doc comment for why this one `Scalar`
-/// variant needs different treatment here.
+/// Reuses the predeclared slot backing `target`. The slot's established type
+/// wins over the current expression type, including the accepted
+/// `bool`-to-`int` assignment that must store a tagged i64 rather than raw i8.
 fn emit_assign<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
-    locals: &mut HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    locals: &mut HashMap<String, StorageSlot<'ctx>>,
     target: &str,
-    ty: pycc_mir::Ty,
     value: Scalar<'ctx>,
 ) {
-    let ptr = match locals.get(target) {
-        Some((ptr, _)) => *ptr,
-        None => {
-            let ptr = match &value {
-                Scalar::Str(_) => alloca_str_at_entry(context, builder),
-                Scalar::Int(v) => builder
-                    .build_alloca(v.get_type(), target)
-                    .expect("build_alloca should not fail for a supported scalar type"),
-                Scalar::Bool(v) => builder
-                    .build_alloca(v.get_type(), target)
-                    .expect("build_alloca should not fail for a supported scalar type"),
-                Scalar::Float(v) => builder
-                    .build_alloca(v.get_type(), target)
-                    .expect("build_alloca should not fail for a supported scalar type"),
-            };
-            locals.insert(target.to_string(), (ptr, ty));
-            ptr
-        }
-    };
+    let slot = locals
+        .get(target)
+        .copied()
+        .expect("every assignment target must have a predeclared storage slot");
+    let value = coerce_scalar_to_type(context, builder, value, slot.ty);
     let basic_value: inkwell::values::BasicValueEnum = match value {
         Scalar::Int(v) => v.into(),
         Scalar::Bool(v) => v.into(),
@@ -959,8 +1112,13 @@ fn emit_assign<'ctx>(
         Scalar::Str(v) => v.into(),
     };
     builder
-        .build_store(ptr, basic_value)
+        .build_store(slot.ptr, basic_value)
         .expect("build_store should not fail for a slot this function itself allocated");
+    if let Some(initialized_ptr) = slot.initialized {
+        builder
+            .build_store(initialized_ptr, context.i8_type().const_int(1, false))
+            .expect("build_store should not fail for a declared global flag");
+    }
 }
 
 /// Whether evaluating `expr` produces a *duplicate* reference to an
@@ -997,27 +1155,35 @@ fn incref_if_str_duplicate<'ctx>(
     }
 }
 
-/// Only meaningful for `Ty::Str` targets: if `target` already has a slot in
-/// `locals` (this `Assign` is a reassignment, not a first binding), loads
-/// its current value and decrefs it before the new value overwrites it --
-/// otherwise reassigning a `str` local in a loop would leak its previous
-/// value every iteration (D-060/D-061, Task 7).
-fn decref_old_str_if_reassigning<'ctx>(
+/// Only meaningful for `Ty::Str` targets: loads the target's predeclared
+/// slot and decrefs its current value before the new value overwrites it.
+/// String slots start as null, whose runtime decref is a no-op, so the same
+/// path is correct for both first assignment and reassignment and prevents
+/// loop-body-first bindings from leaking earlier iteration values (D-074).
+fn decref_str_slot_before_store<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
-    locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
     target: &str,
 ) {
-    if let Some((slot_ptr, pycc_mir::Ty::Str)) = locals.get(target) {
-        let old = builder
-            .build_load(context.ptr_type(inkwell::AddressSpace::default()), *slot_ptr, "old_str")
-            .expect("build_load should not fail for this function's own alloca")
-            .into_pointer_value();
-        builder
-            .build_call(rt.str_decref, &[old.into()], "str_decref_old")
-            .expect("build_call should not fail for a well-formed decref");
+    let slot = locals[target];
+    if slot.ty != pycc_mir::Ty::Str {
+        panic!(
+            "pycc_codegen: internal error: string assignment target `{target}` has a non-string storage slot"
+        );
     }
+    let old = builder
+        .build_load(
+            context.ptr_type(inkwell::AddressSpace::default()),
+            slot.ptr,
+            "old_str",
+        )
+        .expect("build_load should not fail for this function's own alloca")
+        .into_pointer_value();
+    builder
+        .build_call(rt.str_decref, &[old.into()], "str_decref_old")
+        .expect("build_call should not fail for a well-formed decref");
 }
 
 /// Emits every statement in `body` in order, stopping early the moment the
@@ -1042,18 +1208,34 @@ fn decref_old_str_if_reassigning<'ctx>(
 /// and `ForRange`'s own inline copy in `emit_stmt` need the exact same
 /// reasoning applied to their own trailing branch, and both re-add their
 /// own guard for the same reason (see each one's own doc comment).
+#[allow(clippy::too_many_arguments)]
 fn emit_body<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
-    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
-    locals: &mut HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &mut HashMap<String, StorageSlot<'ctx>>,
     body: &[MirStmt],
+    expected_return_ty: pycc_mir::Ty,
 ) -> Result<(), String> {
     for stmt in body {
-        emit_stmt(context, builder, module, rt, user_functions, locals, stmt)?;
-        if builder.get_insert_block().unwrap().get_terminator().is_some() {
+        emit_stmt(
+            context,
+            builder,
+            module,
+            rt,
+            user_functions,
+            locals,
+            stmt,
+            expected_return_ty,
+        )?;
+        if builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some()
+        {
             break;
         }
     }
@@ -1076,18 +1258,131 @@ fn emit_body_then_branch<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
-    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
-    locals: &mut HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &mut HashMap<String, StorageSlot<'ctx>>,
     body: &[MirStmt],
     dest: inkwell::basic_block::BasicBlock<'ctx>,
-) -> Result<(), String> {
-    emit_body(context, builder, module, rt, user_functions, locals, body)?;
-    if builder.get_insert_block().unwrap().get_terminator().is_none() {
+    expected_return_ty: pycc_mir::Ty,
+) -> Result<bool, String> {
+    emit_body(
+        context,
+        builder,
+        module,
+        rt,
+        user_functions,
+        locals,
+        body,
+        expected_return_ty,
+    )?;
+    let falls_through = builder
+        .get_insert_block()
+        .unwrap()
+        .get_terminator()
+        .is_none();
+    if falls_through {
         builder
             .build_unconditional_branch(dest)
             .expect("build_unconditional_branch should not fail on a block with no terminator yet");
     }
-    Ok(())
+    Ok(falls_through)
+}
+
+fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mir::Ty>) {
+    match stmt {
+        MirStmt::Assign { target, value } => {
+            let ty = value.ty();
+            if matches!(
+                ty,
+                pycc_mir::Ty::Int | pycc_mir::Ty::Bool | pycc_mir::Ty::Float | pycc_mir::Ty::Str
+            ) {
+                bindings.entry(target.clone()).or_insert(ty);
+            }
+        }
+        MirStmt::If { body, orelse, .. } => {
+            for stmt in body {
+                collect_stmt_bindings(stmt, bindings);
+            }
+            for stmt in orelse {
+                collect_stmt_bindings(stmt, bindings);
+            }
+        }
+        MirStmt::While { body, .. } => {
+            for stmt in body {
+                collect_stmt_bindings(stmt, bindings);
+            }
+        }
+        MirStmt::ForRange { var, body, .. } => {
+            bindings.entry(var.clone()).or_insert(pycc_mir::Ty::Int);
+            for stmt in body {
+                collect_stmt_bindings(stmt, bindings);
+            }
+        }
+        MirStmt::ExprStmt(_) | MirStmt::Return(_) => {}
+    }
+}
+
+fn collect_module_bindings(mir: &MirModule) -> BTreeMap<String, pycc_mir::Ty> {
+    let mut bindings = BTreeMap::new();
+    for item in &mir.items {
+        if let MirItem::TopLevelStmt(stmt) = item {
+            collect_stmt_bindings(stmt, &mut bindings);
+        }
+    }
+    bindings
+}
+
+fn declare_module_globals<'ctx>(
+    context: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+    bindings: &BTreeMap<String, pycc_mir::Ty>,
+) -> BTreeMap<String, StorageSlot<'ctx>> {
+    bindings
+        .iter()
+        .map(|(name, ty)| {
+            let (storage_ty, initializer): (
+                inkwell::types::BasicTypeEnum,
+                inkwell::values::BasicValueEnum,
+            ) = match ty {
+                pycc_mir::Ty::Int => (
+                    context.i64_type().into(),
+                    tag_smallint_const(context, 0).into(),
+                ),
+                pycc_mir::Ty::Bool => (
+                    context.i8_type().into(),
+                    context.i8_type().const_zero().into(),
+                ),
+                pycc_mir::Ty::Float => (
+                    context.f64_type().into(),
+                    context.f64_type().const_zero().into(),
+                ),
+                pycc_mir::Ty::Str => (
+                    context.ptr_type(inkwell::AddressSpace::default()).into(),
+                    context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .const_null()
+                        .into(),
+                ),
+                other => {
+                    panic!("pycc_codegen: a `{other:?}`-typed module binding is not supported yet")
+                }
+            };
+            let global = module.add_global(storage_ty, None, &format!("pyglobal_{name}"));
+            global.set_linkage(Linkage::Internal);
+            global.set_initializer(&initializer);
+            let initialized =
+                module.add_global(context.i8_type(), None, &format!("pyglobal_init_{name}"));
+            initialized.set_linkage(Linkage::Internal);
+            initialized.set_initializer(&context.i8_type().const_zero());
+            (
+                name.clone(),
+                StorageSlot {
+                    ptr: global.as_pointer_value(),
+                    ty: *ty,
+                    initialized: Some(initialized.as_pointer_value()),
+                },
+            )
+        })
+        .collect()
 }
 
 /// `target_triple`: `None` compiles for the host's own default target (the
@@ -1125,9 +1420,15 @@ pub fn compile_to_object(
     // call it, which is exactly the bug this pass structure fixes (see
     // git history: an earlier version treated a function merely named
     // `main` as auto-invoked, which doesn't match CPython at all).
-    let mut user_functions: HashMap<&str, FunctionValue> = HashMap::new();
+    let mut user_functions: HashMap<&str, UserFunction> = HashMap::new();
     for item in &mir.items {
-        if let MirItem::Function { name, params, return_ty, .. } = item {
+        if let MirItem::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } = item
+        {
             let param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = params
                 .iter()
                 .map(|(_, ty)| ty_to_basic_type(&context, *ty).into())
@@ -1138,9 +1439,22 @@ pub fn compile_to_object(
             };
             let mangled = format!("pyfn_{name}");
             let f = module.add_function(&mangled, fn_type, None);
-            user_functions.insert(name.as_str(), f);
+            user_functions.insert(
+                name.as_str(),
+                UserFunction {
+                    value: f,
+                    param_tys: params.iter().map(|(_, ty)| *ty).collect(),
+                },
+            );
         }
     }
+
+    // Module bindings need process-wide storage because generated functions
+    // can read them (D-041), including bindings whose assignment appears
+    // after the function definition. Declare every slot before emitting either
+    // the synthetic module entry point or any user function.
+    let module_bindings = collect_module_bindings(mir);
+    let module_globals = declare_module_globals(&context, &module, &module_bindings);
 
     let entry_fn_type = i64_type.fn_type(&[], false);
     let entry_fn = module.add_function("main", entry_fn_type, None);
@@ -1150,20 +1464,36 @@ pub fn compile_to_object(
     // `main` entry block (module-level Python names are one shared
     // scope); each user function gets its own, fresh map below, since
     // Python function bodies don't see each other's locals.
-    let mut top_level_locals = HashMap::new();
+    let mut top_level_locals: HashMap<_, _> = module_globals
+        .iter()
+        .map(|(name, binding)| (name.clone(), *binding))
+        .collect();
     for item in &mir.items {
         if let MirItem::TopLevelStmt(stmt) = item {
-            emit_stmt(&context, &builder, &module, &rt, &user_functions, &mut top_level_locals, stmt)?;
+            emit_stmt(
+                &context,
+                &builder,
+                &module,
+                &rt,
+                &user_functions,
+                &mut top_level_locals,
+                stmt,
+                pycc_mir::Ty::None,
+            )?;
         }
     }
     // Module-level Python code has no `return` (T0024) -- every top-level
     // `str` local's single exit point is program completion right here, so
     // this is where its accepted refcounting scope (D-061's Task 7
     // addendum) decrefs it exactly once, before `main` itself returns.
-    for (ptr, ty) in top_level_locals.values() {
-        if *ty == pycc_mir::Ty::Str {
+    for slot in module_globals.values() {
+        if slot.ty == pycc_mir::Ty::Str {
             let value = builder
-                .build_load(context.ptr_type(inkwell::AddressSpace::default()), *ptr, "final_str")
+                .build_load(
+                    context.ptr_type(inkwell::AddressSpace::default()),
+                    slot.ptr,
+                    "final_str",
+                )
                 .expect("build_load should not fail for this function's own alloca")
                 .into_pointer_value();
             builder
@@ -1184,7 +1514,12 @@ pub fn compile_to_object(
     // there (see `a_top_level_return_is_an_internal_error_not_bad_ir`), the
     // same guard-then-explicit-panic shape the per-function completion loop
     // below already uses for its own T0024-guaranteed-unreachable case.
-    if builder.get_insert_block().unwrap().get_terminator().is_some() {
+    if builder
+        .get_insert_block()
+        .unwrap()
+        .get_terminator()
+        .is_some()
+    {
         panic!(
             "pycc_codegen: internal error: a top-level statement terminated `main`'s \
              entry block -- pycc_types::check (T0024) should have rejected a module-level \
@@ -1213,11 +1548,20 @@ pub fn compile_to_object(
     // bound: reassignable, and readable via `emit_expr`'s `Name` arm with
     // no special-casing.
     for item in &mir.items {
-        if let MirItem::Function { name, params, return_ty, body } = item {
-            let f = user_functions[name.as_str()];
+        if let MirItem::Function {
+            name,
+            params,
+            return_ty,
+            body,
+        } = item
+        {
+            let f = user_functions[name.as_str()].value;
             let block = context.append_basic_block(f, "entry");
             builder.position_at_end(block);
-            let mut fn_locals = HashMap::new();
+            let mut fn_locals: HashMap<_, _> = module_globals
+                .iter()
+                .map(|(global_name, binding)| (global_name.clone(), *binding))
+                .collect();
             for (i, (param_name, ty)) in params.iter().enumerate() {
                 // `.expect(...)`, not `.unwrap_or_else(|| panic!(...))`:
                 // `f`'s own `fn_type` (built above, in the first pass) was
@@ -1229,18 +1573,39 @@ pub fn compile_to_object(
                 // not introduced in the first place, the same reasoning
                 // already applied elsewhere in this file (e.g.
                 // `emit_body_then_branch`'s removed guard, Task 4).
-                let incoming = f
-                    .get_nth_param(i as u32)
-                    .expect("this function was declared with exactly `params.len()` parameters above");
-                let ptr = builder
-                    .build_alloca(ty_to_basic_type(&context, *ty), param_name)
-                    .expect("build_alloca should not fail for a supported scalar type");
-                builder
-                    .build_store(ptr, incoming)
-                    .expect("build_store should not fail for a slot this function itself allocated");
-                fn_locals.insert(param_name.clone(), (ptr, *ty));
+                let incoming = f.get_nth_param(i as u32).expect(
+                    "this function was declared with exactly `params.len()` parameters above",
+                );
+                let slot = storage_slot_at_entry(&context, &builder, *ty, param_name, false);
+                builder.build_store(slot.ptr, incoming).expect(
+                    "build_store should not fail for a slot this function itself allocated",
+                );
+                fn_locals.insert(param_name.clone(), slot);
             }
-            emit_body(&context, &builder, &module, &rt, &user_functions, &mut fn_locals, body)?;
+            let mut local_bindings = BTreeMap::new();
+            for stmt in body {
+                collect_stmt_bindings(stmt, &mut local_bindings);
+            }
+            for (param_name, _) in params {
+                local_bindings.remove(param_name);
+            }
+            for (local_name, ty) in local_bindings {
+                let slot = storage_slot_at_entry(&context, &builder, ty, &local_name, true);
+                // A function-local target shadows a same-named module global
+                // throughout the function (D-055), so this intentionally
+                // replaces any global slot seeded above.
+                fn_locals.insert(local_name, slot);
+            }
+            emit_body(
+                &context,
+                &builder,
+                &module,
+                &rt,
+                &user_functions,
+                &mut fn_locals,
+                body,
+                *return_ty,
+            )?;
             // A `None`-returning function falling through its last
             // statement without an explicit `return` is ordinary, legal
             // Python (an implicit `return None`); a non-`None`-returning
@@ -1252,13 +1617,23 @@ pub fn compile_to_object(
             // not_bad_ir` test).
             match return_ty {
                 pycc_mir::Ty::None => {
-                    if builder.get_insert_block().unwrap().get_terminator().is_none() {
+                    if builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_terminator()
+                        .is_none()
+                    {
                         builder.build_return(None).expect(
                             "build_return should not fail: builder is always freshly positioned before this call",
                         );
                     }
                 }
-                _ if builder.get_insert_block().unwrap().get_terminator().is_none() => {
+                _ if builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_terminator()
+                    .is_none() =>
+                {
                     panic!(
                         "pycc_codegen: internal error: `{name}` is declared to return a \
                          non-`None` value but fell through without a `return` -- \
@@ -1413,8 +1788,8 @@ fn emit_print_arg<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
-    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
-    locals: &HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
     arg: &MirExpr,
 ) {
     if arg.ty() == pycc_mir::Ty::None {
@@ -1457,14 +1832,16 @@ fn emit_print_arg<'ctx>(
 /// helpers' own doc comments) -- and now (Task 5) `Return`, terminating
 /// the current block with the evaluated value (or none, for a bare
 /// `return`).
+#[allow(clippy::too_many_arguments)]
 fn emit_stmt<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
     rt: &RtFns<'ctx>,
-    user_functions: &HashMap<&str, FunctionValue<'ctx>>,
-    locals: &mut HashMap<String, (PointerValue<'ctx>, pycc_mir::Ty)>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &mut HashMap<String, StorageSlot<'ctx>>,
     stmt: &MirStmt,
+    expected_return_ty: pycc_mir::Ty,
 ) -> Result<(), String> {
     match stmt {
         MirStmt::ExprStmt(MirExpr::Call { callee, args, .. }) if callee == "print" => {
@@ -1501,11 +1878,24 @@ fn emit_stmt<'ctx>(
         // switching to `emit_expr`'s "internal error" panic, preserving
         // both the existing user-facing behavior and the `?`-propagation
         // coverage every nested-body call site below relies on.
-        MirStmt::ExprStmt(MirExpr::Call { callee, args, ty: pycc_mir::Ty::None }) => {
-            let f = *user_functions
-                .get(callee.as_str())
-                .ok_or_else(|| format!("pycc_codegen v0.1: call to undefined function `{callee}`"))?;
-            build_call_to(context, builder, module, rt, user_functions, locals, f, args);
+        MirStmt::ExprStmt(MirExpr::Call {
+            callee,
+            args,
+            ty: pycc_mir::Ty::None,
+        }) => {
+            let user_function = user_functions.get(callee.as_str()).ok_or_else(|| {
+                format!("pycc_codegen v0.1: call to undefined function `{callee}`")
+            })?;
+            build_call_to(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                user_function,
+                args,
+            );
             Ok(())
         }
         MirStmt::ExprStmt(expr) => {
@@ -1517,9 +1907,9 @@ fn emit_stmt<'ctx>(
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
             let scalar = incref_if_str_duplicate(builder, rt, value, scalar);
             if ty == pycc_mir::Ty::Str {
-                decref_old_str_if_reassigning(context, builder, rt, locals, target);
+                decref_str_slot_before_store(context, builder, rt, locals, target);
             }
-            emit_assign(context, builder, locals, target, ty, scalar);
+            emit_assign(context, builder, locals, target, scalar);
             Ok(())
         }
         MirStmt::If { test, body, orelse } => {
@@ -1530,20 +1920,51 @@ fn emit_stmt<'ctx>(
             };
             let then_bb = context.append_basic_block(function, "if_then");
             let merge_bb = context.append_basic_block(function, "if_merge");
-            let else_bb = if orelse.is_empty() { merge_bb } else { context.append_basic_block(function, "if_else") };
+            let else_bb = if orelse.is_empty() {
+                merge_bb
+            } else {
+                context.append_basic_block(function, "if_else")
+            };
             builder
                 .build_conditional_branch(cond, then_bb, else_bb)
                 .expect("build_conditional_branch should not fail for a well-formed i1 condition");
 
             builder.position_at_end(then_bb);
-            emit_body_then_branch(context, builder, module, rt, user_functions, locals, body, merge_bb)?;
+            let then_falls_through = emit_body_then_branch(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                body,
+                merge_bb,
+                expected_return_ty,
+            )?;
 
-            if !orelse.is_empty() {
+            let else_falls_through = if orelse.is_empty() {
+                true
+            } else {
                 builder.position_at_end(else_bb);
-                emit_body_then_branch(context, builder, module, rt, user_functions, locals, orelse, merge_bb)?;
-            }
+                emit_body_then_branch(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                    orelse,
+                    merge_bb,
+                    expected_return_ty,
+                )?
+            };
 
             builder.position_at_end(merge_bb);
+            if !then_falls_through && !else_falls_through {
+                builder
+                    .build_unreachable()
+                    .expect("build_unreachable should terminate a merge with no predecessors");
+            }
             Ok(())
         }
         MirStmt::While { test, body } => {
@@ -1565,23 +1986,48 @@ fn emit_stmt<'ctx>(
                 .expect("build_conditional_branch should not fail for a well-formed i1 condition");
 
             builder.position_at_end(body_bb);
-            emit_body_then_branch(context, builder, module, rt, user_functions, locals, body, test_bb)?;
+            emit_body_then_branch(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                body,
+                test_bb,
+                expected_return_ty,
+            )?;
 
             builder.position_at_end(after_bb);
             Ok(())
         }
-        MirStmt::ForRange { var, start, stop, step, body } => {
+        MirStmt::ForRange {
+            var,
+            start,
+            stop,
+            step,
+            body,
+        } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
-            let Scalar::Int(start_v) = emit_expr(context, builder, module, rt, user_functions, locals, start) else {
-                panic!("pycc_codegen: internal error: range() start did not evaluate to int")
-            };
-            let Scalar::Int(stop_v) = emit_expr(context, builder, module, rt, user_functions, locals, stop) else {
-                panic!("pycc_codegen: internal error: range() stop did not evaluate to int")
-            };
-            let Scalar::Int(step_v) = emit_expr(context, builder, module, rt, user_functions, locals, step) else {
-                panic!("pycc_codegen: internal error: range() step did not evaluate to int")
-            };
-            emit_assign(context, builder, locals, var, pycc_mir::Ty::Int, Scalar::Int(start_v));
+            let start_v = range_operand_to_tagged_int(
+                context,
+                builder,
+                emit_expr(context, builder, module, rt, user_functions, locals, start),
+                "start",
+            );
+            let stop_v = range_operand_to_tagged_int(
+                context,
+                builder,
+                emit_expr(context, builder, module, rt, user_functions, locals, stop),
+                "stop",
+            );
+            let step_v = range_operand_to_tagged_int(
+                context,
+                builder,
+                emit_expr(context, builder, module, rt, user_functions, locals, step),
+                "step",
+            );
+            let preheader = builder.get_insert_block().unwrap();
 
             let test_bb = context.append_basic_block(function, "for_test");
             let body_bb = context.append_basic_block(function, "for_body");
@@ -1591,26 +2037,50 @@ fn emit_stmt<'ctx>(
                 .build_unconditional_branch(test_bb)
                 .expect("build_unconditional_branch should not fail entering the loop test");
             builder.position_at_end(test_bb);
-            let (var_ptr, _) = *locals.get(var).expect("range() var was just bound above");
-            let current = builder
-                .build_load(context.i64_type(), var_ptr, "for_var")
-                .expect("build_load should not fail for this function's own alloca")
-                .into_int_value();
+            let induction = builder
+                .build_phi(context.i64_type(), "for_current")
+                .expect("build_phi should not fail in a fresh loop-test block");
+            induction.add_incoming(&[(&start_v, preheader)]);
+            let current = induction.as_basic_value().into_int_value();
             let cont = builder
-                .build_call(rt.range_continue, &[current.into(), stop_v.into(), step_v.into()], "range_continue")
+                .build_call(
+                    rt.range_continue,
+                    &[current.into(), stop_v.into(), step_v.into()],
+                    "range_continue",
+                )
                 .expect("build_call should not fail for a well-formed range_continue check")
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_range_continue returns a non-void i8")
                 .into_int_value();
             let cont_i1 = builder
-                .build_int_compare(IntPredicate::NE, cont, context.i8_type().const_int(0, false), "for_cont")
+                .build_int_compare(
+                    IntPredicate::NE,
+                    cont,
+                    context.i8_type().const_int(0, false),
+                    "for_cont",
+                )
                 .expect("build_int_compare should not fail comparing two i8 operands");
             builder
                 .build_conditional_branch(cont_i1, body_bb, after_bb)
                 .expect("build_conditional_branch should not fail for a well-formed i1 condition");
 
             builder.position_at_end(body_bb);
-            emit_body(context, builder, module, rt, user_functions, locals, body)?;
+            // Python binds a `for` target only after an element actually
+            // exists. The visible target is separate from the hidden SSA
+            // induction value so an empty range leaves it unbound, the final
+            // target remains the last element, and body reassignment cannot
+            // corrupt the next iteration.
+            emit_assign(context, builder, locals, var, Scalar::Int(current));
+            emit_body(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                body,
+                expected_return_ty,
+            )?;
             // `ForRange`'s own inline copy of `emit_body_then_branch`'s
             // terminator-safety guard (see that function's own doc comment
             // for why): a `Return` reached inside `body` already terminates
@@ -1618,23 +2088,23 @@ fn emit_stmt<'ctx>(
             // skipped in that case -- building it anyway would try to add a
             // second terminator onto an already-terminated block, which is
             // invalid LLVM IR.
-            if builder.get_insert_block().unwrap().get_terminator().is_none() {
-                let current = builder
-                    .build_load(context.i64_type(), var_ptr, "for_var_reload")
-                    .expect("build_load should not fail for this function's own alloca")
-                    .into_int_value();
+            if builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_none()
+            {
                 let next = builder
                     .build_call(rt.int_add, &[current.into(), step_v.into()], "for_next")
                     .expect("build_call should not fail for a well-formed int add")
                     .try_as_basic_value()
                     .expect_basic("pycc_rt_int_add returns a non-void i64")
                     .into_int_value();
-                builder
-                    .build_store(var_ptr, next)
-                    .expect("build_store should not fail for this function's own alloca");
-                builder
-                    .build_unconditional_branch(test_bb)
-                    .expect("build_unconditional_branch should not fail on a block with no terminator yet");
+                let body_end = builder.get_insert_block().unwrap();
+                induction.add_incoming(&[(&next, body_end)]);
+                builder.build_unconditional_branch(test_bb).expect(
+                    "build_unconditional_branch should not fail on a block with no terminator yet",
+                );
             }
 
             builder.position_at_end(after_bb);
@@ -1643,8 +2113,11 @@ fn emit_stmt<'ctx>(
         MirStmt::Return(value) => {
             match value {
                 Some(expr) => {
-                    let scalar = emit_expr(context, builder, module, rt, user_functions, locals, expr);
+                    let scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, expr);
                     let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
+                    let scalar =
+                        coerce_scalar_to_type(context, builder, scalar, expected_return_ty);
                     let basic_value: inkwell::values::BasicValueEnum = match scalar {
                         Scalar::Int(v) => v.into(),
                         Scalar::Bool(v) => v.into(),
@@ -1692,6 +2165,15 @@ mod tests {
             args: vec![],
             ty: Ty::None,
         })
+    }
+
+    #[test]
+    #[should_panic(expected = "a `None`-typed module binding is not supported yet")]
+    fn a_none_typed_module_binding_has_no_storage_representation() {
+        let context = Context::create();
+        let module = context.create_module("unsupported_global");
+        let bindings = BTreeMap::from([("x".to_string(), Ty::None)]);
+        let _ = declare_module_globals(&context, &module, &bindings);
     }
 
     #[test]
@@ -1998,7 +2480,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "printing a `None`-typed value that isn't a direct call result is not supported yet")]
+    #[should_panic(
+        expected = "printing a `None`-typed value that isn't a direct call result is not supported yet"
+    )]
     fn printing_a_none_typed_name_that_isnt_a_direct_call_result_panics() {
         // `print(y)` where `y` is (hypothetically) `None`-typed but not
         // itself a `Call` -- the narrow gap this task's own scope note
@@ -2018,7 +2502,10 @@ mod tests {
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                 callee: "print".to_string(),
-                args: vec![MirExpr::Name { name: "y".to_string(), ty: Ty::None }],
+                args: vec![MirExpr::Name {
+                    name: "y".to_string(),
+                    ty: Ty::None,
+                }],
                 ty: Ty::None,
             }))],
         };
@@ -2095,8 +2582,14 @@ mod tests {
                     callee: "print".to_string(),
                     args: vec![MirExpr::BinOp {
                         op: BinOpKind::FloorDiv,
-                        left: Box::new(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }),
-                        right: Box::new(MirExpr::Name { name: "y".to_string(), ty: Ty::Int }),
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::Name {
+                            name: "y".to_string(),
+                            ty: Ty::Int,
+                        }),
                         ty: Ty::Int,
                     }],
                     ty: Ty::None,
@@ -2154,7 +2647,10 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "x".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
                     ty: Ty::None,
                 })),
             ],
@@ -2282,7 +2778,10 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "c".to_string(),
-                    value: MirExpr::Name { name: "b".to_string(), ty: Ty::Bool },
+                    value: MirExpr::Name {
+                        name: "b".to_string(),
+                        ty: Ty::Bool,
+                    },
                 }),
             ],
         };
@@ -2317,7 +2816,10 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "x".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
                     ty: Ty::None,
                 })),
             ],
@@ -2349,7 +2851,10 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "x".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
                     ty: Ty::None,
                 })),
             ],
@@ -2515,7 +3020,9 @@ mod tests {
         // expression statement); nothing currently has a side effect from
         // it, but the shape is legal MIR and must not panic or miscompile.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::IntLiteral(5)))],
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(
+                MirExpr::IntLiteral(5),
+            ))],
         };
         let dir = tempfile_dir("bare_expr_stmt");
         let obj_path = dir.join("bare_expr_stmt.o");
@@ -2546,7 +3053,7 @@ mod tests {
         let block = context.append_basic_block(f, "entry");
         builder.position_at_end(block);
 
-        let user_functions: HashMap<&str, FunctionValue> = HashMap::new();
+        let user_functions: HashMap<&str, UserFunction> = HashMap::new();
         let mut locals = HashMap::new();
         // The alloca's own LLVM type is arbitrary here (`None` has no
         // codegen representation to allocate correctly) -- it's never
@@ -2555,7 +3062,14 @@ mod tests {
         let ptr = builder
             .build_alloca(context.f64_type(), "x")
             .expect("build_alloca should not fail for a fresh block");
-        locals.insert("x".to_string(), (ptr, Ty::None));
+        locals.insert(
+            "x".to_string(),
+            StorageSlot {
+                ptr,
+                ty: Ty::None,
+                initialized: None,
+            },
+        );
 
         emit_expr(
             &context,
@@ -2564,7 +3078,10 @@ mod tests {
             &rt,
             &user_functions,
             &locals,
-            &MirExpr::Name { name: "x".to_string(), ty: Ty::None },
+            &MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::None,
+            },
         );
     }
 
@@ -2583,7 +3100,10 @@ mod tests {
                     target: "y".to_string(),
                     value: MirExpr::BinOp {
                         op: BinOpKind::Add,
-                        left: Box::new(MirExpr::Name { name: "x".to_string(), ty: Ty::Float }),
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Float,
+                        }),
                         right: Box::new(MirExpr::FloatLiteral(1.0)),
                         ty: Ty::Float,
                     },
@@ -2596,8 +3116,8 @@ mod tests {
     }
 
     #[test]
-    fn a_function_parameter_can_be_read_back_and_printed() {
-        // `def f(n: int): print(n)` ; `f(7)` -- supersedes this test's
+    fn a_function_parameter_can_be_reassigned_read_back_and_printed() {
+        // `def f(n: int): n = n + 1; print(n)` ; `f(7)` -- supersedes this test's
         // earlier (Task 3) incarnation, `referencing_a_function_parameter_
         // is_not_yet_supported`, which proved the opposite: that
         // `compile_to_object` started each function's `fn_locals` map
@@ -2616,11 +3136,28 @@ mod tests {
                     name: "f".to_string(),
                     params: vec![("n".to_string(), Ty::Int)],
                     return_ty: Ty::None,
-                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
-                        callee: "print".to_string(),
-                        args: vec![MirExpr::Name { name: "n".to_string(), ty: Ty::Int }],
-                        ty: Ty::None,
-                    })],
+                    body: vec![
+                        MirStmt::Assign {
+                            target: "n".to_string(),
+                            value: MirExpr::BinOp {
+                                op: BinOpKind::Add,
+                                left: Box::new(MirExpr::Name {
+                                    name: "n".to_string(),
+                                    ty: Ty::Int,
+                                }),
+                                right: Box::new(MirExpr::IntLiteral(1)),
+                                ty: Ty::Int,
+                            },
+                        },
+                        MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::Name {
+                                name: "n".to_string(),
+                                ty: Ty::Int,
+                            }],
+                            ty: Ty::None,
+                        }),
+                    ],
                 },
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                     callee: "f".to_string(),
@@ -2635,7 +3172,7 @@ mod tests {
         let bin_path = dir.join("param_reference_reads_back");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
-        assert_eq!(output.stdout, b"7\n");
+        assert_eq!(output.stdout, b"8\n");
     }
 
     #[test]
@@ -2650,7 +3187,10 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::If {
                     test: MirExpr::Compare {
                         op: CmpOpKind::Lt,
-                        left: Box::new(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }),
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        }),
                         right: Box::new(MirExpr::IntLiteral(2)),
                         ty: Ty::Bool,
                     },
@@ -2674,6 +3214,43 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"10\n");
+    }
+
+    #[test]
+    fn an_if_whose_both_branches_return_terminates_its_unreachable_merge() {
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "choose".to_string(),
+                    params: vec![("flag".to_string(), Ty::Bool)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::If {
+                        test: MirExpr::Name {
+                            name: "flag".to_string(),
+                            ty: Ty::Bool,
+                        },
+                        body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(1)))],
+                        orelse: vec![MirStmt::Return(Some(MirExpr::IntLiteral(2)))],
+                    }],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "choose".to_string(),
+                        args: vec![MirExpr::BoolLiteral(true)],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("if_both_branches_return");
+        let obj_path = dir.join("if_both_branches_return.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("if_both_branches_return");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
     }
 
     #[test]
@@ -2710,21 +3287,30 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::While {
                     test: MirExpr::Compare {
                         op: CmpOpKind::Gt,
-                        left: Box::new(MirExpr::Name { name: "i".to_string(), ty: Ty::Int }),
+                        left: Box::new(MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        }),
                         right: Box::new(MirExpr::IntLiteral(0)),
                         ty: Ty::Bool,
                     },
                     body: vec![
                         MirStmt::ExprStmt(MirExpr::Call {
                             callee: "print".to_string(),
-                            args: vec![MirExpr::Name { name: "i".to_string(), ty: Ty::Int }],
+                            args: vec![MirExpr::Name {
+                                name: "i".to_string(),
+                                ty: Ty::Int,
+                            }],
                             ty: Ty::None,
                         }),
                         MirStmt::Assign {
                             target: "i".to_string(),
                             value: MirExpr::BinOp {
                                 op: BinOpKind::Sub,
-                                left: Box::new(MirExpr::Name { name: "i".to_string(), ty: Ty::Int }),
+                                left: Box::new(MirExpr::Name {
+                                    name: "i".to_string(),
+                                    ty: Ty::Int,
+                                }),
                                 right: Box::new(MirExpr::IntLiteral(1)),
                                 ty: Ty::Int,
                             },
@@ -2759,18 +3345,27 @@ mod tests {
                     value: MirExpr::IntLiteral(3),
                 }),
                 MirItem::TopLevelStmt(MirStmt::While {
-                    test: MirExpr::Name { name: "i".to_string(), ty: Ty::Int },
+                    test: MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    },
                     body: vec![
                         MirStmt::ExprStmt(MirExpr::Call {
                             callee: "print".to_string(),
-                            args: vec![MirExpr::Name { name: "i".to_string(), ty: Ty::Int }],
+                            args: vec![MirExpr::Name {
+                                name: "i".to_string(),
+                                ty: Ty::Int,
+                            }],
                             ty: Ty::None,
                         }),
                         MirStmt::Assign {
                             target: "i".to_string(),
                             value: MirExpr::BinOp {
                                 op: BinOpKind::Sub,
-                                left: Box::new(MirExpr::Name { name: "i".to_string(), ty: Ty::Int }),
+                                left: Box::new(MirExpr::Name {
+                                    name: "i".to_string(),
+                                    ty: Ty::Int,
+                                }),
                                 right: Box::new(MirExpr::IntLiteral(1)),
                                 ty: Ty::Int,
                             },
@@ -2799,7 +3394,10 @@ mod tests {
                 step: MirExpr::IntLiteral(2),
                 body: vec![MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "i".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }],
                     ty: Ty::None,
                 })],
             })],
@@ -2824,7 +3422,10 @@ mod tests {
                 step: MirExpr::IntLiteral(-1),
                 body: vec![MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "i".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }],
                     ty: Ty::None,
                 })],
             })],
@@ -2841,15 +3442,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "range() start did not evaluate to int")]
     fn for_range_with_a_non_int_start_is_rejected() {
-        // `pycc_types`/`pycc_mir` only ever build `ForRange` with `int`
-        // `start`/`stop`/`step` (matching CPython's own `range()` argument
-        // rule); this defensive check is unreachable via any real pipeline
-        // output, same convention as the `BinOp`/`Compare` operand-type
-        // checks above -- hand-built malformed MIR exercises it directly.
+        // `bool` is accepted as an `int` subtype; float is not. Hand-built
+        // malformed MIR exercises the defensive backend check directly.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ForRange {
                 var: "i".to_string(),
-                start: MirExpr::BoolLiteral(true),
+                start: MirExpr::FloatLiteral(1.0),
                 stop: MirExpr::IntLiteral(3),
                 step: MirExpr::IntLiteral(1),
                 body: vec![],
@@ -2868,7 +3466,7 @@ mod tests {
             items: vec![MirItem::TopLevelStmt(MirStmt::ForRange {
                 var: "i".to_string(),
                 start: MirExpr::IntLiteral(0),
-                stop: MirExpr::BoolLiteral(true),
+                stop: MirExpr::StringLiteral("3".to_string()),
                 step: MirExpr::IntLiteral(1),
                 body: vec![],
             })],
@@ -2887,7 +3485,7 @@ mod tests {
                 var: "i".to_string(),
                 start: MirExpr::IntLiteral(0),
                 stop: MirExpr::IntLiteral(3),
-                step: MirExpr::BoolLiteral(true),
+                step: MirExpr::FloatLiteral(1.0),
                 body: vec![],
             })],
         };
@@ -2922,7 +3520,10 @@ mod tests {
                     MirStmt::If {
                         test: MirExpr::Compare {
                             op: CmpOpKind::Eq,
-                            left: Box::new(MirExpr::Name { name: "i".to_string(), ty: Ty::Int }),
+                            left: Box::new(MirExpr::Name {
+                                name: "i".to_string(),
+                                ty: Ty::Int,
+                            }),
                             right: Box::new(MirExpr::IntLiteral(1)),
                             ty: Ty::Bool,
                         },
@@ -2935,7 +3536,10 @@ mod tests {
                     },
                     MirStmt::ExprStmt(MirExpr::Call {
                         callee: "print".to_string(),
-                        args: vec![MirExpr::Name { name: "i".to_string(), ty: Ty::Int }],
+                        args: vec![MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        }],
                         ty: Ty::None,
                     }),
                 ],
@@ -3044,8 +3648,14 @@ mod tests {
                     return_ty: Ty::Int,
                     body: vec![MirStmt::Return(Some(MirExpr::BinOp {
                         op: BinOpKind::Add,
-                        left: Box::new(MirExpr::Name { name: "a".to_string(), ty: Ty::Int }),
-                        right: Box::new(MirExpr::Name { name: "b".to_string(), ty: Ty::Int }),
+                        left: Box::new(MirExpr::Name {
+                            name: "a".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::Name {
+                            name: "b".to_string(),
+                            ty: Ty::Int,
+                        }),
                         ty: Ty::Int,
                     }))],
                 },
@@ -3087,8 +3697,14 @@ mod tests {
                     return_ty: Ty::Int,
                     body: vec![MirStmt::Return(Some(MirExpr::BinOp {
                         op: BinOpKind::Sub,
-                        left: Box::new(MirExpr::Name { name: "a".to_string(), ty: Ty::Int }),
-                        right: Box::new(MirExpr::Name { name: "b".to_string(), ty: Ty::Int }),
+                        left: Box::new(MirExpr::Name {
+                            name: "a".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::Name {
+                            name: "b".to_string(),
+                            ty: Ty::Int,
+                        }),
                         ty: Ty::Int,
                     }))],
                 },
@@ -3125,7 +3741,10 @@ mod tests {
             MirStmt::If {
                 test: MirExpr::Compare {
                     op: CmpOpKind::LtE,
-                    left: Box::new(MirExpr::Name { name: "n".to_string(), ty: Ty::Int }),
+                    left: Box::new(MirExpr::Name {
+                        name: "n".to_string(),
+                        ty: Ty::Int,
+                    }),
                     right: Box::new(MirExpr::IntLiteral(1)),
                     ty: Ty::Bool,
                 },
@@ -3134,12 +3753,18 @@ mod tests {
             },
             MirStmt::Return(Some(MirExpr::BinOp {
                 op: BinOpKind::Mul,
-                left: Box::new(MirExpr::Name { name: "n".to_string(), ty: Ty::Int }),
+                left: Box::new(MirExpr::Name {
+                    name: "n".to_string(),
+                    ty: Ty::Int,
+                }),
                 right: Box::new(MirExpr::Call {
                     callee: "fact".to_string(),
                     args: vec![MirExpr::BinOp {
                         op: BinOpKind::Sub,
-                        left: Box::new(MirExpr::Name { name: "n".to_string(), ty: Ty::Int }),
+                        left: Box::new(MirExpr::Name {
+                            name: "n".to_string(),
+                            ty: Ty::Int,
+                        }),
                         right: Box::new(MirExpr::IntLiteral(1)),
                         ty: Ty::Int,
                     }],
@@ -3195,7 +3820,10 @@ mod tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             compile_to_object(&mir, &obj_path, None)
         }));
-        assert!(result.is_err(), "expected a panic, not a successfully-compiled object");
+        assert!(
+            result.is_err(),
+            "expected a panic, not a successfully-compiled object"
+        );
     }
 
     #[test]
@@ -3209,14 +3837,19 @@ mod tests {
         // `a_non_none_function_falling_through_is_an_internal_error_not_bad_ir`
         // above for the per-function analogue of the same guard.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirStmt::Return(Some(MirExpr::IntLiteral(0))))],
+            items: vec![MirItem::TopLevelStmt(MirStmt::Return(Some(
+                MirExpr::IntLiteral(0),
+            )))],
         };
         let dir = tempfile_dir("top_level_return_internal_error");
         let obj_path = dir.join("top_level_return_internal_error.o");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             compile_to_object(&mir, &obj_path, None)
         }));
-        assert!(result.is_err(), "expected a panic, not a successfully-compiled object");
+        assert!(
+            result.is_err(),
+            "expected a panic, not a successfully-compiled object"
+        );
     }
 
     #[test]
@@ -3262,7 +3895,10 @@ mod tests {
                     return_ty: Ty::Bool,
                     body: vec![MirStmt::Return(Some(MirExpr::Compare {
                         op: CmpOpKind::Gt,
-                        left: Box::new(MirExpr::Name { name: "n".to_string(), ty: Ty::Int }),
+                        left: Box::new(MirExpr::Name {
+                            name: "n".to_string(),
+                            ty: Ty::Int,
+                        }),
                         right: Box::new(MirExpr::IntLiteral(0)),
                         ty: Ty::Bool,
                     }))],
@@ -3283,27 +3919,13 @@ mod tests {
     }
 
     #[test]
-    fn a_none_typed_call_result_used_as_a_nested_expression_no_longer_panics() {
-        // Deliberately malformed MIR: a `None`-returning function's result
-        // can only legitimately appear as a bare statement (see
-        // `emit_stmt`'s own void-call arm) or as one of `print`'s own
-        // arguments (see `emit_stmt`'s `print` dispatch) -- real
-        // `pycc_types` would never type an `Assign`'s value as `Ty::None`
-        // this way (there is no `x = None`-shaped source this could come
-        // from in v0.1). Before Task 10, this hit `emit_expr`'s `Call`
-        // arm's defensive `other =>` catch-all and panicked with "a
-        // `None`-typed call result is not supported yet"; Task 10 gives
-        // that arm its own explicit `Ty::None` case instead (a placeholder
-        // `Scalar`, needed so `emit_stmt`'s `print` dispatch can call
-        // `emit_expr` on a `None`-typed argument at all -- see that arm's
-        // own doc comment), so this exact malformed shape now silently
-        // produces a placeholder `bool` local instead of panicking. Kept
-        // (renamed, no longer `#[should_panic]`) as a regression test
-        // documenting that specific, intentional behavior change rather
-        // than being deleted outright -- `an_infer_typed_call_result_used_
-        // as_a_nested_expression_is_not_supported` below takes over this
-        // test's original job of exercising the `other =>` catch-all
-        // itself, via the one `Ty` variant that still reaches it.
+    #[should_panic(expected = "every assignment target must have a predeclared storage slot")]
+    fn a_none_typed_call_result_cannot_be_stored_as_a_general_value() {
+        // D-072 leaves general `None` storage outside v0.1. `emit_expr`
+        // preserves the call side effect with an internal placeholder, but
+        // binding collection deliberately creates no slot for `Ty::None`;
+        // the assignment invariant must therefore fail loudly instead of
+        // silently materializing a bool local.
         let mir = MirModule {
             items: vec![
                 MirItem::Function {
@@ -3314,13 +3936,17 @@ mod tests {
                 },
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "x".to_string(),
-                    value: MirExpr::Call { callee: "f".to_string(), args: vec![], ty: Ty::None },
+                    value: MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::None,
+                    },
                 }),
             ],
         };
-        let dir = tempfile_dir("none_typed_call_result_no_longer_panics");
-        let obj_path = dir.join("none_typed_call_result_no_longer_panics.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let dir = tempfile_dir("none_typed_call_result_has_no_storage");
+        let obj_path = dir.join("none_typed_call_result_has_no_storage.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
     }
 
     #[test]
@@ -3343,7 +3969,11 @@ mod tests {
                 },
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "x".to_string(),
-                    value: MirExpr::Call { callee: "f".to_string(), args: vec![], ty: Ty::Infer },
+                    value: MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::Infer,
+                    },
                 }),
             ],
         };
@@ -3564,7 +4194,7 @@ mod tests {
         // parameter_is_not_yet_supported` test, which happened to hit it
         // via an *unbound* parameter; now that Task 5 binds parameters for
         // real, that test was rewritten into a positive one (see
-        // `a_function_parameter_can_be_read_back_and_printed` above),
+        // `a_function_parameter_can_be_reassigned_read_back_and_printed` above),
         // leaving this exact check's own coverage to this more direct,
         // dedicated test instead.
         let mir = MirModule {
@@ -3636,7 +4266,10 @@ mod tests {
                 }),
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "z".to_string(), ty: pycc_mir::Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "z".to_string(),
+                        ty: pycc_mir::Ty::Int,
+                    }],
                     ty: pycc_mir::Ty::None,
                 })),
             ],
@@ -3959,7 +4592,10 @@ mod tests {
                     target: "x".to_string(),
                     value: MirExpr::BinOp {
                         op: BinOpKind::Add,
-                        left: Box::new(MirExpr::Name { name: "x".to_string(), ty: Ty::Str }),
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Str,
+                        }),
                         right: Box::new(MirExpr::StringLiteral("bar".to_string())),
                         ty: Ty::Str,
                     },
@@ -3976,12 +4612,36 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "string assignment target `value` has a non-string storage slot")]
+    fn a_string_assignment_rejects_a_predeclared_non_string_slot() {
+        // Deliberately malformed MIR: the checked pipeline preserves a
+        // binding's established representation, so it cannot assign `str`
+        // to an `int` target. The hand-built shape verifies codegen rejects
+        // the mismatch before treating an integer slot as a string pointer.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "value".to_string(),
+                    value: MirExpr::IntLiteral(1),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "value".to_string(),
+                    value: MirExpr::StringLiteral("bad".to_string()),
+                }),
+            ],
+        };
+        let dir = tempfile_dir("str_assignment_non_str_slot_panics");
+        let obj_path = dir.join("str_assignment_non_str_slot_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
     fn a_str_local_first_assigned_inside_an_if_body_is_freed_at_top_level_completion() {
         // Regression test for a review finding against this file's first
         // `str`-codegen task: `if True: s = "hi"` -- `s`'s *first*
-        // assignment happens inside the `if`'s own `then` block, never at
+        // assignment executes inside the `if`'s own `then` block, never at
         // the top level directly, and `s` is never read by any user code
-        // either. The only read of `s`'s slot is
+        // either. The final read of `s`'s slot is
         // `compile_to_object`'s own top-level-locals completion-decref loop,
         // positioned right before `main`'s `build_return` -- outside the
         // `if`'s `then` block entirely. Before this fix, `s`'s `alloca`
@@ -3990,9 +4650,9 @@ mod tests {
         // does not dominate that later completion-loop read: `module.
         // verify()` rejected the resulting IR and `compile_to_object`
         // panicked ("Instruction does not dominate all uses! %final_str =
-        // load ptr, ptr %s"). Hoisting `s`'s `alloca` to the function's
-        // entry block (`alloca_str_at_entry`) fixes this regardless of
-        // which nested block `s`'s first assignment executes in.
+        // load ptr, ptr %s"). Preclassifying `s` and hoisting its initialized
+        // `alloca` to the function's entry block fixes this regardless of
+        // which nested block its first assignment executes in (D-074).
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::If {
                 test: MirExpr::BoolLiteral(true),
@@ -4014,16 +4674,12 @@ mod tests {
 
     #[test]
     fn a_str_local_assigned_in_both_branches_of_an_if_else_is_freed_at_top_level_completion() {
-        // `if True: s = "hi" else: s = "bye"` -- `s`'s *first* assignment
-        // (the `then` branch, processed first by this file's `If` codegen)
-        // creates its slot; the `else` branch's own `Assign` then reuses
-        // that same slot (`emit_assign`'s `locals.get(target) => Some`
-        // path) from a sibling block that neither dominates nor is
-        // dominated by the `then` block. Same underlying entry-block-
-        // hoisting fix as the single-branch test above, additionally
-        // proving the reused-slot path is safe once the slot itself lives
-        // in the entry block rather than in whichever branch first created
-        // it.
+        // `if True: s = "hi" else: s = "bye"` -- `s`'s slot is classified
+        // and initialized in the entry block before either branch is
+        // emitted. Both sibling branches then reuse that same dominating
+        // slot, rather than whichever branch is visited first creating it.
+        // This additionally proves the pre-store null/old-value decref path
+        // is safe from either predecessor (D-074).
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::If {
                 test: MirExpr::BoolLiteral(true),
@@ -4047,20 +4703,14 @@ mod tests {
     }
 
     #[test]
-    fn a_str_local_first_assigned_inside_a_while_body_is_freed_at_top_level_completion() {
+    fn a_str_local_first_assigned_inside_a_while_body_frees_previous_and_final_values() {
         // `i = 0; while i < 3: s = "x"; i = i + 1` -- `s`'s first assignment
         // happens inside the `while`'s own body block, exercising the same
         // entry-block-hoisting fix through a loop back-edge instead of an
-        // `if`/`else` merge. This is the only test in this file whose first
-        // binding of a `str` local is itself inside a loop body, so it also
-        // pins D-061's accepted leak class (b) (see D-070): codegen visits
-        // this `Assign` exactly once, when `s` is not yet in `locals`, so
-        // `decref_old_str_if_reassigning` never fires for it and no decref is
-        // emitted into the loop body at all. At runtime every iteration but
-        // the last therefore overwrites `s`'s slot without freeing its
-        // predecessor's `"x"` -- a bounded, memory-safe per-iteration leak;
-        // only the final iteration's value is later freed, by the top-level
-        // completion pass, which is exactly what this test's name describes.
+        // `if`/`else` merge. The slot is initialized to null in the entry
+        // block, so the emitted pre-store decref is harmless on the first
+        // iteration, frees the previous value on later iterations, and the
+        // top-level completion pass frees the final value (D-074).
         let mir = MirModule {
             items: vec![
                 MirItem::TopLevelStmt(MirStmt::Assign {
@@ -4070,7 +4720,10 @@ mod tests {
                 MirItem::TopLevelStmt(MirStmt::While {
                     test: MirExpr::Compare {
                         op: CmpOpKind::Lt,
-                        left: Box::new(MirExpr::Name { name: "i".to_string(), ty: Ty::Int }),
+                        left: Box::new(MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        }),
                         right: Box::new(MirExpr::IntLiteral(3)),
                         ty: Ty::Bool,
                     },
@@ -4083,7 +4736,10 @@ mod tests {
                             target: "i".to_string(),
                             value: MirExpr::BinOp {
                                 op: BinOpKind::Add,
-                                left: Box::new(MirExpr::Name { name: "i".to_string(), ty: Ty::Int }),
+                                left: Box::new(MirExpr::Name {
+                                    name: "i".to_string(),
+                                    ty: Ty::Int,
+                                }),
                                 right: Box::new(MirExpr::IntLiteral(1)),
                                 ty: Ty::Int,
                             },
@@ -4108,7 +4764,7 @@ mod tests {
         // never runs at all. This exercises the *other* half of the same
         // review finding the three tests above cover: hoisting `s`'s
         // `alloca` to the entry block only fixes *dominance*; it's the
-        // explicit `store null` `alloca_str_at_entry` also does at entry
+        // explicit `store null` `alloca_local_at_entry` also does at entry
         // that keeps this path safe, since `s`'s slot genuinely holds that
         // null (never LLVM `undef`) when the top-level completion loop
         // loads and decrefs it -- `pycc_rt_str_decref`'s own null guard
@@ -4125,7 +4781,10 @@ mod tests {
                     value: MirExpr::StringLiteral(String::new()),
                 }),
                 MirItem::TopLevelStmt(MirStmt::If {
-                    test: MirExpr::Name { name: "flag".to_string(), ty: Ty::Str },
+                    test: MirExpr::Name {
+                        name: "flag".to_string(),
+                        ty: Ty::Str,
+                    },
                     body: vec![MirStmt::Assign {
                         target: "s".to_string(),
                         value: MirExpr::StringLiteral("hi".to_string()),
@@ -4140,7 +4799,10 @@ mod tests {
         let bin_path = dir.join("str_never_assigned_on_taken_path");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
-        assert!(output.status.success(), "should run without crashing (null-guarded decref of a never-assigned slot)");
+        assert!(
+            output.status.success(),
+            "should run without crashing (null-guarded decref of a never-assigned slot)"
+        );
     }
 
     #[test]
@@ -4190,7 +4852,11 @@ mod tests {
             let bin_path = dir.join("str_cmp_runtime");
             link_object_with_runtime(&obj_path, &bin_path);
             let output = Command::new(&bin_path).output().expect("binary should run");
-            assert_eq!(output.stdout, expected.as_bytes(), "comparing {left:?} < {right:?}");
+            assert_eq!(
+                output.stdout,
+                expected.as_bytes(),
+                "comparing {left:?} < {right:?}"
+            );
         }
     }
 
@@ -4504,6 +5170,45 @@ mod tests {
     }
 
     #[test]
+    fn compiles_an_f_string_interpolating_a_none_returning_call_as_none() {
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "returns_none".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(None)],
+                },
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "text".to_string(),
+                    value: MirExpr::FString(vec![pycc_mir::MirFStringPart::Interpolation(
+                        Box::new(MirExpr::Call {
+                            callee: "returns_none".to_string(),
+                            args: vec![],
+                            ty: Ty::None,
+                        }),
+                    )]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "text".to_string(),
+                        ty: Ty::Str,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("fstring_none_call");
+        let obj_path = dir.join("fstring_none_call.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("fstring_none_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"None\n");
+    }
+
+    #[test]
     fn compiles_an_f_string_with_only_literal_parts() {
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
@@ -4577,15 +5282,24 @@ mod tests {
                         target: "acc".to_string(),
                         value: MirExpr::BinOp {
                             op: BinOpKind::Add,
-                            left: Box::new(MirExpr::Name { name: "acc".to_string(), ty: Ty::Int }),
-                            right: Box::new(MirExpr::Name { name: "acc".to_string(), ty: Ty::Int }),
+                            left: Box::new(MirExpr::Name {
+                                name: "acc".to_string(),
+                                ty: Ty::Int,
+                            }),
+                            right: Box::new(MirExpr::Name {
+                                name: "acc".to_string(),
+                                ty: Ty::Int,
+                            }),
                             ty: Ty::Int,
                         },
                     }],
                 }),
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
                     callee: "print".to_string(),
-                    args: vec![MirExpr::Name { name: "acc".to_string(), ty: Ty::Int }],
+                    args: vec![MirExpr::Name {
+                        name: "acc".to_string(),
+                        ty: Ty::Int,
+                    }],
                     ty: Ty::None,
                 })),
             ],

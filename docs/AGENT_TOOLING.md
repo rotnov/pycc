@@ -83,7 +83,7 @@ thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
 They are intentionally absent from `skills-lock.json`, `rotnov/skills`, and
 skills.sh until their trigger and output evals mature.
 
-`pycc` distinguishes the implemented compiler slice from planned
+`pycc` distinguishes the implemented v0.1 compiler surface from planned
 specifications before running commands. `pycc-feedback` may reproduce,
 minimize, sanitize, run sanitized duplicate searches, and prepare a public
 GitHub draft without approval. Non-public search terms require a separate

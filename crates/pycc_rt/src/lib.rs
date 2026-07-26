@@ -136,16 +136,24 @@ fn magnitude_sub(a: &[u32], b: &[u32]) -> Vec<u32> {
 
 fn bigint_add_signed(a_neg: bool, a_mag: &[u32], b_neg: bool, b_mag: &[u32]) -> BigIntObj {
     if a_neg == b_neg {
-        BigIntObj { negative: a_neg, limbs: trim(&magnitude_add(a_mag, b_mag)) }
+        BigIntObj {
+            negative: a_neg,
+            limbs: trim(&magnitude_add(a_mag, b_mag)),
+        }
     } else {
         match magnitude_cmp(a_mag, b_mag) {
-            std::cmp::Ordering::Equal => BigIntObj { negative: false, limbs: vec![0] },
-            std::cmp::Ordering::Greater => {
-                BigIntObj { negative: a_neg, limbs: trim(&magnitude_sub(a_mag, b_mag)) }
-            }
-            std::cmp::Ordering::Less => {
-                BigIntObj { negative: b_neg, limbs: trim(&magnitude_sub(b_mag, a_mag)) }
-            }
+            std::cmp::Ordering::Equal => BigIntObj {
+                negative: false,
+                limbs: vec![0],
+            },
+            std::cmp::Ordering::Greater => BigIntObj {
+                negative: a_neg,
+                limbs: trim(&magnitude_sub(a_mag, b_mag)),
+            },
+            std::cmp::Ordering::Less => BigIntObj {
+                negative: b_neg,
+                limbs: trim(&magnitude_sub(b_mag, a_mag)),
+            },
         }
     }
 }
@@ -180,7 +188,10 @@ fn to_sign_and_magnitude(tagged: i64) -> (bool, Vec<u32>) {
         let v = untag_smallint(tagged);
         let negative = v < 0;
         let mag = v.unsigned_abs();
-        (negative, trim(&[(mag & 0xFFFF_FFFF) as u32, (mag >> 32) as u32]))
+        (
+            negative,
+            trim(&[(mag & 0xFFFF_FFFF) as u32, (mag >> 32) as u32]),
+        )
     } else {
         let b = unsafe { bigint_ref(tagged) };
         (b.negative, b.limbs.clone())
@@ -203,7 +214,9 @@ fn bigint_to_decimal_string(negative: bool, limbs: &[u32]) -> String {
     let mut digits = Vec::new();
     loop {
         let (q, r) = divmod_small(&limbs, 10);
-        digits.push(std::char::from_digit(r, 10).expect("a remainder of division by 10 is always 0-9"));
+        digits.push(
+            std::char::from_digit(r, 10).expect("a remainder of division by 10 is always 0-9"),
+        );
         limbs = trim(&q);
         if limbs.len() == 1 && limbs[0] == 0 {
             break;
@@ -252,13 +265,18 @@ fn bigint_to_decimal_string(negative: bool, limbs: &[u32]) -> String {
 // unwind ever crosses its boundary on those paths).
 fn int_add(a: i64, b: i64) -> i64 {
     if is_smallint(a) && is_smallint(b) {
-        if let Some(result) = untag_smallint(a).checked_add(untag_smallint(b)).and_then(fits_smallint) {
+        if let Some(result) = untag_smallint(a)
+            .checked_add(untag_smallint(b))
+            .and_then(fits_smallint)
+        {
             return result;
         }
         // Both operands fit 63 bits, so their true sum always fits i128
         // with room to spare -- exact, no further bigint math needed
         // for this specific promotion step.
-        return tag_bigint(bigint_from_i128(untag_smallint(a) as i128 + untag_smallint(b) as i128));
+        return tag_bigint(bigint_from_i128(
+            untag_smallint(a) as i128 + untag_smallint(b) as i128,
+        ));
     }
     let (a_neg, a_mag) = to_sign_and_magnitude(a);
     let (b_neg, b_mag) = to_sign_and_magnitude(b);
@@ -285,10 +303,15 @@ pub extern "C" fn pycc_rt_int_add(a: i64, b: i64) -> i64 {
 
 fn int_sub(a: i64, b: i64) -> i64 {
     if is_smallint(a) && is_smallint(b) {
-        if let Some(result) = untag_smallint(a).checked_sub(untag_smallint(b)).and_then(fits_smallint) {
+        if let Some(result) = untag_smallint(a)
+            .checked_sub(untag_smallint(b))
+            .and_then(fits_smallint)
+        {
             return result;
         }
-        return tag_bigint(bigint_from_i128(untag_smallint(a) as i128 - untag_smallint(b) as i128));
+        return tag_bigint(bigint_from_i128(
+            untag_smallint(a) as i128 - untag_smallint(b) as i128,
+        ));
     }
     let (a_neg, a_mag) = to_sign_and_magnitude(a);
     let (b_neg, b_mag) = to_sign_and_magnitude(b);
@@ -306,7 +329,9 @@ fn int_mul(a: i64, b: i64) -> i64 {
     untag_smallint(a)
         .checked_mul(untag_smallint(b))
         .and_then(fits_smallint)
-        .unwrap_or_else(|| panic!("pycc_rt: integer overflow (bigint promotion is not implemented yet)"))
+        .unwrap_or_else(|| {
+            panic!("pycc_rt: integer overflow (bigint promotion is not implemented yet)")
+        })
 }
 
 #[unsafe(no_mangle)]
@@ -344,9 +369,14 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
     // `pycc_rt_int_floordiv_panics_when_negating_the_minimum_taggable_value_overflows`).
     let q = a / b;
     let r = a % b;
-    let floored = if r != 0 && (r < 0) != (b < 0) { q - 1 } else { q };
-    fits_smallint(floored)
-        .unwrap_or_else(|| panic!("pycc_rt: integer overflow (bigint promotion is not implemented yet)"))
+    let floored = if r != 0 && (r < 0) != (b < 0) {
+        q - 1
+    } else {
+        q
+    };
+    fits_smallint(floored).unwrap_or_else(|| {
+        panic!("pycc_rt: integer overflow (bigint promotion is not implemented yet)")
+    })
 }
 
 #[unsafe(no_mangle)]
@@ -377,7 +407,11 @@ fn int_floormod(a: i64, b: i64) -> i64 {
     // `cargo llvm-cov`: its `None` arm never executed under any test.
     // `tag_smallint` alone is therefore correct and simpler.
     let r = a % b;
-    let floored = if r != 0 && (r < 0) != (b < 0) { r + b } else { r };
+    let floored = if r != 0 && (r < 0) != (b < 0) {
+        r + b
+    } else {
+        r
+    };
     tag_smallint(floored)
 }
 
@@ -500,7 +534,11 @@ fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
     require_smallint(i, "iterating");
     require_smallint(stop, "iterating");
     require_smallint(step, "iterating");
-    let (i, stop, step) = (untag_smallint(i), untag_smallint(stop), untag_smallint(step));
+    let (i, stop, step) = (
+        untag_smallint(i),
+        untag_smallint(stop),
+        untag_smallint(step),
+    );
     match step.cmp(&0) {
         std::cmp::Ordering::Greater => i8::from(i < stop),
         std::cmp::Ordering::Less => i8::from(i > stop),
@@ -549,7 +587,11 @@ pub extern "C" fn pycc_rt_float_floordiv(a: f64, b: f64) -> f64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_float_floormod(a: f64, b: f64) -> f64 {
     let r = a % b;
-    if r != 0.0 && (r < 0.0) != (b < 0.0) { r + b } else { r }
+    if r != 0.0 && (r < 0.0) != (b < 0.0) {
+        r + b
+    } else {
+        r
+    }
 }
 
 /// Python's `**` on `float`: unlike `int_pow`, a negative exponent is
@@ -612,7 +654,10 @@ fn new_pystr(bytes: &[u8]) -> *mut PyStrObj {
     } else {
         PyStrPayload::Heap(bytes.to_vec().into_boxed_slice())
     };
-    Box::into_raw(Box::new(PyStrObj { rc: Cell::new(1), payload }))
+    Box::into_raw(Box::new(PyStrObj {
+        rc: Cell::new(1),
+        payload,
+    }))
 }
 
 /// Builds a `str` object from a compile-time literal's bytes
@@ -748,7 +793,11 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
 /// adds for its own (unrelated) purpose.
 fn int_to_str(tagged: i64) -> *mut PyStrObj {
     if is_smallint(tagged) {
-        return new_pystr(format_i64_line(untag_smallint(tagged)).trim_end().as_bytes());
+        return new_pystr(
+            format_i64_line(untag_smallint(tagged))
+                .trim_end()
+                .as_bytes(),
+        );
     }
     let b = unsafe { bigint_ref(tagged) };
     new_pystr(bigint_to_decimal_string(b.negative, &b.limbs).as_bytes())
@@ -804,7 +853,11 @@ fn float_to_str(value: f64) -> *mut PyStrObj {
         );
     }
     let text = format!("{value}");
-    let text = if text.contains('.') { text } else { format!("{text}.0") };
+    let text = if text.contains('.') {
+        text
+    } else {
+        format!("{text}.0")
+    };
     new_pystr(text.as_bytes())
 }
 
@@ -946,17 +999,35 @@ mod tests {
     fn pycc_rt_int_floordiv_matches_python_floor_semantics() {
         // Python: -7 // 2 == -4 (floors toward negative infinity), not -3
         // (truncation toward zero, which is what a raw LLVM/Rust `/` gives).
-        assert_eq!(untag_smallint(pycc_rt_int_floordiv(tag_smallint(-7), tag_smallint(2))), -4);
-        assert_eq!(untag_smallint(pycc_rt_int_floordiv(tag_smallint(7), tag_smallint(2))), 3);
-        assert_eq!(untag_smallint(pycc_rt_int_floordiv(tag_smallint(7), tag_smallint(-2))), -4);
+        assert_eq!(
+            untag_smallint(pycc_rt_int_floordiv(tag_smallint(-7), tag_smallint(2))),
+            -4
+        );
+        assert_eq!(
+            untag_smallint(pycc_rt_int_floordiv(tag_smallint(7), tag_smallint(2))),
+            3
+        );
+        assert_eq!(
+            untag_smallint(pycc_rt_int_floordiv(tag_smallint(7), tag_smallint(-2))),
+            -4
+        );
     }
 
     #[test]
     fn pycc_rt_int_floormod_matches_python_floor_semantics() {
         // Python: -7 % 2 == 1 (result takes the divisor's sign), not -1.
-        assert_eq!(untag_smallint(pycc_rt_int_floormod(tag_smallint(-7), tag_smallint(2))), 1);
-        assert_eq!(untag_smallint(pycc_rt_int_floormod(tag_smallint(7), tag_smallint(2))), 1);
-        assert_eq!(untag_smallint(pycc_rt_int_floormod(tag_smallint(7), tag_smallint(-2))), -1);
+        assert_eq!(
+            untag_smallint(pycc_rt_int_floormod(tag_smallint(-7), tag_smallint(2))),
+            1
+        );
+        assert_eq!(
+            untag_smallint(pycc_rt_int_floormod(tag_smallint(7), tag_smallint(2))),
+            1
+        );
+        assert_eq!(
+            untag_smallint(pycc_rt_int_floormod(tag_smallint(7), tag_smallint(-2))),
+            -1
+        );
     }
 
     #[test]
@@ -983,7 +1054,10 @@ mod tests {
         // negative value that still tags) round-trips correctly through
         // floor-division by `1` without spuriously reporting overflow.
         let min = i64::MIN >> 1; // most negative value that still tags
-        assert_eq!(untag_smallint(pycc_rt_int_floordiv(tag_smallint(min), tag_smallint(1))), min);
+        assert_eq!(
+            untag_smallint(pycc_rt_int_floordiv(tag_smallint(min), tag_smallint(1))),
+            min
+        );
     }
 
     #[test]
@@ -1001,8 +1075,14 @@ mod tests {
 
     #[test]
     fn pycc_rt_int_pow_computes_the_correct_tagged_power() {
-        assert_eq!(untag_smallint(pycc_rt_int_pow(tag_smallint(2), tag_smallint(10))), 1024);
-        assert_eq!(untag_smallint(pycc_rt_int_pow(tag_smallint(5), tag_smallint(0))), 1);
+        assert_eq!(
+            untag_smallint(pycc_rt_int_pow(tag_smallint(2), tag_smallint(10))),
+            1024
+        );
+        assert_eq!(
+            untag_smallint(pycc_rt_int_pow(tag_smallint(5), tag_smallint(0))),
+            1
+        );
     }
 
     #[test]
@@ -1045,14 +1125,26 @@ mod tests {
 
     #[test]
     fn pycc_rt_range_continue_handles_positive_step() {
-        assert_eq!(pycc_rt_range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(1)), 1);
-        assert_eq!(pycc_rt_range_continue(tag_smallint(3), tag_smallint(3), tag_smallint(1)), 0);
+        assert_eq!(
+            pycc_rt_range_continue(tag_smallint(0), tag_smallint(3), tag_smallint(1)),
+            1
+        );
+        assert_eq!(
+            pycc_rt_range_continue(tag_smallint(3), tag_smallint(3), tag_smallint(1)),
+            0
+        );
     }
 
     #[test]
     fn pycc_rt_range_continue_handles_negative_step() {
-        assert_eq!(pycc_rt_range_continue(tag_smallint(3), tag_smallint(0), tag_smallint(-1)), 1);
-        assert_eq!(pycc_rt_range_continue(tag_smallint(0), tag_smallint(0), tag_smallint(-1)), 0);
+        assert_eq!(
+            pycc_rt_range_continue(tag_smallint(3), tag_smallint(0), tag_smallint(-1)),
+            1
+        );
+        assert_eq!(
+            pycc_rt_range_continue(tag_smallint(0), tag_smallint(0), tag_smallint(-1)),
+            0
+        );
     }
 
     #[test]
@@ -1400,7 +1492,10 @@ mod tests {
         // single zero limb). `i64::MAX >> 1` is the largest tagged smallint,
         // so `+ 1` overflows the fixnum range and promotes to a real bigint.
         let huge = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1));
-        assert!(!is_smallint(huge), "value must actually be a bigint, not a tagged smallint");
+        assert!(
+            !is_smallint(huge),
+            "value must actually be a bigint, not a tagged smallint"
+        );
         assert_eq!(pycc_rt_int_truthy(huge), 1);
     }
 

@@ -1,3 +1,4 @@
+use pycc_mir::{BinOpKind, MirExpr, MirItem, MirModule, MirStmt, Ty};
 use std::io::Write;
 use std::process::Command;
 
@@ -25,6 +26,158 @@ fn build_and_run(label: &str, source: &str) -> std::process::Output {
     Command::new(&out).output().unwrap()
 }
 
+fn compile_mir(label: &str, mir: &MirModule) -> Result<(), String> {
+    let dir = std::env::temp_dir().join(format!("pycc_slice1_mir_{label}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    pycc_codegen::compile_to_object(mir, &dir.join(format!("{label}.o")), None)
+}
+
+#[test]
+fn public_codegen_api_covers_float_runtime_ops_and_parameter_reassignment() {
+    let mir = MirModule {
+        items: vec![
+            MirItem::Function {
+                name: "increment".to_string(),
+                params: vec![("value".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "value".to_string(),
+                        value: MirExpr::BinOp {
+                            op: BinOpKind::Add,
+                            left: Box::new(MirExpr::Name {
+                                name: "value".to_string(),
+                                ty: Ty::Int,
+                            }),
+                            right: Box::new(MirExpr::IntLiteral(1)),
+                            ty: Ty::Int,
+                        },
+                    },
+                    MirStmt::Return(Some(MirExpr::Name {
+                        name: "value".to_string(),
+                        ty: Ty::Int,
+                    })),
+                ],
+            },
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::BinOp {
+                    op: BinOpKind::FloorDiv,
+                    left: Box::new(MirExpr::FloatLiteral(5.5)),
+                    right: Box::new(MirExpr::FloatLiteral(2.0)),
+                    ty: Ty::Float,
+                }],
+                ty: Ty::None,
+            })),
+        ],
+    };
+
+    compile_mir("public_success_paths", &mir).expect("public codegen paths should compile");
+}
+
+#[test]
+#[should_panic(expected = "has no local slot")]
+fn public_codegen_api_rejects_a_name_without_storage() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Name {
+                name: "missing".to_string(),
+                ty: Ty::Int,
+            }],
+            ty: Ty::None,
+        }))],
+    };
+    let _ = compile_mir("missing_storage", &mir);
+}
+
+#[test]
+#[should_panic(expected = "call to undefined function")]
+fn public_codegen_api_rejects_an_undefined_nested_call() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::Call {
+                callee: "missing".to_string(),
+                args: vec![],
+                ty: Ty::Int,
+            }],
+            ty: Ty::None,
+        }))],
+    };
+    let _ = compile_mir("undefined_nested_call", &mir);
+}
+
+#[test]
+#[should_panic(expected = "an f-string with zero parts should not be reachable")]
+fn public_codegen_api_rejects_an_empty_structural_fstring() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![MirExpr::FString(vec![])],
+            ty: Ty::None,
+        }))],
+    };
+    let _ = compile_mir("empty_structural_fstring", &mir);
+}
+
+#[test]
+fn public_codegen_api_returns_an_error_for_an_undefined_void_call() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+            callee: "missing".to_string(),
+            args: vec![],
+            ty: Ty::None,
+        }))],
+    };
+    let error = compile_mir("undefined_void_call", &mir).expect_err("the call should fail");
+    assert!(error.contains("missing"));
+}
+
+#[test]
+fn public_codegen_api_propagates_an_error_from_a_function_body() {
+    let mir = MirModule {
+        items: vec![MirItem::Function {
+            name: "broken".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "missing".to_string(),
+                args: vec![],
+                ty: Ty::None,
+            })],
+        }],
+    };
+    let error = compile_mir("undefined_void_call_in_function", &mir)
+        .expect_err("the function body should fail");
+    assert!(error.contains("missing"));
+}
+
+#[test]
+#[should_panic(expected = "declared to return a non-`None` value but fell through")]
+fn public_codegen_api_rejects_a_non_none_function_that_falls_through() {
+    let mir = MirModule {
+        items: vec![MirItem::Function {
+            name: "broken".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![],
+        }],
+    };
+    let _ = compile_mir("non_none_fallthrough", &mir);
+}
+
+#[test]
+#[should_panic(expected = "a top-level statement terminated `main`'s entry block")]
+fn public_codegen_api_rejects_a_top_level_return() {
+    let mir = MirModule {
+        items: vec![MirItem::TopLevelStmt(MirStmt::Return(Some(
+            MirExpr::IntLiteral(0),
+        )))],
+    };
+    let _ = compile_mir("top_level_return", &mir);
+}
+
 #[test]
 fn recursive_fibonacci_matches_the_well_known_sequence() {
     let source = "\
@@ -40,10 +193,7 @@ while i < 11:
 ";
     let output = build_and_run("fib_recursive", source);
     assert!(output.status.success());
-    assert_eq!(
-        output.stdout,
-        b"0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n"
-    );
+    assert_eq!(output.stdout, b"0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n");
 }
 
 #[test]
@@ -183,6 +333,170 @@ print(\"x\", 1, 2.5, True)
     let output = build_and_run("print_multi_arg_mixed_types", source);
     assert!(output.status.success());
     assert_eq!(output.stdout, b"x 1 2.5 True\n");
+}
+
+#[test]
+fn backend_representation_boundaries_match_the_checked_v0_1_contract() {
+    let source = "\
+def read_later_global() -> int:
+    return later_global
+
+def read_later_label() -> str:
+    return later_label
+
+def branch_local(flag: bool) -> int:
+    if flag:
+        value = 1
+    else:
+        value = 2
+    return value
+
+def accepts_int(value: int) -> int:
+    return value
+
+def both_branches_return(flag: bool) -> int:
+    if flag:
+        return True
+    else:
+        return False
+
+def returns_none() -> None:
+    return
+
+def local_shadows_global() -> int:
+    shadowed = 4
+    return shadowed
+
+def reassigns_parameter(value: int) -> int:
+    value = value + 1
+    return value
+
+later_global = 5
+later_label = \"global\"
+shadowed = 9
+print(read_later_global())
+print(read_later_label())
+print(branch_local(False))
+print(accepts_int(True))
+print(both_branches_return(False))
+print(local_shadows_global())
+print(shadowed)
+print(reassigns_parameter(10))
+for i in range(False, 3, True):
+    print(i)
+counter = 10
+counter = True
+print(counter)
+print(f\"{returns_none()}\")
+";
+    let output = build_and_run("backend_representation_boundaries", source);
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"5\nglobal\n2\n1\n0\n4\n9\n11\n0\n1\n2\n1\nNone\n"
+    );
+}
+
+#[test]
+fn calling_a_function_before_its_integer_global_is_initialized_fails() {
+    let source = "\
+def read_later_global() -> int:
+    return later_global
+
+later_global = read_later_global()
+";
+    let output = build_and_run("uninitialized_integer_global", source);
+    assert!(
+        !output.status.success(),
+        "an LLVM initializer must never become a fabricated Python int"
+    );
+}
+
+#[test]
+fn calling_a_function_before_its_string_global_is_initialized_fails_safely() {
+    let source = "\
+def read_later_label() -> str:
+    return later_label
+
+captured = read_later_label()
+later_label = \"global\"
+";
+    let output = build_and_run("uninitialized_string_global", source);
+    assert!(
+        !output.status.success(),
+        "an uninitialized string global must trap before a null runtime dereference"
+    );
+}
+
+#[test]
+fn a_maybe_bound_integer_local_fails_before_loading_undefined_storage() {
+    let source = "\
+def read_value(flag: bool) -> int:
+    if flag:
+        value = 1
+    return value
+
+captured = read_value(False)
+";
+    let output = build_and_run("maybe_bound_integer_local", source);
+    assert!(
+        !output.status.success(),
+        "a skipped local assignment must not expose LLVM undef"
+    );
+}
+
+#[test]
+fn a_maybe_bound_string_local_fails_before_returning_null() {
+    let source = "\
+def read_label(flag: bool) -> str:
+    if flag:
+        label = \"ready\"
+    return label
+
+captured = read_label(False)
+";
+    let output = build_and_run("maybe_bound_string_local", source);
+    assert!(
+        !output.status.success(),
+        "a skipped string assignment must trap before null reaches a caller"
+    );
+}
+
+#[test]
+fn an_empty_range_leaves_a_new_target_unbound() {
+    let source = "\
+for item in range(0):
+    print(item)
+print(item)
+";
+    let output = build_and_run("empty_range_target", source);
+    assert!(
+        !output.status.success(),
+        "an empty range must not fabricate a visible target value"
+    );
+}
+
+#[test]
+fn range_targets_keep_the_last_element_and_ignore_body_reassignment_for_iteration() {
+    let source = "\
+empty = 7
+for empty in range(0):
+    print(empty)
+print(empty)
+for i in range(3):
+    print(i)
+print(i)
+for j in range(3, 0, 0 - 1):
+    print(j)
+print(j)
+for k in range(3):
+    print(k)
+    k = 99
+print(k)
+";
+    let output = build_and_run("range_target_lifetime", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"7\n0\n1\n2\n2\n3\n2\n1\n1\n0\n1\n2\n99\n");
 }
 
 #[test]

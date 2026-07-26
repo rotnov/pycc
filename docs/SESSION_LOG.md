@@ -11,6 +11,52 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-07-26 — PR #132 review fixes validated before current-main integration
+
+**Snapshot evidence:** local task branch `codex/fix-pr132-review-0764` is at
+`b57481a7dda629536bf29c280639454f9eba4e1e`, with the reviewed PR #132 fix
+set still uncommitted at this checkpoint. That branch previously integrated
+`main@128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`; during the independent
+review loop the remote default branch advanced to
+`78f5dcc0c3fd7c88fdc87e716e294fb0fc5cdb53`, while the published PR head
+remained `1ae1b3c90749836aeaa340ad0d8a067dc605d464`. The containing patch commit
+preserves the validated work before any current-`main` integration; it is not
+yet pushed or merged.
+
+**Validated fix set:** all current PR #132 Codex findings are addressed across
+MIR, LLVM codegen, runtime-facing safety, tests, and the owning documentation.
+Functions see completed module bindings; globals and maybe-bound
+non-parameter locals carry runtime initialization flags; parameters remain
+initialized and reassignable; local allocations dominate their uses; accepted
+`bool`→`int` boundaries use the tagged representation; a `for` uses hidden SSA
+induction state so empty ranges, post-loop targets, negative steps, and body
+reassignment match Python; two-return merges are terminated; and `None` in an
+f-string renders as `None`. Current docs and site projections describe the
+implemented subset and remaining gaps without attributing unary rejection to
+the backend.
+
+**Local evidence:** the exact hard command
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+passed with 13,499/13,499 regions and 9,426/9,426 lines. Workspace tests,
+Clippy with `-D warnings`, `cargo doc`, site checks and mutation self-tests,
+242 Python policy tests, Ruby CI-permission and roadmap-evidence suites,
+agent policy/assets validation, Codex/Claude alpha-skill evals, both marketplace
+checks, and `git diff --check` passed. The final independent iEvo deep-review
+rerun covered all 11 dimensions and reported no blocker or warning. The known
+iEvo stale-catalog defect remains deduplicated in upstream
+[`ievo-ai/skills#459`](https://github.com/ievo-ai/skills/issues/459); no new
+confirmed iEvo defect was found.
+
+**Required next steps:** commit this clean reviewed patch, integrate exact
+`origin/main@78f5dcc` with `--no-commit`, resolve additively, refresh this
+snapshot immediately before the merge commit, and rerun proportionate full
+validation. Then push normally to `feat/v0-1-pr5-codegen-depth`, resolve only
+the verified fixed/outdated review threads, request one exact `@codex review`
+for the new head, and wait for all required CI including the hard coverage and
+performance gates. Monitor only current open PRs, new merges, current checks,
+and current review threads; PR #119/#125 references are historical governance
+records, not live monitoring targets.
+
 ## 2026-07-26 — PR #138 merged; D-062 blocks PR #132
 
 **Delivered state:** [PR #137](https://github.com/rotnov/pycc/pull/137)

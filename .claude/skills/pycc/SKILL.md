@@ -21,12 +21,14 @@ complete pycc interface.
    planned, or unknown.
 
 At this alpha revision, `build`, `run`, `check`, and `version --verbose` have
-implementations. `check` runs the broader parser, checked HIR lowering, and
-strict type-checker subset and can render human or JSON diagnostics. `build`
-and `run` still support a narrower backend slice. `test`, `explain`, `init`,
-and `clean` return an explicit not-implemented error, and `check --fix` is not
-parsed yet. Re-verify these statements against source whenever using the
-skill; do not let this snapshot override newer code.
+implementations. `check` runs the parser, checked HIR lowering, and strict
+type-checker subset and can render human or JSON diagnostics. `build` and
+`run` lower the implemented v0.1 language surface through MIR, LLVM, the host
+linker, and the native runtime, subject to the explicit gaps in
+`docs/ROADMAP.md`. `test`, `explain`, `init`, and `clean` return an explicit
+not-implemented error, and `check --fix` is not parsed yet. Re-verify these
+statements against source whenever using the skill; do not let this snapshot
+override newer code.
 
 ## Build and run
 
@@ -52,8 +54,9 @@ shared filename or overwrite a user binary or source file implicitly.
 
 ## Check and inspect diagnostics
 
-Run frontend-only checks without claiming that the broader frontend can be
-compiled by the current backend:
+Run frontend-only checks when the user wants validation without object
+generation or linking. A successful check does not prove that a program avoids
+every documented backend gap, including D-072:
 
 ```sh
 cargo run --bin pycc -- check path/to/program.py

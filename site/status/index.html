@@ -25,7 +25,7 @@
     <meta property="og:title" content="pycc status — implemented now and planned next">
     <meta
       property="og:description"
-      content="A commit-relative account of the Python AOT compiler's working slice, enforced quality gates, and remaining v0.1 work."
+      content="A commit-relative account of the Python AOT compiler's implemented v0.1 surface, enforced quality gates, documented gaps, and remaining work."
     >
     <meta property="og:image" content="https://rotnov.github.io/pycc/og.png">
     <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
@@ -34,7 +34,7 @@
     <meta name="twitter:title" content="pycc status — implemented now and planned next">
     <meta
       name="twitter:description"
-      content="A commit-relative account of the Python AOT compiler's working slice, enforced quality gates, and remaining v0.1 work."
+      content="A commit-relative account of the Python AOT compiler's implemented v0.1 surface, enforced quality gates, documented gaps, and remaining work."
     >
     <meta name="twitter:image" content="https://rotnov.github.io/pycc/og.png">
     <meta name="twitter:image:alt" content="pycc — typed Python in, native binaries out">
@@ -136,18 +136,18 @@
         <article class="prose">
           <section id="implemented">
             <p class="section-kicker">Current implementation</p>
-            <h2>The frontend is broader than the native backend.</h2>
+            <h2>The frontend and native backend cover v0.1 with documented gaps.</h2>
             <p>
-              <code>pycc check</code> runs the broadened parser → HIR → strict
-              type checker without entering code generation. Separately, the
-              repository retains a working vertical slice from Python source
-              through MIR, LLVM object generation, host linking, and execution
-              of a native binary.
+              <code>pycc check</code> runs the parser → HIR → strict type
+              checker without entering code generation. The
+              <code>build</code>/<code>run</code> path lowers the same implemented
+              language surface through MIR, LLVM object generation, host
+              linking, and execution of a native binary.
             </p>
             <div class="evidence-grid">
               <div class="evidence-card">
                 <span>Frontend language surface</span>
-                <strong>Full v0.1 grammar</strong>
+                <strong>Implemented v0.1 subset</strong>
                 <p>
                   Arithmetic, comparisons, assignments, calls and returns,
                   recursion, <code>if</code>/<code>while</code>/<code>for</code>
@@ -160,9 +160,9 @@
                 <strong>Build, run, check, version</strong>
                 <p>
                   <code>check</code> supports validated human and JSON
-                  diagnostics. <code>build</code> and <code>run</code> retain
-                  their slice-level paths; other documented commands remain
-                  planned.
+                  diagnostics. <code>build</code> and <code>run</code> compile
+                  the implemented v0.1 surface; other documented commands
+                  remain planned.
                 </p>
               </div>
               <div class="evidence-card">
@@ -196,7 +196,7 @@
                 <span>Quality</span>
                 <strong>100% lines and regions</strong>
                 <p>
-                  Pull requests must keep the current Rust slice at 100% line
+                  Pull requests must keep the current Rust implementation at 100% line
                   and region coverage before the protected branch can merge.
                 </p>
               </div>
@@ -205,24 +205,25 @@
 
           <section id="not-yet">
             <p class="section-kicker">Scope boundary</p>
-            <h2>Native code generation remains slice-only.</h2>
+            <h2>v0.1 still has explicit implementation gaps.</h2>
             <p>
-              <code>pycc build</code> and <code>pycc run</code> still lower
-              only module-level <code>print(&lt;i64 literal&gt;)</code>,
-              zero-argument function definitions, and explicit zero-argument
-              calls. New frontend constructs reach an explicit backend
-              boundary until the v0.1 MIR, code generation, and runtime work
-              lands. Containers, <code>Optional</code>, and narrowing are also
-              outside the current frontend grammar.
+              The current backend deliberately rejects bigint comparisons and
+              several bigint arithmetic operations and float formatting outside
+              the accepted v0.1 range. Unary operators are rejected earlier by
+              HIR lowering, including under <code>pycc check</code>. Unbound string
+              temporaries and function-scoped string values can still leak
+              until ownership analysis lands. Containers,
+              <code>Optional</code>, and narrowing are outside the current
+              frontend grammar.
             </p>
             <div class="callout">
               <strong>Do not use pycc in production.</strong>
               <p>
                 HIR and type diagnostics still use placeholder source
                 positions, safe help suggestions are not populated, and
-                unsupported backend constructs still fail at the explicit
-                pre-alpha boundary. Landing-page build examples remain design
-                targets unless marked as implemented.
+                documented gaps may still fail at explicit pre-alpha
+                boundaries. Landing-page examples outside the implemented
+                v0.1 surface remain design targets unless marked otherwise.
               </p>
             </div>
           </section>
@@ -233,7 +234,7 @@
             <ul class="source-list">
               <li>
                 <a href="https://github.com/rotnov/pycc/blob/main/tests/slice0.rs">
-                  End-to-end slice tests
+                  End-to-end v0.1 backend tests
                 </a>
                 <span>Compile and execute the currently supported programs.</span>
               </li>
@@ -266,14 +267,13 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>Code generation and runtime breadth are next.</h2>
+            <h2>Conformance and final v0.1 acceptance are next.</h2>
             <p>
-              The next compiler slice lowers the implemented v0.1 frontend
-              constructs through MIR and LLVM, then expands the runtime for
-              integers, floats, strings, booleans, control flow, recursion, and
-              basic f-strings. The required frontend measurement and
-              greater-than-2% regression gate run independently of that compiler
-              sequence through <code>ci-gate</code>. This source-aware paired gate
+              PR-5 implements the v0.1 frontend surface through MIR, LLVM, and
+              the native runtime. The conformance testkit, named demos, and
+              final acceptance pass are next. The required frontend measurement
+              and greater-than-2% regression gate remain required through
+              <code>ci-gate</code>. This source-aware paired gate
               measures the exact predecessor and candidate sequentially on one
               hosted runner and seals the predecessor timing before candidate code
               runs. Before candidate code runs, it classifies the complete
@@ -287,8 +287,8 @@
               predecessor-owned checker. Revision, benchmark-contract,
               executable-input identity, artifact-identity, exact file-set, and
               comparison drift fail closed.
-              The conformance testkit, named demos, and final v0.1 acceptance pass
-              follow the code-generation and runtime work.
+              These gates and the documented implementation gaps drive the
+              remaining v0.1 work.
             </p>
             <div class="page-links">
               <a href="../architecture/">

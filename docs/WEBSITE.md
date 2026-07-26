@@ -37,12 +37,13 @@ independent source of product truth.
 
 The current commit-relative boundary is deliberately explicit across the
 landing, status, architecture, comparison, Markdown, and `llms.txt` surfaces:
-`pycc check` owns the broadened v0.1 parser → HIR → strict-type-checker path,
-including stable human and JSON frontend diagnostics, while `pycc build` and
-`pycc run` retain only the original narrow MIR → LLVM → native-executable
-slice. Code-generation and runtime breadth are the next delivery step. These
-facts must move with the authoritative roadmap whenever implementation depth
-changes.
+`pycc check` owns the v0.1 parser → HIR → strict-type-checker path, including
+stable human and JSON frontend diagnostics, while `pycc build` and `pycc run`
+lower the same implemented language surface through MIR → LLVM → host linker →
+native executable. The project remains pre-alpha because the documented
+representation and lifetime gaps, conformance testkit, named demos, and final
+v0.1 acceptance remain unfinished. These facts must move with the authoritative
+roadmap whenever implementation depth changes.
 
 The status page presents D-051/D-053/D-056/D-062's active fixed-replicate,
 source-aware paired gate

@@ -12,8 +12,10 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > Status: pre-alpha. `pycc check` now parses and type-checks the v0.1
 > frontend surface, enforcing public annotations, rejecting `Any`, inferring
 > private-helper signatures, and rendering human or JSON diagnostics.
-> `pycc build` and `pycc run` still compile only the original narrow native
-> slice; code-generation and runtime breadth are the next delivery step.
+> `pycc build` and `pycc run` compile that implemented v0.1 surface through
+> MIR, LLVM, the host linker, and the native runtime. The compiler remains
+> pre-alpha: documented representation and lifetime gaps, the conformance
+> testkit, named demos, and final v0.1 acceptance are still roadmap work.
 > The frontend performance measurement and isolated greater-than-2% regression
 > gate are required through `ci-gate` independently of that compiler sequence.
 > The source-aware paired gate measures the exact predecessor and candidate
