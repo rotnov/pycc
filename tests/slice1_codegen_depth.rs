@@ -285,6 +285,23 @@ fn true_division_by_zero_fails_explicitly() {
 }
 
 #[test]
+fn none_typed_parameters_cross_the_user_function_abi() {
+    let source = "\
+def source() -> None:
+    return
+
+def sink(value: None) -> None:
+    print(value)
+    return value
+
+sink(source())
+";
+    let output = build_and_run("none_parameter_abi", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"None\n");
+}
+
+#[test]
 fn a_floor_division_quotient_outside_the_tagged_range_promotes() {
     let source = "\
 minimum = 0 - 4611686018427387903 - 1

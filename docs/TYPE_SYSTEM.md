@@ -50,7 +50,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 | `bool` | subtype of `int` | `i8`, unboxed; `i1` is transient control-flow state only — see D-061/D-074 |
 | `str` | immutable Unicode | UTF-8 heap, small-string opt — see D-007 |
 | `bytes` / `bytearray` | per CPython | raw buffer |
-| `None` | unit | zero-sized; `T \| None` = nullable/tagged repr |
+| `None` | unit | LLVM `void` for returns; canonical `i8 0` carrier for the v0.1 user-function parameter ABI and parameter entry slots; `T \| None` = nullable/tagged repr |
 | `tuple[A, B]` | fixed heterogeneous | inline struct (stack when non-escaping) |
 | `list[T]` / `set[T]` / `dict[K, V]` | homogeneous, invariant | native vec / swiss-table (insertion-ordered dict) |
 | `class` | nominal | struct; fields fixed at compile time (`__slots__` semantics implicit) |
