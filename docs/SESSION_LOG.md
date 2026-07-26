@@ -51,6 +51,36 @@ frontend regression gate is already active and required through
 first point the full pipeline runs end-to-end on all five Tier-1 platforms
 — treat it as the highest-uncertainty remaining slice, not a formality.
 
+**PR-5 recovery boundary:** at this snapshot the PR-5 branch is a
+machine-local branch in the originating shared repository, not a remote
+ref. This entry records its state but does not authorize publishing or
+changing another session's in-flight work. A session using that same
+repository can locate the linked worktree without relying on a personal
+path:
+
+```sh
+pr5_worktree="$(
+  git worktree list --porcelain |
+    awk '$1 == "worktree" { path = substr($0, 10) }
+         $1 == "branch" && $2 == "refs/heads/feat/v0-1-pr5-codegen-depth" {
+           print path
+           exit
+         }'
+)"
+test -n "$pr5_worktree" || {
+  printf '%s\n' 'PR-5 worktree is not present in this repository' >&2
+  exit 1
+}
+git -C "$pr5_worktree" status --short --branch
+git -C "$pr5_worktree" rev-parse HEAD
+```
+
+The expected snapshot commit is
+`c70ac5696ff908770350a587ed87210cd6edd80b`. If the worktree is absent or
+its head has moved, stop and coordinate with the branch owner; a clean
+clone cannot recover this unpublished snapshot from `origin`, and the
+commands below are valid only after the local branch has been found.
+
 **Where to look to resume:**
 - Run `git status --short --branch` in the PR-5 worktree first; the branch
   is active, so this snapshot must never be used to overwrite newer local
