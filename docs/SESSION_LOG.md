@@ -50,8 +50,8 @@ boundaries.
 estimate from `6.0009 µs` to `5.7464 µs`; Criterion estimated `-3.2494%` with
 `p = 0.00` and reported an improvement. The exact hard command
 `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
-passes with 16,020/16,020 regions and 11,489/11,489 lines. The coverage run
-includes 159 `pycc_types` tests, 59 `pycc_rt` tests, and 27 slice-level tests.
+passes with 16,038/16,038 regions and 11,501/11,501 lines. The coverage run
+includes 159 `pycc_types` tests, 62 `pycc_rt` tests, and 28 slice-level tests.
 Clippy with `-D warnings`, fresh workspace Rust documentation, formatting,
 roadmap-evidence validation (99 runs / 432 assertions plus the production
 checker), and diff checks are green after the final review repair.
@@ -62,6 +62,15 @@ diagnostic-order regression exercised an internal helper but not the changed
 public `check` path. Both repairs are staged with focused assertions. The exact
 final staged diff is reviewed again after this entry; the pull request and
 commit history remain the authoritative outcome.
+
+**Concurrent-head evidence:** while the reviewed repair was staged, the remote
+PR head advanced through `f0226542e7601b3a82883ae82c74e45ed5fa3549`. The
+reviewed local repair was first preserved as
+`fcd865613c46b70bb7cbaf4b72b11929e897d5fb`, then the remote head was merged.
+The resolution retains its exact-fibonacci oracle, Linux/libm end-to-end test,
+and refreshed architecture/CLI text while preserving the independently
+reviewed finite-only float-power guards and the now-implemented floor-division
+promotion in the roadmap.
 
 **Required next steps:** commit and push the reviewed repair, then request exact
 `@codex review` once for that commit. Re-run every required gate and merge only

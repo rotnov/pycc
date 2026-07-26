@@ -86,8 +86,11 @@ paths = ["tests/"]
 
 `0` ok · `1` compile errors (including `C0001` version-capability gaps) · `2`
 bad invocation or unreadable input · `101` compiled program panicked/uncaught
-exception, or the temporary D-035 MIR/backend boundary was reached by
-`build`/`run` (matches process exit conventions per-OS). Unsupported HIR input
+exception, or `build`/`run` hit one of `pycc_codegen`'s own explicit,
+named "not supported yet" boundaries for a construct `pycc check` accepts but
+codegen doesn't yet implement (D-072; the older D-035 `pycc_mir` boundary
+this row used to name is closed for good as of PR-5 -- see D-072's own
+Context) (matches process exit conventions per-OS). Unsupported HIR input
 to `check` is a normal exit-1 diagnostic, not exit 101.
 
 `pycc check` reports all supplied-file failures. If different files produce

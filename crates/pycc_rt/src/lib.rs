@@ -635,10 +635,17 @@ pub extern "C" fn pycc_rt_float_floormod(a: f64, b: f64) -> f64 {
     float_divmod(a, b).1
 }
 
-/// Python's `**` on `float`: a negative exponent is ordinary for a nonzero
-/// base (`2.0 ** -1 == 0.5`), but Rust's `powf` silently returns infinities or
-/// NaNs for cases where Python raises or produces a complex value. Until
-/// exceptions and complex numbers exist, reject those domains explicitly.
+/// Python's `**` on `float`: unlike `int_pow`, a negative exponent is
+/// perfectly ordinary here (`2.0 ** -1 == 0.5`). But three domains where
+/// `f64::powf` silently returns an IEEE-754 special value diverge from
+/// Python, which raises or produces a complex result instead (verified against
+/// `python3.13`):
+/// zero raised to a negative power (`ZeroDivisionError`), a negative base
+/// raised to a non-integer power (a complex result -- `pycc` has no
+/// complex type), and a finite base/exponent pair whose true result
+/// overflows `float` range (`OverflowError`). Each is an honest panic
+/// instead of a silently wrong `inf`/`NaN`, matching this crate's
+/// division-by-zero convention above.
 fn float_pow(a: f64, b: f64) -> f64 {
     // CPython delegates non-finite exponent/base domains to libm: for
     // example, `(-1.0) ** inf == 1.0`, `0.0 ** -inf == inf`, and
@@ -647,17 +654,17 @@ fn float_pow(a: f64, b: f64) -> f64 {
     // exponent and would otherwise misclassify those ordinary real results.
     if b.is_finite() {
         if a == 0.0 && b < 0.0 {
-            panic!("pycc_rt: zero cannot be raised to a negative float power");
+            panic!("pycc_rt: 0.0 cannot be raised to a negative power");
         }
         if a.is_finite() && a < 0.0 && b.fract() != 0.0 {
             panic!(
-                "pycc_rt: a negative float base with a fractional exponent requires complex support"
+                "pycc_rt: a negative float raised to a non-integer power is not supported yet (would require a complex result)"
             );
         }
     }
     let result = a.powf(b);
-    if a.is_finite() && b.is_finite() && result.is_infinite() {
-        panic!("pycc_rt: float power overflow");
+    if result.is_infinite() && a.is_finite() && b.is_finite() {
+        panic!("pycc_rt: float power overflowed (result too large to represent)");
     }
     result
 }
@@ -1292,21 +1299,64 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "zero cannot be raised")]
-    fn float_pow_rejects_zero_to_a_negative_power() {
+    fn pycc_rt_float_pow_accepts_a_negative_base_with_an_integer_exponent() {
+        // An integer exponent (positive or negative) always yields a real
+        // result, matching `python3.13`: `(-2.0) ** 3 == -8.0`,
+        // `(-2.0) ** -3 == -0.125`, `(-2.0) ** 2 == 4.0`.
+        assert_eq!(pycc_rt_float_pow(-2.0, 3.0), -8.0);
+        assert_eq!(pycc_rt_float_pow(-2.0, -3.0), -0.125);
+        assert_eq!(pycc_rt_float_pow(-2.0, 2.0), 4.0);
+    }
+
+    #[test]
+    fn pycc_rt_float_pow_accepts_a_tiny_finite_result() {
+        // Verified against `python3.13`: `2.0 ** -1024.0` produces a tiny
+        // finite positive value, no exception -- only *overflow* to infinity
+        // is a Python `OverflowError`, not a representable subnormal result.
+        let result = pycc_rt_float_pow(2.0, -1024.0);
+        assert!(result > 0.0 && result < 1e-300);
+    }
+
+    #[test]
+    #[should_panic(expected = "0.0 cannot be raised to a negative power")]
+    fn float_pow_rejects_zero_raised_to_a_negative_power() {
+        // Verified against `python3.13`: `0.0 ** -1.0` raises
+        // `ZeroDivisionError: 0.0 cannot be raised to a negative power`,
+        // while `f64::powf` alone silently returns `inf`. Calls the
+        // private `float_pow` directly, not the public `extern "C"`
+        // wrapper -- the wrapper is a plain (non-unwinding) `extern "C" fn`,
+        // so a panic crossing it aborts the whole test binary (`SIGABRT`)
+        // instead of being caught by `#[should_panic]` (same convention as
+        // `int_mul`/`float_div` above).
         float_pow(0.0, -1.0);
     }
 
     #[test]
-    #[should_panic(expected = "requires complex support")]
-    fn float_pow_rejects_a_negative_base_with_a_fractional_exponent() {
-        float_pow(-1.0, 0.5);
+    #[should_panic(expected = "0.0 cannot be raised to a negative power")]
+    fn float_pow_rejects_negative_zero_raised_to_a_negative_power() {
+        // `-0.0 == 0.0` under IEEE-754, and `python3.13` raises the same
+        // `ZeroDivisionError` for `(-0.0) ** -1.0` as for `0.0 ** -1.0`.
+        float_pow(-0.0, -1.0);
     }
 
     #[test]
-    #[should_panic(expected = "float power overflow")]
-    fn float_pow_rejects_a_finite_overflow() {
-        float_pow(f64::MAX, 2.0);
+    #[should_panic(
+        expected = "a negative float raised to a non-integer power is not supported yet"
+    )]
+    fn float_pow_rejects_a_negative_base_raised_to_a_non_integer_power() {
+        // Verified against `python3.13`: `(-2.0) ** 3.5` returns a complex
+        // number (`pycc` has no complex type in v0.1), while `f64::powf`
+        // alone silently returns `NaN`.
+        float_pow(-2.0, 3.5);
+    }
+
+    #[test]
+    #[should_panic(expected = "float power overflowed")]
+    fn float_pow_rejects_a_finite_result_that_overflows_float_range() {
+        // Verified against `python3.13`: `2.0 ** 1024.0` raises
+        // `OverflowError: (34, 'Result too large')`, while `f64::powf`
+        // alone silently returns `inf`.
+        float_pow(2.0, 1024.0);
     }
 
     #[test]
