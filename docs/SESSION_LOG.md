@@ -11,7 +11,7 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-26 — PR #132 findings repaired in a post-merge follow-up
+## 2026-07-26 — PR #143 follows up findings merged with PR #132
 
 **Snapshot evidence:** the follow-up branch starts from exact default branch
 `origin/main@03c6472362d1d6d2211b7cf4e7bb132ffe86295f`, the merge commit for
@@ -51,13 +51,17 @@ direct-call-only `None` descriptions in the historical plan and code comments;
 those descriptions now include D-075's parameter-carried paths. The next pass
 found and corrected the same stale wording in the runtime API comment plus the
 pre-integration slice-0 count in this snapshot. The final independent
-deep-review verification is clean across all 11 checklist areas. Commit/push,
-opening the follow-up PR, a one-per-head `@codex review`, and remote CI remain
-required before merge.
+deep-review verification is clean across all 11 checklist areas. The repair
+was committed, pushed, and opened as follow-up
+[#143](https://github.com/rotnov/pycc/pull/143). Its exact `@codex review` at
+head `24f1a5b` found that this handoff still listed the completed commit step;
+this paragraph corrects that stale state. Publishing the correction, requesting
+one Codex re-review for the new head, resolving that thread, and completing the
+remaining remote CI are required before merge.
 
 **Monitoring scope correction:** PR #119 and PR #125 are historical governance
-evidence only, not live monitoring targets. Once opened, monitor this follow-up
-PR plus newly opened PRs and newly merged default-branch commits.
+evidence only, not live monitoring targets. Monitor PR #143 plus newly opened
+PRs and newly merged default-branch commits.
 
 ## 2026-07-26 — PR #132 final-head performance-gate repair validated locally
 
