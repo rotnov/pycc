@@ -280,11 +280,13 @@
               <code>src/</code> and <code>crates/</code> trees; the existing contract
               independently binds every benchmark and build input. Identical
               executable inputs keep the timing delta as visible, non-blocking
-              environment telemetry. Changed source keeps the hard greater-than-2%
-              median regression block. The gate compares through a hash-verified
+              environment telemetry. Changed source uses exactly five complete
+              runs per revision, compares the median of their per-run medians,
+              and keeps the hard greater-than-2% regression block. All ten timing
+              files are retained. The gate compares through a hash-verified
               predecessor-owned checker. Revision, benchmark-contract,
-              executable-input identity, artifact-identity, and comparison drift
-              fail closed.
+              executable-input identity, artifact-identity, exact file-set, and
+              comparison drift fail closed.
               The conformance testkit, named demos, and final v0.1 acceptance pass
               follow the code-generation and runtime work.
             </p>

@@ -104,23 +104,24 @@ upload steps, flattens each single-ID download into its own exact destination,
 and requires any contract drift to use its own reviewed transition. D-056 keeps
 this transport, threshold, required `ci-gate` fan-in, and benchmark unchanged.
 
-D-056 is active for residual same-runner order variance. Main
-run 30198852753 failed at `+3.14%` even though `src/`, `crates/`, and every
+D-056 introduced the executable-input identity rule for residual same-runner
+order variance. Main run 30198852753 failed at `+3.14%` even though `src/`,
+`crates/`, and every
 already-bound benchmark/build input were unchanged; run 30199477003 later
 passed the same unchanged-input class at `+0.86%`. The active workflow
 therefore retains both timings as telemetry but makes them non-blocking only
 when a pre-execution trusted comparison proves the complete executable inputs
 identical. Any `src/` or `crates/` difference still enters the unchanged
-greater-than-2% median comparison. The live workflow is byte-identical to the
-reviewed D-056 fixture. D-062 responds to the later identical-source-pair
+greater-than-2% median comparison. The historical D-056 workflow first
+activated that rule. D-062 responds to the later identical-source-pair
 `+0.10%`/`+3.66%` contradiction that D-056's changed-input path intentionally
-does not remove. It stages a source-aware five-replicate successor:
+does not remove. The active source-aware five-replicate successor uses:
 median-of-five per revision when inputs changed, D-056's non-blocking telemetry
 when they are identical, all ten JSON files retained, predecessor samples
 sealed before candidate execution, and no result-dependent retries. The
-checker temporarily authorizes only active D-056 and the exact inert D-062
-fixture; a fresh byte-exact activation PR must make the latter live and retire
-the former. The 2% threshold, `ci-gate` fan-in, benchmark contract, artifact-ID
+checker authorizes only the exact active D-062 workflow, which is byte-identical
+to its reviewed fixture; D-056 remains historical audit evidence but its digest
+is retired. The 2% threshold, `ci-gate` fan-in, benchmark contract, artifact-ID
 binding, and isolated predecessor-owned comparison boundary remain unchanged.
 
 ## Autonomy policy ("no questions" mechanics)
