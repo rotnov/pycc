@@ -74,6 +74,13 @@ The check-only frontend path validates the original HIR against its inferred
 signature table without materializing a resolved HIR clone. Compiler stages
 that need concrete private-helper signatures use `check_and_resolve` and pay
 for that returned clone; `pycc check` does not construct and discard it.
+When every declared function signature is already concrete, the checker builds
+that signature table directly and proceeds to the ordinary validation pass;
+the constraint-collection walk is reserved for modules that contain an actual
+private-helper inference variable. A concrete module that fails validation
+falls back to the historical solver-first sequence so the selected diagnostic
+does not change when multiple errors are present; valid concrete modules keep
+the single-pass fast path.
 Per-function checking also shares the immutable module function registry
 through an `Arc`-backed copy-on-write table. Function-local environments still
 clone global bindings so parameter and assignment changes remain isolated, but

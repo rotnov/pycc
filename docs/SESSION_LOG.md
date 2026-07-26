@@ -11,6 +11,41 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-07-26 — PR #51 performance repair locally validated
+
+**Snapshot evidence:** [PR #51](https://github.com/rotnov/pycc/pull/51) ran
+required CI as run `30206099702` at head
+`c1e855590a23307bcd8472979ff37f8bbfd0f8d9`, based on active-D-062
+`main@45545bb057f5cd9e8712610c6137f53ef56d3aae`. The worktree was clean at
+that head before the uncommitted performance repair described below.
+
+**Gate result:** trusted audit, agent checks, 100% coverage, Linux/macOS,
+cross-compile, and the 5+5 measurement job passed. The isolated comparator
+correctly blocked the changed-source candidate at `+10.7215%`: predecessor
+aggregate median `7964.08 ns`, candidate `8817.95 ns`. This was not retried or
+waived. The benchmark does not execute the changed root CLI sources, but it
+exposed an existing redundant type-checker walk that could be removed without
+changing the gate.
+
+**Repair:** `pycc_types::check` now constructs already-concrete
+function signatures directly and reserves constraint collection for modules
+that contain real `Ty::Infer` signatures; a failed concrete validation falls
+back to the historical solver-first order so diagnostic selection is stable.
+The workspace coverage gate passes at 100% lines and regions, including
+explicit fast-path, diagnostic-parity, solver-path, and collector edge cases;
+workspace clippy, Rust documentation, roadmap evidence, and agent-asset checks
+also pass. An initial local Criterion comparison improved from about `7.15 µs`
+to `5.85 µs` (`−18.0%`); a later run after the diagnostic-order fallback
+measured `6.99 µs` (about `−2.3%` from the same original observation). This
+single-host evidence is noisy and is not selected as the gate result; the next
+fixed 5+5 CI comparison remains authoritative.
+
+**Where to resume:** run the exact pinned local reviewer on the staged repair;
+commit, integrate the refreshed default branch, and repeat exact-revision
+pre-commit installation before pushing a new head. Treat the next CI run as new
+candidate evidence, not a rerun of the failed head, and merge only if every
+required check is green.
+
 ## 2026-07-26 — PR #51 pre-commit hook awaiting final CI and merge
 
 **Snapshot evidence:** the checked-out `codex/pre-commit-hook` branch was at

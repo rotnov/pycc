@@ -28,6 +28,29 @@ never a merge gate.
 
 ---
 
+## 2026-07-26 — Retried a hanging Apple Git submodule probe before inspecting it
+
+**What happened:** the exact-revision `pre-commit try-repo` verification for
+PR #51 twice stopped after “Initializing environment.” Both attempts were left
+waiting for several minutes before the process tree was inspected. The blocked
+child was Apple Git 2.50.1 running `git submodule update` in a repository with
+no submodules; the same command also hung when invoked directly.
+
+**Root cause:** the second attempt repeated the first with the same Git binary
+instead of first reducing the stall to its child process. The visible
+pre-commit message was mistaken for a slow Rust environment build even though
+Cargo had not started.
+
+**What fixed it:** inspected the process tree, reproduced the empty-submodule
+command directly, and then ran the same command with the already installed
+bundled Git 2.53.0, which returned immediately. Putting that verified Git first
+in the isolated command's `PATH` let `pre-commit try-repo` reach Cargo and pass.
+
+**Lesson:** after one silent repeatable stall, inspect the youngest child and
+reduce it outside the orchestrating tool before retrying. Distinguish “no
+output” from “build in progress” by confirming that the expected compiler
+process actually exists.
+
 ## 2026-07-26 — A parallel agent changed this file's introducing PR branch
 
 **What happened:** while this pull request (adding this very file and
