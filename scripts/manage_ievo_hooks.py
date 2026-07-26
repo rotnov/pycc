@@ -258,34 +258,36 @@ def strip_ievo_entries(
 ManagedReference = tuple[str, Path]
 
 
+def string_values(value: object) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for nested in value.values():
+            yield from string_values(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from string_values(nested)
+
+
 def managed_target_references(settings: dict[str, Any]) -> list[ManagedReference]:
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
         return []
 
     references: list[ManagedReference] = []
-    target_texts = {target.as_posix(): target for target in SCRIPT_TARGETS.values()}
-    for event, groups in hooks.items():
-        if not isinstance(event, str) or not isinstance(groups, list):
+    managed_targets = (
+        *SCRIPT_TARGETS.values(),
+        *LOCAL_COMPANIONS,
+        VENDOR_DIRECTORY,
+    )
+    target_texts = {target.as_posix(): target for target in managed_targets}
+    for event, value in hooks.items():
+        if not isinstance(event, str):
             continue
-        for group in groups:
-            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
-                continue
-            for entry in group["hooks"]:
-                if not isinstance(entry, dict):
-                    continue
-                values: list[str] = []
-                command = entry.get("command")
-                if isinstance(command, str):
-                    values.append(command)
-                arguments = entry.get("args")
-                if isinstance(arguments, list):
-                    values.extend(
-                        value for value in arguments if isinstance(value, str)
-                    )
-                for target_text, target in target_texts.items():
-                    if any(target_text in value for value in values):
-                        references.append((event, target))
+        values = tuple(string_values(value))
+        for target_text, target in target_texts.items():
+            if any(target_text in candidate for candidate in values):
+                references.append((event, target))
     return list(dict.fromkeys(references))
 
 

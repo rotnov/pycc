@@ -563,10 +563,12 @@ class IevoHookLifecycleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             target = manager.SCRIPT_TARGETS["correction-capture"]
+            companion = manager.LOCAL_COMPANIONS[0]
             shared = {
                 "hooks": {
                     "UserPromptSubmit": [self.group(self.command_entry(target))],
                     "Stop": [self.group(self.command_entry(target, shell_form=True))],
+                    "DirectHandler": [self.command_entry(companion, shell_form=True)],
                 }
             }
             self.write_json(root, manager.CLAUDE_SHARED, shared)
@@ -585,6 +587,24 @@ class IevoHookLifecycleTests(unittest.TestCase):
             )
             self.assertTrue((root / manager.FLAG).is_file())
             self.assertTrue((root / target).is_file())
+            self.assertTrue((root / companion).is_file())
+
+    def test_managed_references_scan_nested_vendor_values(self) -> None:
+        settings = {
+            "hooks": {
+                "FutureEvent": {
+                    "custom": [
+                        "run",
+                        manager.VENDOR_DIRECTORY.joinpath("runtime.sh").as_posix(),
+                    ]
+                }
+            }
+        }
+
+        self.assertEqual(
+            manager.managed_target_references(settings),
+            [("FutureEvent", manager.VENDOR_DIRECTORY)],
+        )
 
 
 if __name__ == "__main__":
