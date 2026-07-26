@@ -28,6 +28,47 @@ never a merge gate.
 
 ---
 
+## 2026-07-26 — Re-verifying before picking an ADR ID isn't enough against a live concurrent actor; park the tail ahead instead
+
+**What happened:** PR #132 (PR-5, "Codegen depth") hit the *same* ADR-ID
+collision with `main`'s independent concurrent actor four separate times
+within one session, despite following the exact lesson recorded below
+("re-check the current highest ID immediately before picking a new one").
+Each time, this branch renumbered its own colliding tail to whatever was
+free *at that moment* (D-048–053 → D-056–061 → D-057–064), and each time
+`main` advanced again before the next push landed, reusing the next ID
+this branch had just claimed (`D-056` for MIR-mirror, then `D-056` again
+for source-aware telemetry, then `D-062` for fixed-replicate
+stabilization). Re-verifying immediately before writing an entry does not
+help when the other actor's own next commit — landing minutes to hours
+later, with no coordination signal — claims the exact ID just re-verified
+as free.
+
+**Root cause:** "re-check before picking" only defends against *stale*
+information; it does nothing against a genuinely *live* concurrent writer
+with no reservation protocol. Adjacent-to-the-current-tip numbering
+guarantees a race whenever both sides advance the tip during the same
+open-PR window, no matter how recently either side last checked.
+
+**What fixed it:** on the third and fourth collisions, stopped picking
+"the next free ID after the current tip" and instead parked this branch's
+entire remaining tail (four entries: str-leak correction, the
+renumbering-record itself, the `print()`-nested-expression boundary, and
+the `RelocMode::PIC` fix) at D-070–073 — a block chosen to sit well ahead
+of `main`'s observed advancement rate, not merely past its tip at that
+instant. `main`'s own next two advances (D-062's refinement, then new
+D-066) landed with zero further collision against that parked range.
+
+**Lesson:** against a live, uncoordinated concurrent writer to the same
+ID sequence, "re-verify immediately before picking" bounds staleness but
+not races — prefer parking a colliding tail several IDs beyond the other
+actor's *observed rate of advancement* (not just its current tip) once a
+collision has already happened twice, rather than continuing to claim
+the adjacent-next ID each time. This trades a temporary gap in the
+sequence (harmless — IDs are not required to be contiguous) for
+eliminating the renumber-repush-collide cycle for the rest of the PR's
+open lifetime.
+
 ## 2026-07-26 — A parallel agent changed this file's introducing PR branch
 
 **What happened:** while this pull request (adding this very file and
