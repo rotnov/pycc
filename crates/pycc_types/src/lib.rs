@@ -32,11 +32,77 @@ impl Environment {
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
         self.functions.get(name)
     }
+
+    fn child_for_function(&self, local_names: &[&str]) -> Self {
+        let mut child = self.clone();
+        for name in local_names {
+            child.bindings.remove(*name);
+        }
+        child
+    }
+}
+
+fn unbound_local(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!("local name `{name}` is not bound before this use"),
+        Span::new(0, 0),
+    )
+}
+
+fn function_local_names(body: &[HirStmt]) -> Vec<&str> {
+    let mut names = Vec::new();
+    collect_local_names(body, &mut names);
+    names
+}
+
+fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
+    for stmt in body {
+        match stmt {
+            HirStmt::Assign { target, .. } => {
+                if !is_local(names, target) {
+                    names.push(target);
+                }
+            }
+            HirStmt::If { body, orelse, .. } => {
+                collect_local_names(body, names);
+                collect_local_names(orelse, names);
+            }
+            HirStmt::While { body, .. } => collect_local_names(body, names),
+            HirStmt::ForRange { var, body, .. } => {
+                if !is_local(names, var) {
+                    names.push(var);
+                }
+                collect_local_names(body, names);
+            }
+            HirStmt::ExprStmt(_) | HirStmt::Return(_) => {}
+        }
+    }
+}
+
+fn module_function_local_names(hir: &HirModule) -> Vec<Vec<&str>> {
+    hir.items
+        .iter()
+        .map(|item| match item {
+            HirItem::Function { body, .. } => function_local_names(body),
+            HirItem::TopLevelStmt(_) => Vec::new(),
+        })
+        .collect()
+}
+
+fn is_local(local_names: &[&str], name: &str) -> bool {
+    local_names.contains(&name)
 }
 
 type TypeTerm = Result<Ty, usize>;
 type SignatureTerms = (Vec<String>, Vec<TypeTerm>, TypeTerm);
 type BinOpConstraint = (BinOpKind, TypeTerm, TypeTerm, TypeTerm);
+
+#[derive(Debug)]
+struct ConstraintEnvironment<'scope, 'hir> {
+    bindings: HashMap<String, TypeTerm>,
+    local_names: &'scope [&'hir str],
+}
 
 fn fresh_term(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> TypeTerm {
     let id = parents.len();
@@ -142,7 +208,7 @@ fn collect_expr_constraints(
     parents: &mut Vec<usize>,
     concrete: &mut Vec<Option<Ty>>,
     binops: &mut Vec<BinOpConstraint>,
-    bindings: &HashMap<String, TypeTerm>,
+    env: &ConstraintEnvironment<'_, '_>,
     expr: &HirExpr,
 ) -> Result<Option<TypeTerm>, Diagnostic> {
     match expr {
@@ -150,27 +216,28 @@ fn collect_expr_constraints(
         HirExpr::FloatLiteral(_) => Ok(Some(Ok(Ty::Float))),
         HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
-        HirExpr::Name(name) => Ok(bindings.get(name).copied()),
+        HirExpr::Name(name) => match env.bindings.get(name).copied() {
+            Some(term) => Ok(Some(term)),
+            None if is_local(env.local_names, name) => Err(unbound_local(name)),
+            None => Ok(None),
+        },
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(expr) = part {
-                    collect_expr_constraints(
-                        signatures, parents, concrete, binops, bindings, expr,
-                    )?;
+                    collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?;
                 }
             }
             Ok(Some(Ok(Ty::Str)))
         }
         HirExpr::Compare { left, right, .. } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, bindings, left)?;
-            collect_expr_constraints(signatures, parents, concrete, binops, bindings, right)?;
+            collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
+            collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
             Ok(Some(Ok(Ty::Bool)))
         }
         HirExpr::BinOp { op, left, right } => {
-            let left =
-                collect_expr_constraints(signatures, parents, concrete, binops, bindings, left)?;
+            let left = collect_expr_constraints(signatures, parents, concrete, binops, env, left)?;
             let right =
-                collect_expr_constraints(signatures, parents, concrete, binops, bindings, right)?;
+                collect_expr_constraints(signatures, parents, concrete, binops, env, right)?;
             match (left, right) {
                 (Some(left), Some(right)) => {
                     let result = fresh_term(parents, concrete);
@@ -184,7 +251,7 @@ fn collect_expr_constraints(
             let mut arg_terms = Vec::with_capacity(args.len());
             for arg in args {
                 arg_terms.push(collect_expr_constraints(
-                    signatures, parents, concrete, binops, bindings, arg,
+                    signatures, parents, concrete, binops, env, arg,
                 )?);
             }
             if callee == "print" {
@@ -225,30 +292,30 @@ fn collect_block_constraints(
     parents: &mut Vec<usize>,
     concrete: &mut Vec<Option<Ty>>,
     binops: &mut Vec<BinOpConstraint>,
-    bindings: &mut HashMap<String, TypeTerm>,
+    env: &mut ConstraintEnvironment<'_, '_>,
     body: &[HirStmt],
     return_term: Option<TypeTerm>,
 ) -> Result<(), Diagnostic> {
     for stmt in body {
         match stmt {
             HirStmt::Assign { target, value } => {
-                if let Some(term) = collect_expr_constraints(
-                    signatures, parents, concrete, binops, bindings, value,
-                )? {
-                    bindings.entry(target.clone()).or_insert(term);
+                if let Some(term) =
+                    collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
+                {
+                    env.bindings.entry(target.clone()).or_insert(term);
                 }
             }
             HirStmt::ExprStmt(expr) => {
-                collect_expr_constraints(signatures, parents, concrete, binops, bindings, expr)?;
+                collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?;
             }
             HirStmt::If { test, body, orelse } => {
-                collect_expr_constraints(signatures, parents, concrete, binops, bindings, test)?;
+                collect_expr_constraints(signatures, parents, concrete, binops, env, test)?;
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
                     binops,
-                    bindings,
+                    env,
                     body,
                     return_term,
                 )?;
@@ -257,19 +324,19 @@ fn collect_block_constraints(
                     parents,
                     concrete,
                     binops,
-                    bindings,
+                    env,
                     orelse,
                     return_term,
                 )?;
             }
             HirStmt::While { test, body } => {
-                collect_expr_constraints(signatures, parents, concrete, binops, bindings, test)?;
+                collect_expr_constraints(signatures, parents, concrete, binops, env, test)?;
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
                     binops,
-                    bindings,
+                    env,
                     body,
                     return_term,
                 )?;
@@ -282,9 +349,9 @@ fn collect_block_constraints(
                 body,
             } => {
                 for (position, expr) in [("start", start), ("stop", stop), ("step", step)] {
-                    if let Some(term @ Err(_)) = collect_expr_constraints(
-                        signatures, parents, concrete, binops, bindings, expr,
-                    )? {
+                    if let Some(term @ Err(_)) =
+                        collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?
+                    {
                         unify_terms(
                             term,
                             Ok(Ty::Int),
@@ -295,7 +362,7 @@ fn collect_block_constraints(
                         )?;
                     }
                 }
-                if let Some(existing) = bindings.get(var).copied() {
+                if let Some(existing) = env.bindings.get(var).copied() {
                     unify_terms(
                         existing,
                         Ok(Ty::Int),
@@ -305,14 +372,14 @@ fn collect_block_constraints(
                         &format!("assignment to for-loop target `{var}`"),
                     )?;
                 } else {
-                    bindings.insert(var.clone(), Ok(Ty::Int));
+                    env.bindings.insert(var.clone(), Ok(Ty::Int));
                 }
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
                     binops,
-                    bindings,
+                    env,
                     body,
                     return_term,
                 )?;
@@ -322,9 +389,9 @@ fn collect_block_constraints(
                     continue;
                 };
                 let actual = match value {
-                    Some(expr) => collect_expr_constraints(
-                        signatures, parents, concrete, binops, bindings, expr,
-                    )?,
+                    Some(expr) => {
+                        collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?
+                    }
                     None => Some(Ok(Ty::None)),
                 };
                 if let Some(actual) = actual {
@@ -354,6 +421,7 @@ fn contains_return(body: &[HirStmt]) -> bool {
 
 fn infer_function_signatures(
     hir: &HirModule,
+    function_local_names: &[Vec<&str>],
 ) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
@@ -381,7 +449,10 @@ fn infer_function_signatures(
     }
 
     let mut binops = Vec::new();
-    let mut globals = HashMap::new();
+    let mut globals = ConstraintEnvironment {
+        bindings: HashMap::new(),
+        local_names: &[],
+    };
     for item in &hir.items {
         if let HirItem::TopLevelStmt(stmt) = item {
             collect_block_constraints(
@@ -395,21 +466,27 @@ fn infer_function_signatures(
             )?;
         }
     }
-    for item in &hir.items {
+    for (item, local_names) in hir.items.iter().zip(function_local_names) {
         let HirItem::Function { name, body, .. } = item else {
             continue;
         };
         let signature = &signatures[name];
-        let mut bindings = globals.clone();
+        let mut env = ConstraintEnvironment {
+            bindings: globals.bindings.clone(),
+            local_names,
+        };
+        for local_name in local_names.iter().copied() {
+            env.bindings.remove(local_name);
+        }
         for (param_name, param_ty) in signature.0.iter().zip(&signature.1) {
-            bindings.insert(param_name.clone(), *param_ty);
+            env.bindings.insert(param_name.clone(), *param_ty);
         }
         collect_block_constraints(
             &signatures,
             &mut parents,
             &mut concrete,
             &mut binops,
-            &mut bindings,
+            &mut env,
             body,
             Some(signature.2),
         )?;
@@ -507,6 +584,14 @@ fn infer_function_signatures(
 }
 
 pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
+    infer_expr_in(env, &[], expr)
+}
+
+fn infer_expr_in(
+    env: &Environment,
+    local_names: &[&str],
+    expr: &HirExpr,
+) -> Result<Ty, Diagnostic> {
     match expr {
         HirExpr::IntLiteral(_) => Ok(Ty::Int),
         HirExpr::FloatLiteral(_) => Ok(Ty::Float),
@@ -515,26 +600,30 @@ pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(expr) = part {
-                    infer_expr(env, expr)?; // any interpolatable type is allowed; Python str()-coerces at runtime
+                    infer_expr_in(env, local_names, expr)?; // any interpolatable type is allowed; Python str()-coerces at runtime
                 }
             }
             Ok(Ty::Str)
         }
         HirExpr::Name(name) => env.lookup(name).ok_or_else(|| {
-            Diagnostic::error(
-                "T0021",
-                format!("name `{name}` is not defined"),
-                Span::new(0, 0), // real span threading through HIR is out of scope for this task -- see Task 15's follow-up note
-            )
+            if is_local(local_names, name) {
+                unbound_local(name)
+            } else {
+                Diagnostic::error(
+                    "T0021",
+                    format!("name `{name}` is not defined"),
+                    Span::new(0, 0), // real span threading through HIR is out of scope for this task -- see Task 15's follow-up note
+                )
+            }
         }),
         HirExpr::BinOp { op, left, right } => {
-            let left_ty = infer_expr(env, left)?;
-            let right_ty = infer_expr(env, right)?;
+            let left_ty = infer_expr_in(env, local_names, left)?;
+            let right_ty = infer_expr_in(env, local_names, right)?;
             numeric_result_type(*op, left_ty, right_ty)
         }
         HirExpr::Compare { op: _, left, right } => {
-            let left_ty = infer_expr(env, left)?;
-            let right_ty = infer_expr(env, right)?;
+            let left_ty = infer_expr_in(env, local_names, left)?;
+            let right_ty = infer_expr_in(env, local_names, right)?;
             if numeric_or_bool_compatible(left_ty, right_ty) {
                 Ok(Ty::Bool)
             } else {
@@ -552,7 +641,7 @@ pub fn infer_expr(env: &Environment, expr: &HirExpr) -> Result<Ty, Diagnostic> {
         HirExpr::Call { callee, args } => {
             let arg_tys = args
                 .iter()
-                .map(|a| infer_expr(env, a))
+                .map(|a| infer_expr_in(env, local_names, a))
                 .collect::<Result<Vec<_>, _>>()?;
             if callee == "print" {
                 return Ok(Ty::None); // print's own signature isn't user-declarable in v0.1
@@ -641,7 +730,16 @@ fn check_range_operand(
     position: &str,
     expr: &HirExpr,
 ) -> Result<(), Diagnostic> {
-    let actual = infer_expr(env, expr)?;
+    check_range_operand_in(env, &[], position, expr)
+}
+
+fn check_range_operand_in(
+    env: &Environment,
+    local_names: &[&str],
+    position: &str,
+    expr: &HirExpr,
+) -> Result<(), Diagnostic> {
+    let actual = infer_expr_in(env, local_names, expr)?;
     if is_assignable(actual, Ty::Int) {
         Ok(())
     } else {
@@ -721,16 +819,25 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
 }
 
 pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
-    check_function_in(&Environment::new(), function)
+    let local_names = match function {
+        HirItem::Function { body, .. } => function_local_names(body),
+        HirItem::TopLevelStmt(_) => Vec::new(),
+    };
+    check_function_in(&Environment::new(), function, &local_names)
 }
 
 /// Checks one function's body, resolving sibling calls and module-level
-/// global reads against a clone of `module_env` (see D-040/D-041) instead
-/// of an isolated, self-only scope. The clone owns independent value bindings
-/// while sharing the immutable function registry through copy-on-write storage,
-/// so a function's parameters and local assignments never leak back into the
-/// module scope or into any other function's check.
-fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(), Diagnostic> {
+/// global reads against a clone of `module_env` (see D-040/D-041/D-055) instead
+/// of an isolated, self-only scope. Lexically local binding targets are removed
+/// from that clone before the body is checked. The clone owns independent value
+/// bindings while sharing the immutable function registry through copy-on-write
+/// storage, so a function's parameters and local assignments never leak back
+/// into the module scope or into any other function's check.
+fn check_function_in(
+    module_env: &Environment,
+    function: &HirItem,
+    local_names: &[&str],
+) -> Result<(), Diagnostic> {
     let HirItem::Function {
         name,
         params,
@@ -755,7 +862,7 @@ fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(),
             Span::new(0, 0),
         ));
     }
-    let mut env = module_env.clone();
+    let mut env = module_env.child_for_function(local_names);
     if !signature_was_registered {
         env.bind_function(name.clone(), resolved_params.to_vec(), resolved_return);
     }
@@ -763,7 +870,7 @@ fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(),
         env.bind(param_name.clone(), param_ty);
     }
     for stmt in body {
-        check_stmt_in_function(&mut env, stmt, resolved_return)?;
+        check_stmt_in_function(&mut env, local_names, stmt, resolved_return)?;
     }
     if resolved_return != Ty::None && !block_always_returns(body) {
         return Err(Diagnostic::error(
@@ -793,6 +900,7 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
 
 fn check_stmt_in_function(
     env: &mut Environment,
+    local_names: &[&str],
     stmt: &HirStmt,
     return_ty: Ty,
 ) -> Result<(), Diagnostic> {
@@ -811,7 +919,7 @@ fn check_stmt_in_function(
             Ok(())
         }
         HirStmt::Return(Some(expr)) => {
-            let actual = infer_expr(env, expr)?;
+            let actual = infer_expr_in(env, local_names, expr)?;
             if !is_assignable(actual, return_ty) {
                 return Err(Diagnostic::error(
                     "T0022",
@@ -826,19 +934,19 @@ fn check_stmt_in_function(
             Ok(())
         }
         HirStmt::If { test, body, orelse } => {
-            infer_expr(env, test)?;
+            infer_expr_in(env, local_names, test)?;
             for s in body {
-                check_stmt_in_function(env, s, return_ty)?;
+                check_stmt_in_function(env, local_names, s, return_ty)?;
             }
             for s in orelse {
-                check_stmt_in_function(env, s, return_ty)?;
+                check_stmt_in_function(env, local_names, s, return_ty)?;
             }
             Ok(())
         }
         HirStmt::While { test, body } => {
-            infer_expr(env, test)?;
+            infer_expr_in(env, local_names, test)?;
             for s in body {
-                check_stmt_in_function(env, s, return_ty)?;
+                check_stmt_in_function(env, local_names, s, return_ty)?;
             }
             Ok(())
         }
@@ -849,16 +957,20 @@ fn check_stmt_in_function(
             step,
             body,
         } => {
-            check_range_operand(env, "start", start)?;
-            check_range_operand(env, "stop", stop)?;
-            check_range_operand(env, "step", step)?;
+            check_range_operand_in(env, local_names, "start", start)?;
+            check_range_operand_in(env, local_names, "stop", stop)?;
+            check_range_operand_in(env, local_names, "step", step)?;
             check_assignment(env, var, Ty::Int)?;
             for s in body {
-                check_stmt_in_function(env, s, return_ty)?;
+                check_stmt_in_function(env, local_names, s, return_ty)?;
             }
             Ok(())
         }
-        other => check_stmt(env, other),
+        HirStmt::Assign { target, value } => {
+            let ty = infer_expr_in(env, local_names, value)?;
+            check_assignment(env, target, ty)
+        }
+        HirStmt::ExprStmt(expr) => infer_expr_in(env, local_names, expr).map(|_| ()),
     }
 }
 
@@ -868,8 +980,9 @@ fn check_stmt_in_function(
 /// unresolved lowering result so `Ty::Infer` can never leak into MIR or code
 /// generation.
 pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
-    let signatures = infer_function_signatures(hir)?;
-    check_with_signatures(hir, &signatures)?;
+    let function_local_names = module_function_local_names(hir);
+    let signatures = infer_function_signatures(hir, &function_local_names)?;
+    check_with_signatures(hir, &signatures, &function_local_names)?;
 
     let mut resolved_hir = hir.clone();
     for item in &mut resolved_hir.items {
@@ -897,6 +1010,7 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
 fn check_with_signatures(
     hir: &HirModule,
     signatures: &HashMap<String, (Vec<Ty>, Ty)>,
+    function_local_names: &[Vec<&str>],
 ) -> Result<(), Diagnostic> {
     let mut env = Environment::new();
     // Pass 1: register every function's signature before checking any
@@ -928,9 +1042,9 @@ fn check_with_signatures(
     // assignment in the file, since real Python only evaluates a function
     // body when it's *called*, typically after the module has finished
     // running top to bottom.
-    for item in &hir.items {
+    for (item, local_names) in hir.items.iter().zip(function_local_names) {
         if let HirItem::Function { .. } = item {
-            check_function_in(&env, item)?;
+            check_function_in(&env, item, local_names)?;
         }
     }
     Ok(())
@@ -941,8 +1055,9 @@ fn check_with_signatures(
 /// Use [`check_and_resolve`] when a downstream compiler stage needs concrete
 /// private-helper signatures in the returned HIR.
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
-    let signatures = infer_function_signatures(hir)?;
-    check_with_signatures(hir, &signatures)
+    let function_local_names = module_function_local_names(hir);
+    let signatures = infer_function_signatures(hir, &function_local_names)?;
+    check_with_signatures(hir, &signatures, &function_local_names)
 }
 
 #[cfg(test)]
@@ -1892,6 +2007,292 @@ mod tests {
         // If the global (Ty::Str) leaked through instead of the parameter
         // (Ty::Int), this would fail with a T0022 return-type mismatch.
         assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_later_local_assignment_blocks_fallback_to_a_same_named_global() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Name("x".to_string())),
+                        HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(2),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "local name `x` is not bound before this use");
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "local name `x` is not bound before this use");
+    }
+
+    #[test]
+    fn a_read_before_local_assignment_is_local_even_without_a_global() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::ExprStmt(HirExpr::Name("x".to_string())),
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::IntLiteral(2),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "local name `x` is not bound before this use");
+    }
+
+    #[test]
+    fn local_name_collection_deduplicates_assignment_and_for_targets() {
+        let body = vec![
+            HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+            HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            },
+            HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+                body: vec![],
+            },
+            HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+                body: vec![],
+            },
+        ];
+
+        assert_eq!(function_local_names(&body), vec!["x", "i"]);
+    }
+
+    #[test]
+    fn direct_function_check_uses_the_same_lexical_local_classification() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::ExprStmt(HirExpr::Name("x".to_string())),
+                HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                },
+                HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+            ],
+        };
+
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "local name `x` is not bound before this use");
+    }
+
+    #[test]
+    fn a_local_first_assignment_does_not_inherit_the_globals_type() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::StringLiteral("global".to_string()),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(2),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+            ],
+        };
+
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_self_referential_first_local_assignment_cannot_read_the_global() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::BinOp {
+                                op: BinOpKind::Add,
+                                left: Box::new(HirExpr::Name("x".to_string())),
+                                right: Box::new(HirExpr::IntLiteral(1)),
+                            },
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "local name `x` is not bound before this use");
+    }
+
+    #[test]
+    fn an_assignment_nested_in_if_classifies_the_name_as_function_local() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Name("x".to_string())),
+                        HirStmt::If {
+                            test: HirExpr::BoolLiteral(true),
+                            body: vec![HirStmt::Assign {
+                                target: "x".to_string(),
+                                value: HirExpr::IntLiteral(2),
+                            }],
+                            orelse: vec![],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.message, "local name `x` is not bound before this use");
+    }
+
+    #[test]
+    fn a_nested_for_target_classifies_the_name_as_function_local() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "i".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Name("i".to_string())),
+                        HirStmt::While {
+                            test: HirExpr::BoolLiteral(true),
+                            body: vec![HirStmt::ForRange {
+                                var: "i".to_string(),
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::IntLiteral(1),
+                                step: HirExpr::IntLiteral(1),
+                                body: vec![],
+                            }],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.message, "local name `i` is not bound before this use");
+    }
+
+    #[test]
+    fn a_for_target_is_local_while_its_range_operands_are_evaluated() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "i".to_string(),
+                    value: HirExpr::IntLiteral(3),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ForRange {
+                        var: "i".to_string(),
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::Name("i".to_string()),
+                        step: HirExpr::IntLiteral(1),
+                        body: vec![],
+                    }],
+                },
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "local name `i` is not bound before this use");
+    }
+
+    #[test]
+    fn private_helper_inference_rejects_a_read_before_local_assignment() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "_f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Name("x".to_string())),
+                        HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(2),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+            ],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "local name `x` is not bound before this use");
     }
 
     #[test]

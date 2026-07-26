@@ -28,6 +28,14 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
+The current frontend also keeps focused differential sources under
+`tests/diagnostics/` when CPython's runtime behavior defines why strict pycc
+must reject a program before code generation. In
+`d0021_unbound_local.py`, CPython 3.14 raises `UnboundLocalError`, while
+`pycc check` reports `T0021`; byte-exact human and version-1 JSON snapshots
+lock the public diagnostic. This focused oracle case does not replace the
+planned multi-version conformance harness.
+
 ## Differential fuzzing
 
 Generator produces well-typed programs (type-directed generation — always compile-clean), weighted toward: arithmetic edges (overflow → bigint promotion paths), string unicode edges, collection aliasing, control-flow + exceptions, match patterns. Mismatch → auto-minimize (creduce-style) → auto-file issue with repro. Runs continuously on a dedicated runner.

@@ -22,6 +22,13 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 - An unconstrained parameter or return variable is rejected with `T0021` and
   an instruction to add an annotation. It never silently becomes `Any` or
   `None`; only a helper with no value-returning path infers `None`.
+- Function-local names are classified before the body is checked. Parameters
+  are local from entry; every assignment target and `for` target anywhere in
+  the implemented nested control-flow grammar is local throughout that
+  function. A read before the local has been bound is `T0021` and never falls
+  back to a same-named module global. A name with no local binding form may
+  still resolve to a module global. Control-flow join state remains the
+  separate definite-assignment work tracked in #118.
 - The first assignment fixes a local variable's inferred type. Later
   assignments must be compatible or produce `T0023`; assigning `bool` to an
   `int` binding preserves the `int` representation.
