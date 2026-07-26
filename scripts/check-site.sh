@@ -457,9 +457,10 @@ PAGE_SPECS = {
             "byte-exact CLI snapshots cover",
             "Code generation and runtime breadth are next.",
             "The required frontend measurement and greater-than-2% regression gate run independently of that compiler sequence through ci-gate",
-            "This gate is bootstrap-free:",
-            "it requires the non-expired frontend-perf-current artifact from the exact successful main predecessor",
-            "and fails closed when that baseline is unavailable.",
+            "This paired gate measures the exact predecessor and candidate sequentially on one hosted runner",
+            "seals the predecessor timing before candidate code runs",
+            "and compares their medians through a hash-verified predecessor-owned checker.",
+            "Revision, benchmark-contract, artifact-identity, and comparison drift fail closed.",
         ),
     },
     "architecture": {

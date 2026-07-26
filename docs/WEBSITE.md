@@ -44,11 +44,13 @@ slice. Code-generation and runtime breadth are the next delivery step. These
 facts must move with the authoritative roadmap whenever implementation depth
 changes.
 
-The status page presents D-048's bootstrap-free steady state independently of
+The status page presents D-051/D-053's active paired gate independently of
 later compiler slices. It states that the frontend measurement and
-greater-than-2% regression gate are required through `ci-gate`, require the
-non-expired timing artifact from the exact successful `main` predecessor, and
-fail closed when that baseline is unavailable.
+greater-than-2% regression gate are required through `ci-gate`, measure the
+exact predecessor and candidate sequentially on one hosted runner, seal the
+predecessor timing before candidate code runs, compare medians through a
+hash-verified predecessor-owned checker, and fail closed on revision,
+benchmark-contract, artifact-identity, or comparison drift.
 
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile
