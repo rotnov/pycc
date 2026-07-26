@@ -64,6 +64,27 @@ precisely to make that reconstruction unnecessary. Git diffing is still the
 right tool to *verify* what the log claims, just not the right first step to
 *discover* it.
 
+## 2026-07-26 — Historical governance PRs were mistaken for live monitors
+
+**What happened:** PR #119 and issue/PR-era #125 were included in the live
+monitoring set even though their only current role is historical evidence for
+the one-shot governance recovery recorded in D-054. This created irrelevant
+status noise and required the user to ask why completed history was still being
+watched.
+
+**Root cause:** links found in current governance documentation were treated as
+operational targets without first checking whether they were open, changing,
+or named by an active task. Documentary relevance was conflated with live
+state.
+
+**What fixed it:** removed #119/#125 from the monitoring scope and retained only
+the active PR #132 plus newly opened PRs and newly merged default-branch
+commits.
+
+**Lesson:** build every monitoring set from current remote state first. A PR or
+issue referenced by an ADR is historical unless it is still open or the active
+task explicitly names it; do not poll documentation citations as live work.
+
 ## 2026-07-26 — Retried a hanging Apple Git submodule probe before inspecting it
 
 **What happened:** the exact-revision `pre-commit try-repo` verification for

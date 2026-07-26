@@ -93,6 +93,12 @@ this row used to name is closed for good as of PR-5 -- see D-072's own
 Context) (matches process exit conventions per-OS). Unsupported HIR input
 to `check` is a normal exit-1 diagnostic, not exit 101.
 
+`pycc run` normalizes every unsuccessful generated-program termination to
+`101`. This includes an ordinary non-zero child status, a Unix signal (which
+has no numeric `ExitStatus::code()`), and a platform abort status wider than
+the CLI's portable one-byte exit-code range; raw child status values are not
+part of the CLI contract.
+
 `pycc check` reports all supplied-file failures. If different files produce
 both compile errors and unreadable-input errors, it exits `2`; otherwise any
 compile error exits `1`.

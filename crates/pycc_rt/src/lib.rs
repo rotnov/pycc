@@ -988,11 +988,11 @@ pub extern "C" fn pycc_rt_print_newline() {
 }
 
 /// Prints the literal `None`, capitalized, with no trailing newline (Task
-/// 10) -- CPython's `str(None)` -- for the narrow `print(f(...))` shape
-/// where `f` returns `Ty::None` (see this task's own scope note: no v0.1
-/// expression can construct a `None` *value* other than this exact
-/// call-result shape, so there is no `PyStrObj`-producing `none_to_str` to
-/// route through `pycc_rt_print_write_str` instead).
+/// 10) -- CPython's `str(None)` -- for either a direct `Ty::None` user-call
+/// result or a D-075 parameter value. v0.1 still has no general-purpose
+/// `None` expression or assignment storage, so there is no
+/// `PyStrObj`-producing `none_to_str` to route through
+/// `pycc_rt_print_write_str` instead.
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_print_none() {
     print!("None");

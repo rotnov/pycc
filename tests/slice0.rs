@@ -154,6 +154,20 @@ fn run_subcommand_builds_and_executes_in_one_step() {
 }
 
 #[test]
+fn run_subcommand_normalizes_a_generated_runtime_failure_to_101() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_run_runtime_fail_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "runtime_fail.py", "print(1.0 / 0.0)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(101));
+}
+
+#[test]
 fn run_subcommand_propagates_a_build_failure() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_run_fail_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

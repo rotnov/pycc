@@ -11,6 +11,55 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-07-26 — PR #132 latest Codex findings repaired; final review loop pending
+
+**Snapshot evidence:** the isolated task worktree is based on published PR
+[#132](https://github.com/rotnov/pycc/pull/132) head
+`d30e6a6c787de39e7e761d44d44cbf3e6cad3353`; exact default branch
+`origin/main@78f5dcc0c3fd7c88fdc87e716e294fb0fc5cdb53` remains the task base already
+integrated into that head. The remote advanced from `50e36e8` while this repair
+was uncommitted; the work was stashed, the branch fast-forwarded, and the
+remote's independent `None`-call-return plus comparison-test fixes were
+preserved in the conflict resolution. It advanced again from `d9d31e2` to
+`d30e6a6` with a Unix-only exit-101 repair and documentation of the `None`
+parameter as an open gap; that runtime regression test remains, while D-075
+supersedes the documented-gap approach and D-076 generalizes the exit mapping
+to every unsuccessful child on every platform. The exact `@codex review` for
+`50e36e8` produced two new actionable P2 threads: a valid `None`-typed parameter reached
+`ty_to_basic_type`'s backend panic, and a generated-program abort was converted
+to exit 1 instead of CLI_SPEC.md's portable runtime-failure code 101.
+
+**Local repair:** D-075 gives `None`-typed user-function parameters a canonical
+LLVM `i8 0` unit carrier while retaining LLVM `void` returns. Parameter name
+reads, `return value`, `print(value)`, f-string interpolation, and passing a
+`None`-returning call into a `None` parameter now compile and run end to end;
+D-072's explicit nested-`print()` boundary and general `None` assignment gap
+remain unchanged. D-076 maps every unsuccessful generated child of `pycc run`
+to 101 without changing compiler-owned build or invocation failures. The type,
+runtime, CLI, roadmap, historical implementation-plan scope note, and ADRs are
+updated with the implementation.
+
+**Local evidence:** focused regressions and the complete 123-test codegen,
+57-test slice-0 suite active on the local Darwin host, and 30-test slice-1
+suite pass. The exact hard command
+`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
+passes with 16,318/16,318 regions and 11,696/11,696 lines. Clippy, fresh Rust
+API docs, and roadmap-evidence checks pass. The first independent deep-review
+pass found one documentation-inventory blocker: the accepted D-075/D-076
+sections were absent from DECISIONS.md's summary table and SPEC.md's ADR map.
+Both indexes now include the decisions. The follow-up pass found two stale
+direct-call-only `None` descriptions in the historical plan and code comments;
+those descriptions now include D-075's parameter-carried paths. The next pass
+found and corrected the same stale wording in the runtime API comment plus the
+pre-integration slice-0 count in this snapshot. The final independent
+deep-review verification is clean across all 11 checklist areas. Commit/push,
+thread resolution, a new one-per-head `@codex review`, and remote CI remain
+required before merge.
+
+**Monitoring scope correction:** PR #119 and PR #125 are historical governance
+evidence only, not live monitoring targets. Continue monitoring the current
+PR #132 plus newly opened PRs and newly merged default-branch commits.
+
 ## 2026-07-26 — PR #132 final-head performance-gate repair validated locally
 
 **Remote evidence:** [PR #132](https://github.com/rotnov/pycc/pull/132) head
