@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+if os.name == "nt":
+    import ctypes
 
 import manage_ievo_hooks as manager
 
@@ -246,7 +251,7 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.create_generated_files(root)
             self.create_gitignore(root, upstream_shims=False)
             self.commit_tracked_baseline(root)
-            manager.remove_path(root / manager.SCRIPT_DIRECTORY)
+            shutil.rmtree(root / manager.SCRIPT_DIRECTORY)
 
             self.assertEqual(
                 subprocess.run(
@@ -350,7 +355,7 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 [unrelated_entry],
             )
             self.assertTrue((root / manager.FLAG).is_file())
-            self.assertTrue(manager.flag_enabled(root))
+            manager.ensure_corrections_only_intent(root)
             for target in (
                 *manager.SCRIPT_TARGETS.values(),
                 *manager.LOCAL_COMPANIONS,
@@ -448,6 +453,143 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 shared_before,
             )
             self.assertFalse((root / manager.CLAUDE_LOCAL).exists())
+
+    def test_localize_requires_the_complete_corrections_only_intent(self) -> None:
+        invalid_flags = {
+            "missing signal": ("enabled: true\nauto_write_scope: project-wide-only\n"),
+            "broadened signal": (
+                "enabled: true\nsignal: all-feedback\n"
+                "auto_write_scope: project-wide-only\n"
+            ),
+            "missing scope": "enabled: true\nsignal: corrections-only\n",
+            "broadened scope": (
+                "enabled: true\nsignal: corrections-only\n"
+                "auto_write_scope: every-file\n"
+            ),
+            "conflicting duplicate": (
+                "enabled: true\nsignal: corrections-only\n"
+                "signal: all-feedback\nauto_write_scope: project-wide-only\n"
+            ),
+        }
+        for label, contents in invalid_flags.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = manager.SCRIPT_TARGETS["correction-capture"]
+                shared = {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                }
+                self.write_json(root, manager.CLAUDE_SHARED, shared)
+                self.create_generated_files(root)
+                self.create_gitignore(root, upstream_shims=False)
+                (root / manager.FLAG).write_text(contents, encoding="utf-8")
+                shared_before = (root / manager.CLAUDE_SHARED).read_text(
+                    encoding="utf-8"
+                )
+
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "evo-auto.flag",
+                ):
+                    manager.localize(root)
+
+                self.assertEqual(
+                    (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                    shared_before,
+                )
+                self.assertFalse((root / manager.CLAUDE_LOCAL).exists())
+
+    def test_check_requires_the_complete_corrections_only_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            (root / manager.FLAG).write_text(
+                "enabled: true\nsignal: every-prompt\n"
+                "auto_write_scope: project-wide-only\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "corrections-only intent",
+            ):
+                manager.check(root, smoke=False)
+
+    def test_disable_requires_the_complete_corrections_only_intent(self) -> None:
+        invalid_flags = {
+            "missing signal": ("enabled: true\nauto_write_scope: project-wide-only\n"),
+            "conflicting duplicate": (
+                "enabled: true\nsignal: corrections-only\n"
+                "signal: all-feedback\nauto_write_scope: project-wide-only\n"
+            ),
+        }
+        for label, contents in invalid_flags.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = manager.SCRIPT_TARGETS["correction-capture"]
+                shared = {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                }
+                self.write_json(root, manager.CLAUDE_SHARED, shared)
+                self.create_generated_files(root)
+                self.create_gitignore(root, upstream_shims=False)
+                (root / manager.FLAG).write_text(contents, encoding="utf-8")
+                shared_before = (root / manager.CLAUDE_SHARED).read_bytes()
+                target_before = (root / target).read_bytes()
+
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "evo-auto.flag",
+                ):
+                    manager.disable(root)
+
+                self.assertEqual(
+                    (root / manager.CLAUDE_SHARED).read_bytes(), shared_before
+                )
+                self.assertEqual((root / target).read_bytes(), target_before)
+
+    def test_lifecycle_accepts_matching_duplicate_intent_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(
+                root,
+                manager.CLAUDE_SHARED,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            (root / manager.FLAG).write_text(
+                "enabled: true\nenabled: true\n"
+                "signal: corrections-only\nsignal: corrections-only\n"
+                "auto_write_scope: project-wide-only\n"
+                "auto_write_scope: project-wide-only\n",
+                encoding="utf-8",
+            )
+
+            manager.localize(root)
+            manager.check(root, smoke=False)
+            manager.disable(root)
+            self.assertFalse((root / target).exists())
 
     def test_localize_writes_the_local_copy_before_removing_shared_entries(
         self,
@@ -620,6 +762,771 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.assertTrue((root / manager.FLAG).is_file())
             self.assertTrue((root / target).is_file())
             self.assertTrue((root / companion).is_file())
+
+    def test_disable_rejects_lexical_managed_aliases_before_mutation(self) -> None:
+        aliases = (
+            ".ievo/./hooks/scripts/correction-capture.sh",
+            ".ievo//hooks///scripts/correction-capture.sh",
+            r".ievo\hooks\scripts\correction-capture.sh",
+            r".ievo/ho\oks/scripts/correction-capture.sh",
+            r".ie\vo/hooks/scripts/correction-capture.sh",
+            ".IEVO/HOOKS/SCRIPTS/correction-capture.sh",
+            ".ievo/other/../hooks/scripts/correction-capture.sh",
+            '.ievo/ho"oks"/scripts/correction-capture.sh',
+            '.ie"vo"/hooks/scripts/correction-capture.sh',
+            ".ievo/ho\\\noks/scripts/correction-capture.sh",
+            ".ievo/hoo${EMPTY}ks/scripts/correction-capture.sh",
+            ".ie${EMPTY}vo/hooks/scripts/correction-capture.sh",
+            ".ievo/${HOOKS}/scripts/correction-capture.sh",
+            "${IEVO}/hooks/scripts/correction-capture.sh",
+            "${IEVO}/${HOOKS}/scripts/correction-capture.sh",
+            ".ievo/hoo$(printf '')ks/scripts/correction-capture.sh",
+            ".ievo/hoo`printf ''`ks/scripts/correction-capture.sh",
+            ".ievo/hoo%EMPTY%ks/scripts/correction-capture.sh",
+            ".ievo/hoo!EMPTY!ks/scripts/correction-capture.sh",
+            ".ievo/hoo$env:EMPTYks/scripts/correction-capture.sh",
+            "${IEVO_HOOKS}/scripts/failure-capture.sh",
+            r"%IEVO_HOOKS%\scripts\failure-capture.sh",
+            ".ievo/ho?ks/scripts/failure-capture.sh",
+            ".ievo/ho[o]ks/scripts/failure-capture.sh",
+            ".ievo/[[:alpha:]]ooks/scripts/failure-capture.sh",
+            ".ievo/[[.h.]]ooks/scripts/failure-capture.sh",
+            ".ievo/[[=h=]]ooks/scripts/failure-capture.sh",
+            ".ievo/ho`oks/scripts/failure-capture.sh",
+            r".ievo\ho^oks\scripts\failure-capture.sh",
+            ".ievo/ho`\noks/scripts/failure-capture.sh",
+            ".ievo/ho`\r\noks/scripts/failure-capture.sh",
+            ".ievo/ho^\noks/scripts/failure-capture.sh",
+            ".ievo/ho^\r\noks/scripts/failure-capture.sh",
+            ".ievo/ho`printf o\n`ks/scripts/failure-capture.sh",
+            ".ievo/ho{ok,xx}s/scripts/failure-capture.sh",
+            ".ievo/ho{o..o}ks/scripts/failure-capture.sh",
+            ".ievo/ho@(ok|xx)s/scripts/failure-capture.sh",
+            ".ievo/$'hoo\\x6bs'/scripts/failure-capture.sh",
+            "sh ('.ie'+'vo/ho'+'oks/scripts/failure-capture.sh')",
+            "sh ('.ie','vo/hooks/scripts/failure-capture.sh' -join '')",
+            "sh ('{0}{1}' -f '.ie','vo/hooks/scripts/failure-capture.sh')",
+            "[string]::Concat('.ie','vo/hooks/scripts/failure-capture.sh')",
+            "& sh (('ievo/hooks/scripts/failure-capture.sh').Insert(0,'.'))",
+            "& sh (('ievo/hooks/scripts/failure-capture.sh').PadLeft(47,'.'))",
+            "$[IEVO_HOOKS]/scripts/failure-capture.sh",
+            r"%A\scripts\failure-capture.sh",
+            r"!IEVO_HOOKS:~0,11!\scripts\failure-capture.sh",
+            r"IEVO~1\hooks\scripts\failure-capture.sh",
+            r".ievo\HOOKS~1\scripts\failure-capture.sh",
+            "@hookArgs",
+            ".ievo/hooks",
+        )
+        for alias in aliases:
+            with self.subTest(alias=alias), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                shared = {
+                    "hooks": {
+                        "FutureEvent": [
+                            self.group(
+                                {"type": "command", "command": "sh", "args": [alias]}
+                            )
+                        ]
+                    }
+                }
+                self.write_json(root, manager.CLAUDE_SHARED, shared)
+                self.create_generated_files(root)
+                target = manager.SCRIPT_TARGETS["correction-capture"]
+                before = (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "unsupported iEvo hook reference",
+                ):
+                    manager.disable(root)
+
+                self.assertEqual(
+                    (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                    before,
+                )
+                self.assertTrue((root / target).is_file())
+
+    def test_disable_rejects_a_directory_shaped_script_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            target_path = root / target
+            target_path.unlink()
+            target_path.mkdir()
+            sentinel = target_path / "force-tracked.txt"
+            sentinel.write_text("keep\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(root), "add", "-f", sentinel.relative_to(root)],
+                check=True,
+            )
+            local_before = (root / manager.CLAUDE_LOCAL).read_bytes()
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "generated removal target must be a regular file",
+            ):
+                manager.disable(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_LOCAL).read_bytes(),
+                local_before,
+            )
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    def test_disable_fails_before_mutation_when_vendor_walk_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            local_before = (root / manager.CLAUDE_LOCAL).read_bytes()
+            generated_before = {
+                relative: (root / relative).read_bytes()
+                for relative in (
+                    *manager.SCRIPT_TARGETS.values(),
+                    *manager.LOCAL_COMPANIONS,
+                    manager.VENDOR_DIRECTORY / "capture.mjs",
+                )
+            }
+
+            def fail_walk(*_args: object, **kwargs: object) -> tuple[()]:
+                onerror = kwargs["onerror"]
+                assert callable(onerror)
+                onerror(PermissionError("vendor subtree is unreadable"))
+                return ()
+
+            with (
+                mock.patch.object(manager.os, "walk", side_effect=fail_walk),
+                self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "cannot inspect managed vendor tree",
+                ),
+            ):
+                manager.disable(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_LOCAL).read_bytes(),
+                local_before,
+            )
+            for relative, contents in generated_before.items():
+                self.assertEqual((root / relative).read_bytes(), contents)
+
+    def test_disable_fails_before_mutation_when_vendor_root_probe_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            local_before = (root / manager.CLAUDE_LOCAL).read_bytes()
+            vendor = root / manager.VENDOR_DIRECTORY
+            original_lstat = Path.lstat
+
+            def fail_vendor_lstat(path: Path) -> object:
+                if path == vendor:
+                    raise PermissionError("vendor root is unreadable")
+                return original_lstat(path)
+
+            with (
+                mock.patch.object(
+                    manager,
+                    "ensure_no_symlink_components",
+                    return_value=None,
+                ),
+                mock.patch.object(Path, "lstat", new=fail_vendor_lstat),
+                self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "cannot inspect managed vendor path",
+                ),
+            ):
+                manager.disable(root)
+
+            self.assertEqual((root / manager.CLAUDE_LOCAL).read_bytes(), local_before)
+            self.assertTrue((root / target).is_file())
+            self.assertTrue((vendor / "capture.mjs").is_file())
+
+    def test_lifecycle_lock_blocks_a_concurrent_disable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            local_before = (root / manager.CLAUDE_LOCAL).read_bytes()
+
+            with manager.lifecycle_lock(root):
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "another iEvo hook lifecycle operation is active",
+                ):
+                    manager.disable(root)
+
+            self.assertEqual((root / manager.CLAUDE_LOCAL).read_bytes(), local_before)
+            self.assertTrue((root / target).is_file())
+
+    def test_linked_worktrees_use_distinct_absolute_and_relative_lock_paths(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            gitdirs = workspace / "common.git" / "worktrees"
+            relative_gitdir = gitdirs / "relative"
+            absolute_gitdir = gitdirs / "absolute"
+            relative_gitdir.mkdir(parents=True)
+            absolute_gitdir.mkdir()
+            relative_root = workspace / "relative-worktree"
+            absolute_root = workspace / "absolute-worktree"
+            relative_root.mkdir()
+            absolute_root.mkdir()
+            (relative_root / ".git").write_text(
+                "gitdir: ../common.git/worktrees/relative\n",
+                encoding="utf-8",
+            )
+            (absolute_root / ".git").write_text(
+                f"gitdir: {absolute_gitdir.resolve()}\n",
+                encoding="utf-8",
+            )
+
+            relative_lock = manager.lifecycle_lock_path(relative_root)
+            absolute_lock = manager.lifecycle_lock_path(absolute_root)
+
+            self.assertEqual(
+                relative_lock,
+                relative_gitdir.resolve() / "pycc-ievo-hooks.lock",
+            )
+            self.assertEqual(
+                absolute_lock,
+                absolute_gitdir.resolve() / "pycc-ievo-hooks.lock",
+            )
+            self.assertNotEqual(relative_lock, absolute_lock)
+            with manager.lifecycle_lock(relative_root):
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "another iEvo hook lifecycle operation is active",
+                ):
+                    with manager.lifecycle_lock(relative_root):
+                        self.fail("the same linked-worktree lock was acquired twice")
+            with manager.lifecycle_lock(absolute_root):
+                pass
+
+    def test_linked_worktree_rejects_a_malformed_gitdir_declaration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".git").write_text("not-a-gitdir\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "invalid gitdir declaration",
+            ):
+                manager.lifecycle_lock_path(root)
+
+    @unittest.skipUnless(os.name != "nt", "POSIX symlink regression")
+    def test_linked_worktree_rejects_a_symlinked_gitdir_component(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            real_parent = workspace / "real-gitdirs"
+            gitdir = real_parent / "worktree"
+            gitdir.mkdir(parents=True)
+            redirected_parent = workspace / "redirected-gitdirs"
+            redirected_parent.symlink_to(real_parent, target_is_directory=True)
+            root = workspace / "worktree"
+            root.mkdir()
+            (root / ".git").write_text(
+                f"gitdir: {redirected_parent / 'worktree'}\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "directory path contains.*symlink",
+            ):
+                manager.lifecycle_lock_path(root)
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction regression")
+    def test_linked_worktree_rejects_a_junctioned_gitdir_component(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            real_parent = workspace / "real-gitdirs"
+            gitdir = real_parent / "worktree"
+            gitdir.mkdir(parents=True)
+            redirected_parent = workspace / "redirected-gitdirs"
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(redirected_parent), str(real_parent)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            root = workspace / "worktree"
+            root.mkdir()
+            (root / ".git").write_text(
+                f"gitdir: {redirected_parent / 'worktree'}\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "directory path contains.*reparse point",
+            ):
+                manager.lifecycle_lock_path(root)
+
+    @unittest.skipUnless(os.name != "nt", "POSIX symlink regression")
+    def test_lifecycle_lock_rejects_a_symlinked_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            self.create_gitignore(root, upstream_shims=False)
+            external = workspace / "external-lock"
+            external.write_bytes(b"keep\n")
+            lock = manager.lifecycle_lock_path(root)
+            lock.symlink_to(external)
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "regular non-link file",
+            ):
+                with manager.lifecycle_lock(root):
+                    self.fail("a symlinked lifecycle lock was acquired")
+
+            self.assertEqual(external.read_bytes(), b"keep\n")
+
+    @unittest.skipUnless(os.name == "nt", "Windows reparse-point regression")
+    def test_lifecycle_lock_rejects_a_windows_junction_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            self.create_gitignore(root, upstream_shims=False)
+            external = workspace / "external-lock-directory"
+            external.mkdir()
+            sentinel = external / "sentinel"
+            sentinel.write_text("keep\n", encoding="utf-8")
+            lock = manager.lifecycle_lock_path(root)
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(lock), str(external)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "regular non-link file",
+            ):
+                with manager.lifecycle_lock(root):
+                    self.fail("a junction lifecycle lock was acquired")
+
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    def test_non_git_lifecycle_lock_stays_inside_the_validated_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lock = manager.lifecycle_lock_path(root)
+
+            self.assertEqual(lock, root / ".pycc-ievo-hooks.lock")
+            with manager.lifecycle_lock(root):
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "another iEvo hook lifecycle operation is active",
+                ):
+                    with manager.lifecycle_lock(root):
+                        self.fail("the same non-git lock was acquired twice")
+            self.assertTrue(lock.is_file())
+
+    def test_stale_lock_file_does_not_block_disable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            lock = manager.lifecycle_lock_path(root)
+            lock.write_bytes(b"\0orphaned owner metadata\n")
+
+            manager.disable(root)
+
+            self.assertFalse((root / target).exists())
+            self.assertFalse((root / manager.VENDOR_DIRECTORY).exists())
+            self.assertTrue(lock.is_file())
+
+    def test_disable_revalidates_vendor_snapshot_before_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            original_check = manager.ensure_machine_local_paths_ignored
+            calls = 0
+            inserted = root / manager.VENDOR_DIRECTORY / "late.mjs"
+
+            def mutate_before_recheck(check_root: Path) -> manager.VendorSnapshot:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    inserted.write_text("// late\n", encoding="utf-8")
+                return original_check(check_root)
+
+            with (
+                mock.patch.object(
+                    manager,
+                    "ensure_machine_local_paths_ignored",
+                    side_effect=mutate_before_recheck,
+                ),
+                self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "managed vendor tree changed",
+                ),
+            ):
+                manager.disable(root)
+
+            self.assertTrue((root / target).is_file())
+            self.assertTrue((root / manager.VENDOR_DIRECTORY / "capture.mjs").is_file())
+            self.assertEqual(inserted.read_text(encoding="utf-8"), "// late\n")
+
+    def test_disable_revalidates_generated_file_snapshot_before_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            original_inspect = manager.inspect_regular_removal_files
+            calls = 0
+            changed = root / target
+
+            def mutate_before_recheck(
+                inspect_root: Path,
+                targets: object,
+            ) -> dict[str, manager.FileIdentity]:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    changed.write_text(
+                        "#!/bin/sh\n# changed\nexit 0\n", encoding="utf-8"
+                    )
+                return original_inspect(inspect_root, targets)  # type: ignore[arg-type]
+
+            with (
+                mock.patch.object(
+                    manager,
+                    "inspect_regular_removal_files",
+                    side_effect=mutate_before_recheck,
+                ),
+                self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "generated removal targets changed",
+                ),
+            ):
+                manager.disable(root)
+
+            self.assertEqual(
+                changed.read_text(encoding="utf-8"),
+                "#!/bin/sh\n# changed\nexit 0\n",
+            )
+            self.assertTrue((root / manager.VENDOR_DIRECTORY / "capture.mjs").is_file())
+
+    def test_disable_revalidates_ancestors_after_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            original_check = manager.ensure_snapshot_unchanged
+            checks = 0
+            hooks = root / manager.HOOK_DIRECTORY
+            relocated = workspace / "relocated-hooks"
+
+            def redirect_after_snapshot(
+                label: str,
+                expected: dict[str, manager.FileIdentity],
+                actual: dict[str, manager.FileIdentity],
+            ) -> None:
+                nonlocal checks
+                original_check(label, expected, actual)
+                checks += 1
+                if checks == 2:
+                    hooks.rename(relocated)
+                    hooks.symlink_to(relocated, target_is_directory=True)
+
+            with (
+                mock.patch.object(
+                    manager,
+                    "ensure_snapshot_unchanged",
+                    side_effect=redirect_after_snapshot,
+                ),
+                self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "symlink component",
+                ),
+            ):
+                manager.disable(root)
+
+            relocated_target = relocated / target.relative_to(manager.HOOK_DIRECTORY)
+            self.assertTrue(relocated_target.is_file())
+            self.assertTrue(
+                (relocated / "scripts" / "vendor" / "capture.mjs").is_file()
+            )
+
+    def test_disable_removes_a_nested_vendor_tree_deepest_first(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            nested = root / manager.VENDOR_DIRECTORY / "one" / "two"
+            nested.mkdir(parents=True)
+            (nested / "nested.mjs").write_text("// nested\n", encoding="utf-8")
+            unrelated = root / manager.SCRIPT_DIRECTORY / "unrelated.txt"
+            unrelated.write_text("keep\n", encoding="utf-8")
+            self.create_gitignore(root, upstream_shims=False)
+
+            manager.disable(root)
+
+            self.assertFalse((root / manager.VENDOR_DIRECTORY).exists())
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "keep\n")
+
+    def test_disable_detects_a_config_change_before_its_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            entry = self.group(self.command_entry(target))
+            self.write_json(
+                root,
+                manager.CLAUDE_SHARED,
+                {"hooks": {"UserPromptSubmit": [entry]}},
+            )
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {"hooks": {"UserPromptSubmit": [entry]}},
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            original_write = manager.atomic_write_json
+
+            def mutate_after_shared_write(
+                write_root: Path,
+                relative: Path,
+                value: dict[str, object],
+            ) -> None:
+                original_write(write_root, relative, value)
+                if relative == manager.CLAUDE_SHARED:
+                    local = self.read_json(root, manager.CLAUDE_LOCAL)
+                    local["concurrent"] = "keep"
+                    self.write_json(root, manager.CLAUDE_LOCAL, local)
+
+            with (
+                mock.patch.object(
+                    manager,
+                    "atomic_write_json",
+                    side_effect=mutate_after_shared_write,
+                ),
+                self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "configuration changed during disable",
+                ),
+            ):
+                manager.disable(root)
+
+            local = self.read_json(root, manager.CLAUDE_LOCAL)
+            self.assertEqual(local["concurrent"], "keep")
+            self.assertNotEqual(self.records(local), set())
+            self.assertTrue((root / target).is_file())
+
+    def test_disable_checks_effective_ignore_policy_before_mutation(self) -> None:
+        for state in ("unignored", "force-tracked-local", "force-tracked-vendor"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                target = manager.SCRIPT_TARGETS["correction-capture"]
+                self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+                self.write_json(
+                    root,
+                    manager.CLAUDE_LOCAL,
+                    {
+                        "hooks": {
+                            "UserPromptSubmit": [self.group(self.command_entry(target))]
+                        }
+                    },
+                )
+                self.create_generated_files(root)
+                self.create_gitignore(root, upstream_shims=False)
+                if state == "unignored":
+                    gitignore = root / manager.GITIGNORE
+                    gitignore.write_text(
+                        gitignore.read_text(encoding="utf-8")
+                        + "!.claude/settings.local.json\n",
+                        encoding="utf-8",
+                    )
+                elif state == "force-tracked-local":
+                    subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(root),
+                            "add",
+                            "-f",
+                            manager.CLAUDE_LOCAL.as_posix(),
+                        ],
+                        check=True,
+                    )
+                else:
+                    subprocess.run(
+                        [
+                            "git",
+                            "-C",
+                            str(root),
+                            "add",
+                            "-f",
+                            manager.VENDOR_DIRECTORY.joinpath("capture.mjs").as_posix(),
+                        ],
+                        check=True,
+                    )
+                local_before = (root / manager.CLAUDE_LOCAL).read_text(encoding="utf-8")
+                vendor_path = root / manager.VENDOR_DIRECTORY / "capture.mjs"
+                vendor_before = vendor_path.read_text(encoding="utf-8")
+
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "machine-local iEvo paths are not ignored",
+                ):
+                    manager.disable(root)
+
+                self.assertEqual(
+                    (root / manager.CLAUDE_LOCAL).read_text(encoding="utf-8"),
+                    local_before,
+                )
+                self.assertTrue((root / target).is_file())
+                self.assertEqual(
+                    vendor_path.read_text(encoding="utf-8"),
+                    vendor_before,
+                )
+
+    def test_disable_rejects_a_symlinked_vendor_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            external = workspace / "external.mjs"
+            external.write_text("// keep\n", encoding="utf-8")
+            vendor_file = root / manager.VENDOR_DIRECTORY / "capture.mjs"
+            vendor_file.unlink()
+            vendor_file.symlink_to(external)
+            local_before = (root / manager.CLAUDE_LOCAL).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "managed vendor tree contains a non-regular file",
+            ):
+                manager.disable(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_LOCAL).read_text(encoding="utf-8"),
+                local_before,
+            )
+            self.assertTrue((root / target).is_file())
+            self.assertEqual(external.read_text(encoding="utf-8"), "// keep\n")
 
     def test_managed_references_scan_nested_vendor_values(self) -> None:
         settings = {
@@ -852,7 +1759,11 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.write_json(root, manager.CLAUDE_LOCAL, local)
             flag = root / manager.FLAG
             flag.parent.mkdir(parents=True)
-            flag.write_text("enabled: true\n", encoding="utf-8")
+            flag.write_text(
+                "enabled: true\nsignal: corrections-only\n"
+                "auto_write_scope: project-wide-only\n",
+                encoding="utf-8",
+            )
             (root / ".ievo/hooks").symlink_to(
                 external_hooks,
                 target_is_directory=True,
@@ -878,6 +1789,181 @@ class IevoHookLifecycleTests(unittest.TestCase):
             )
             self.assertTrue(external_target.is_file())
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    def test_mounted_config_ancestor_blocks_localize_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(
+                root,
+                manager.CLAUDE_SHARED,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            shared_before = (root / manager.CLAUDE_SHARED).read_bytes()
+            target_before = (root / target).read_bytes()
+            mounted = root / manager.CLAUDE_SHARED.parent
+
+            with (
+                mock.patch.object(
+                    manager.os.path,
+                    "ismount",
+                    side_effect=lambda path: Path(path) == mounted,
+                ),
+                self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "managed path crosses a mount boundary",
+                ),
+            ):
+                manager.localize(root)
+
+            self.assertEqual((root / manager.CLAUDE_SHARED).read_bytes(), shared_before)
+            self.assertFalse((root / manager.CLAUDE_LOCAL).exists())
+            self.assertEqual((root / target).read_bytes(), target_before)
+
+    def test_mounted_hook_ancestor_blocks_disable_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            local_before = (root / manager.CLAUDE_LOCAL).read_bytes()
+            target_before = (root / target).read_bytes()
+            vendor = root / manager.VENDOR_DIRECTORY / "capture.mjs"
+            vendor_before = vendor.read_bytes()
+            mounted = root / manager.HOOK_DIRECTORY
+
+            with (
+                mock.patch.object(
+                    manager.os.path,
+                    "ismount",
+                    side_effect=lambda path: Path(path) == mounted,
+                ),
+                self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "managed path crosses a mount boundary",
+                ),
+            ):
+                manager.disable(root)
+
+            self.assertEqual((root / manager.CLAUDE_LOCAL).read_bytes(), local_before)
+            self.assertEqual((root / target).read_bytes(), target_before)
+            self.assertEqual(vendor.read_bytes(), vendor_before)
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction regression")
+    def test_windows_junctioned_hook_ancestor_blocks_disable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            external_hooks = workspace / "external-hooks"
+            external_scripts = external_hooks / "scripts"
+            external_scripts.mkdir(parents=True)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            external_target = external_hooks / target.relative_to(".ievo/hooks")
+            external_target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            vendor = external_scripts / "vendor"
+            vendor.mkdir()
+            sentinel = vendor / "sentinel"
+            sentinel.write_text("keep\n", encoding="utf-8")
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            self.write_json(
+                root,
+                manager.CLAUDE_LOCAL,
+                {
+                    "hooks": {
+                        "UserPromptSubmit": [self.group(self.command_entry(target))]
+                    }
+                },
+            )
+            flag = root / manager.FLAG
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text(
+                "enabled: true\nsignal: corrections-only\n"
+                "auto_write_scope: project-wide-only\n",
+                encoding="utf-8",
+            )
+            self.create_gitignore(root, upstream_shims=False)
+            junction = root / manager.HOOK_DIRECTORY
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(junction), str(external_hooks)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            local_before = (root / manager.CLAUDE_LOCAL).read_bytes()
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "reparse point",
+            ):
+                manager.disable(root)
+
+            self.assertEqual((root / manager.CLAUDE_LOCAL).read_bytes(), local_before)
+            self.assertTrue(external_target.is_file())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    @unittest.skipUnless(os.name == "nt", "Windows short-path regression")
+    def test_windows_short_path_alias_blocks_disable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.create_generated_files(root)
+
+            def short_path(path: Path) -> Path:
+                buffer = ctypes.create_unicode_buffer(32768)
+                length = ctypes.windll.kernel32.GetShortPathNameW(
+                    str(path), buffer, len(buffer)
+                )
+                self.assertGreater(length, 0)
+                self.assertLess(length, len(buffer))
+                return Path(buffer.value)
+
+            short_root = short_path(root)
+            short_ievo = short_path(root / ".ievo")
+            short_component = short_ievo.relative_to(short_root)
+            if "~" not in short_component.as_posix():
+                self.skipTest("8.3 short names are unavailable on this volume")
+            alias = short_component / target.relative_to(".ievo")
+            shared = {
+                "hooks": {
+                    "FutureEvent": [
+                        self.group(
+                            {
+                                "type": "command",
+                                "command": "sh",
+                                "args": [alias.as_posix()],
+                            }
+                        )
+                    ]
+                }
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            shared_before = (root / manager.CLAUDE_SHARED).read_bytes()
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "unsupported iEvo hook reference",
+            ):
+                manager.disable(root)
+
+            self.assertEqual((root / manager.CLAUDE_SHARED).read_bytes(), shared_before)
+            self.assertTrue((root / target).is_file())
 
     def test_symlinked_config_ancestor_blocks_disable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

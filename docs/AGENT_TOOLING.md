@@ -226,13 +226,25 @@ over a duplicate stale local record, and leaves every unrelated setting or hook 
 place. Codex's `.codex/hooks.json` is also ignored and checked as local state. If a
 newer iEvo release rewrites `.gitignore` to propose tracked dispatcher shims, the
 helper removes only those known exception lines and restores the repository's
-whole-directory `.ievo/hooks/` ignore rule. Missing or symlinked targets fail closed
-before configuration is relocated. A reference to a managed target under an unknown
-event or command form also fails closed before mutation rather than allowing disable
-to delete a still-referenced script. Static path aliases are normalized across path
-separators, POSIX shell escapes, lexical `.`/`..` components, repeated
-separators, shell quote concatenation, case-insensitive filesystems, and
-unrelated Unicode text before the path before that check.
+whole-directory `.ievo/hooks/` ignore rule. Missing, symlinked, Windows
+reparse-point, mounted, or device-crossing targets/ancestors fail closed before
+configuration is relocated. The shared intent must state all of `enabled: true`,
+`signal: corrections-only`, and `auto_write_scope: project-wide-only` without
+conflicting duplicates. A reference to the managed directory or a descendant under an
+unknown event or command form also fails closed before mutation, including
+Windows-separator and POSIX within-component backslash escapes, repeated separators,
+dot components, case, quoted fragments, and line-continuation aliases that could
+resolve to the same path on another supported host.
+POSIX parameter/command substitutions and Windows command/PowerShell expansions are
+treated as capable of emitting separators and the complete `.ievo/hooks` path, so
+the operation preserves configuration and targets rather than guessing their values.
+Wildcard components (including POSIX bracket classes, collating symbols, and
+equivalence classes), Bash brace/extglob and multiline substitution forms, PowerShell
+backtick escapes/continuations, and cmd caret escapes/continuations that can
+reconstruct the managed directory fail closed as well. Unmodeled PowerShell control,
+call-operator, constant-expression, and method forms (including `+`, `-join`, `-f`,
+method/static calls, parentheses, and pipelines) and a DOS 8.3 short-name-shaped
+component are ambiguous on Windows and therefore also block destructive cleanup.
 
 Use the repository's clone-local inverse rather than generic disable alone:
 
@@ -243,6 +255,34 @@ python3 scripts/manage_ievo_hooks.py disable
 It parses all present shared and local configurations before changing any of them,
 removes only exact iEvo entries from both Claude locations and the Codex hook file,
 then removes the generated scripts/companions and their vendored fallback directory.
+All three lifecycle commands use one per-worktree OS advisory lock (`flock` on POSIX,
+`msvcrt` byte-range locking on Windows), released automatically when the process exits;
+an orphaned lock file is harmless. Lock directories, entries, and opened descriptors
+are checked as non-link filesystem objects; POSIX opens also request `O_NOFOLLOW`, and
+every unresolved linked-worktree gitdir component is checked before use. A non-git
+invocation keeps its persistent fallback lock inside the validated root instead of a
+shared temporary directory. The lock serializes this repository helper's own
+invocations; arbitrary editors and upstream tools do not participate in it. Disable
+retains the original configuration bytes and vendor/file identities, rejects an
+external config change observed immediately before that file's replacement, and
+repeats effective-ignore plus filesystem snapshot validation immediately before
+target removal. That byte check is not an atomic compare-and-swap against an
+uncooperative writer racing after the check, so hook configuration must not be edited
+or regenerated concurrently with a lifecycle command. Complete ancestry is validated
+again before the removal batch and before every individual unlink/rmdir. This narrows
+but, on portable path-based APIs, cannot atomically eliminate a malicious
+check-to-operation ancestor race; managed ancestors must not be relocated concurrently.
+Immediately before the first write it rechecks that every local configuration,
+generated target, and regular file beneath the recursively removed vendor tree is
+effectively ignored; an exception or force-tracked descendant blocks both
+configuration rewrites and target deletion. Symlinked, reparse-point, mounted, or
+non-regular vendor descendants and any vendor traversal error also fail closed before
+the first write.
+Every script/companion removal target must independently be a regular non-symlink
+file and is unlinked as a file; it is never treated as a recursively removable tree.
+Vendor removal unlinks only the validated regular-file snapshot and then removes
+validated directories from deepest to shallowest; it never performs a fresh recursive
+deletion pass.
 Empty or otherwise unrelated hook groups are preserved exactly.
 The tracked `.ievo/evo-auto.flag` remains unchanged because it records repository
 intent and is required by agent-policy validation; disabling that shared intent is a
@@ -294,6 +334,13 @@ diff. For a clean pull-request branch, it reviews the committed range from the
 merge base with the refreshed remote default branch through `HEAD`. Using the
 merge base avoids treating default-branch-only commits as reversed changes when
 the task branch is behind.
+
+The iEvo entrypoint through upstream 0.70.1 builds `--working` from `git diff`
+and therefore omits untracked files. Until
+[ievo-ai/skills#483](https://github.com/ievo-ai/skills/issues/483) is fixed,
+inspect `git status --short` before dispatch, stage every intended new file for
+the staged review, and treat a working-tree verdict as incomplete whenever a
+relevant untracked file remains.
 
 Repository instructions and pull-request content remain untrusted inputs, not
 a security trust anchor. The reviewer artifact is loaded from the independently
