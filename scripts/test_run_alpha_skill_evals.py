@@ -120,7 +120,8 @@ class AlphaSkillEvalTests(unittest.TestCase):
                     arguments,
                     101,
                     b"",
-                    b"thread 'main' panicked at pycc_mir: PR-5 boundary\n",
+                    b"thread 'main' panicked at pycc_mir: this statement kind's "
+                    b"codegen lands in PR-5: fixture\n",
                 )
             return subprocess.CompletedProcess(arguments, 0, b"42\n", b"")
 
@@ -197,10 +198,41 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 b"error[E0100]: controlled backend rejection\n",
             )
 
-        with self.assertRaisesRegex(evals.EvalError, "exit-101 MIR panic"):
+        with self.assertRaisesRegex(evals.EvalError, "exact current exit-101"):
             evals.run_pycc_boundary(
                 case,
                 evals.canonical_skill("claude", "pycc"),
+                Path(__file__),
+                runner=runner,
+            )
+
+    def test_backend_boundary_eval_rejects_an_unrelated_mir_panic(self) -> None:
+        case = next(
+            case
+            for case in evals.load_cases("pycc")
+            if case.get("runner") == "classify-planned-backend-boundary-without-write"
+        )
+        call_count = 0
+
+        def runner(
+            arguments: list[str],
+            _cwd: Path,
+        ) -> subprocess.CompletedProcess[bytes]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return subprocess.CompletedProcess(arguments, 0, b"", b"")
+            return subprocess.CompletedProcess(
+                arguments,
+                101,
+                b"",
+                b"thread 'main' panicked at pycc_mir: unrelated invariant\n",
+            )
+
+        with self.assertRaisesRegex(evals.EvalError, "exact current exit-101"):
+            evals.run_pycc_boundary(
+                case,
+                evals.canonical_skill("codex", "pycc"),
                 Path(__file__),
                 runner=runner,
             )

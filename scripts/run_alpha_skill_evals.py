@@ -371,10 +371,12 @@ def run_pycc_boundary(
             build.returncode != 101
             or build.stdout != b""
             or b"panicked at" not in build.stderr
-            or b"pycc_mir" not in build.stderr
+            or b"pycc_mir: this statement kind's codegen lands in PR-5"
+            not in build.stderr
         ):
             raise EvalError(
-                "backend fixture must reproduce the current exit-101 MIR panic"
+                "backend fixture must reproduce the exact current exit-101 "
+                "D-035 MIR panic"
             )
 
 
