@@ -44,13 +44,15 @@ slice. Code-generation and runtime breadth are the next delivery step. These
 facts must move with the authoritative roadmap whenever implementation depth
 changes.
 
-The status page presents D-051/D-053's active paired gate independently of
-later compiler slices. It states that the frontend measurement and
-greater-than-2% regression gate are required through `ci-gate`, measure the
-exact predecessor and candidate sequentially on one hosted runner, seal the
-predecessor timing before candidate code runs, compare medians through a
-hash-verified predecessor-owned checker, and fail closed on revision,
-benchmark-contract, artifact-identity, or comparison drift.
+The status page presents D-051/D-053/D-056's active source-aware paired gate
+independently of later compiler slices. It states that the frontend measurement
+and regression gate are required through `ci-gate`, measure the exact
+predecessor and candidate sequentially on one hosted runner, seal the
+predecessor timing before candidate code runs, and classify complete
+repository-owned executable inputs before that execution. Identical inputs
+make timing non-blocking environment telemetry; changed source keeps the hard
+greater-than-2% block. The gate fails closed on revision, benchmark-contract,
+executable-input identity, artifact-identity, or comparison drift.
 
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile
@@ -96,9 +98,11 @@ the landing, status, architecture, comparison, Markdown, and `llms.txt`
 frontend/backend claims independently, preventing a structurally valid site
 from silently describing a superseded compiler milestone. It also removes the
 status page's paired same-runner measurement, exact-revision provenance,
-predecessor-before-candidate sealing, and fail-closed
-revision/contract/artifact/comparison requirements independently so the
-validator rejects a public performance-gate claim that no longer matches CI. The
+predecessor-before-candidate sealing, executable-input classification,
+conditional telemetry rule, changed-source hard threshold, and fail-closed
+revision/contract/identity/artifact/comparison requirements independently so
+the validator rejects a public performance-gate claim that no longer matches
+CI. The
 landing-page contract also requires
 exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable

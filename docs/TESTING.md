@@ -124,15 +124,18 @@ The historical D-048 workflow established the split trust boundary:
 `frontend-perf-measure` executed pull-request benchmark code and uploaded only
 Criterion estimates as untrusted data, while `frontend-perf-gate` executed the
 hash-verified main-owned comparator against an exact successful-main artifact.
-D-051/D-053 retain that isolation while retiring the cross-run artifact
-dependency, the D-048 digest, and its fixture. Artifact and checkout actions
-remain immutable reviewed pins.
+D-051/D-053 introduced the paired-runner version of that isolation while
+retiring the cross-run artifact dependency, the D-048 digest, and its fixture.
+D-056 retains the same boundary. Artifact and checkout actions remain immutable
+reviewed pins.
 
 The active `.github/workflows/ci.yml` is byte-identical to
-`tests/fixtures/d51-paired-ci.yml`. The checker allowlist contains only that
-whole-file digest, and structural mutation tests exercise the complete paired
-job shapes. The D-048 steady-state, pre-split, and activation fixtures, their
-digests, and their bootstrap tests are absent.
+`tests/fixtures/d56-source-aware-ci.yml`. The checker allowlist contains only
+that whole-file digest, and structural mutation tests exercise the complete
+source-aware paired job shapes. The retired D-051 fixture and comparator remain
+historical audit evidence, but the public policy rejects their workflow digest.
+The D-048 steady-state, pre-split, and activation fixtures, their digests, and
+their bootstrap tests are absent.
 The retired D-048 mean comparator and its standalone test are absent too;
 references to those paths in the historical D-042/D-044 decisions describe
 the repository state when those decisions were accepted, not active tooling.
@@ -146,8 +149,9 @@ event inputs, and measures both revisions inside that same run. There is no
 missing-evidence exception, reusable bootstrap, repository variable, cache
 fallback, older convenient SHA, or failed-run artifact path.
 
-D-051/D-053 remove between-runner timing from the live comparison without
-changing the 2% threshold. The active measurement job
+D-051/D-053 removed between-runner timing; D-056 retains those provenance
+controls and keeps the 2% threshold for changed executable inputs. The active
+measurement job
 resolves `pull_request.base.sha` or `push.before`, checks out that exact
 predecessor and `github.sha` into separate directories, verifies both
 revisions, and rejects drift in the bound benchmark-definition and
@@ -180,29 +184,28 @@ local paired validation with identical Rust and benchmark code produced a
 high outliers, while the medians differed by `-0.56%`. The merge threshold
 remains greater than 2%, and the comparator remains isolated and digest-bound.
 
-D-056 stages a source-aware successor after the active paired gate still
+D-056 is the active source-aware successor after the earlier paired gate still
 produced a `+3.14%` false failure for identical executable inputs in main run
 [30198852753](https://github.com/rotnov/pycc/actions/runs/30198852753), followed
 by a `+0.86%` pass for the same unchanged-input class in run
 [30199477003](https://github.com/rotnov/pycc/actions/runs/30199477003). The
-prospective [`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml)
+active [`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml)
 keeps both measurements and every D-051 provenance control. Before candidate
 code runs, it classifies the complete `src/` and `crates/` trees as identical
 or changed; the existing contract independently binds every benchmark,
 manifest, lockfile, toolchain, Cargo configuration, and local build script.
-The prospective comparator treats a timing delta as non-blocking environment
+The active comparator treats a timing delta as non-blocking environment
 telemetry only for the exact `true` identity, while any changed executable
 input keeps the same greater-than-2% failure. Boolean validation, complete-path
 classification, step ordering, output propagation, comparator binding, and
 the unchanged failure path have focused positive and negative tests.
 
-This paragraph describes staged evidence, not current behavior. The active
-workflow remains byte-identical to the reviewed D-051 fixture until a separate
-fresh-base activation pull request replaces it byte-for-byte with D-056 and
-retires the older authorization.
+This is current behavior. The live workflow is byte-identical to the reviewed
+D-056 fixture and the allowlist accepts only that digest. The D-051 workflow
+digest is retired and has a public-CLI rejection test.
 
 The byte-exact activation retired the D-048 workflow digest and fixture. No
-administrative bootstrap is required because each D-051 run measures both sides
+administrative bootstrap is required because each D-056 run measures both sides
 of its own comparison. D-054's one-shot staging recovery is historical audit
 evidence only; normal `audit` plus `ci-gate` protection was restored before this
 activation branch was created and is not encoded in repository configuration.
