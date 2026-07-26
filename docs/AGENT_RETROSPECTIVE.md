@@ -28,6 +28,42 @@ never a merge gate.
 
 ---
 
+## 2026-07-26 — Re-derived a parallel session's already-planned PR #132 reconciliation from git archaeology instead of reading `SESSION_LOG.md` first
+
+**What happened:** a push to `feat/v0-1-pr5-codegen-depth` was rejected as
+non-fast-forward after another session had pushed 5 commits directly to the
+same branch (via a `codex/fix-pr132-review-0764` lineage), independently
+fixing an overlapping-but-not-identical subset of the same 8 Codex review
+findings. Before reading `docs/SESSION_LOG.md`, roughly 30 minutes were spent
+manually diffing commits (`git show <sha>:<path>`, function-by-function) to
+figure out which findings the other session had already fixed, whether its
+`D-074` collided with a local draft entry, and whether the two lineages were
+genuinely complementary or in conflict.
+
+**Root cause:** `docs/SESSION_LOG.md` (added by D-066 specifically to answer
+"what state is the work in and what's next" across sessions) already
+contained a same-day entry recording that exact reconciliation as planned and
+partly executed — which commits to keep, which review threads it covered, and
+the exact next steps ("push normally... resolve only threads verified against
+the resulting remote head... request `@codex review` once for that new
+head"). Reading it first would have made the manual diffing largely
+redundant: the log already answered "is this a rogue conflicting process or
+planned parallel work," which is exactly the question the diffing was trying
+to answer from first principles.
+
+**What fixed it:** the manual diffing still reached the correct
+conclusion (remote is a superset in every substantive area except two doc
+files it never touched), so no rework was needed — but reading the log
+partway through confirmed it was reinventing an already-recorded plan.
+
+**Lesson:** when a push conflict or unexpected remote state is discovered on
+a branch this project's own automation actively works, check
+`docs/SESSION_LOG.md` for a same-branch entry *before* reaching for `git
+show`/`git diff` archaeology to reconstruct intent — the log exists
+precisely to make that reconstruction unnecessary. Git diffing is still the
+right tool to *verify* what the log claims, just not the right first step to
+*discover* it.
+
 ## 2026-07-26 — Retried a hanging Apple Git submodule probe before inspecting it
 
 **What happened:** the exact-revision `pre-commit try-repo` verification for

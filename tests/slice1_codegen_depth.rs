@@ -238,6 +238,33 @@ print(2.0 ** 0.5)
 }
 
 #[test]
+fn float_and_str_ge_and_ne_execute_with_the_correct_boolean_value() {
+    // `pycc_codegen`'s own `compiles_the_remaining_float_comparison_operators`/
+    // `compiles_the_remaining_string_comparison_operators` unit tests only
+    // prove the generated IR compiles -- they never link, run, or check a
+    // value, so a predicate swap (e.g. `FloatPredicate::OGE` -> `OGT`, or the
+    // analogous string-branch bug) would still pass every existing test.
+    // This goes through the real `pycc` CLI and asserts actual values
+    // (verified against `python3` on this exact source).
+    let source = "\
+print(2.5 >= 2.5)
+print(2.5 >= 2.6)
+print(2.5 != 2.5)
+print(2.5 != 2.6)
+print(\"b\" >= \"b\")
+print(\"b\" >= \"c\")
+print(\"b\" != \"b\")
+print(\"b\" != \"c\")
+";
+    let output = build_and_run("float_str_ge_ne_values", source);
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"True\nFalse\nFalse\nTrue\nTrue\nFalse\nFalse\nTrue\n"
+    );
+}
+
+#[test]
 fn multiplication_promotes_and_float_floor_division_matches_cpython() {
     let source = "\
 print(3000000000 * 3000000000)
@@ -417,6 +444,17 @@ print(f\"{returns_none()}\")
 ";
     let output = build_and_run("backend_representation_boundaries", source);
     assert!(output.status.success());
+    // Three of these lines are a documented v0.1 deviation from CPython, not
+    // the correct value: `accepts_int(True)` (4th line), `both_branches_
+    // return(False)` (5th line), and `counter` after being reassigned `True`
+    // (12th line) print "1"/"0"/"1" here, where real CPython (verified via
+    // `python3` on this exact source) prints "True"/"False"/"True" -- once a
+    // `bool` crosses an `int`-typed boundary its runtime representation
+    // becomes an ordinary tagged int with no bit left to recover that it was
+    // ever a `bool` (see docs/ROADMAP.md's "Language surface" known-gaps
+    // list, D-061/D-074). This assertion pins pycc's actual current output,
+    // not CPython's -- it is not itself evidence the divergent lines are
+    // correct.
     assert_eq!(
         output.stdout,
         b"5\nglobal\n2\n1\n0\n4\n9\n11\n0\n1\n2\n1\nNone\n"

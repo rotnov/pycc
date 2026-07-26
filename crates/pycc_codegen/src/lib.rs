@@ -2121,6 +2121,33 @@ fn emit_stmt<'ctx>(
         }
         MirStmt::Return(value) => {
             match value {
+                // A function declared `-> None` has a `void` LLVM signature
+                // (see this function's own return-type declaration site),
+                // so `return <None-typed-expr>` can never hand back a real
+                // value -- there is nothing to build a non-void `ret` from.
+                // Mirrors `emit_print_arg`'s own `Ty::None` handling: a
+                // direct call result's side effect is preserved (the callee
+                // still runs), but the placeholder `Scalar::Bool` value
+                // `emit_expr` returns for it is discarded rather than fed
+                // into `build_return`, which previously built an invalid
+                // `ret i8 0` inside a `void` function (only caught by
+                // `verify_module`'s Linux/macOS-only LLVM verifier, D-029 --
+                // a silent miscompile risk on Windows).
+                Some(expr)
+                    if expected_return_ty == pycc_mir::Ty::None
+                        && expr.ty() == pycc_mir::Ty::None =>
+                {
+                    if !matches!(expr, MirExpr::Call { .. }) {
+                        panic!(
+                            "pycc_codegen: returning a `None`-typed value that isn't a direct \
+                             call result is not supported yet"
+                        );
+                    }
+                    emit_expr(context, builder, module, rt, user_functions, locals, expr);
+                    builder
+                        .build_return(None)
+                        .expect("build_return should not fail for a bare `return`");
+                }
                 Some(expr) => {
                     let scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, expr);
@@ -2489,6 +2516,76 @@ mod tests {
     }
 
     #[test]
+    fn returning_a_void_returning_call_result_from_a_none_returning_function_runs_the_callee_and_returns_void()
+     {
+        // `def helper() -> None: return` ; `def outer() -> None: return
+        // helper()` ; `outer()` -- must not build `ret i8 0` inside
+        // `outer`'s `void` LLVM signature (previously failed `verify_module`
+        // with "Found return instr that returns non-void in Function of
+        // void return type!").
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(None)],
+                },
+                MirItem::Function {
+                    name: "outer".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(Some(MirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                        ty: Ty::None,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "outer".to_string(),
+                    args: vec![],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("return_none_call");
+        let obj_path = dir.join("return_none_call.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("return_none_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"");
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "returning a `None`-typed value that isn't a direct call result is not supported yet"
+    )]
+    fn returning_a_none_typed_name_that_is_not_a_direct_call_is_not_supported_yet() {
+        // A `None`-typed `MirExpr::Name` can't arise from any real HIR/MIR
+        // lowering path today (no `NoneLiteral` variant exists, and
+        // assigning a `None`-typed call result to a name is itself a
+        // separate, already-panicking boundary) -- this hand-built MIR
+        // exercises the match guard's `else` branch directly, matching
+        // `emit_print_arg`'s identical non-call-`None` panic convention.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::None,
+                }))],
+            }],
+        };
+        let dir = tempfile_dir("return_none_name");
+        let obj_path = dir.join("return_none_name.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
     #[should_panic(
         expected = "printing a `None`-typed value that isn't a direct call result is not supported yet"
     )]
@@ -2767,6 +2864,86 @@ mod tests {
         let dir = tempfile_dir("remaining_cmp_ops");
         let obj_path = dir.join("remaining_cmp_ops.o");
         compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn ge_and_ne_execute_with_the_correct_boolean_value_for_int() {
+        // `compiles_the_remaining_comparison_operators` above only proves
+        // `GtE`/`NotEq` produce IR that compiles -- it never links, runs, or
+        // checks a value, so a predicate swap (e.g. `IntPredicate::SGE` ->
+        // `IntPredicate::SGT`) would still pass every existing test. This
+        // links and runs, asserting the actual computed booleans.
+        fn print_compare(op: CmpOpKind, left: i64, right: i64) -> MirStmt {
+            MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Compare {
+                    op,
+                    left: Box::new(MirExpr::IntLiteral(left)),
+                    right: Box::new(MirExpr::IntLiteral(right)),
+                    ty: Ty::Bool,
+                }],
+                ty: Ty::None,
+            })
+        }
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(print_compare(CmpOpKind::GtE, 5, 5)),
+                MirItem::TopLevelStmt(print_compare(CmpOpKind::GtE, 5, 6)),
+                MirItem::TopLevelStmt(print_compare(CmpOpKind::NotEq, 5, 5)),
+                MirItem::TopLevelStmt(print_compare(CmpOpKind::NotEq, 5, 6)),
+            ],
+        };
+        let dir = tempfile_dir("ge_ne_values");
+        let obj_path = dir.join("ge_ne_values.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("ge_ne_values");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"True\nFalse\nFalse\nTrue\n");
+    }
+
+    #[test]
+    fn a_nan_float_is_not_equal_to_itself_and_is_truthy() {
+        // `float('nan') != float('nan')` and `bool(float('nan'))` are both
+        // `True` in CPython (IEEE-754 unordered-comparison semantics) --
+        // `Compare`'s `NotEq` arm and `truthy`'s `Float` arm both
+        // deliberately use `FloatPredicate::UNE` (not the ordered `ONE`) to
+        // match this. v0.1's Python-source surface has no NaN-producing
+        // expression (this same diff's `float_pow` domain guards ensure
+        // `**` panics before a NaN could leak out that path either), so a
+        // hand-built `FloatLiteral(f64::NAN)` is the only way to exercise
+        // it -- without this test, swapping either `UNE` for `ONE` would
+        // still pass every other test in the suite.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Compare {
+                        op: CmpOpKind::NotEq,
+                        left: Box::new(MirExpr::FloatLiteral(f64::NAN)),
+                        right: Box::new(MirExpr::FloatLiteral(f64::NAN)),
+                        ty: Ty::Bool,
+                    }],
+                    ty: Ty::None,
+                })),
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::FloatLiteral(f64::NAN),
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::StringLiteral("nan_is_truthy".to_string())],
+                        ty: Ty::None,
+                    })],
+                    orelse: vec![],
+                }),
+            ],
+        };
+        let dir = tempfile_dir("nan_comparisons");
+        let obj_path = dir.join("nan_comparisons.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("nan_comparisons");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"True\nnan_is_truthy\n");
     }
 
     #[test]
