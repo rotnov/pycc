@@ -48,16 +48,17 @@ primitive literals and annotations, assignments, arithmetic, comparisons,
 calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. Function items
 carry their parameter and return types, while call expressions retain only the
 callee name; HIR does not yet assign binding identities or build and memoize a
-call graph. `pycc_types::check_and_resolve` validates the lowered module,
-resolves sibling and recursive calls against the module signature set, infers
-private-helper signatures where constraints are sufficient, and returns HIR
-with those signatures materialized.
+call graph. `pycc_types::check` validates the lowered module against the
+inferred signature table without cloning HIR. Compiler stages that need
+concrete private-helper signatures use `pycc_types::check_and_resolve`, which
+performs the same validation and returns HIR with those signatures
+materialized.
 
-`pycc check` stops after that frontend pipeline. The MIR/backend boundary is
-deliberately narrower until PR-5: it currently lowers only integer-literal
-`print()` calls and zero-argument user-function calls. Other valid frontend
-constructs reach the explicit D-035 PR-5 boundary in `pycc_mir` rather than
-being advertised as code-generation support.
+`pycc check` stops after the check-only frontend pipeline. The MIR/backend
+boundary is deliberately narrower until PR-5: it currently lowers only
+integer-literal `print()` calls and zero-argument user-function calls. Other
+valid frontend constructs reach the explicit D-035 PR-5 boundary in
+`pycc_mir` rather than being advertised as code-generation support.
 
 Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [DECISIONS.md](./DECISIONS.md) D-003).
 

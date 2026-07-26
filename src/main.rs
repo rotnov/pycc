@@ -61,7 +61,7 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
 /// for what that requires to actually be available.
 fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode> {
     let path = Path::new(path);
-    let typed_hir = check_frontend(path)
+    let typed_hir = resolve_frontend(path)
         .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
     let mir = pycc_mir::build(&typed_hir);
 
@@ -102,7 +102,7 @@ enum FrontendFailure {
     },
 }
 
-fn check_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
+fn lower_frontend(path: &Path) -> Result<(pycc_hir::HirModule, String), FrontendFailure> {
     let bytes = std::fs::read(path).map_err(|error| FrontendFailure::Input(error.to_string()))?;
     let source = source::decode_python_source(&bytes).map_err(FrontendFailure::Input)?;
     let module = match pycc_parser::parse(&source) {
@@ -117,10 +117,18 @@ fn check_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
             return Err(FrontendFailure::Compile { diagnostic, source });
         }
     };
-    match pycc_types::check_and_resolve(&hir) {
-        Ok(typed_hir) => Ok(typed_hir),
-        Err(diagnostic) => Err(FrontendFailure::Compile { diagnostic, source }),
-    }
+    Ok((hir, source))
+}
+
+fn check_frontend(path: &Path) -> Result<(), FrontendFailure> {
+    let (hir, source) = lower_frontend(path)?;
+    pycc_types::check(&hir).map_err(|diagnostic| FrontendFailure::Compile { diagnostic, source })
+}
+
+fn resolve_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
+    let (hir, source) = lower_frontend(path)?;
+    pycc_types::check_and_resolve(&hir)
+        .map_err(|diagnostic| FrontendFailure::Compile { diagnostic, source })
 }
 
 fn report_check_failure(path: &Path, failure: FrontendFailure, error_format: ErrorFormat) -> u8 {
