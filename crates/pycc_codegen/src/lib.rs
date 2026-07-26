@@ -1171,6 +1171,26 @@ pub fn compile_to_object(
                 .expect("build_call should not fail for a well-formed decref");
         }
     }
+    // Module-level Python code cannot contain a `return`: `pycc_types`'
+    // T0024 rejects one anywhere at module scope, including nested inside a
+    // top-level `if`/`while`/`for` (its `check_stmt` recurses into itself,
+    // not into a function-context variant). The only `emit_stmt` path that
+    // builds a terminator is `MirStmt::Return`, so no top-level statement
+    // can have terminated this block. If one somehow did, appending the
+    // `build_return` below would put a second terminator on an
+    // already-terminated block -- invalid IR that `module.verify()` catches
+    // everywhere except Windows, where D-029 makes `verify_module` a no-op.
+    // Fail loudly on every platform instead of silently emitting bad IR
+    // there (see `a_top_level_return_is_an_internal_error_not_bad_ir`), the
+    // same guard-then-explicit-panic shape the per-function completion loop
+    // below already uses for its own T0024-guaranteed-unreachable case.
+    if builder.get_insert_block().unwrap().get_terminator().is_some() {
+        panic!(
+            "pycc_codegen: internal error: a top-level statement terminated `main`'s \
+             entry block -- pycc_types::check (T0024) should have rejected a module-level \
+             `return` before it reached codegen"
+        );
+    }
     // See the module-level comment block below for why these .expect()s
     // (this one included) are deliberate rather than Result-threaded: each
     // covers an operation that stays infallible given how this function
@@ -3168,6 +3188,27 @@ mod tests {
     }
 
     #[test]
+    fn a_top_level_return_is_an_internal_error_not_bad_ir() {
+        // `pycc_types`' T0024 rejects any module-level `return` already (even
+        // nested in a top-level `if`/`while`/`for`) -- this proves codegen
+        // fails loudly (a clear panic) rather than emitting a second
+        // terminator into `main`'s entry block, which is invalid IR that
+        // `module.verify()` cannot catch on Windows (D-029's no-op), if that
+        // check is ever somehow bypassed. Mirrors
+        // `a_non_none_function_falling_through_is_an_internal_error_not_bad_ir`
+        // above for the per-function analogue of the same guard.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Return(Some(MirExpr::IntLiteral(0))))],
+        };
+        let dir = tempfile_dir("top_level_return_internal_error");
+        let obj_path = dir.join("top_level_return_internal_error.o");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_to_object(&mir, &obj_path, None)
+        }));
+        assert!(result.is_err(), "expected a panic, not a successfully-compiled object");
+    }
+
+    #[test]
     #[should_panic(expected = "internal error: call to undefined function")]
     fn calling_an_undefined_function_as_a_nested_expression_is_an_internal_error() {
         // Unlike a bare statement-level call (see `calling_an_undefined_
@@ -3999,13 +4040,16 @@ mod tests {
         // `i = 0; while i < 3: s = "x"; i = i + 1` -- `s`'s first assignment
         // happens inside the `while`'s own body block, exercising the same
         // entry-block-hoisting fix through a loop back-edge instead of an
-        // `if`/`else` merge. Also exercises `decref_old_str_if_reassigning`'s
-        // own reassignment load across loop iterations (the 2nd/3rd
-        // iteration each decref the previous iteration's `"x"` before
-        // overwriting `s`'s slot) -- that load site has the exact same
-        // dominance requirement the top-level completion loop does, and
-        // this is the only test in this file that reassigns a `str` local
-        // whose first binding is itself inside a loop body.
+        // `if`/`else` merge. This is the only test in this file whose first
+        // binding of a `str` local is itself inside a loop body, so it also
+        // pins D-052's accepted leak class (b) (see D-053): codegen visits
+        // this `Assign` exactly once, when `s` is not yet in `locals`, so
+        // `decref_old_str_if_reassigning` never fires for it and no decref is
+        // emitted into the loop body at all. At runtime every iteration but
+        // the last therefore overwrites `s`'s slot without freeing its
+        // predecessor's `"x"` -- a bounded, memory-safe per-iteration leak;
+        // only the final iteration's value is later freed, by the top-level
+        // completion pass, which is exactly what this test's name describes.
         let mir = MirModule {
             items: vec![
                 MirItem::TopLevelStmt(MirStmt::Assign {

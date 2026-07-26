@@ -2,10 +2,13 @@ use pycc_hir::{FStringPart, HirExpr, HirItem, HirModule, HirStmt};
 use std::collections::HashMap;
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
-// `pycc_hir` directly (see its Cargo.toml) -- `Ty` reaches its public API
-// through `MirExpr`/`MirItem`'s fields, so it must be nameable as
-// `pycc_mir::Ty` from any downstream crate, exactly like `pycc_types` already
-// re-exports it (`pycc_types::Ty`, its own line 4) for the same reason.
+// `pycc_hir` directly (see its Cargo.toml) -- `Ty`, `BinOpKind`, and
+// `CmpOpKind` all reach this crate's public API through `MirExpr`'s fields
+// (`Name`/`Call` carry a `Ty`; `BinOp` carries a `BinOpKind`; `Compare`
+// carries a `CmpOpKind`), so each must be nameable as
+// `pycc_mir::{Ty, BinOpKind, CmpOpKind}` from any downstream crate, exactly
+// like `pycc_types` already re-exports `Ty` (`pycc_types::Ty`, its own line
+// 4) for the same reason.
 pub use pycc_hir::{BinOpKind, CmpOpKind, Ty};
 
 #[derive(Debug, Clone, PartialEq)]

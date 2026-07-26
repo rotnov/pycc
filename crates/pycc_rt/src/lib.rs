@@ -37,7 +37,8 @@ fn format_i64_line(value: i64) -> String {
 /// See D-052: every `Ty::Int` value is one LLVM `i64`. Its low bit is the
 /// discriminant -- `1` means the high 63 bits (arithmetic-shift-recovered)
 /// are the real value; `0` means the full 64 bits are a heap `BigInt`
-/// pointer (Task 9). This module never constructs the `0` case yet.
+/// pointer. `tag_bigint` (Task 9) constructs the `0` case on arithmetic
+/// overflow; `bigint_ref`/`to_sign_and_magnitude` interpret it.
 const TAG_BIT: i64 = 1;
 
 fn tag_smallint(value: i64) -> i64 {
@@ -1393,9 +1394,28 @@ mod tests {
     }
 
     #[test]
-    fn a_bigint_prints_with_a_trailing_newline_like_a_smallint() {
+    fn a_nonzero_bigint_is_truthy() {
+        // Companion to `a_bigint_zero_is_falsy`: pins the *other* outcome of
+        // `pycc_rt_int_truthy`'s bigint branch (a magnitude that is not a
+        // single zero limb). `i64::MAX >> 1` is the largest tagged smallint,
+        // so `+ 1` overflows the fixnum range and promotes to a real bigint.
         let huge = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1));
-        pycc_rt_int_print(huge); // stdout captured by the test harness
+        assert!(!is_smallint(huge), "value must actually be a bigint, not a tagged smallint");
+        assert_eq!(pycc_rt_int_truthy(huge), 1);
+    }
+
+    #[test]
+    fn a_bigint_print_path_runs_without_panicking() {
+        // Exercises `int_print`'s bigint branch (`int_to_str` -> `println!`
+        // -> `str_decref`). This in-process test only proves that path runs
+        // without panicking; the "prints the decimal digits with a trailing
+        // newline" behavior itself is asserted end-to-end by pycc_codegen's
+        // `compiles_a_loop_whose_accumulator_overflows_into_a_bigint`, which
+        // runs the compiled binary and checks its stdout is the digits plus
+        // exactly one `\n` (capturing `println!` output inside a libtest unit
+        // body would need stdout-redirect plumbing this crate does not have).
+        let huge = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(1));
+        pycc_rt_int_print(huge);
     }
 
     #[test]
