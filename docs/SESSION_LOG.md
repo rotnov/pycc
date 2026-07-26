@@ -48,9 +48,11 @@ Tier-1 targets, the `pycc check` <50ms/1k-LOC benchmark, and exact
 diagnostic-output acceptance) and PR-7 (buffer to close whatever's left
 against the v0.1 acceptance checklist) have not been started. The paired
 frontend regression gate is already active and required through
-`ci-gate` under D-051/D-053; it is not deferred PR-6 work. PR-6 is the
-first point the full pipeline runs end-to-end on all five Tier-1 platforms
-— treat it as the highest-uncertainty remaining slice, not a formality.
+`ci-gate` under D-056 in the containing commit; D-051/D-053 remain the
+retained paired-provenance controls, not the current workflow/comparator
+authorization. The gate is not deferred PR-6 work. PR-6 is the first point
+the full pipeline runs end-to-end on all five Tier-1 platforms — treat it
+as the highest-uncertainty remaining slice, not a formality.
 
 **PR-5 recovery boundary:** at this snapshot the PR-5 branch is a
 machine-local branch in the originating shared repository, not a remote
