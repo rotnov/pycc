@@ -120,12 +120,15 @@ checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
 then validates the downloaded measurement against the canonical baseline.
 Artifact and checkout actions use immutable reviewed pins.
 
-The completed transition retains only
-`tests/fixtures/d48-steady-ci.yml`. The active `.github/workflows/ci.yml` is
-byte-identical to that reviewed fixture, the checker binds its whole-file
-digest, and structural mutation tests exercise the bootstrap-free job shapes.
-The retired pre-split and activation fixtures, their digests, and their
-shell-level bootstrap tests are removed.
+The completed D-048 transition retains
+`tests/fixtures/d48-steady-ci.yml` as the active workflow fixture. The active
+`.github/workflows/ci.yml` is byte-identical to that reviewed fixture, the
+checker binds its whole-file digest, and structural mutation tests exercise
+the bootstrap-free job shapes. The retired pre-split and activation fixtures,
+their digests, and their shell-level bootstrap tests are removed. D-051 also
+stages `tests/fixtures/d51-paired-ci.yml` and its prospective digest as inert
+review material; that second fixture does not describe the active workflow
+until a separate byte-exact activation pull request lands.
 
 The baseline lifecycle is fail-closed and main-owned. The gate queries only a
 successful `push` run of `ci.yml` on `main` whose `head_sha` is the exact PR
@@ -144,6 +147,49 @@ expired, cancelled, or non-exact predecessor artifact fails the pull request
 or `main` run. The completed one-time activation and its deletion evidence are
 recorded in [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md); the
 repository variable is absent and is not standing configuration.
+
+D-051's staged successor removes between-runner timing from the eventual
+comparison without changing the 2% threshold. Its prospective measurement job
+resolves `pull_request.base.sha` or `push.before`, checks out that exact
+predecessor and `github.sha` into separate directories, verifies both
+revisions, and rejects drift in the bound benchmark-definition and
+build-configuration contract: `benches/`, the root `Cargo.toml` and
+`Cargo.lock`, both root Rust toolchain filenames, root `.cargo/`, every
+workspace-member `Cargo.toml`, and every tracked local `build.rs`. It
+benchmarks both revisions on one hosted runner using separate Cargo target
+directories. The predecessor
+JSON is uploaded through the pinned v4 artifact action before candidate code
+executes, closing the same-user background-process race that a local
+hash-then-copy sequence would leave open; the candidate JSON is uploaded
+separately afterward. The prospective gate checks out and hash-verifies the
+dedicated median comparator and its tests from the exact predecessor, validates
+the distinct numeric artifact identities returned by the trusted upload steps,
+downloads both same-run inputs by those exact IDs rather than replaceable
+names, requires exactly both regular files with no symlinks or extras, and
+remains an exact `ci-gate` dependency. Missing or zero predecessor SHAs,
+unsupported events, a mutable action, revision mismatch, removal of any bound
+contract path or local-manifest/build-script binding, shared target state,
+candidate execution before the sealed predecessor upload, a broad artifact
+upload, a missing, repeated, or non-numeric artifact identity, a name-based
+download, either missing estimate, an extra file, a symlink, a skippable
+comparison, or a mixed old/new job pair fails closed in focused tests.
+
+Median point estimates are deliberate rather than a threshold relaxation. A
+local paired validation with identical Rust and benchmark code produced a
+`-2.94%` mean difference after the predecessor sample accumulated 15 severe
+high outliers, while the medians differed by `-0.56%`. The merge threshold
+remains greater than 2%, and the comparator remains isolated and digest-bound.
+
+Staging does not silently switch the live contract: until the active workflow
+is replaced byte-for-byte in the follow-up activation, pull requests still use
+the D-048 exact-successful-main artifact lifecycle above. The activation then
+retires the D-048 workflow digest and fixture; no new administrative bootstrap
+is required because each D-051 run measures both sides of its own comparison.
+A pull request that changes a bound manifest, local build script, lockfile,
+toolchain, Cargo configuration, or benchmark source must first stage a
+reviewed transition for that benchmark contract; the gate intentionally does
+not guess whether such a change affects only product code or also the
+measurement harness.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would

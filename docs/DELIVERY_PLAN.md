@@ -92,6 +92,21 @@ This remains deliberately lightweight and distinct from the full
 pyperformance/Nuitka/Codon/mypyc comparison suite (TESTING.md Layer 7), which
 stays out of scope until v0.2.
 
+D-051 records a staged transport correction after repeated docs-only CI runs
+proved that absolute estimates from two different hosted runners can exceed
+the 2% threshold despite narrow within-run confidence intervals. The current
+D-048 artifact gate remains active during staging. A separate byte-exact
+activation changes only the performance transport so the exact predecessor
+and candidate are measured on one runner and their paired estimates are passed
+to a dedicated hash-verified median comparator inside the same isolated review
+boundary. The prospective workflow binds the benchmark sources, root and
+workspace manifests, local build scripts, lockfile, Rust toolchain, and Cargo
+configuration; it seals the predecessor artifact before candidate code runs,
+binds both downloads to the distinct artifact IDs returned by their trusted
+upload steps, and requires any contract drift to use its own reviewed
+transition. The threshold, required `ci-gate` fan-in, and benchmark itself do
+not change.
+
 ## Autonomy policy ("no questions" mechanics)
 
 **Spec is law.** Where an existing doc already decided something, follow it literally. Where the spec is genuinely silent (as with the exact LLVM/inkwell version above), the agent picks the most conservative option that is *actually available in this environment* — never a hypothetical — records it as a new dated entry in [DECISIONS.md](./DECISIONS.md) using its existing template, and continues without stopping.
