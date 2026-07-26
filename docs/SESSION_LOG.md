@@ -103,6 +103,72 @@ reservations, and this has now happened four times.
 
 ---
 
+## 2026-07-26 — PR #138 merged; D-062 blocks PR #132
+
+**Delivered state:** [PR #137](https://github.com/rotnov/pycc/pull/137)
+merged as `45545bb057f5cd9e8712610c6137f53ef56d3aae`. Post-merge CI run
+`30205599108` passed the hard 100% line/region gate, all Tier-1 legs, the
+cross-target proof, both frontend-performance jobs, and aggregate `ci-gate`;
+the exact merge also passed agent-assets, agent-policy, Pages, and
+main-history-audit. [PR #138](https://github.com/rotnov/pycc/pull/138) then
+merged the PR-state-first monitoring rule as
+`fb5d483daa9f9fd18914a0ceeee1b8448edd1421`. Post-merge run `30206232849`
+and its agent and main-history workflows all completed successfully by the
+2026-07-26T14:40:20Z inspection checkpoint, including 100% coverage, both
+performance jobs, every Tier-1 leg, and aggregate `ci-gate`.
+
+**D-062 evidence:** run `30205599108` retained exact predecessor artifact
+`8632975406` and candidate artifact `8632990263`. Their five per-run medians
+aggregate to `6924.73 ns -> 7077.93 ns` (`+2.2123%`). The trusted classifier
+proved the executable inputs identical, so D-056's retained rule correctly
+treated that delta as non-blocking environment telemetry; evaluating the same
+evidence as changed inputs would fail the unchanged hard `>2%` gate. This
+verifies D-062's delivered identical-input path, but does not close
+[#109](https://github.com/rotnov/pycc/issues/109): repeated changed-source PR
+and post-merge evidence is still required without result selection.
+
+**Current work at the same checkpoint:** [PR #132](https://github.com/rotnov/pycc/pull/132)
+was open at `1ae1b3c90749836aeaa340ad0d8a067dc605d464` while current `main` was
+`fb5d483daa9f9fd18914a0ceeee1b8448edd1421`; GitHub reported it conflicting
+and `DIRTY`. Its first performance attempt failed before collecting timing
+because rustup hit a DNS lookup error. The permitted no-result rerun completed
+all fixed samples, but D-062 then blocked the changed-input comparison at
+`6686.28, 6777.54, 7088.44, 7228.73, 7185.40 ns` versus
+`8498.72, 7405.25, 7527.44, 8023.83, 7353.21 ns`: aggregate medians
+`7088.44 ns -> 7527.44 ns`, or `+6.1931%`. Exact artifacts `8633194749`
+and `8633213046` retain that evidence. Coverage, audit, cross-target, and every
+native platform check passed, but `frontend-perf-gate` and `ci-gate` failed;
+do not rerun or select another timing result for this head. Nine current Codex
+threads and one outdated thread also remain unresolved. Refresh the branch from
+current `main`, verify and fix every confirmed thread with regression coverage,
+investigate the retained performance evidence without result selection, resolve
+only fixed or proven-obsolete threads, then obtain green required checks and a
+Codex review for the final exact head before considering merge.
+
+## 2026-07-26 — PR #138 opened for PR-state-first CI monitoring
+
+**Snapshot evidence:** ready-for-review
+[PR #138](https://github.com/rotnov/pycc/pull/138) was opened from
+`codex/check-pr-state-before-ci` at head
+`61163e35f67af30a5b3dc24b988abc9f3c1eb9a3`, based on
+`main@45545bb057f5cd9e8712610c6137f53ef56d3aae`. A live state query reported
+the PR `OPEN`, non-draft, and `MERGEABLE`; `mergeStateStatus=BLOCKED`
+reflected required checks still in progress rather than a merge conflict.
+The containing change is not yet merged.
+
+**Delivered scope if merged:** `.ievo/evolution/project.md` will require
+agents to inspect pull-request lifecycle and mergeability before waiting for
+CI, and `docs/AGENT_RETROSPECTIVE.md` records the PR #132 incident that
+motivated the rule. No compiler behavior, supported platform, roadmap
+acceptance evidence, or delivery sequencing changes.
+
+**Required next steps:** push the session-log snapshot as the final PR head,
+rerun focused local validation, confirm the PR is still open and mergeable,
+request Codex review through the retry guard, and monitor required CI plus
+all review surfaces. Merge only after required checks are green and no
+actionable review thread remains; then verify the post-merge `main` run and
+history audit.
+
 ## 2026-07-26 — D-062 activation PR #137 green; refresh onto current main in progress
 
 **Snapshot evidence:** draft [PR #137](https://github.com/rotnov/pycc/pull/137)
