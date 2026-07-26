@@ -205,24 +205,35 @@
 
           <section id="not-yet">
             <p class="section-kicker">Scope boundary</p>
-            <h2>Native code generation remains slice-only.</h2>
+            <h2>A handful of documented v0.1 codegen gaps remain.</h2>
             <p>
-              <code>pycc build</code> and <code>pycc run</code> still lower
-              only module-level <code>print(&lt;i64 literal&gt;)</code>,
-              zero-argument function definitions, and explicit zero-argument
-              calls. New frontend constructs reach an explicit backend
-              boundary until the v0.1 MIR, code generation, and runtime work
-              lands. Containers, <code>Optional</code>, and narrowing are also
-              outside the current frontend grammar.
+              <code>pycc build</code> and <code>pycc run</code> now compile
+              the complete v0.1 feature set: arithmetic (including
+              <code>int</code> overflow-to-bigint and
+              true-division-always-<code>float</code> promotion),
+              comparisons, <code>if</code>/<code>while</code>/<code>for</code>+<code>range</code>,
+              functions and recursion, <code>str</code> (small-string
+              optimization, concatenation), basic f-strings, and
+              type-aware <code>print</code>. Known, accepted gaps: comparing
+              an already-promoted bigint <code>int</code>, <code>int</code>
+              multiplication/floor-division/modulo/power on a bigint
+              operand, <code>float</code> formatting outside CPython's
+              non-scientific range, a <code>str</code> local not
+              reassigned before its function returns, and unary operators
+              (<code>-x</code>/<code>+x</code>/<code>not x</code>/<code>~x</code>)
+              are honest "not supported yet" boundaries, not silent wrong
+              answers. Containers, <code>Optional</code>, and narrowing are
+              also outside the current frontend grammar.
             </p>
             <div class="callout">
               <strong>Do not use pycc in production.</strong>
               <p>
                 HIR and type diagnostics still use placeholder source
                 positions, safe help suggestions are not populated, and
-                unsupported backend constructs still fail at the explicit
-                pre-alpha boundary. Landing-page build examples remain design
-                targets unless marked as implemented.
+                unsupported constructs still fail at their own explicit
+                pre-alpha boundary rather than miscompiling silently.
+                Landing-page build examples remain design targets unless
+                marked as implemented.
               </p>
             </div>
           </section>
@@ -266,12 +277,14 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>Code generation and runtime breadth are next.</h2>
+            <h2>The conformance testkit and benchmark gate are next.</h2>
             <p>
-              The next compiler slice lowers the implemented v0.1 frontend
-              constructs through MIR and LLVM, then expands the runtime for
-              integers, floats, strings, booleans, control flow, recursion, and
-              basic f-strings. The required frontend measurement and
+              The next compiler slice adds <code>pycc_testkit</code>: the
+              <code>fib</code> and <code>mandelbrot-ascii</code> demos
+              compiled and compared against pinned CPython output on all
+              five Tier-1 targets, a <code>pycc check</code> benchmark
+              under 50ms per 1k lines, and byte-exact diagnostic-output
+              acceptance. The required frontend measurement and
               greater-than-2% regression gate run independently of that compiler
               sequence through <code>ci-gate</code>. This source-aware paired gate
               measures the exact predecessor and candidate sequentially on one
@@ -287,8 +300,8 @@
               predecessor-owned checker. Revision, benchmark-contract,
               executable-input identity, artifact-identity, exact file-set, and
               comparison drift fail closed.
-              The conformance testkit, named demos, and final v0.1 acceptance pass
-              follow the code-generation and runtime work.
+              A final buffer PR closes whatever is left against the v0.1
+              acceptance checklist once the testkit and benchmark gate land.
             </p>
             <div class="page-links">
               <a href="../architecture/">

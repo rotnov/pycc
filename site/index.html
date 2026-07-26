@@ -358,14 +358,17 @@
             <p>
               <code>pycc check</code> now runs the broadened v0.1 frontend:
               parsing, HIR lowering, strict type checking, private-helper
-              inference, and stable human or JSON diagnostics. The native
-              <code>build</code>/<code>run</code> path remains limited to the
-              original executable slice.
+              inference, and stable human or JSON diagnostics.
+              <code>build</code>/<code>run</code> now compile the complete
+              v0.1 feature set -- arithmetic, control flow, functions and
+              recursion, <code>str</code>, basic f-strings, and type-aware
+              <code>print</code> -- through MIR, LLVM, and a real runtime,
+              with a handful of documented gaps.
             </p>
             <ul>
               <li><span aria-hidden="true">✓</span> Strict v0.1 frontend and diagnostic snapshots</li>
-              <li><span aria-hidden="true">✓</span> End-to-end native-code slice</li>
-              <li><span aria-hidden="true">→</span> Full code generation and runtime breadth are next</li>
+              <li><span aria-hidden="true">✓</span> Full v0.1 codegen and runtime, documented gaps only</li>
+              <li><span aria-hidden="true">→</span> Conformance testkit and benchmark gate are next</li>
             </ul>
           </div>
         </div>

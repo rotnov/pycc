@@ -564,8 +564,9 @@ mutations = (
     (
         site_dir / "python-aot-compilers" / "index.html",
         (
-            "frontend checker implemented for the v0.1 subset, while "
-            "native code generation remains slice-only"
+            "full v0.1 frontend and backend implemented (arithmetic, "
+            "control flow, functions, recursion, f-strings), release "
+            "optimization and conformance testing still planned"
         ),
         "type checker is a stub and the backend status is unknown",
         "comparison page with superseded pycc positioning",

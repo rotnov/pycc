@@ -798,11 +798,25 @@ fn build_call_to<'ctx>(
     f: FunctionValue<'ctx>,
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
+    let param_types = f.get_type().get_param_types();
     let arg_values: Vec<inkwell::values::BasicMetadataValueEnum> = args
         .iter()
-        .map(|a| {
+        .enumerate()
+        .map(|(i, a)| {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
+            // `bool` is an `int` subtype (`pycc_types::is_assignable`) -- a
+            // `bool`-typed argument passed where the callee's parameter is
+            // declared `int` needs the same D-061 tagging `to_tagged_int`
+            // applies elsewhere, or the built call's argument type would
+            // not match the callee's own declared signature (`f`'s
+            // parameter types, queried directly from its already-built
+            // `FunctionType` rather than threading `pycc_mir::Ty` params
+            // through every call site).
+            let needs_widening = matches!(scalar, Scalar::Bool(_))
+                && param_types.get(i).is_some_and(|pt| *pt == context.i64_type().into());
+            let scalar =
+                if needs_widening { Scalar::Int(to_tagged_int(context, builder, scalar)) } else { scalar };
             match scalar {
                 Scalar::Int(v) => v.into(),
                 Scalar::Bool(v) => v.into(),
@@ -917,9 +931,17 @@ fn alloca_str_at_entry<'ctx>(context: &'ctx Context, builder: &inkwell::builder:
 /// Allocates (on first assignment) or reuses (on reassignment) the
 /// `alloca` backing `target`, stores `value` into it, and records/updates
 /// its entry in `locals`. A local's `Ty` never changes across
-/// reassignment (`pycc_types` ties one static type to each binding), so
-/// reusing an existing slot never needs a type check beyond the
-/// `debug_assert_eq!` in `emit_expr`'s `Name` arm above.
+/// reassignment (`pycc_types`' sticky-first-type rule, T0023, ties one
+/// static type to each binding forever) -- but the *value* being stored on
+/// a reassignment can still be a legally narrower `Scalar` than that sticky
+/// type (`bool` is `int`-assignable), since `pycc_mir` reports every read
+/// of the local using its original type, never the latest assignment's own
+/// type. Reusing an existing slot therefore widens a `Scalar::Bool` value
+/// into a tagged `int` (D-061) when the local's own recorded type is
+/// `Int`, matching the widening `emit_expr`'s `Name` arm will use to read
+/// it back -- the only other combination possible here, since
+/// `pycc_types::check_assignment` already rejected anything else before
+/// this HIR could reach codegen.
 ///
 /// A `str` local's *first* assignment hoists its `alloca` to the function's
 /// entry block instead of building it at the current position -- see
@@ -933,8 +955,14 @@ fn emit_assign<'ctx>(
     ty: pycc_mir::Ty,
     value: Scalar<'ctx>,
 ) {
-    let ptr = match locals.get(target) {
-        Some((ptr, _)) => *ptr,
+    let (ptr, value) = match locals.get(target) {
+        Some((ptr, local_ty)) => {
+            let value = match (local_ty, &value) {
+                (pycc_mir::Ty::Int, Scalar::Bool(_)) => Scalar::Int(to_tagged_int(context, builder, value)),
+                _ => value,
+            };
+            (*ptr, value)
+        }
         None => {
             let ptr = match &value {
                 Scalar::Str(_) => alloca_str_at_entry(context, builder),
@@ -949,7 +977,7 @@ fn emit_assign<'ctx>(
                     .expect("build_alloca should not fail for a supported scalar type"),
             };
             locals.insert(target.to_string(), (ptr, ty));
-            ptr
+            (ptr, value)
         }
     };
     let basic_value: inkwell::values::BasicValueEnum = match value {
@@ -1645,6 +1673,25 @@ fn emit_stmt<'ctx>(
                 Some(expr) => {
                     let scalar = emit_expr(context, builder, module, rt, user_functions, locals, expr);
                     let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
+                    // `bool` is an `int` subtype (`pycc_types::is_assignable`)
+                    // -- returning a `bool` value from a function declared
+                    // to return `int` needs the same D-061 tagging
+                    // `build_call_to`'s argument-marshalling applies, or the
+                    // built `ret` instruction's operand type would not
+                    // match this function's own declared return type
+                    // (queried directly from its `FunctionType`, the same
+                    // approach `build_call_to` uses for parameters).
+                    let return_ty = builder
+                        .get_insert_block()
+                        .expect("builder is always positioned inside some block while a statement is being emitted")
+                        .get_parent()
+                        .expect("the block builder is currently positioned in always belongs to a function")
+                        .get_type()
+                        .get_return_type();
+                    let needs_widening = matches!(scalar, Scalar::Bool(_))
+                        && return_ty.is_some_and(|rt_ty| rt_ty == context.i64_type().into());
+                    let scalar =
+                        if needs_widening { Scalar::Int(to_tagged_int(context, builder, scalar)) } else { scalar };
                     let basic_value: inkwell::values::BasicValueEnum = match scalar {
                         Scalar::Int(v) => v.into(),
                         Scalar::Bool(v) => v.into(),
@@ -3526,6 +3573,114 @@ mod tests {
         let dir = tempfile_dir("call_with_bool_arg");
         let obj_path = dir.join("call_with_bool_arg.o");
         compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn a_bool_argument_widens_to_int_when_the_parameter_is_declared_int() {
+        // `def f(x: int) -> None: print(x)` ; `f(True)` -- `bool` is an
+        // `int` subtype (`pycc_types::is_assignable`), so this is valid,
+        // type-checked v0.1 Python. `build_call_to` previously passed the
+        // evaluated `Scalar::Bool` (an `i8`) straight through with no
+        // widening, so the built call's argument type didn't match `f`'s
+        // declared `i64` parameter -- `module.verify()` rejected the IR.
+        // `x` is `int`-typed, so `True` widens to the tagged fixnum `1`;
+        // prints "1", not "True".
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::Name { name: "x".to_string(), ty: Ty::Int }],
+                        ty: Ty::None,
+                    })],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![MirExpr::BoolLiteral(true)],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("bool_arg_widens_to_int");
+        let obj_path = dir.join("bool_arg_widens_to_int.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("bool_arg_widens_to_int");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    fn a_bool_return_value_widens_to_int_when_the_function_declares_int() {
+        // `def f() -> int: return True` ; `print(f())` -- same
+        // `bool`-is-`int` widening as the argument case above, but for
+        // `MirStmt::Return`'s own value-emission arm: it previously mapped
+        // the returned `Scalar::Bool` straight to a `BasicValueEnum` with no
+        // widening, so the built `ret` instruction's operand type didn't
+        // match `f`'s declared `i64` return type -- `module.verify()`
+        // rejected the IR. Prints "1", not "True".
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::BoolLiteral(true)))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call { callee: "f".to_string(), args: vec![], ty: Ty::Int }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("bool_return_widens_to_int");
+        let obj_path = dir.join("bool_return_widens_to_int.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("bool_return_widens_to_int");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    fn reassigning_an_int_local_with_a_bool_value_widens_it_to_int() {
+        // `x = 5; x = True; print(x)` -- `pycc_types::check_assignment`'s
+        // sticky-first-type rule (T0023) keeps `x` typed `int` throughout
+        // (a later `bool` value is `is_assignable` into it, never rebinding
+        // it), so `pycc_mir` reports every `Name("x")` read as `Ty::Int`.
+        // `emit_assign` previously reused the first assignment's `i64`
+        // alloca but stored the second assignment's raw `Scalar::Bool` (an
+        // `i8`) into it verbatim -- an `i8` store into an `i64`-sized slot,
+        // followed by an `i64` load expecting a full tagged fixnum. Prints
+        // "1" (the tagged fixnum for the `int` value `1`), not "True".
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::IntLiteral(5),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::BoolLiteral(true),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name { name: "x".to_string(), ty: Ty::Int }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("reassign_bool_into_int");
+        let obj_path = dir.join("reassign_bool_into_int.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("reassign_bool_into_int");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
     }
 
     #[test]

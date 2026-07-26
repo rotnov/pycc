@@ -77,6 +77,20 @@ pub fn build(hir: &HirModule) -> MirModule {
             bind(&mut scopes, format!("$fn:{name}"), *return_ty);
         }
     }
+    // Second pass: lower every top-level statement purely for its binding
+    // side effect (discarding the result), mirroring `pycc_types::check`'s
+    // own three-pass structure (D-041): every top-level statement is
+    // processed before any function body is checked, so a function may read
+    // a module-level global assigned later in the file. Safe to lower twice
+    // -- `lower_stmt`/`lower_expr` have no side effect beyond `scopes`, and
+    // this pass's own sticky-first-type `bind` (see `lower_stmt`'s `Assign`
+    // arm) makes re-running it in the third pass below a no-op once a name
+    // is already bound.
+    for item in &hir.items {
+        if let HirItem::TopLevelStmt(stmt) = item {
+            lower_stmt(stmt, &mut scopes);
+        }
+    }
     let items = hir.items.iter().map(|item| lower_item(item, &mut scopes)).collect();
     MirModule { items }
 }
@@ -97,12 +111,12 @@ fn bind(scopes: &mut [HashMap<String, Ty>], name: String, ty: Ty) {
     scopes.last_mut().expect("at least one scope is always present").insert(name, ty);
 }
 
+fn scope_lookup(scopes: &[HashMap<String, Ty>], name: &str) -> Option<Ty> {
+    scopes.iter().rev().find_map(|scope| scope.get(name).copied())
+}
+
 fn lookup(scopes: &[HashMap<String, Ty>], name: &str) -> Ty {
-    scopes
-        .iter()
-        .rev()
-        .find_map(|scope| scope.get(name).copied())
-        .unwrap_or_else(|| panic!("pycc_mir: internal error: `{name}` has no recorded type -- pycc_types::check should have rejected this HIR before it reached pycc_mir"))
+    scope_lookup(scopes, name).unwrap_or_else(|| panic!("pycc_mir: internal error: `{name}` has no recorded type -- pycc_types::check should have rejected this HIR before it reached pycc_mir"))
 }
 
 fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt {
@@ -110,7 +124,16 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
         HirStmt::ExprStmt(expr) => MirStmt::ExprStmt(lower_expr(expr, scopes)),
         HirStmt::Assign { target, value } => {
             let value = lower_expr(value, scopes);
-            bind(scopes, target.clone(), value.ty());
+            // `pycc_types::check_assignment`'s own sticky-first-type rule
+            // (T0023): a name's recorded type is fixed at its first binding
+            // and never updated by a later assignment (only checked to be
+            // `is_assignable` into it, e.g. `bool` into `int`) -- so only
+            // bind here when `target` isn't already bound in any enclosing
+            // scope; a later assignment's own possibly-narrower `value.ty()`
+            // is intentionally *not* what a later `Name` read reports.
+            if scope_lookup(scopes, target).is_none() {
+                bind(scopes, target.clone(), value.ty());
+            }
             MirStmt::Assign { target: target.clone(), value }
         }
         HirStmt::If { test, body, orelse } => MirStmt::If {
@@ -600,6 +623,85 @@ mod tests {
                     ty: Ty::Float,
                 },
             })]
+        );
+    }
+
+    #[test]
+    fn a_function_reading_a_global_assigned_later_in_the_file_resolves() {
+        // Mirrors D-038/D-039's forward-reference fix on the `pycc_types`
+        // side (a sibling call resolves regardless of definition order):
+        // `pycc_types::check_with_signatures` registers function signatures,
+        // then processes *every* top-level statement, and only then checks
+        // function bodies -- so a function reading a module-level global
+        // type-checks regardless of whether the global's own assignment is
+        // lexically before or after the function's `def`. `build`'s own
+        // first pass previously registered only `$fn:name` signatures, not
+        // top-level bindings, so this exact HIR panicked in `lookup` before
+        // this fix.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("g".to_string())))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "g".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "g".to_string(),
+                    ty: Ty::Int
+                }))],
+            }
+        );
+    }
+
+    #[test]
+    fn reassigning_a_local_keeps_its_sticky_first_inferred_type() {
+        // Mirrors `pycc_types::check_assignment`'s own sticky-first-type
+        // rule (T0023): a name's recorded type is fixed at its first
+        // binding and never updated -- a later assignment only has to be
+        // `is_assignable` into that original type (`bool` widens into
+        // `int`), so `x = 5; x = True` leaves `x` typed `Int` throughout,
+        // never rebound to `Bool`. `lower_stmt`'s `Assign` arm previously
+        // rebound unconditionally to the newest value's own type
+        // (last-write-wins), so a later `Name("x")` read would incorrectly
+        // report `Ty::Bool`.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::BoolLiteral(true),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("x".to_string())],
+                })),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[2],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Name { name: "x".to_string(), ty: Ty::Int }],
+                ty: Ty::None,
+            }))
         );
     }
 

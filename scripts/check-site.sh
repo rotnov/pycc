@@ -418,7 +418,7 @@ required_disclosures = (
     "Managed by a human.",
     "No project code is handwritten by a human.",
     "pycc check now runs the broadened v0.1 frontend",
-    "Full code generation and runtime breadth are next",
+    "Conformance testkit and benchmark gate are next",
 )
 for disclosure in required_disclosures:
     if disclosure not in visible_body_text:
@@ -456,7 +456,7 @@ PAGE_SPECS = {
             "Strict checking and inference",
             "Validated frontend codes",
             "byte-exact CLI snapshots cover",
-            "Code generation and runtime breadth are next.",
+            "The conformance testkit and benchmark gate are next.",
             "The required frontend measurement and greater-than-2% regression gate run independently of that compiler sequence through ci-gate",
             "This source-aware paired gate measures the exact predecessor and candidate sequentially on one hosted runner",
             "seals the predecessor timing before candidate code runs",
@@ -480,7 +480,7 @@ PAGE_SPECS = {
             "Frontend v0.1 checked",
             "Resolve and type-check",
             "pycc_types::check_and_resolve",
-            "MIR and code generation remain slice-only",
+            "MIR and code generation now cover the full v0.1 surface",
             "Strict checking and inference",
         ),
     },
@@ -511,8 +511,9 @@ PAGE_SPECS = {
             "Tools six projects",
             "Alpha; focused on numerical and array-oriented typed Python",
             (
-                "frontend checker implemented for the v0.1 subset, while "
-                "native code generation remains slice-only"
+                "full v0.1 frontend and backend implemented (arithmetic, "
+                "control flow, functions, recursion, f-strings), release "
+                "optimization and conformance testing still planned"
             ),
             "Do not choose pycc for production today.",
             "Benchmarks none claimed",
