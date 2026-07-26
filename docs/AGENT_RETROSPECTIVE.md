@@ -51,6 +51,59 @@ reduce it outside the orchestrating tool before retrying. Distinguish “no
 output” from “build in progress” by confirming that the expected compiler
 process actually exists.
 
+## 2026-07-26 — A handoff correction was drafted against moving PR state
+
+**What happened:** the session snapshot committed in `1671223` still
+described PR #137's refresh onto `main` as in progress even though that merge
+commit itself completed the refresh. An independent review caught the stale
+handoff. While its first uncommitted correction was being reviewed, PR #137
+merged as `45545bb` and its post-merge checks completed, so the proposed
+replacement immediately became stale too. The original snapshot reached
+`main` through PR #137; the stale corrective draft did not.
+
+**Root cause:** exact GitHub state was gathered while drafting the snapshot
+and then treated as stable through the review interval. D-066 required a
+commit-grounded snapshot, but the operational rule did not explicitly require
+one final fetch and PR/check re-resolution immediately before committing it.
+
+**What fixed it:** stopped when a fresh fetch showed that `origin/main` had
+advanced, inspected the merge commit and its exact post-merge CI and history
+audit, re-read the current PR state and unresolved threads, and replaced the
+stale current-state handoff with a newer snapshot. The commit-boundary refresh
+is now an explicit rule in `AGENTS.md`.
+
+**Lesson:** treat external PR and CI status in a handoff as volatile until the
+commit is created. Immediately before committing, fetch and re-resolve every
+referenced head, merge state, review thread, and check; if anything moved,
+rewrite the newest snapshot instead of preserving completed work as a future
+step.
+
+## 2026-07-26 — CI monitoring started before checking the pull-request state
+
+**What happened:** agents monitoring
+[PR #132](https://github.com/rotnov/pycc/pull/132) treated the missing
+head-branch CI checks as work still in progress and waited for them. A live
+PR-state query at 12:58 UTC instead reported the open PR as
+`mergeable=CONFLICTING` and `mergeStateStatus=DIRTY`; only the separate
+`Workflow policy` check was present. The useful next action was conflict
+resolution, not another CI poll.
+
+**Root cause:** the monitoring loop started from the checks collection and
+interpreted an absent or incomplete check set as a timing condition. It did
+not first establish whether the PR was open and ready, whether its head was
+current, or whether conflicts prevented the normal head workflow from
+starting.
+
+**What fixed it:** queried the PR's lifecycle and mergeability fields before
+examining its checks, surfaced the conflict immediately, and recorded the
+ordering rule in `.ievo/evolution/project.md`.
+
+**Lesson:** before waiting for PR CI, inspect `state`, `isDraft`, head SHA,
+`mergeable`, and `mergeStateStatus`. A closed, merged, draft, stale, or
+conflicting PR needs state-specific handling; only a PR that can actually
+run its required workflows belongs in the CI polling loop. Distinguish a
+base-trusted `pull_request_target` policy check from the ordinary head CI
+whose absence may be the symptom being diagnosed.
 ## 2026-07-26 — A parallel agent changed this file's introducing PR branch
 
 **What happened:** while this pull request (adding this very file and
