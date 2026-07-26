@@ -15,7 +15,7 @@
 - `cargo doc --workspace --no-deps` must stay clean after any public API change.
 - `--debug` profile only for every fixture/benchmark this PR adds — `--release`/LTO is a v0.2 item (`docs/ROADMAP.md`).
 - Do not touch `benches/check_bench.rs`, its `[[bench]]` entry in the root `Cargo.toml`, or any file the existing `frontend-perf-measure`/`frontend-perf-gate` "Verify exact benchmark revisions" step diffs (`benches`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rust-toolchain`, `.cargo`, every `crates/**/Cargo.toml`/`build.rs`) unless a task explicitly says to and re-verifies that gate afterward.
-- Record any genuinely-undecided implementation-fork decision as a new `docs/DECISIONS.md` entry (re-check the current highest `D-0NN` ID before picking a number — D-074 is the highest as of this plan's writing, so this plan uses D-075/D-076/D-077, but re-verify at execution time and renumber every reference in this plan if the real repo state differs, exactly like PR-5's own plan had to).
+- Record any genuinely-undecided implementation-fork decision as a new `docs/DECISIONS.md` entry (re-check the current highest `D-0NN` ID before picking a number — D-074 was the highest when this plan was first drafted, but a concurrent PR merged to `main` before Task 2 ran and took D-075/D-076 for its own unrelated decisions; this plan was updated in place to D-078/D-079/D-080 after merging that PR into this branch, so D-076 is the actual highest as of this line. Re-verify at execution time regardless and renumber every reference in this plan if the real repo state differs again, exactly like PR-5's own plan had to).
 - Every out-of-scope construct still gets an explicit panic or documented gap, never a silently wrong result — this project's standing convention.
 - Follow the existing TDD-per-task discipline: write failing test, verify it fails, implement, verify it passes, full workspace test+clippy+coverage, commit, push, then a docs-only commit flipping that task's plan checkboxes.
 - Known, accepted v0.1 gaps documented in `docs/ROADMAP.md`'s "Language surface" row (bigint/float conversions, negative `int` exponent, float-power domains, `None`-typed parameters, the `bool`→`int` identity loss, `str` leaks) are not bugs — no task in this plan should "fix" them; the fib/mandelbrot fixtures must avoid exercising any of them.
@@ -69,7 +69,7 @@ git commit -m "docs: upgrade CPython oracle pin to 3.14.6"
 
 ---
 
-## Task 2: Record the conformance-harness shape decision (D-075)
+## Task 2: Record the conformance-harness shape decision (D-078)
 
 **Files:**
 - Modify: `docs/DECISIONS.md`
@@ -80,20 +80,20 @@ git commit -m "docs: upgrade CPython oracle pin to 3.14.6"
 - [ ] **Step 1: Re-check the current highest ADR ID**
 
 Run: `grep -n "^| D-0" docs/DECISIONS.md | tail -3` and `grep -n "^## D-0" docs/DECISIONS.md | tail -3`
-Expected: confirms D-074 is still the highest table row and highest long-form section (verified at this plan's authoring time; this branch does not have the cross-PR concurrent-actor pattern PR-5 hit, since PR-5 is already merged to `main` and this is a fresh branch off it — but re-verify anyway before writing new IDs, since `main` itself can still advance from other work).
+Expected: confirms `D-076` is the highest table row and highest long-form section as of this branch's merge with `main` (this branch already hit the cross-PR concurrent-actor pattern once, before Task 1 finished: a separate PR merged to `main` claiming D-075/D-076 for its own `None`-parameter-ABI/exit-101 decisions, which were merged into this branch and are why this plan's own decisions now start at D-078, not D-075. Re-verify anyway before writing new IDs — `main` can still advance further from other concurrent work).
 
-- [ ] **Step 2: Append the D-075 table row**
+- [ ] **Step 2: Append the D-078 table row**
 
-Add to the table (after the D-074 row):
+Add to the table (after the D-076 row — the current tail after merging `main`'s `None`-ABI/exit-101 PR into this branch):
 ```markdown
-| D-075 | PR-6's conformance checks (fib, mandelbrot-ascii vs. pinned CPython 3.14.6) live in a plain `tests/conformance.rs` integration test using `std::process::Command`, matching `tests/slice0.rs`/`tests/slice1_codegen_depth.rs`'s existing pattern — not a new `pycc_testkit` crate. `pycc_testkit` (D-018/D-037) remains deferred to whenever the full multi-version `py30`-`py315` matrix TESTING.md describes actually gets built | accepted |
+| D-078 | PR-6's conformance checks (fib, mandelbrot-ascii vs. pinned CPython 3.14.6) live in a plain `tests/conformance.rs` integration test using `std::process::Command`, matching `tests/slice0.rs`/`tests/slice1_codegen_depth.rs`'s existing pattern — not a new `pycc_testkit` crate. `pycc_testkit` (D-018/D-037) remains deferred to whenever the full multi-version `py30`-`py315` matrix TESTING.md describes actually gets built | accepted |
 ```
 
-- [ ] **Step 3: Append the D-075 long-form section**
+- [ ] **Step 3: Append the D-078 long-form section**
 
-Insert after D-074's long-form section (before whatever comes next, or at the end of the file if D-074 is currently last):
+Insert after D-076's long-form section (the current last section after merging `main`'s `None`-ABI/exit-101 PR into this branch; re-verify it's still last before inserting).
 ```markdown
-## D-075: A plain integration test, not a new `pycc_testkit` crate, for PR-6's two conformance fixtures
+## D-078: A plain integration test, not a new `pycc_testkit` crate, for PR-6's two conformance fixtures
 
 - Status: accepted (PR-6's own scope decision, per D-057's "simplest correct thing for the stated PR scope" precedent)
 - Context: `docs/ARCHITECTURE.md` and `docs/SPEC.md` both list `pycc_testkit` as a planned crate ("Conformance/differential test harness," `docs/TESTING.md`'s Layer 2), and D-018/D-037 deferred building it until PR-6 "once there's a PEP matrix for it to check against." PR-6's actual acceptance criterion (`docs/DELIVERY_PLAN.md` row 6) is narrow: two named fixtures (fib, mandelbrot-ascii) diffed against a pinned CPython 3.14.6 oracle on 5 targets in `--debug` profile — not the full `py30`–`py315` cumulative-fixture-range matrix `docs/TESTING.md`'s Layer 2 describes for v1.0, which still has no PEP matrix to check against today.
@@ -106,12 +106,12 @@ Insert after D-074's long-form section (before whatever comes next, or at the en
 
 ```bash
 git add docs/DECISIONS.md
-git commit -m "docs: record D-075, tests/conformance.rs instead of a new pycc_testkit crate"
+git commit -m "docs: record D-078, tests/conformance.rs instead of a new pycc_testkit crate"
 ```
 
 ---
 
-## Task 3: Record the absolute-threshold benchmark decision (D-076)
+## Task 3: Record the absolute-threshold benchmark decision (D-079)
 
 **Files:**
 - Modify: `docs/DECISIONS.md`
@@ -119,18 +119,18 @@ git commit -m "docs: record D-075, tests/conformance.rs instead of a new pycc_te
 **Interfaces:**
 - Produces: the accepted decision that `pycc check`'s `<50ms/1000 LOC` floor is a separate mechanism from the existing paired-regression Criterion gate — Task 7 builds against this.
 
-- [ ] **Step 1: Append the D-076 table row**
+- [ ] **Step 1: Append the D-079 table row**
 
-Add to the table (after D-075):
+Add to the table (after D-078):
 ```markdown
-| D-076 | `pycc check`'s `<50ms/1000 LOC` absolute-throughput floor (DELIVERY_PLAN.md row 6) is a new, separate plain-timed CLI check, not an addition to `benches/check_bench.rs`/the existing paired-regression `frontend-perf-measure`/`frontend-perf-gate` Criterion gate | accepted |
+| D-079 | `pycc check`'s `<50ms/1000 LOC` absolute-throughput floor (DELIVERY_PLAN.md row 6) is a new, separate plain-timed CLI check, not an addition to `benches/check_bench.rs`/the existing paired-regression `frontend-perf-measure`/`frontend-perf-gate` Criterion gate | accepted |
 ```
 
-- [ ] **Step 2: Append the D-076 long-form section**
+- [ ] **Step 2: Append the D-079 long-form section**
 
-Insert after D-075's section:
+Insert after D-078's section:
 ```markdown
-## D-076: A separate plain-timed check for the `<50ms/1000 LOC` floor, not an extension of the paired-regression Criterion gate
+## D-079: A separate plain-timed check for the `<50ms/1000 LOC` floor, not an extension of the paired-regression Criterion gate
 
 - Status: accepted
 - Context: `frontend-perf-measure`/`frontend-perf-gate` (D-042/D-044/D-046/D-056/D-062) already benchmark `pycc check`'s frontend path via `benches/check_bench.rs`'s single Criterion benchmark (`pycc_check_frontend_fixture`, a tiny inline `fib`+loop fixture), enforcing a *paired, relative* `>2%` regression threshold against the immediate predecessor commit — never an absolute wall-clock or throughput number. `frontend-perf-gate`'s own "Verify exact benchmark revisions" step does a byte-for-byte `git diff --no-index --exit-code` of `benches/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rust-toolchain`, `.cargo`, and every `crates/**/Cargo.toml`/`build.rs` between the predecessor and candidate commit, hard-failing if anything there differs. DELIVERY_PLAN.md row 6's acceptance criterion is a different shape entirely: an *absolute* floor (`<50ms` for `1000` lines of source), independent of any predecessor comparison.
@@ -143,7 +143,7 @@ Insert after D-075's section:
 
 ```bash
 git add docs/DECISIONS.md
-git commit -m "docs: record D-076, separate absolute-threshold benchmark mechanism"
+git commit -m "docs: record D-079, separate absolute-threshold benchmark mechanism"
 ```
 
 ---
@@ -477,7 +477,7 @@ Create `scripts/check_frontend_throughput.rb`:
 require "open3"
 
 # Measures wall-clock time for `<pycc_bin> check <fixture>` and reports
-# whether it stayed under `threshold_ms` -- an absolute floor (D-076), not a
+# whether it stayed under `threshold_ms` -- an absolute floor (D-079), not a
 # regression-vs-predecessor comparison like frontend-perf-gate's Criterion
 # harness. A single measurement is sufficient here: this checks a fixed
 # threshold, not two noisy measurements against each other.
@@ -528,7 +528,7 @@ Expected: `OK: pycc check took N.NNms (threshold 50.0ms)` with `N.NN` under `50`
 
 Add to `.github/workflows/ci.yml`'s `build-test-coverage` job (macos-14 — the one stable, single-runner job already responsible for "does everything" checks like the roadmap-evidence/ci-permissions scripts), after the existing `cargo build --workspace` step:
 ```yaml
-      - name: Check pycc check throughput floor (<50ms/1000 LOC, D-076)
+      - name: Check pycc check throughput floor (<50ms/1000 LOC, D-079)
         run: ruby scripts/check_frontend_throughput.rb target/debug/pycc tests/fixtures/pr6_1000_loc_bench.py 50
 ```
 Do not add this to `native-build-test`'s 4-leg matrix — a single stable runner is enough to enforce one absolute floor; running it on every OS would need per-OS-tuned thresholds (Windows/ARM runners are typically slower than the reference `macos-14` runner this floor is calibrated against) which is unnecessary scope for this PR's stated acceptance criterion.
@@ -542,12 +542,12 @@ Then push and confirm `frontend-perf-gate`'s "Verify exact benchmark revisions" 
 
 ```bash
 git add tests/fixtures/pr6_1000_loc_bench.py scripts/check_frontend_throughput.rb scripts/test_check_frontend_throughput.rb .github/workflows/ci.yml
-git commit -m "ci: add pycc check <50ms/1000 LOC absolute throughput floor (D-076)"
+git commit -m "ci: add pycc check <50ms/1000 LOC absolute throughput floor (D-079)"
 ```
 
 ---
 
-## Task 8: Record the diagnostic-conformance decision (D-077) and close the gap
+## Task 8: Record the diagnostic-conformance decision (D-080) and close the gap
 
 **Files:**
 - Modify: `docs/DECISIONS.md`
@@ -571,18 +571,18 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
 ```
 Note the two real divergences from `docs/CLI_SPEC.md`'s current prose example: (a) the caret label repeats the full message (no short, independent label like `expected \`int\``), and (b) there is no `= help: ...` line (D-043's documented, accepted gap — `render_human`'s own doc comment already says so).
 
-- [ ] **Step 2: Append the D-077 table row**
+- [ ] **Step 2: Append the D-080 table row**
 
-Add to `docs/DECISIONS.md`'s table (after D-076):
+Add to `docs/DECISIONS.md`'s table (after D-079):
 ```markdown
-| D-077 | `docs/CLI_SPEC.md`'s diagnostics-output-contract example is corrected to match `render_human`'s real current output (full-message caret label, no `help:` line) instead of an aspirational format nothing implements yet; a checked-in fixture proves the corrected example byte-for-byte, closing DELIVERY_PLAN.md row 6's third acceptance bullet without growing new diagnostic-rendering scope | accepted |
+| D-080 | `docs/CLI_SPEC.md`'s diagnostics-output-contract example is corrected to match `render_human`'s real current output (full-message caret label, no `help:` line) instead of an aspirational format nothing implements yet; a checked-in fixture proves the corrected example byte-for-byte, closing DELIVERY_PLAN.md row 6's third acceptance bullet without growing new diagnostic-rendering scope | accepted |
 ```
 
-- [ ] **Step 3: Append the D-077 long-form section**
+- [ ] **Step 3: Append the D-080 long-form section**
 
-Insert after D-076's section:
+Insert after D-079's section:
 ```markdown
-## D-077: Correct CLI_SPEC.md's diagnostic example to match reality instead of building new rendering features
+## D-080: Correct CLI_SPEC.md's diagnostic example to match reality instead of building new rendering features
 
 - Status: accepted
 - Context: `docs/DELIVERY_PLAN.md` row 6's third acceptance bullet is "diagnostic output matches CLI_SPEC.md's example byte-for-byte." `docs/CLI_SPEC.md`'s current example shows a short, message-independent caret label (`expected \`int\``) and a populated `= help: did you mean \`int("35")\`?` line -- neither exists in `render_human` today. `crates/pycc_diag/src/lib.rs`'s own `render_human_matches_cli_spec_format` test (already passing) proves the *actual* current output: the caret label duplicates the full diagnostic message, and there is no help line at all, exactly matching D-043's already-accepted, already-documented gap ("`help:` suggestions are never populated"). No fixture anywhere in `tests/diagnostics/` currently proves CLI_SPEC.md's example byte-for-byte, because that example doesn't match anything the compiler actually emits.
@@ -642,7 +642,7 @@ Run: `cargo build --workspace && cargo test --workspace && cargo clippy --worksp
 
 ```bash
 git add docs/DECISIONS.md docs/CLI_SPEC.md tests/diagnostics/cli_spec_example.py tests/diagnostics/cli_spec_example.expected.txt tests/diagnostics_test.rs
-git commit -m "docs+test: correct CLI_SPEC.md's diagnostic example to match reality (D-077), enforce it"
+git commit -m "docs+test: correct CLI_SPEC.md's diagnostic example to match reality (D-080), enforce it"
 ```
 
 ---
@@ -665,17 +665,17 @@ The conformance harness, five-target language conformance, fuzzing, and corpus l
 ```
 to:
 ```
-A narrow two-fixture conformance check (fib, mandelbrot-ascii vs. pinned CPython 3.14.6, `tests/conformance.rs`, D-075) is live on all 5 Tier-1 targets, plus an absolute `pycc check` throughput floor (`<50ms`/1000 LOC, D-076); the full multi-version `py30`-`py315` conformance matrix, differential fuzzing, and corpus layers remain planned according to [TESTING.md](./TESTING.md).
+A narrow two-fixture conformance check (fib, mandelbrot-ascii vs. pinned CPython 3.14.6, `tests/conformance.rs`, D-078) is live on all 5 Tier-1 targets, plus an absolute `pycc check` throughput floor (`<50ms`/1000 LOC, D-079); the full multi-version `py30`-`py315` conformance matrix, differential fuzzing, and corpus layers remain planned according to [TESTING.md](./TESTING.md).
 ```
 
 - [ ] **Step 2: Check `docs/ROADMAP.md`'s "Language surface" row for any now-stale claim**
 
-Read it once more end-to-end; confirm nothing this PR changed (D-075/D-076/D-077, the corrected CLI_SPEC.md example) contradicts anything it currently says. It shouldn't — this PR added test/CI infrastructure and one docs correction, not new language-surface behavior.
+Read it once more end-to-end; confirm nothing this PR changed (D-078/D-079/D-080, the corrected CLI_SPEC.md example) contradicts anything it currently says. It shouldn't — this PR added test/CI infrastructure and one docs correction, not new language-surface behavior.
 
 - [ ] **Step 3: Grep for any other stale reference to this PR's changed state**
 
 Run: `grep -rn "pycc_testkit\|byte-for-byte\|3\.14\.3" docs/*.md | grep -v SESSION_LOG`
-Review each hit; fix any that still describes pre-PR-6 state (e.g. `docs/SPEC.md`'s `pycc_testkit` mention should stay as-is per D-075's Consequences — it correctly describes a still-planned crate, not something to remove).
+Review each hit; fix any that still describes pre-PR-6 state (e.g. `docs/SPEC.md`'s `pycc_testkit` mention should stay as-is per D-078's Consequences — it correctly describes a still-planned crate, not something to remove).
 
 - [ ] **Step 4: Full workspace check**
 
