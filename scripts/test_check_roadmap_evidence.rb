@@ -995,22 +995,29 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
-  def test_rejects_paired_gate_without_flat_id_bound_downloads
+  def test_rejects_paired_gate_without_valid_flat_id_bound_downloads
     [
       "Download sealed predecessor frontend timing",
       "Download candidate frontend timing"
     ].each do |step_name|
-      workflow = paired_perf_workflow do |jobs|
-        download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
-          step["name"] == step_name
+      [[:missing, nil], [:disabled, false], [:invalid, "flatten"]].each do |mutation, value|
+        workflow = paired_perf_workflow do |jobs|
+          download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+            step["name"] == step_name
+          end
+          inputs = download.fetch("with")
+          if mutation == :missing
+            inputs.delete("merge-multiple")
+          else
+            inputs["merge-multiple"] = value
+          end
         end
-        download.fetch("with").delete("merge-multiple")
-      end
 
-      error = assert_raises(RoadmapEvidenceError) do
-        validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+        error = assert_raises(RoadmapEvidenceError) do
+          validate_perf_gate_baseline_lifecycle(workflow, "ci.yml")
+        end
+        assert_includes error.message, "reviewed isolated comparison job"
       end
-      assert_includes error.message, "reviewed isolated comparison job"
     end
   end
 
