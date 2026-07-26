@@ -28,6 +28,14 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
+The current frontend also keeps focused differential sources under
+`tests/diagnostics/` when CPython's runtime behavior defines why strict pycc
+must reject a program before code generation. In
+`d0021_unbound_local.py`, CPython 3.14 raises `UnboundLocalError`, while
+`pycc check` reports `T0021`; byte-exact human and version-1 JSON snapshots
+lock the public diagnostic. This focused oracle case does not replace the
+planned multi-version conformance harness.
+
 ## Differential fuzzing
 
 Generator produces well-typed programs (type-directed generation — always compile-clean), weighted toward: arithmetic edges (overflow → bigint promotion paths), string unicode edges, collection aliasing, control-flow + exceptions, match patterns. Mismatch → auto-minimize (creduce-style) → auto-file issue with repro. Runs continuously on a dedicated runner.
@@ -112,38 +120,100 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The D-048 steady-state workflow replaces the superseded single-job performance
-design with a split trust boundary. `frontend-perf-measure`
-executes pull-request benchmark code and uploads only Criterion's estimates
-JSON as untrusted data. `frontend-perf-gate` executes only the two sparse
-checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
-then validates the downloaded measurement against the canonical baseline.
-Artifact and checkout actions use immutable reviewed pins.
+The historical D-048 workflow established the split trust boundary:
+`frontend-perf-measure` executed pull-request benchmark code and uploaded only
+Criterion estimates as untrusted data, while `frontend-perf-gate` executed the
+hash-verified main-owned comparator against an exact successful-main artifact.
+D-051/D-053 introduced the paired-runner version of that isolation while
+retiring the cross-run artifact dependency, the D-048 digest, and its fixture.
+D-056 retains the same boundary. Artifact and checkout actions remain immutable
+reviewed pins.
 
-The completed transition retains only
-`tests/fixtures/d48-steady-ci.yml`. The active `.github/workflows/ci.yml` is
-byte-identical to that reviewed fixture, the checker binds its whole-file
-digest, and structural mutation tests exercise the bootstrap-free job shapes.
-The retired pre-split and activation fixtures, their digests, and their
-shell-level bootstrap tests are removed.
+The active `.github/workflows/ci.yml` is byte-identical to
+`tests/fixtures/d56-source-aware-ci.yml`. The checker allowlist contains only
+that whole-file digest, and structural mutation tests exercise the complete
+source-aware paired job shapes. The retired D-051 fixture and comparator remain
+historical audit evidence, but the public policy rejects their workflow digest.
+The D-048 steady-state, pre-split, and activation fixtures, their digests, and
+their bootstrap tests are absent.
+The retired D-048 mean comparator and its standalone test are absent too;
+references to those paths in the historical D-042/D-044 decisions describe
+the repository state when those decisions were accepted, not active tooling.
 
-The baseline lifecycle is fail-closed and main-owned. The gate queries only a
-successful `push` run of `ci.yml` on `main` whose `head_sha` is the exact PR
-base SHA (or the exact `before` SHA for a main push), verifies the returned
-`head_sha`, then downloads that run's non-expired `frontend-perf-current`
-artifact by explicit run ID. It never falls back to an older successful run and
-never restores an Actions cache, so neither overlapping main workflows nor a
-pull-request merge ref can weaken baseline provenance. The artifact is retained
-for 90 days and each successful main run refreshes it.
+The paired lifecycle is fail-closed and predecessor-owned without an external
+baseline. Both performance jobs remain exact literal-success dependencies of
+`ci-gate`; the trusted checker validates their complete shapes and the aggregate
+fan-in. Each run derives the predecessor exclusively from
+`pull_request.base.sha` or `push.before`, rejects missing, zero, or unsupported
+event inputs, and measures both revisions inside that same run. There is no
+missing-evidence exception, reusable bootstrap, repository variable, cache
+fallback, older convenient SHA, or failed-run artifact path.
 
-There is no missing-baseline exception. Both performance jobs are required by
-an exact fail-closed `ci-gate`; the trusted checker validates their complete
-job shapes and the aggregate fan-in. The gate requires the exact predecessor
-artifact unconditionally and compares without a skip expression. A missing,
-expired, cancelled, or non-exact predecessor artifact fails the pull request
-or `main` run. The completed one-time activation and its deletion evidence are
-recorded in [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md); the
-repository variable is absent and is not standing configuration.
+D-051/D-053 removed between-runner timing; D-056 retains those provenance
+controls and keeps the 2% threshold for changed executable inputs. The active
+measurement job
+resolves `pull_request.base.sha` or `push.before`, checks out that exact
+predecessor and `github.sha` into separate directories, verifies both
+revisions, and rejects drift in the bound benchmark-definition and
+build-configuration contract: `benches/`, the root `Cargo.toml` and
+`Cargo.lock`, both root Rust toolchain filenames, root `.cargo/`, every
+workspace-member `Cargo.toml`, and every tracked local `build.rs`. It
+benchmarks both revisions on one hosted runner using separate Cargo target
+directories. The predecessor
+JSON is uploaded through the pinned v4 artifact action before candidate code
+executes, closing the same-user background-process race that a local
+hash-then-copy sequence would leave open; the candidate JSON is uploaded
+separately afterward. The active gate checks out and hash-verifies the
+dedicated median comparator and its tests from the exact predecessor, validates
+the distinct numeric artifact identities returned by the trusted upload steps,
+downloads both same-run inputs by those exact IDs rather than replaceable
+names, flattens each single-ID download into its own exact destination,
+requires exactly both regular files with no symlinks or extras, and
+remains an exact `ci-gate` dependency. Missing or zero predecessor SHAs,
+unsupported events, a mutable action, revision mismatch, removal of any bound
+contract path or local-manifest/build-script binding, shared target state,
+candidate execution before the sealed predecessor upload, a broad artifact
+upload, a missing, repeated, or non-numeric artifact identity, a name-based
+download, a non-flat artifact download, either missing estimate, an extra file,
+a symlink, a skippable comparison, or a mixed old/new job pair fails closed in
+focused tests.
+
+Median point estimates are deliberate rather than a threshold relaxation. A
+local paired validation with identical Rust and benchmark code produced a
+`-2.94%` mean difference after the predecessor sample accumulated 15 severe
+high outliers, while the medians differed by `-0.56%`. The merge threshold
+remains greater than 2%, and the comparator remains isolated and digest-bound.
+
+D-056 is the active source-aware successor after the earlier paired gate still
+produced a `+3.14%` false failure for identical executable inputs in main run
+[30198852753](https://github.com/rotnov/pycc/actions/runs/30198852753), followed
+by a `+0.86%` pass for the same unchanged-input class in run
+[30199477003](https://github.com/rotnov/pycc/actions/runs/30199477003). The
+active [`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml)
+keeps both measurements and every D-051 provenance control. Before candidate
+code runs, it classifies the complete `src/` and `crates/` trees as identical
+or changed; the existing contract independently binds every benchmark,
+manifest, lockfile, toolchain, Cargo configuration, and local build script.
+The active comparator treats a timing delta as non-blocking environment
+telemetry only for the exact `true` identity, while any changed executable
+input keeps the same greater-than-2% failure. Boolean validation, complete-path
+classification, step ordering, output propagation, comparator binding, and
+the unchanged failure path have focused positive and negative tests.
+
+This is current behavior. The live workflow is byte-identical to the reviewed
+D-056 fixture and the allowlist accepts only that digest. The D-051 workflow
+digest is retired and has a public-CLI rejection test.
+
+The byte-exact activation retired the D-048 workflow digest and fixture. No
+administrative bootstrap is required because each D-056 run measures both sides
+of its own comparison. D-054's one-shot staging recovery is historical audit
+evidence only; normal `audit` plus `ci-gate` protection was restored before this
+activation branch was created and is not encoded in repository configuration.
+A pull request that changes a bound manifest, local build script, lockfile,
+toolchain, Cargo configuration, or benchmark source must first stage a
+reviewed transition for that benchmark contract; the gate intentionally does
+not guess whether such a change affects only product code or also the
+measurement harness.
 
 Regular CI runs the self-tests and repository checker after the hard coverage
 step for fast feedback; placing a head-controlled script before that step would

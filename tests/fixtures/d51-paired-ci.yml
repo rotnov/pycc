@@ -325,9 +325,9 @@ jobs:
   # The measurement job eventually executes pull-request code and is
   # therefore untrusted. It seals the exact predecessor timing in an immutable
   # artifact before candidate code runs, then measures the candidate on the
-  # same hosted runner. It also proves whether every executable benchmark input
-  # is byte-identical before candidate code runs. The separate gate job never
-  # executes compiler/build code from the PR.
+  # same hosted runner so host-to-host variance cannot masquerade as a compiler
+  # regression. The separate gate job never executes compiler/build code from
+  # the PR.
   frontend-perf-measure:
     runs-on: macos-14
     permissions:
@@ -336,7 +336,6 @@ jobs:
       predecessor_sha: ${{ steps.predecessor.outputs.sha }}
       predecessor_artifact_id: ${{ steps.previous_upload.outputs.artifact-id }}
       current_artifact_id: ${{ steps.current_upload.outputs.artifact-id }}
-      executable_inputs_equal: ${{ steps.benchmark_contract.outputs.executable_inputs_equal }}
     steps:
       - name: Resolve exact predecessor
         id: predecessor
@@ -420,27 +419,6 @@ jobs:
           test "$(local_contract_digest previous)" = \
             "$(local_contract_digest current)"
 
-      - name: Classify executable benchmark inputs
-        id: benchmark_contract
-        run: |
-          set -euo pipefail
-          executable_inputs_equal=true
-          for executable_path in src crates; do
-            if git diff --no-index --no-ext-diff --no-textconv --quiet -- \
-              "previous/$executable_path" "current/$executable_path"; then
-              continue
-            else
-              diff_status="$?"
-              if [ "$diff_status" -ne 1 ]; then
-                echo "could not compare executable benchmark input $executable_path" >&2
-                exit "$diff_status"
-              fi
-              executable_inputs_equal=false
-            fi
-          done
-          printf 'executable_inputs_equal=%s\n' \
-            "$executable_inputs_equal" >> "$GITHUB_OUTPUT"
-
       - name: Show pinned toolchain
         run: rustup show
 
@@ -501,7 +479,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  # Required by ci-gate (D-044/D-056). This job consumes the paired
+  # Required by ci-gate (D-044/D-051). This job consumes the paired
   # measurement only as JSON data and verifies immutable hashes for the
   # reviewed comparator and its tests before executing them.
   frontend-perf-gate:
@@ -517,21 +495,21 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.frontend-perf-measure.outputs.predecessor_sha }}
           sparse-checkout: |
-            scripts/check_source_aware_perf_regression.rb
-            scripts/test_check_source_aware_perf_regression.rb
+            scripts/check_paired_perf_regression.rb
+            scripts/test_check_paired_perf_regression.rb
           sparse-checkout-cone-mode: false
 
       - name: Verify reviewed performance checker
         run: |
           printf '%s  %s\n' \
-            55ce7259ff164a43a98187cb7b611794a8417dc3dfddf3f4fb689776ab83adcb \
-            scripts/check_source_aware_perf_regression.rb \
-            b5ccd35af90dcff6f9fff30ec9075ab9d780694fc9941954913f5bd4407b2b34 \
-            scripts/test_check_source_aware_perf_regression.rb |
+            257d37974b1d862de4df9561a9f37b05a125af0404aea7a6f0861271e5fbc56b \
+            scripts/check_paired_perf_regression.rb \
+            5c45928a89f099d6e175a1d30bccbef59c58501d89cac252963e84b9e00952c5 \
+            scripts/test_check_paired_perf_regression.rb |
             shasum -a 256 --check
 
       - name: Test reviewed performance checker
-        run: ruby scripts/test_check_source_aware_perf_regression.rb
+        run: ruby scripts/test_check_paired_perf_regression.rb
 
       - name: Require sealed artifact identities
         env:
@@ -551,18 +529,6 @@ jobs:
             echo "paired frontend timings must have distinct artifact identities" >&2
             exit 1
           fi
-
-      - name: Require executable-input identity
-        env:
-          EXECUTABLE_INPUTS_EQUAL: ${{ needs.frontend-perf-measure.outputs.executable_inputs_equal }}
-        run: |
-          case "$EXECUTABLE_INPUTS_EQUAL" in
-            true|false) ;;
-            *)
-              echo "paired frontend timing has invalid executable-input identity" >&2
-              exit 1
-              ;;
-          esac
 
       - name: Download sealed predecessor frontend timing
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -596,13 +562,10 @@ jobs:
           fi
 
       - name: Compare exact predecessor and candidate
-        env:
-          EXECUTABLE_INPUTS_EQUAL: ${{ needs.frontend-perf-measure.outputs.executable_inputs_equal }}
         run: |
-          ruby scripts/check_source_aware_perf_regression.rb \
+          ruby scripts/check_paired_perf_regression.rb \
             target/criterion/pycc_check_frontend_fixture/current/estimates.json \
-            target/criterion/pycc_check_frontend_fixture/previous/estimates.json \
-            "$EXECUTABLE_INPUTS_EQUAL"
+            target/criterion/pycc_check_frontend_fixture/previous/estimates.json
 
   ci-gate:
     needs:

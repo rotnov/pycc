@@ -17,15 +17,17 @@ enforce the normal delivery path.
   `os`/`target` entry changes. D-044's untrusted `frontend-perf-measure` job
   and isolated `frontend-perf-gate`, which make a measured >2% regression
   merge-blocking without executing PR-head comparator code, are required by
-  this fan-in. D-048 supersedes D-047's temporary PR-6 deferral and replaces
-  D-046's ref-scoped cache transport with exact-predecessor artifacts from
-  successful `main` runs. The gate is now bootstrap-free: it requires a
-  non-expired `frontend-perf-current` artifact from the exact successful
-  predecessor, compares untrusted PR timing through the hash-verified
-  main-owned checker, and fails closed when that artifact is unavailable.
-  Only the reviewed steady-state workflow digest remains authorized. The
-  standalone `agent-policy` job provides faster feedback until its exact
-  context has run successfully on `main` and is added to branch protection.
+  this fan-in. D-051/D-053 supersede D-048's cross-run artifact transport with
+  exact predecessor and candidate timings measured sequentially on one hosted
+  runner, and D-056 adds trusted pre-execution source identity. The predecessor
+  timing is sealed before candidate code runs; the isolated gate consumes both
+  artifacts by distinct numeric IDs, flattens each into an exact destination,
+  verifies the predecessor-owned source-aware comparator, and fails closed on
+  revision, benchmark-contract, executable-input identity, artifact-identity,
+  file-set, or comparison drift. Only the reviewed D-056 source-aware workflow
+  digest is authorized. The standalone `agent-policy` job provides faster
+  feedback until its exact context has run successfully on `main` and is
+  added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
   Requiring the author's own approval would deadlock every pull request. Enable one
   independent approval, stale-approval dismissal, and last-push approval when a
@@ -33,24 +35,68 @@ enforce the normal delivery path.
 - All review conversations must be resolved.
 - Administrators are included; force pushes and branch deletion are disabled.
 
-### Frontend performance baseline provenance (D-048)
+### Retired cross-run baseline provenance (D-048)
 
-The one-time activation is complete. The successful
+The historical D-048 activation completed through the successful
 [`main` CI run](https://github.com/rotnov/pycc/actions/runs/30168696265) for
 merge commit `9bed86027e3efe0e0ab9dd906457953d8ba09956` published the non-expired
 90-day `frontend-perf-current` artifact `8622316274`; `frontend-perf-gate` and
-the aggregate `ci-gate` both succeeded. The repository Actions API confirmed
-that `PERF_ACTIVATION_HEAD` was absent after that run at
-2026-07-25T18:13:08Z. The active workflow is byte-identical to the reviewed
-steady-state fixture, and the activation variable, bootstrap branches,
-pre-split fixture, activation fixture, and retired digests are absent.
+the aggregate `ci-gate` both succeeded. The deletion readback for
+`PERF_ACTIVATION_HEAD` returned `404` at 2026-07-25T17:59:51Z, eight seconds
+before the artifact was created, because stale-attempt cleanup raced the
+activation merge. This deviated from the planned post-run deletion ordering,
+but did not weaken the executed boundary: the activation push bootstrap did
+not read the variable, remained bound to the exact event and reviewed
+predecessor, and `frontend-perf-gate` started after deletion and succeeded.
+The repository Actions API confirmed continued absence after the full run at
+2026-07-25T18:13:08Z. The
+[post-merge audit](https://github.com/rotnov/pycc/pull/103#issuecomment-5079757567)
+records the timestamps and exact artifacts. D-051/D-053 later retired this
+cross-run transport, its workflow digest, and its fixture. The activation
+variable, bootstrap branches, pre-split fixture, activation fixture, and every
+D-048 authorization remain absent.
 
-Every later pull request must locate the non-expired artifact from the exact
-successful `main` run at its base SHA. Every later `main` push must use the
-exact `before` SHA. Missing, expired, cancelled, or non-exact predecessor
-evidence is a hard failure; there is no reusable bootstrap or administrative
-feature flag. D-048 and D-050 preserve the historical activation lifecycle and
-the reason it was bounded.
+D-048 and D-050 preserve the historical activation lifecycle and the reason it
+was bounded; they no longer describe live performance transport.
+
+### Active source-aware paired-runner gate (D-051/D-053/D-056)
+
+Three complete CI attempts for PR #107 measured a documentation-and-test-only
+candidate at `+80.82%`, `+12.82%`, and `+7.30%` against the same exact
+predecessor. The third candidate estimate had a narrow 95% confidence interval,
+so longer sampling on that host would not remove the observed cross-host
+offset. Re-running until a convenient hosted machine passes is not acceptable
+merge evidence.
+
+The reviewed D-051 design checks out
+the exact predecessor and candidate, verifies their revisions and the complete
+bound benchmark-definition and build-configuration contract, and measures both
+sequentially on one runner with separate target state. It seals the predecessor
+artifact before candidate code runs, so a lingering same-user process cannot
+rewrite the trusted side of the pair. The gate binds both downloads to the
+distinct numeric artifact IDs emitted by the trusted upload steps, so deleting
+and replacing an artifact under the same name fails closed. Each single-ID
+download is flattened into its own exact comparison directory, so the pinned
+action cannot add an artifact-name path component. Its isolated gate
+keeps the 2% threshold and hash-verified review boundary while using an
+exact-predecessor median comparator that is robust to isolated high outliers
+and accepts exactly two regular-file estimates. D-056 retains this entire
+boundary and addresses the residual false-positive class demonstrated by main
+run 30198852753: a `+3.14%` delta with identical executable inputs. Before
+candidate execution, the active measurement job classifies the complete `src/`
+and `crates/` trees while the existing contract independently binds every
+benchmark and build input. The gate accepts only an exact boolean identity,
+always downloads and validates both timing artifacts, and treats the delta as
+non-blocking environment telemetry only when all executable inputs are proven
+identical. Changed source keeps the existing `>2%` block.
+
+The active `.github/workflows/ci.yml` is byte-identical to the reviewed
+[`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml), and the
+allowlist contains only its digest. The D-051 fixture and comparator remain
+historical audit evidence, but the active policy rejects that older workflow
+digest. Every pull request and `main` push still measures both exact revisions
+inside its own run, so no successful external baseline artifact or
+administrative bootstrap state is required.
 
 When a new check is introduced, first merge and observe it successfully on `main`,
 then add its exact reported context to branch protection. Never require a guessed or
@@ -100,3 +146,15 @@ owner, expiry, and rollback command/settings. Keep every unaffected control enab
 The administrator restores the original settings immediately after recovery and
 attaches the settings diff plus audit result to the incident. An agent, bot, or normal
 maintenance task never receives standing bypass permission.
+
+D-054 records the only use of this path to date. Public
+[incident #125](https://github.com/rotnov/pycc/issues/125) documented the D-048
+exact-base deadlock, and explicit administrator authorization allowed
+only `ci-gate` to be removed from the required-check set for at most ten minutes
+and exactly one staging merge. Strict up-to-date protection, `audit`, administrator
+enforcement, review and conversation rules, and the force-push/deletion prohibitions
+remained enabled. [PR #119](https://github.com/rotnov/pycc/pull/119) merged as
+`416f626fcd8406cc60781d9415589367d4d9c18a`; an unconditional exit trap restored
+the app-bound `audit` plus `ci-gate` set within seconds, and the full settings
+readback is attached to the incident. The exception is closed and grants no
+permission for any future bypass.
