@@ -21,8 +21,10 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > candidate code runs. It classifies all repository-owned executable inputs
 > before that execution: identical inputs keep the observed timing as
 > non-blocking environment telemetry, while changed `src/` or `crates/` inputs
-> retain the hard greater-than-2% regression block. Revision, benchmark-contract,
-> executable-input identity, artifact-identity, and comparison drift fail closed.
+> use exactly five complete runs per revision, compare the median of their
+> per-run medians, and retain the hard greater-than-2% regression block. All ten
+> timing files are retained. Revision, benchmark-contract, executable-input
+> identity, artifact-identity, exact file-set, and comparison drift fail closed.
 > See the [current status](https://rotnov.github.io/pycc/status/) and
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 

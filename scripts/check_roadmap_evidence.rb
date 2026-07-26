@@ -36,12 +36,12 @@ EVIDENCE_SECTIONS = {
 # Historical audit-fixture digest. The public policy no longer accepts it.
 D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
   "4b1d11afba108745a2bc375e3447d92ecde843376c3bea95ab32f76b3fc53249"
+# Historical audit-fixture digest. The public policy no longer accepts it.
 D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
   "c696da18f4f8b876d4398c43f94fe574e870579badd84cf579fbe91fbd9d7b4b"
 D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
   "a5135f7a8ebe2b0c0924ad026612ef9c90ade105c9a4fd484f803e10cf5b5c8d"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
   D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
@@ -1150,7 +1150,7 @@ def validate_evidence(root, _evidence_ids)
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match a reviewed active or staged performance CI workflow"
+          "#{workflow}: does not match the reviewed active D-062 performance CI workflow"
   end
   validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
 end
