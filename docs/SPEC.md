@@ -1,6 +1,6 @@
 # pycc — Project Specification Index
 
-Entry point to the full spec. Development model is AI-first (D-013): these documents are the contract the code is written against — every claim here must be checkable by a test, benchmark gate, or CI rule.
+Entry point to the full spec. Development model is AI-first (D-013): the normative documents indexed here are the contract the code is written against — every normative claim must be checkable by a test, benchmark gate, or CI rule. The D-055 retrospective and session logs are explicitly informational records, not specifications; their table rows are included only so agents can discover the project-history and handoff context.
 
 | Doc | Contents | Drives |
 |---|---|---|
@@ -18,8 +18,8 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 | [DECISIONS.md](./DECISIONS.md) | ADR log D-001…D-055 (int repr, LLVM, UTF-8 str, no-GIL model, coverage, agent surfaces, CI trust, iEvo, repository governance, Windows CI, roadmap evidence, frontend depth, performance-gate activation and audited recovery, paired-runner stabilization, type-check environment sharing, agent retrospective/session logs…) | irreversible calls |
 | [DELIVERY_PLAN.md](./DELIVERY_PLAN.md) | Milestone decomposition, verified environment baseline, v0.1 crate scope + PR breakdown, autonomy policy | execution order, PR sequencing |
 | [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md) | Protected-branch contract, required controls, emergency bypass, and audit response | GitHub settings, governance workflows |
-| [AGENT_RETROSPECTIVE.md](./AGENT_RETROSPECTIVE.md) | Process-mistake journal for autonomous agent work (not code bugs) | future-session process learning |
-| [SESSION_LOG.md](./SESSION_LOG.md) | Running handoff snapshot: overall delivery status, in-flight work, resume points | session continuity/handoff |
+| [AGENT_RETROSPECTIVE.md](./AGENT_RETROSPECTIVE.md) | Informational process-mistake journal for autonomous agent work (not code bugs or normative requirements) | future-session process learning only |
+| [SESSION_LOG.md](./SESSION_LOG.md) | Informational handoff snapshot: overall delivery status, in-flight work, resume points (not normative requirements) | session continuity/handoff only |
 | [AGENT_TOOLING.md](./AGENT_TOOLING.md) | Agent plugin pins, reviewed update process, validation, and rollback | `.agents/`, `.claude/`, agent-asset CI |
 | [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
 | [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) | Chronological search-query measurements and ranking methodology | discoverability monitoring |
@@ -39,7 +39,7 @@ Entry point to the full spec. Development model is AI-first (D-013): these docum
 
 ## Doc lifecycle
 
-Spec change = PR touching the doc + the tests that enforce it, reviewed against DECISIONS.md. CI owns the ✅ marks in PYTHON_STANDARDS.md — humans and agents only add rows, never flip statuses by hand.
+Spec change = PR touching the normative doc + the tests that enforce it, reviewed against DECISIONS.md. CI owns the ✅ marks in PYTHON_STANDARDS.md — humans and agents only add rows, never flip statuses by hand. `AGENT_RETROSPECTIVE.md` and `SESSION_LOG.md` are reviewed for factual accuracy, links, privacy, and safe handoff instructions, but their entries do not create implementation requirements. Promote a lesson or snapshot claim into the owning policy, ADR, or specification before treating it as normative.
 
 ## Not yet specced (known gaps)
 

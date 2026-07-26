@@ -3,7 +3,7 @@
 ## Project navigation
 
 - Start with `docs/SPEC.md`. It is the index for the project's specifications and points to the document that owns each area.
-- Treat the documents under `docs/` as part of the implementation contract, not as an after-the-fact description.
+- Treat normative specifications under `docs/` as part of the implementation contract, not as an after-the-fact description. The D-055 journals `docs/AGENT_RETROSPECTIVE.md` and `docs/SESSION_LOG.md` are the explicit informational exceptions: review them for factual accuracy, but do not treat their historical lessons or snapshots as implementation requirements. Promote any rule discovered there into `AGENTS.md`, `docs/DECISIONS.md`, or the owning specification before relying on it as policy.
 - Before changing behavior, architecture, public APIs, the CLI, diagnostics, build or release processes, tests, or supported language semantics, read the relevant specification.
 
 ## Before starting a new task ([D-021](docs/DECISIONS.md#d-021-agent-task-preflight-and-documentation-refresh))
