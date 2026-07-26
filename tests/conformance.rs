@@ -55,3 +55,14 @@ fn fib_matches_cpython_3_14_6_byte_for_byte() {
         "pycc and CPython 3.14.6 disagree on tests/fixtures/conformance_fib.py"
     );
 }
+
+#[test]
+fn mandelbrot_ascii_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance_mandelbrot.py");
+    let (pycc_stdout, cpython_stdout) = run_conformance_fixture("conformance_mandelbrot", &fixture);
+    assert_eq!(
+        pycc_stdout, cpython_stdout,
+        "pycc and CPython 3.14.6 disagree on tests/fixtures/conformance_mandelbrot.py"
+    );
+}
