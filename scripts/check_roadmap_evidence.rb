@@ -35,6 +35,8 @@ EVIDENCE_SECTIONS = {
 }.freeze
 D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
   "4b1d11afba108745a2bc375e3447d92ecde843376c3bea95ab32f76b3fc53249"
+D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
+  "c696da18f4f8b876d4398c43f94fe574e870579badd84cf579fbe91fbd9d7b4b"
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
 PINNED_ARTIFACT_UPLOAD_ACTION =
@@ -45,12 +47,24 @@ PAIRED_PERF_CHECKER_SHA256 =
   "257d37974b1d862de4df9561a9f37b05a125af0404aea7a6f0861271e5fbc56b"
 PAIRED_PERF_CHECKER_TEST_SHA256 =
   "5c45928a89f099d6e175a1d30bccbef59c58501d89cac252963e84b9e00952c5"
+D56_PERF_CHECKER_SHA256 =
+  "55ce7259ff164a43a98187cb7b611794a8417dc3dfddf3f4fb689776ab83adcb"
+D56_PERF_CHECKER_TEST_SHA256 =
+  "b5ccd35af90dcff6f9fff30ec9075ab9d780694fc9941954913f5bd4407b2b34"
 PAIRED_PERF_CHECKER_VERIFY_SCRIPT = <<~SHELL.strip
   printf '%s  %s\\n' \\
     #{PAIRED_PERF_CHECKER_SHA256} \\
     scripts/check_paired_perf_regression.rb \\
     #{PAIRED_PERF_CHECKER_TEST_SHA256} \\
     scripts/test_check_paired_perf_regression.rb |
+    shasum -a 256 --check
+SHELL
+D56_PERF_CHECKER_VERIFY_SCRIPT = <<~SHELL.strip
+  printf '%s  %s\\n' \\
+    #{D56_PERF_CHECKER_SHA256} \\
+    scripts/check_source_aware_perf_regression.rb \\
+    #{D56_PERF_CHECKER_TEST_SHA256} \\
+    scripts/test_check_source_aware_perf_regression.rb |
     shasum -a 256 --check
 SHELL
 PAIRED_PERF_PREDECESSOR_SCRIPT = <<~'SHELL'.strip
@@ -112,6 +126,25 @@ PAIRED_PERF_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
   test "$(local_contract_digest previous)" = \
     "$(local_contract_digest current)"
 SHELL
+D56_EXECUTABLE_INPUT_IDENTITY_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  executable_inputs_equal=true
+  for executable_path in src crates; do
+    if git diff --no-index --no-ext-diff --no-textconv --quiet -- \
+      "previous/$executable_path" "current/$executable_path"; then
+      continue
+    else
+      diff_status="$?"
+      if [ "$diff_status" -ne 1 ]; then
+        echo "could not compare executable benchmark input $executable_path" >&2
+        exit "$diff_status"
+      fi
+      executable_inputs_equal=false
+    fi
+  done
+  printf 'executable_inputs_equal=%s\n' \
+    "$executable_inputs_equal" >> "$GITHUB_OUTPUT"
+SHELL
 PAIRED_PERF_PREVIOUS_BENCHMARK_SCRIPT = <<~'SHELL'.strip
   set -euo pipefail
   previous_target="$RUNNER_TEMP/pycc-paired-perf-previous"
@@ -153,6 +186,15 @@ PAIRED_PERF_ARTIFACT_ID_REQUIRE_SCRIPT = <<~'SHELL'.strip
     exit 1
   fi
 SHELL
+D56_EXECUTABLE_INPUT_IDENTITY_REQUIRE_SCRIPT = <<~'SHELL'.strip
+  case "$EXECUTABLE_INPUTS_EQUAL" in
+    true|false) ;;
+    *)
+      echo "paired frontend timing has invalid executable-input identity" >&2
+      exit 1
+      ;;
+  esac
+SHELL
 PAIRED_PERF_REQUIRE_SCRIPT = <<~'SHELL'.strip
   set -euo pipefail
   timing_root="target/criterion/pycc_check_frontend_fixture"
@@ -173,6 +215,12 @@ PAIRED_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
   ruby scripts/check_paired_perf_regression.rb \
     target/criterion/pycc_check_frontend_fixture/current/estimates.json \
     target/criterion/pycc_check_frontend_fixture/previous/estimates.json
+SHELL
+D56_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
+  ruby scripts/check_source_aware_perf_regression.rb \
+    target/criterion/pycc_check_frontend_fixture/current/estimates.json \
+    target/criterion/pycc_check_frontend_fixture/previous/estimates.json \
+    "$EXECUTABLE_INPUTS_EQUAL"
 SHELL
 PAIRED_PERF_MEASURE_STEPS = [
   {
@@ -335,6 +383,87 @@ PAIRED_PERF_GATE_JOB = {
     "contents" => "read"
   },
   "steps" => PAIRED_PERF_GATE_STEPS
+}.freeze
+D56_SOURCE_AWARE_PERF_MEASURE_STEPS =
+  Marshal.load(Marshal.dump(PAIRED_PERF_MEASURE_STEPS)).tap do |steps|
+    verify_index = steps.index do |step|
+      step["name"] == "Verify exact benchmark revisions"
+    end
+    steps.insert(
+      verify_index + 1,
+      {
+        "name" => "Classify executable benchmark inputs",
+        "id" => "benchmark_contract",
+        "run" => D56_EXECUTABLE_INPUT_IDENTITY_SCRIPT
+      }
+    )
+  end.freeze
+D56_SOURCE_AWARE_PERF_GATE_STEPS =
+  Marshal.load(Marshal.dump(PAIRED_PERF_GATE_STEPS)).tap do |steps|
+    checkout = steps.find do |step|
+      step["name"] == "Check out only the reviewed performance checker"
+    end
+    checkout.fetch("with")["sparse-checkout"] =
+      "scripts/check_source_aware_perf_regression.rb\n" \
+      "scripts/test_check_source_aware_perf_regression.rb"
+
+    verify = steps.find do |step|
+      step["name"] == "Verify reviewed performance checker"
+    end
+    verify["run"] = D56_PERF_CHECKER_VERIFY_SCRIPT
+
+    checker_test = steps.find do |step|
+      step["name"] == "Test reviewed performance checker"
+    end
+    checker_test["run"] =
+      "ruby scripts/test_check_source_aware_perf_regression.rb"
+
+    identity_index = steps.index do |step|
+      step["name"] == "Require sealed artifact identities"
+    end
+    steps.insert(
+      identity_index + 1,
+      {
+        "name" => "Require executable-input identity",
+        "env" => {
+          "EXECUTABLE_INPUTS_EQUAL" =>
+            "${{ needs.frontend-perf-measure.outputs.executable_inputs_equal }}"
+        },
+        "run" => D56_EXECUTABLE_INPUT_IDENTITY_REQUIRE_SCRIPT
+      }
+    )
+
+    compare = steps.find do |step|
+      step["name"] == "Compare exact predecessor and candidate"
+    end
+    compare["env"] = {
+      "EXECUTABLE_INPUTS_EQUAL" =>
+        "${{ needs.frontend-perf-measure.outputs.executable_inputs_equal }}"
+    }
+    compare["run"] = D56_PERF_COMPARE_SCRIPT
+  end.freeze
+D56_SOURCE_AWARE_PERF_MEASURE_JOB = {
+  "runs-on" => "macos-14",
+  "permissions" => { "contents" => "read" },
+  "outputs" => {
+    "predecessor_sha" => "${{ steps.predecessor.outputs.sha }}",
+    "predecessor_artifact_id" =>
+      "${{ steps.previous_upload.outputs.artifact-id }}",
+    "current_artifact_id" =>
+      "${{ steps.current_upload.outputs.artifact-id }}",
+    "executable_inputs_equal" =>
+      "${{ steps.benchmark_contract.outputs.executable_inputs_equal }}"
+  },
+  "steps" => D56_SOURCE_AWARE_PERF_MEASURE_STEPS
+}.freeze
+D56_SOURCE_AWARE_PERF_GATE_JOB = {
+  "needs" => "frontend-perf-measure",
+  "runs-on" => "macos-14",
+  "permissions" => {
+    "actions" => "read",
+    "contents" => "read"
+  },
+  "steps" => D56_SOURCE_AWARE_PERF_GATE_STEPS
 }.freeze
 PAIRED_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
@@ -633,6 +762,48 @@ def validate_perf_gate_baseline_lifecycle(workflow_text, source)
   true
 end
 
+def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
+  stream = Psych.parse_stream(workflow_text, filename: source)
+  root = yaml_mapping(stream.children.first.root, source)
+  jobs = yaml_mapping(root["jobs"], "#{source} jobs")
+  measure_job_node = jobs["frontend-perf-measure"]
+  perf_job_node = jobs["frontend-perf-gate"]
+
+  unless measure_job_node
+    raise RoadmapEvidenceError,
+          "#{source}: source-aware gate requires frontend-perf-measure"
+  end
+  measure_job =
+    yaml_value(measure_job_node, "#{source} frontend-perf-measure job")
+  unless measure_job == D56_SOURCE_AWARE_PERF_MEASURE_JOB
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-measure must match the reviewed source-aware measurement job"
+  end
+
+  unless perf_job_node
+    raise RoadmapEvidenceError,
+          "#{source}: source-aware gate requires frontend-perf-gate"
+  end
+  perf_job = yaml_value(perf_job_node, "#{source} frontend-perf-gate job")
+  unless perf_job == D56_SOURCE_AWARE_PERF_GATE_JOB
+    raise RoadmapEvidenceError,
+          "#{source}: frontend-perf-gate must match the reviewed source-aware comparison job"
+  end
+
+  ci_gate_node = jobs["ci-gate"]
+  unless ci_gate_node
+    raise RoadmapEvidenceError,
+          "#{source}: source-aware performance jobs must be required by ci-gate"
+  end
+  ci_gate = yaml_value(ci_gate_node, "#{source} ci-gate job")
+  unless ci_gate == PAIRED_PERF_CI_GATE_JOB
+    raise RoadmapEvidenceError,
+          "#{source}: ci-gate must match the reviewed fail-closed aggregate job"
+  end
+
+  true
+end
+
 def opening_fence(line)
   match = /\A {0,3}(?<marker>`{3,}|~{3,})(?<info>[^\r\n]*)(?:\r?\n)?\z/.match(line)
   return unless match
@@ -854,12 +1025,15 @@ def validate_evidence(root, _evidence_ids)
     raise RoadmapEvidenceError,
           "#{workflow}: evidence does not provide the exact 100% line and region gate"
   end
-  validate_perf_gate_baseline_lifecycle(workflow_text, workflow.to_s)
-
   digest = Digest::SHA256.hexdigest(workflow_text)
-  unless digest == D51_PAIRED_PERF_CI_WORKFLOW_SHA256
+  case digest
+  when D51_PAIRED_PERF_CI_WORKFLOW_SHA256
+    validate_perf_gate_baseline_lifecycle(workflow_text, workflow.to_s)
+  when D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
+    validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
+  else
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match the reviewed active D-051 CI workflow"
+          "#{workflow}: does not match the reviewed D-051 active or D-056 prospective CI workflow"
   end
 end
 

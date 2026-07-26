@@ -86,6 +86,24 @@ Every pull request and `main` push measures both exact revisions inside its own
 run, so no successful external baseline artifact or administrative bootstrap
 state is required.
 
+### Staged source-aware successor (D-056)
+
+The active D-051/D-053 workflow remains unchanged in this commit. D-056 adds a
+reviewed inert fixture for the residual false-positive class demonstrated by
+main run 30198852753: a `+3.14%` delta with identical executable inputs. The
+prospective measurement job classifies the complete `src/` and `crates/` trees
+before candidate execution, while retaining every existing benchmark/build
+contract check. Its gate accepts only an exact boolean identity, always
+downloads and validates both timing artifacts, and treats the delta as
+non-blocking environment telemetry only when all executable inputs are proven
+identical. Changed source keeps the existing `>2%` block.
+
+Activation requires a separate branch from the staging merge, a byte-exact
+replacement of `.github/workflows/ci.yml` with
+[`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml), the
+trusted-base `audit`, and normal `ci-gate`. The activation then retires D-051's
+active digest; this staged paragraph grants no bootstrap or bypass.
+
 When a new check is introduced, first merge and observe it successfully on `main`,
 then add its exact reported context to branch protection. Never require a guessed or
 not-yet-emitted context, because that creates an unfulfillable merge gate.

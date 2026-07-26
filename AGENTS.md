@@ -3,7 +3,7 @@
 ## Project navigation
 
 - Start with `docs/SPEC.md`. It is the index for the project's specifications and points to the document that owns each area.
-- Treat normative specifications under `docs/` as part of the implementation contract, not as an after-the-fact description. The D-056 journals `docs/AGENT_RETROSPECTIVE.md` and `docs/SESSION_LOG.md` are the explicit informational exceptions: review them for factual accuracy, but do not treat their historical lessons or snapshots as implementation requirements. Promote any rule discovered there into `AGENTS.md`, `docs/DECISIONS.md`, or the owning specification before relying on it as policy.
+- Treat normative specifications under `docs/` as part of the implementation contract, not as an after-the-fact description. The D-057 journals `docs/AGENT_RETROSPECTIVE.md` and `docs/SESSION_LOG.md` are the explicit informational exceptions: review them for factual accuracy, but do not treat their historical lessons or snapshots as implementation requirements. Promote any rule discovered there into `AGENTS.md`, `docs/DECISIONS.md`, or the owning specification before relying on it as policy.
 - Before changing behavior, architecture, public APIs, the CLI, diagnostics, build or release processes, tests, or supported language semantics, read the relevant specification.
 
 ## Before starting a new task ([D-021](docs/DECISIONS.md#d-021-agent-task-preflight-and-documentation-refresh))
@@ -129,7 +129,7 @@
 - Check implementation against the relevant documents linked from `docs/SPEC.md`, especially public contracts, diagnostics, portability, error paths, ownership, and cross-crate boundaries.
 - Flag concrete correctness, security, compatibility, test, and documentation defects. Leave formatting, lint, and other deterministic mechanical checks to CI.
 
-## Keep a retrospective log and a session handoff log ([D-056](docs/DECISIONS.md#d-056-maintain-an-agent-retrospective-log-and-a-session-handoff-log))
+## Keep a retrospective log and a session handoff log ([D-057](docs/DECISIONS.md#d-057-maintain-an-agent-retrospective-log-and-a-session-handoff-log))
 
 - `docs/AGENT_RETROSPECTIVE.md` is a process-mistake journal, not a code-bug tracker: log a mistake in *how the work was done* (wasted time, a wrong assumption, thrashing against a moving target, a convention violated before it was caught) when it cost meaningful time and the lesson is something a future session could actually act on. Do not log routine debugging, ordinary compiler errors, or first-try successes. Write date, what happened, root cause, what fixed it, and an actionable lesson — newest entry first.
 - `docs/SESSION_LOG.md` is a running handoff snapshot, not a transcript: update it at meaningful checkpoints (a PR opened or merged, a milestone reached, before a long session ends or hands off) with overall status, what's currently in flight, known follow-ups, and where a fresh session should look to resume. Ground each snapshot in the exact commit and repository state actually inspected, distinguish uncommitted or unmerged work from delivered work, and keep the newest entry first.
