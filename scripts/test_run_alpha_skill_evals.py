@@ -174,11 +174,11 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 runner=runner,
             )
 
-    def test_backend_failure_eval_requires_the_current_mir_panic(self) -> None:
+    def test_backend_boundary_eval_requires_the_current_mir_panic(self) -> None:
         case = next(
             case
             for case in evals.load_cases("pycc")
-            if case.get("runner") == "classify-backend-panic-without-write"
+            if case.get("runner") == "classify-planned-backend-boundary-without-write"
         )
         call_count = 0
 
@@ -198,7 +198,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(evals.EvalError, "exit-101 MIR panic"):
-            evals.run_pycc_failure(
+            evals.run_pycc_boundary(
                 case,
                 evals.canonical_skill("claude", "pycc"),
                 Path(__file__),

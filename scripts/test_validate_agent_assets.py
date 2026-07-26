@@ -235,6 +235,14 @@ class AgentAssetValidationTests(unittest.TestCase):
             any("sanitize every outbound query" in item for item in failures)
         )
 
+    def test_feedback_skill_preserves_the_accepted_pr5_boundary(self) -> None:
+        for contract in ("codegen lands in PR-5", "intentional temporary"):
+            with self.subTest(contract=contract):
+                failures = self.alpha_contract_failures(
+                    remove_feedback_text=contract
+                )
+                self.assertTrue(any(contract in item for item in failures))
+
     def test_alpha_skill_requires_multiple_evals(self) -> None:
         failures = self.alpha_contract_failures(pycc_eval_count=1)
         self.assertTrue(any("at least two evals" in item for item in failures))

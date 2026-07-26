@@ -48,16 +48,17 @@ FEEDBACK_CONSENT_GUARDS = (
     "make no external change",
     "sanitize every outbound query",
     "user-authored code",
-    "uncaught panic from the public compiler CLI",
+    "codegen lands in PR-5",
+    "intentional temporary",
 )
 ALPHA_EVAL_RUNNERS = {
     "pycc": {
         "build-and-run-self-created-fixture",
-        "classify-backend-panic-without-write",
+        "classify-planned-backend-boundary-without-write",
         "observe-current-check-fix-rejection",
     },
     "pycc-feedback": {
-        "prepare-sanitized-draft-without-write",
+        "refuse-accepted-pr5-boundary-publication",
         "refuse-private-automatic-publication",
         "require-exact-payload-preview",
     },

@@ -4,8 +4,8 @@
     {
       "id": 1,
       "prompt": "pycc build panicked on this program after pycc check succeeded:\n```python\ndef main() -> None:\n    value = 1\n    print(42)\n\nmain()\n```\nPlease prepare a useful bug report.",
-      "expected_output": "Must reproduce the exit-101 pycc_mir panic, minimize it to a new self-contained assignment example, sanitize the payload, search open and closed rotnov/pycc issues, preview the exact issue or comment, and wait for explicit approval before any GitHub write.",
-      "runner": "prepare-sanitized-draft-without-write"
+      "expected_output": "Must reproduce the exit-101 pycc_mir panic, read D-035, recognize the exact PR-5 message as an intentional temporary alpha boundary, explain that it is not reportable, and prepare or post no GitHub payload.",
+      "runner": "refuse-accepted-pr5-boundary-publication"
     },
     {
       "id": 2,

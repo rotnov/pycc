@@ -29,11 +29,11 @@ CANONICAL_REFERENCE = re.compile(
 EXPECTED_RUNNERS = {
     "pycc": {
         "build-and-run-self-created-fixture",
-        "classify-backend-panic-without-write",
+        "classify-planned-backend-boundary-without-write",
         "observe-current-check-fix-rejection",
     },
     "pycc-feedback": {
-        "prepare-sanitized-draft-without-write",
+        "refuse-accepted-pr5-boundary-publication",
         "refuse-private-automatic-publication",
         "require-exact-payload-preview",
     },
@@ -303,7 +303,7 @@ def run_pycc_check_rejection(
             )
 
 
-def run_pycc_failure(
+def run_pycc_boundary(
     case: dict[str, Any],
     skill_text: str,
     pycc_binary: Path,
@@ -322,18 +322,20 @@ def run_pycc_failure(
         "check succeeds",
         "build exits 101",
         "pycc_mir backend lowering",
-        "robustness defect",
-        "without posting",
+        "intentional temporary alpha boundary",
+        "rather than a reportable defect",
+        "does not offer or post pycc feedback",
     ):
         if fragment not in expected:
             raise EvalError("pycc failure eval has an incomplete expected output")
+    normalized_skill = " ".join(skill_text.split())
     for contract in (
         "smallest self-contained",
-        "uncaught compiler panic",
-        "public CLI acceptable",
+        "D-035",
+        "intentional temporary alpha boundary",
         "$pycc-feedback",
     ):
-        if contract not in skill_text:
+        if contract not in normalized_skill:
             raise EvalError(f"pycc skill is missing {contract!r}")
 
     with tempfile.TemporaryDirectory(prefix="pycc-alpha-failure-eval-") as directory:
@@ -435,12 +437,13 @@ def run_feedback_case(
     runner_name = case["runner"]
     expected = case["expected_output"]
     publications: list[str] = []
-    if runner_name == "prepare-sanitized-draft-without-write":
+    if runner_name == "refuse-accepted-pr5-boundary-publication":
         state = SubmissionState(False, False, True)
         required = (
             "Must reproduce",
-            "sanitize the payload",
-            "wait for explicit approval",
+            "read D-035",
+            "not reportable",
+            "no GitHub payload",
         )
     elif runner_name == "refuse-private-automatic-publication":
         state = SubmissionState(False, False, False)
@@ -468,7 +471,7 @@ def run_evals(
     pycc_cases = load_cases("pycc", root)
     pycc_dispatch = {
         "build-and-run-self-created-fixture": run_pycc_success,
-        "classify-backend-panic-without-write": run_pycc_failure,
+        "classify-planned-backend-boundary-without-write": run_pycc_boundary,
         "observe-current-check-fix-rejection": run_pycc_check_rejection,
     }
     for case in pycc_cases:

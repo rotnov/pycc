@@ -100,10 +100,11 @@ strict `check` path emits `T0021` before separately observing that the planned
 `--fix` flag is still rejected. Its backend scenario proves that the same
 inferred-assignment fixture passes `check` before `build` reaches the current
 exit-101 `pycc_mir` PR-5 boundary, so the skill must classify the raw public-CLI
-panic without confusing frontend and backend support. The `pycc-feedback`
-cases exercise exact-draft, private-source refusal, and context-free-consent
-invariants through a fail-closed safety oracle that cannot perform a network
-write. All four reviewed `i-have-an-issue` scenarios validate their distinct
+panic as D-035's intentional temporary alpha gap rather than a reportable
+defect. The `pycc-feedback` cases exercise refusal to report that accepted
+boundary, private-source refusal, and context-free-consent invariants through
+a fail-closed safety oracle that cannot perform a network write. All four
+reviewed `i-have-an-issue` scenarios validate their distinct
 evidence criteria and execute the vendored search helper's local help path
 without a network request. The unit suite covers full scenario dispatch,
 build failure, wrong output, stale frontend claims, current-stage panic drift,

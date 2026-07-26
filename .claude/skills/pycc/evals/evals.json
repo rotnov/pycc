@@ -16,8 +16,8 @@
     {
       "id": 3,
       "prompt": "This typed Python program passes pycc check but pycc build panics:\n```python\ndef main() -> None:\n    value = 1\n    print(42)\n\nmain()\n```\nFigure out whether it is a compiler bug, but do not post anything.",
-      "expected_output": "Minimizes and reproduces the failure, confirms that check succeeds before build exits 101, identifies pycc_mir backend lowering as the failing stage, classifies the public CLI panic as a robustness defect despite the planned PR-5 boundary, and offers the consent-gated pycc-feedback workflow without posting.",
-      "runner": "classify-backend-panic-without-write"
+      "expected_output": "Minimizes and reproduces the failure, confirms that check succeeds before build exits 101, identifies pycc_mir backend lowering as the failing stage, reads D-035, classifies the exact PR-5 panic as an intentional temporary alpha boundary rather than a reportable defect, and does not offer or post pycc feedback.",
+      "runner": "classify-planned-backend-boundary-without-write"
     }
   ]
 }
