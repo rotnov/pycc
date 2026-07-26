@@ -11,6 +11,45 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-07-26 — Draft PR #140 fixes the clone-local iEvo hook lifecycle
+
+**Snapshot evidence:** draft [PR #140](https://github.com/rotnov/pycc/pull/140)
+was opened from `codex/resolve-ievo-hook-lifecycle-0764` at
+`4c5deacea832df8127b21bd7dabfde84c9c0e8d7`, based on
+`main@128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`. The containing change is
+not merged; issue [#34](https://github.com/rotnov/pycc/issues/34) remains open
+until that PR lands. A fresh overlap audit found no competing lifecycle fix:
+PR #59 changes pinned Claude plugin configuration, while PRs #36 and #132 are
+compiler/runtime work.
+
+**Scope and review state:** D-067 adds one repository helper for exact iEvo
+hook relocation, validation/smoke, and clone-local disable across Claude Code
+and Codex. The lifecycle preserves unrelated configuration, restores the
+project's whole-directory `.ievo/hooks/` ignore policy after upstream
+tracked-shim mutations, writes the local destination before removing shared
+wiring, removes local hook entries before their targets, and preserves the
+tracked `.ievo/evo-auto.flag` project-wide intent. Its isolated test starts
+from a committed clean baseline and requires the tracked view to return clean
+after enable-style mutations, localize, smoke, and repeated disable. Upstream
+`ievo-ai/skills#446` and merged PR #455 are linked in the PR; their tracked
+dispatcher design does not supersede D-023/D-025's local-execution policy.
+
+**Validation at the recorded head:** ruff, 249 Python tests, agent-policy,
+agent-assets, both pinned marketplace checks, roadmap evidence (99 runs and
+432 assertions), `cargo fmt`, workspace build/test after the explicit build,
+clippy, rustdoc, and `git diff --check` passed. Two unrelated baseline gaps are
+recorded rather than hidden: a clean test without a prior workspace build
+reproduces open #20, and the strict coverage command completes all tests but
+reports 99.98% lines / 99.96% regions from existing uncovered `src/main.rs`
+paths.
+
+**Required next steps:** commit and push this snapshot as the new PR head,
+rerun focused policy/document checks, confirm the PR is still open and inspect
+mergeability before waiting for CI, then run the Codex-review retry guard and
+request review only if allowed. Keep the PR draft until required checks and
+review surfaces are understood; merge only after green required checks, no
+actionable unresolved thread, and exact-head review evidence.
+
 ## 2026-07-26 — PR #138 merged; D-062 blocks PR #132
 
 **Delivered state:** [PR #137](https://github.com/rotnov/pycc/pull/137)
