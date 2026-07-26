@@ -27,8 +27,11 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   the implemented nested control-flow grammar is local throughout that
   function. A read before the local has been bound is `T0021` and never falls
   back to a same-named module global. A name with no local binding form may
-  still resolve to a module global. Control-flow join state remains the
-  separate definite-assignment work tracked in #118.
+  still resolve to a module global. Call targets follow the same lookup before
+  builtin or function-registry resolution: an unbound local target is `T0021`,
+  while a bound local or parameter from the current primitive subset cannot be
+  called by falling through to a same-named function. Control-flow join state
+  remains the separate definite-assignment work tracked in #118.
 - The first assignment fixes a local variable's inferred type. Later
   assignments must be compatible or produce `T0023`; assigning `bool` to an
   `int` binding preserves the `int` representation.

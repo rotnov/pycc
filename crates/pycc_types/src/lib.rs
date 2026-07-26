@@ -50,8 +50,19 @@ fn unbound_local(name: &str) -> Diagnostic {
     )
 }
 
-fn function_local_names(body: &[HirStmt]) -> Vec<&str> {
-    let mut names = Vec::new();
+fn non_callable_binding(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!("name `{name}` is bound to a non-callable value"),
+        Span::new(0, 0),
+    )
+}
+
+fn function_local_names<'a>(params: &'a [(String, Ty)], body: &'a [HirStmt]) -> Vec<&'a str> {
+    let mut names = params
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
     collect_local_names(body, &mut names);
     names
 }
@@ -84,7 +95,7 @@ fn module_function_local_names(hir: &HirModule) -> Vec<Vec<&str>> {
     hir.items
         .iter()
         .map(|item| match item {
-            HirItem::Function { body, .. } => function_local_names(body),
+            HirItem::Function { params, body, .. } => function_local_names(params, body),
             HirItem::TopLevelStmt(_) => Vec::new(),
         })
         .collect()
@@ -248,6 +259,13 @@ fn collect_expr_constraints(
             }
         }
         HirExpr::Call { callee, args } => {
+            if is_local(env.local_names, callee) {
+                return if env.bindings.contains_key(callee) {
+                    Err(non_callable_binding(callee))
+                } else {
+                    Err(unbound_local(callee))
+                };
+            }
             let mut arg_terms = Vec::with_capacity(args.len());
             for arg in args {
                 arg_terms.push(collect_expr_constraints(
@@ -639,6 +657,13 @@ fn infer_expr_in(
             }
         }
         HirExpr::Call { callee, args } => {
+            if is_local(local_names, callee) {
+                return if env.lookup(callee).is_some() {
+                    Err(non_callable_binding(callee))
+                } else {
+                    Err(unbound_local(callee))
+                };
+            }
             let arg_tys = args
                 .iter()
                 .map(|a| infer_expr_in(env, local_names, a))
@@ -820,7 +845,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
 
 pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
     let local_names = match function {
-        HirItem::Function { body, .. } => function_local_names(body),
+        HirItem::Function { params, body, .. } => function_local_names(params, body),
         HirItem::TopLevelStmt(_) => Vec::new(),
     };
     check_function_in(&Environment::new(), function, &local_names)
@@ -2092,7 +2117,126 @@ mod tests {
             },
         ];
 
-        assert_eq!(function_local_names(&body), vec!["x", "i"]);
+        assert_eq!(function_local_names(&[], &body), vec!["x", "i"]);
+    }
+
+    #[test]
+    fn a_call_before_local_assignment_cannot_fall_back_to_a_global_function() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "helper".to_string(),
+                            args: vec![],
+                        }),
+                        HirStmt::Assign {
+                            target: "helper".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "local name `helper` is not bound before this use"
+        );
+    }
+
+    #[test]
+    fn a_call_before_local_assignment_cannot_fall_back_to_print() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![],
+                    }),
+                    HirStmt::Assign {
+                        target: "print".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                ],
+            }],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "local name `print` is not bound before this use"
+        );
+    }
+
+    #[test]
+    fn a_bound_local_value_cannot_fall_back_to_a_function_registry_entry() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::Assign {
+                            target: "helper".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        },
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "helper".to_string(),
+                            args: vec![],
+                        }),
+                    ],
+                },
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    #[test]
+    fn a_parameter_cannot_fall_back_to_a_same_named_builtin() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("print".to_string(), Ty::Int)],
+                return_ty: Ty::None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![],
+                })],
+            }],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "name `print` is bound to a non-callable value");
     }
 
     #[test]
@@ -2114,6 +2258,58 @@ mod tests {
         let err = check_function(&function).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert_eq!(err.message, "local name `x` is not bound before this use");
+    }
+
+    #[test]
+    fn direct_function_check_treats_an_unbound_call_target_as_a_local_read() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "helper".to_string(),
+                    args: vec![],
+                }),
+                HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                },
+            ],
+        };
+
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "local name `helper` is not bound before this use"
+        );
+    }
+
+    #[test]
+    fn direct_function_check_rejects_calling_a_bound_local_value() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                },
+                HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "helper".to_string(),
+                    args: vec![],
+                }),
+            ],
+        };
+
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
     }
 
     #[test]
