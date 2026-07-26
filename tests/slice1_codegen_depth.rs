@@ -108,6 +108,27 @@ fizzbuzz(15)
 }
 
 #[test]
+fn a_basic_f_string_interpolates_a_str_and_an_int_local_between_literal_parts() {
+    // Not in the plan brief's own Step 2-5 list, but this file's own task
+    // description ("recursive functions, control flow, arithmetic, strings,
+    // f-strings") and this task's `docs/ROADMAP.md` update both name
+    // f-strings as part of what `tests/slice1_codegen_depth.rs` proves --
+    // without a real f-string fixture that citation would be an overclaim.
+    // Exercises `HirExpr::FString`/`MirExpr::FString` end to end (parser →
+    // HIR → types → MIR → LLVM), plus `print` accepting a `str`-typed
+    // argument built from f-string interpolation (Task 8/Task 10's join
+    // point).
+    let source = "\
+n = 7
+label = \"answer\"
+print(f\"{label} = {n}\")
+";
+    let output = build_and_run("fstring_basic", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"answer = 7\n");
+}
+
+#[test]
 fn mandelbrot_ascii_produces_a_grid_of_the_expected_dimensions_and_palette() {
     // A first-cut, deliberately small (20x40) rendering exercising
     // nested `while` loops, `float` arithmetic (including true
