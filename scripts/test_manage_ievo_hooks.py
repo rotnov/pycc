@@ -606,6 +606,61 @@ class IevoHookLifecycleTests(unittest.TestCase):
             [("FutureEvent", manager.VENDOR_DIRECTORY)],
         )
 
+    def test_symlinked_hook_ancestor_blocks_smoke_and_disable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            external_hooks = workspace / "external-hooks"
+            external_scripts = external_hooks / "scripts"
+            external_scripts.mkdir(parents=True)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            external_target = external_hooks / target.relative_to(".ievo/hooks")
+            smoke_marker = workspace / "smoke-ran"
+            external_target.write_text(
+                f"#!/bin/sh\ntouch '{smoke_marker}'\n",
+                encoding="utf-8",
+            )
+            vendor = external_scripts / "vendor"
+            vendor.mkdir()
+            sentinel = vendor / "sentinel"
+            sentinel.write_text("keep\n", encoding="utf-8")
+
+            shared = {"hooks": {}}
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            flag = root / manager.FLAG
+            flag.parent.mkdir(parents=True)
+            flag.write_text("enabled: true\n", encoding="utf-8")
+            (root / ".ievo/hooks").symlink_to(
+                external_hooks,
+                target_is_directory=True,
+            )
+            self.create_gitignore(root, upstream_shims=False)
+            local_before = (root / manager.CLAUDE_LOCAL).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "symlink component",
+            ):
+                manager.check(root, smoke=True)
+            self.assertFalse(smoke_marker.exists())
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "symlink component",
+            ):
+                manager.disable(root)
+            self.assertEqual(
+                (root / manager.CLAUDE_LOCAL).read_text(encoding="utf-8"),
+                local_before,
+            )
+            self.assertTrue(external_target.is_file())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
 
 if __name__ == "__main__":
     unittest.main()

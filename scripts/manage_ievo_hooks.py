@@ -328,10 +328,33 @@ def add_records(
     return result
 
 
+def ensure_no_symlink_components(root: Path, relative: Path) -> None:
+    if relative.is_absolute() or ".." in relative.parts:
+        raise HookLifecycleError(f"managed path must stay relative: {relative}")
+    if root.is_symlink():
+        raise HookLifecycleError(f"managed path root must not be a symlink: {root}")
+
+    current = root
+    for index, component in enumerate(relative.parts):
+        current /= component
+        if current.is_symlink():
+            raise HookLifecycleError(
+                "managed path contains a symlink component: "
+                f"{current.relative_to(root)}"
+            )
+        if current.exists() and index < len(relative.parts) - 1:
+            if not current.is_dir():
+                raise HookLifecycleError(
+                    "managed path ancestor must be a directory: "
+                    f"{current.relative_to(root)}"
+                )
+
+
 def existing_targets(root: Path, records: Iterable[HookRecord]) -> None:
     missing: list[str] = []
     unsafe: list[str] = []
     for target in dict.fromkeys(target for _, target, _ in records):
+        ensure_no_symlink_components(root, target)
         path = root / target
         if not path.exists():
             missing.append(target.as_posix())
@@ -457,6 +480,14 @@ def remove_path(path: Path) -> None:
 
 
 def disable(root: Path) -> None:
+    removal_targets = [
+        *SCRIPT_TARGETS.values(),
+        *LOCAL_COMPANIONS,
+        VENDOR_DIRECTORY,
+    ]
+    for target in removal_targets:
+        ensure_no_symlink_components(root, target)
+
     configurations: list[tuple[Path, dict[str, Any]]] = []
     for relative in (CLAUDE_SHARED, CLAUDE_LOCAL, CODEX_LOCAL):
         settings = read_json(root, relative, required=relative == CLAUDE_SHARED)
@@ -472,14 +503,10 @@ def disable(root: Path) -> None:
         if updated != original:
             atomic_write_json(root, relative, updated)
 
-    removal_targets = [
-        *(root / target for target in SCRIPT_TARGETS.values()),
-        *(root / target for target in LOCAL_COMPANIONS),
-        root / VENDOR_DIRECTORY,
-    ]
     for target in removal_targets:
-        if target.exists() or target.is_symlink():
-            remove_path(target)
+        path = root / target
+        if path.exists():
+            remove_path(path)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
