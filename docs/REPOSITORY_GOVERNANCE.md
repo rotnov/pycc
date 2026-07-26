@@ -19,12 +19,13 @@ enforce the normal delivery path.
   merge-blocking without executing PR-head comparator code, are required by
   this fan-in. D-051/D-053 supersede D-048's cross-run artifact transport with
   exact predecessor and candidate timings measured sequentially on one hosted
-  runner. The predecessor timing is sealed before candidate code runs; the
-  isolated gate consumes both artifacts by distinct numeric IDs, flattens each
-  into an exact destination, verifies the predecessor-owned median comparator,
-  and fails closed on revision, benchmark-contract, artifact-identity, file-set,
-  or comparison drift. Only the reviewed D-051 paired-workflow digest remains
-  authorized. The standalone `agent-policy` job provides faster
+  runner, and D-056 adds trusted pre-execution source identity. The predecessor
+  timing is sealed before candidate code runs; the isolated gate consumes both
+  artifacts by distinct numeric IDs, flattens each into an exact destination,
+  verifies the predecessor-owned source-aware comparator, and fails closed on
+  revision, benchmark-contract, executable-input identity, artifact-identity,
+  file-set, or comparison drift. Only the reviewed D-056 source-aware workflow
+  digest is authorized. The standalone `agent-policy` job provides faster
   feedback until its exact context has run successfully on `main` and is
   added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
@@ -58,7 +59,7 @@ D-048 authorization remain absent.
 D-048 and D-050 preserve the historical activation lifecycle and the reason it
 was bounded; they no longer describe live performance transport.
 
-### Active paired-runner gate (D-051/D-053)
+### Active source-aware paired-runner gate (D-051/D-053/D-056)
 
 Three complete CI attempts for PR #107 measured a documentation-and-test-only
 candidate at `+80.82%`, `+12.82%`, and `+7.30%` against the same exact
@@ -67,7 +68,7 @@ so longer sampling on that host would not remove the observed cross-host
 offset. Re-running until a convenient hosted machine passes is not acceptable
 merge evidence.
 
-The reviewed `tests/fixtures/d51-paired-ci.yml` successor therefore checks out
+The reviewed D-051 design checks out
 the exact predecessor and candidate, verifies their revisions and the complete
 bound benchmark-definition and build-configuration contract, and measures both
 sequentially on one runner with separate target state. It seals the predecessor
@@ -79,30 +80,23 @@ download is flattened into its own exact comparison directory, so the pinned
 action cannot add an artifact-name path component. Its isolated gate
 keeps the 2% threshold and hash-verified review boundary while using an
 exact-predecessor median comparator that is robust to isolated high outliers
-and accepts exactly two regular-file estimates. The active
-`.github/workflows/ci.yml` is byte-identical to this fixture, the allowlist
-contains only its reviewed digest, and the D-048 fixture and digest are absent.
-Every pull request and `main` push measures both exact revisions inside its own
-run, so no successful external baseline artifact or administrative bootstrap
-state is required.
-
-### Staged source-aware successor (D-056)
-
-The active D-051/D-053 workflow remains unchanged in this commit. D-056 adds a
-reviewed inert fixture for the residual false-positive class demonstrated by
-main run 30198852753: a `+3.14%` delta with identical executable inputs. The
-prospective measurement job classifies the complete `src/` and `crates/` trees
-before candidate execution, while retaining every existing benchmark/build
-contract check. Its gate accepts only an exact boolean identity, always
-downloads and validates both timing artifacts, and treats the delta as
+and accepts exactly two regular-file estimates. D-056 retains this entire
+boundary and addresses the residual false-positive class demonstrated by main
+run 30198852753: a `+3.14%` delta with identical executable inputs. Before
+candidate execution, the active measurement job classifies the complete `src/`
+and `crates/` trees while the existing contract independently binds every
+benchmark and build input. The gate accepts only an exact boolean identity,
+always downloads and validates both timing artifacts, and treats the delta as
 non-blocking environment telemetry only when all executable inputs are proven
 identical. Changed source keeps the existing `>2%` block.
 
-Activation requires a separate branch from the staging merge, a byte-exact
-replacement of `.github/workflows/ci.yml` with
-[`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml), the
-trusted-base `audit`, and normal `ci-gate`. The activation then retires D-051's
-active digest; this staged paragraph grants no bootstrap or bypass.
+The active `.github/workflows/ci.yml` is byte-identical to the reviewed
+[`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml), and the
+allowlist contains only its digest. The D-051 fixture and comparator remain
+historical audit evidence, but the active policy rejects that older workflow
+digest. Every pull request and `main` push still measures both exact revisions
+inside its own run, so no successful external baseline artifact or
+administrative bootstrap state is required.
 
 When a new check is introduced, first merge and observe it successfully on `main`,
 then add its exact reported context to branch protection. Never require a guessed or
