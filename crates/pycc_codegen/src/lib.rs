@@ -16,9 +16,11 @@ use std::path::Path;
 /// tasks: `Str` (Task 7) is a pointer to an opaque `pycc_rt::PyStrObj` --
 /// `pycc_codegen` never inspects its layout (D-059's inline/heap
 /// representation is entirely `pycc_rt`'s own concern), only ever passing
-/// it through to a `pycc_rt_str_*` call. `Ty::None` never needs a variant
-/// here -- no v0.1 `MirExpr` can actually construct a `None` *value* (see
-/// Task 6's note).
+/// it through to a `pycc_rt_str_*` call. `Ty::None` uses the same LLVM `i8`
+/// carrier shape as `Bool`, but always with the value zero: a distinct enum
+/// variant would not add information because MIR's static `Ty` determines
+/// whether that carrier means Python's unit value or a real boolean. Function
+/// returns of `None` remain LLVM `void`.
 enum Scalar<'ctx> {
     /// Tagged per D-061. Always LLVM `i64`.
     Int(IntValue<'ctx>),
@@ -232,6 +234,11 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         pycc_mir::Ty::Bool => context.i8_type().into(),
         pycc_mir::Ty::Float => context.f64_type().into(),
         pycc_mir::Ty::Str => context.ptr_type(inkwell::AddressSpace::default()).into(),
+        // LLVM `void` cannot be a parameter type. v0.1 therefore carries
+        // Python's singleton unit value across user-function parameter and
+        // local-storage boundaries as the canonical `i8 0`; a `None` return
+        // is still emitted as LLVM `void` by `compile_to_object`.
+        pycc_mir::Ty::None => context.i8_type().into(),
         other => {
             panic!("pycc_codegen: a `{other:?}`-typed parameter/return value is not supported yet")
         }
@@ -569,6 +576,16 @@ fn emit_expr<'ctx>(
                         );
                     Scalar::Str(loaded.into_pointer_value())
                 }
+                Ty::None => {
+                    let loaded = builder
+                        .build_load(context.i8_type(), slot.ptr, "load_none")
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
+                    // The static `Ty::None` retains the semantic distinction
+                    // from a bool even though both use an LLVM `i8` carrier.
+                    Scalar::Bool(loaded.into_int_value())
+                }
                 other => {
                     panic!("pycc_codegen: reading a `{other:?}`-typed local is not supported yet")
                 }
@@ -841,14 +858,11 @@ fn emit_expr<'ctx>(
                 ),
                 Ty::None => {
                     // A `None`-returning call's LLVM function returns
-                    // `void` -- there is no value to extract, and this
-                    // crate has no `Scalar::None` (Task 6's finding: no
-                    // v0.1 expression can construct a `None` *value* other
-                    // than this exact call-result shape). The only callers
-                    // that evaluate a `Ty::None`-typed expression are the
-                    // `print` and f-string paths below. Both discard this
-                    // placeholder after preserving the call's side effects
-                    // and materialize Python's literal `"None"`.
+                    // `void`, so there is no value to extract. Preserve the
+                    // call's side effects and materialize the canonical zero
+                    // carrier used when that unit value crosses a parameter
+                    // or storage boundary. The surrounding MIR type keeps it
+                    // distinct from a real `False` value.
                     Scalar::Bool(context.i8_type().const_int(0, false))
                 }
                 other => {
@@ -885,12 +899,6 @@ fn emit_expr<'ctx>(
                     }
                     pycc_mir::MirFStringPart::Interpolation(inner) => {
                         if inner.ty() == pycc_mir::Ty::None {
-                            if !matches!(inner.as_ref(), MirExpr::Call { .. }) {
-                                panic!(
-                                    "pycc_codegen: interpolating a `None`-typed value that isn't a \
-                                     direct call result is not supported yet"
-                                );
-                            }
                             emit_expr(context, builder, module, rt, user_functions, locals, inner);
                             emit_string_literal(context, builder, module, rt, "None")
                         } else {
@@ -951,11 +959,11 @@ fn emit_expr<'ctx>(
 /// `call` instruction to the already-resolved `f`. Shared between
 /// `emit_expr`'s `Call` arm (a value-producing call used inside a larger
 /// expression) and `emit_stmt`'s void-call arm below (a call whose
-/// declared return type is `None`, used as a bare statement) -- `Scalar`
-/// has no variant for "no value" (see its own doc comment), so a
-/// `None`-returning call can never flow back out of `emit_expr` itself;
-/// this is the one piece both call sites need regardless of whether a
-/// value comes back afterward.
+/// declared return type is `None`, used as a bare statement). A
+/// `None`-returning call has no LLVM return value; `emit_expr` separately
+/// materializes its canonical unit carrier only when a surrounding
+/// expression needs one. This is the one piece both call sites need
+/// regardless of whether a value comes back afterward.
 ///
 /// Deliberately does *not* also do the `user_functions` lookup for
 /// `callee`: the two call sites disagree on how a missing function should
@@ -1753,14 +1761,8 @@ fn verify_module(module: &inkwell::module::Module<'_>) {
 /// Emits one `print()` argument (Task 10), called once per element of
 /// `emit_stmt`'s `print`-call arm's `args`, in order, with the separator
 /// space between arguments already built by that arm itself (not here) --
-/// `Ty::None` (only ever reachable as a direct `Call` result, per Task
-/// 6/10's own scope note: there is no `MirExpr::NoneLiteral`, and a `Name`
-/// bound to a `None`-typed variable stays an explicit, narrow "not
-/// supported yet" here, since `emit_expr`'s `Name` arm has no `Ty::None`
-/// case at all) evaluates `arg` for its side effects (the call itself must
-/// still run) and discards the placeholder `Scalar` `emit_expr` returns for
-/// it (see that arm's own doc comment on `emit_expr`'s `Call` arm),
-/// printing the literal `"None"` instead of using it; every other v0.1
+/// `Ty::None` evaluates `arg` for its side effects and discards its canonical
+/// unit carrier, printing the literal `"None"` instead; every other v0.1
 /// scalar type converts to `str` via `to_str` (reusing `pycc_rt_int_to_str`/
 /// `float_to_str`/`bool_to_str`, the same conversions f-string
 /// interpolation already uses) and writes it with `pycc_rt_print_write_str`,
@@ -1802,12 +1804,6 @@ fn emit_print_arg<'ctx>(
     arg: &MirExpr,
 ) {
     if arg.ty() == pycc_mir::Ty::None {
-        if !matches!(arg, MirExpr::Call { .. }) {
-            panic!(
-                "pycc_codegen: printing a `None`-typed value that isn't a direct \
-                 call result is not supported yet"
-            );
-        }
         emit_expr(context, builder, module, rt, user_functions, locals, arg);
         builder
             .build_call(rt.print_none, &[], "print_none")
@@ -1827,9 +1823,10 @@ fn emit_print_arg<'ctx>(
 
 /// Handles every `MirStmt` shape in v0.1 (this match is exhaustive over
 /// `MirStmt`, no catch-all arm): a `print()` call of any number of
-/// `int`/`float`/`bool`/`str` arguments plus the narrow `print(f(...))`
-/// `None`-result shape (Task 10, space-separated, one trailing newline,
-/// matching CPython's `print(*args)`; see that arm's own doc comment), any
+/// `int`/`float`/`bool`/`str` arguments plus `None` from either a direct
+/// user-function result or a D-075 parameter value (Task 10, space-separated,
+/// one trailing newline, matching CPython's `print(*args)`; D-072 still
+/// excludes using `print()` itself as a nested expression), any
 /// other bare expression statement (a user-function call with any number of
 /// arguments included -- see `emit_expr`'s `Call` arm, which this now
 /// delegates to uniformly instead of special-casing zero-arg calls here), a
@@ -1870,10 +1867,9 @@ fn emit_stmt<'ctx>(
         // A user-function call whose declared return type is `None`, used
         // as a bare statement (e.g. `main()`) -- must go through
         // `build_call_to` directly rather than the general `ExprStmt(expr)`
-        // arm below: `emit_expr`'s own `Call` arm always maps its result
-        // into a `Scalar`, and `Scalar` has no variant representing "no
-        // value" (see its own doc comment), so a `None`-returning call can
-        // never validly flow through `emit_expr` at all. Matched by `ty`
+        // arm below: the call itself returns LLVM `void`, and the general
+        // expression path's canonical unit carrier is unnecessary when the
+        // result is discarded. Matched by `ty`
         // alone (no `callee != "print"` guard needed): the arm above
         // already claims every `print` call via its own guard regardless
         // of `ty`, so only a non-`print` call ever reaches this one.
@@ -2121,39 +2117,26 @@ fn emit_stmt<'ctx>(
         }
         MirStmt::Return(value) => {
             match value {
-                // A function declared `-> None` has a `void` LLVM signature
-                // (see this function's own return-type declaration site),
-                // so `return <None-typed-expr>` can never hand back a real
-                // value -- there is nothing to build a non-void `ret` from.
-                // Mirrors `emit_print_arg`'s own `Ty::None` handling: a
-                // direct call result's side effect is preserved (the callee
-                // still runs), but the placeholder `Scalar::Bool` value
-                // `emit_expr` returns for it is discarded rather than fed
-                // into `build_return`, which previously built an invalid
-                // `ret i8 0` inside a `void` function (only caught by
-                // `verify_module`'s Linux/macOS-only LLVM verifier, D-029 --
-                // a silent miscompile risk on Windows).
-                Some(expr)
-                    if expected_return_ty == pycc_mir::Ty::None
-                        && expr.ty() == pycc_mir::Ty::None =>
-                {
-                    if !matches!(expr, MirExpr::Call { .. }) {
-                        panic!(
-                            "pycc_codegen: returning a `None`-typed value that isn't a direct \
-                             call result is not supported yet"
-                        );
-                    }
-                    emit_expr(context, builder, module, rt, user_functions, locals, expr);
-                    builder
-                        .build_return(None)
-                        .expect("build_return should not fail for a bare `return`");
-                }
                 Some(expr) => {
                     let scalar =
                         emit_expr(context, builder, module, rt, user_functions, locals, expr);
                     let scalar = incref_if_str_duplicate(builder, rt, expr, scalar);
                     let scalar =
                         coerce_scalar_to_type(context, builder, scalar, expected_return_ty);
+                    if expected_return_ty == pycc_mir::Ty::None {
+                        // `None` parameters and call results use a canonical
+                        // `i8 0` carrier inside expressions, but a function
+                        // declared to return `None` has an LLVM `void`
+                        // signature. Evaluating above preserves any call or
+                        // name-load side effects; the carrier itself is
+                        // intentionally discarded here. Returning it as an
+                        // `i8` previously built invalid IR that only the
+                        // non-Windows verifier caught (D-029).
+                        builder
+                            .build_return(None)
+                            .expect("build_return should not fail for a None return value");
+                        return Ok(());
+                    }
                     let basic_value: inkwell::values::BasicValueEnum = match scalar {
                         Scalar::Int(v) => v.into(),
                         Scalar::Bool(v) => v.into(),
@@ -2184,8 +2167,8 @@ mod tests {
     /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
     /// shape reused by many of this file's older tests (`emit_stmt`'s
     /// `print` dispatch itself now handles any number of arguments of any
-    /// v0.1 scalar type, plus the narrow `None`-result shape; see its own
-    /// doc comment, Task 10).
+    /// v0.1 scalar type, plus `None` from direct user-function results and
+    /// D-075 parameter values; see its own doc comment, Task 10).
     fn call_print(n: i64) -> MirStmt {
         MirStmt::ExprStmt(MirExpr::Call {
             callee: "print".to_string(),
@@ -2559,65 +2542,51 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "returning a `None`-typed value that isn't a direct call result is not supported yet"
-    )]
-    fn returning_a_none_typed_name_that_is_not_a_direct_call_is_not_supported_yet() {
-        // A `None`-typed `MirExpr::Name` can't arise from any real HIR/MIR
-        // lowering path today (no `NoneLiteral` variant exists, and
-        // assigning a `None`-typed call result to a name is itself a
-        // separate, already-panicking boundary) -- this hand-built MIR
-        // exercises the match guard's `else` branch directly, matching
-        // `emit_print_arg`'s identical non-call-`None` panic convention.
+    fn printing_a_none_typed_parameter_renders_none() {
+        // `def source() -> None: return`; `def sink(y: None) -> None:
+        // print(y)`; `sink(source())` -- exercises the canonical unit
+        // carrier as a call argument, parameter slot, name read, and print
+        // input without ever confusing it for the physically-identical
+        // `False` carrier.
         let mir = MirModule {
-            items: vec![MirItem::Function {
-                name: "f".to_string(),
-                params: vec![],
-                return_ty: Ty::None,
-                body: vec![MirStmt::Return(Some(MirExpr::Name {
-                    name: "x".to_string(),
+            items: vec![
+                MirItem::Function {
+                    name: "source".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(None)],
+                },
+                MirItem::Function {
+                    name: "sink".to_string(),
+                    params: vec![("y".to_string(), Ty::None)],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::Name {
+                            name: "y".to_string(),
+                            ty: Ty::None,
+                        }],
+                        ty: Ty::None,
+                    })],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "sink".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "source".to_string(),
+                        args: vec![],
+                        ty: Ty::None,
+                    }],
                     ty: Ty::None,
-                }))],
-            }],
+                })),
+            ],
         };
-        let dir = tempfile_dir("return_none_name");
-        let obj_path = dir.join("return_none_name.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "printing a `None`-typed value that isn't a direct call result is not supported yet"
-    )]
-    fn printing_a_none_typed_name_that_isnt_a_direct_call_result_panics() {
-        // `print(y)` where `y` is (hypothetically) `None`-typed but not
-        // itself a `Call` -- the narrow gap this task's own scope note
-        // documents (Task 6's finding: a `Name` bound to a `None`-typed
-        // variable is legal Python but stays unsupported here, since
-        // `emit_expr`'s `Name` arm has no `Ty::None` case at all). Real
-        // `pycc_types` has no way to produce a `None`-typed `Name` in v0.1
-        // (there is no `x = None`-shaped source, and even `x =
-        // some_void_function()` would need `emit_expr`'s own `Name` arm to
-        // support reading it back, which it deliberately doesn't) -- this
-        // is deliberately malformed MIR exercising `emit_stmt`'s own
-        // defensive guard for that shape directly, matching this file's
-        // established convention for internal-error tests. The panic
-        // fires purely from `arg`'s own shape (`matches!(arg, MirExpr::
-        // Call { .. })`), before any name lookup, so `y` is never actually
-        // bound in `locals`.
-        let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
-                callee: "print".to_string(),
-                args: vec![MirExpr::Name {
-                    name: "y".to_string(),
-                    ty: Ty::None,
-                }],
-                ty: Ty::None,
-            }))],
-        };
-        let dir = tempfile_dir("print_none_typed_name_panics");
-        let obj_path = dir.join("print_none_typed_name_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let dir = tempfile_dir("print_none_typed_parameter");
+        let obj_path = dir.join("print_none_typed_parameter.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("print_none_typed_parameter");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"None\n");
     }
 
     #[test]
@@ -3216,20 +3185,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "reading a `None`-typed local is not supported yet")]
-    fn reading_a_none_typed_local_is_not_yet_supported() {
-        // Not reachable through `compile_to_object`/real MIR at all: no
-        // real pipeline can produce a `None`-typed *local* (only a call's
-        // or function's return type is ever legitimately `None`) -- this
-        // calls `emit_expr` directly with a hand-built `locals` map
-        // instead, exercising the `Name` arm's defensive catch-all. This
-        // test's earlier (Task 3-era) incarnation used `Ty::Str` here,
-        // before Task 7 added real `str`-local support (see
-        // `reading_a_float_local_back_out_of_its_alloca` below for the
-        // precedent this mirrors, and
-        // `compiles_string_concatenation_and_a_reassignment_that_frees_the_old_value`
-        // for the real `str`-local read-back test that replaced this one's
-        // old role).
+    fn reading_a_none_typed_parameter_slot_emits_its_unit_carrier() {
+        // Calls `emit_expr` directly to isolate its `Ty::None` name-load
+        // arm. The real source-level ABI path is covered separately by
+        // `printing_a_none_typed_parameter_renders_none`.
         let context = Context::create();
         let module = context.create_module("test");
         let builder = context.create_builder();
@@ -3241,13 +3200,12 @@ mod tests {
 
         let user_functions: HashMap<&str, UserFunction> = HashMap::new();
         let mut locals = HashMap::new();
-        // The alloca's own LLVM type is arbitrary here (`None` has no
-        // codegen representation to allocate correctly) -- it's never
-        // actually loaded from, since `emit_expr`'s `Name` arm panics on
-        // `Ty::None` before reaching any `build_load` call.
         let ptr = builder
-            .build_alloca(context.f64_type(), "x")
+            .build_alloca(context.i8_type(), "x")
             .expect("build_alloca should not fail for a fresh block");
+        builder
+            .build_store(ptr, context.i8_type().const_zero())
+            .expect("build_store should not fail for a fresh unit slot");
         locals.insert(
             "x".to_string(),
             StorageSlot {
@@ -3256,6 +3214,55 @@ mod tests {
                 initialized: None,
             },
         );
+
+        let value = emit_expr(
+            &context,
+            &builder,
+            &module,
+            &rt,
+            &user_functions,
+            &locals,
+            &MirExpr::Name {
+                name: "x".to_string(),
+                ty: Ty::None,
+            },
+        );
+        // Reaching this point proves the typed load was emitted. Its exact
+        // LLVM `i8` representation is verified by the module-level ABI and
+        // runtime tests; matching the private wrapper here would add an
+        // intentionally-unreachable assertion branch under the hard region
+        // coverage gate.
+        let _ = value;
+    }
+
+    #[test]
+    #[should_panic(expected = "reading a `Infer`-typed local is not supported yet")]
+    fn reading_an_unresolved_infer_typed_local_is_an_internal_error() {
+        // `Ty::Infer` is an HIR-only solver marker and must be resolved
+        // before MIR reaches codegen. Hand-built storage keeps the
+        // defensive catch-all in the name-load path covered without
+        // weakening the invariant for real source programs.
+        let context = Context::create();
+        let module = context.create_module("test");
+        let builder = context.create_builder();
+        let rt = declare_rt_functions(&context, &module);
+        let fn_type = context.void_type().fn_type(&[], false);
+        let f = module.add_function("f", fn_type, None);
+        let block = context.append_basic_block(f, "entry");
+        builder.position_at_end(block);
+
+        let user_functions: HashMap<&str, UserFunction> = HashMap::new();
+        let ptr = builder
+            .build_alloca(context.i8_type(), "x")
+            .expect("build_alloca should not fail for a fresh block");
+        let locals = HashMap::from([(
+            "x".to_string(),
+            StorageSlot {
+                ptr,
+                ty: Ty::Infer,
+                initialized: None,
+            },
+        )]);
 
         emit_expr(
             &context,
@@ -3266,7 +3273,7 @@ mod tests {
             &locals,
             &MirExpr::Name {
                 name: "x".to_string(),
-                ty: Ty::None,
+                ty: Ty::Infer,
             },
         );
     }
@@ -4473,25 +4480,25 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a `None`-typed parameter/return value is not supported yet")]
-    fn a_none_typed_parameter_is_not_yet_supported() {
-        // `def f(x: None): ...` -- a distinct `ty_to_basic_type` call site
-        // from the return-type test above (a function's parameter list,
-        // inside `compile_to_object`'s first pass, which has no `Ty::None`
-        // bypass of its own), same underlying panic. This test's earlier
-        // (Task 3-era) incarnation used `Ty::Str` here, before Task 7
-        // closed that gap.
+    fn compiles_a_none_typed_parameter_and_value_return() {
+        // `def f(x: None) -> None: return x` -- `None` returns stay LLVM
+        // `void`, while the parameter and name read use the canonical i8
+        // unit carrier. This is valid frontend input and must not fail only
+        // when codegen declares the function.
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "f".to_string(),
                 params: vec![("x".to_string(), Ty::None)],
                 return_ty: Ty::None,
-                body: vec![],
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::None,
+                }))],
             }],
         };
-        let dir = tempfile_dir("none_param_panics");
-        let obj_path = dir.join("none_param_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let dir = tempfile_dir("none_param_compiles");
+        let obj_path = dir.join("none_param_compiles.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
     }
 
     #[test]
@@ -6120,29 +6127,51 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "interpolating a `None`-typed value that isn't a direct call result is not supported yet"
-    )]
-    fn interpolating_a_none_typed_name_that_isnt_a_direct_call_result_panics() {
-        // Mirrors `printing_a_none_typed_name_that_isnt_a_direct_call_result_
-        // panics`'s own deliberately malformed MIR (a `Name` bound to a
-        // `None`-typed variable is not real `pycc_types` output -- see that
-        // test's own doc comment), exercising the same defensive guard on
-        // the f-string interpolation path instead of `print`'s.
+    fn interpolating_a_none_typed_parameter_renders_none() {
+        // `render(source())` exercises the same unit carrier through an
+        // f-string interpolation of a parameter name rather than `print`'s
+        // dedicated `None` path.
         let mir = MirModule {
-            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
-                target: "s".to_string(),
-                value: MirExpr::FString(vec![pycc_mir::MirFStringPart::Interpolation(Box::new(
-                    MirExpr::Name {
-                        name: "y".to_string(),
-                        ty: Ty::None,
-                    },
-                ))]),
-            })],
+            items: vec![
+                MirItem::Function {
+                    name: "source".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(None)],
+                },
+                MirItem::Function {
+                    name: "render".to_string(),
+                    params: vec![("value".to_string(), Ty::None)],
+                    return_ty: Ty::Str,
+                    body: vec![MirStmt::Return(Some(MirExpr::FString(vec![
+                        pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::Name {
+                            name: "value".to_string(),
+                            ty: Ty::None,
+                        })),
+                    ])))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "render".to_string(),
+                        args: vec![MirExpr::Call {
+                            callee: "source".to_string(),
+                            args: vec![],
+                            ty: Ty::None,
+                        }],
+                        ty: Ty::Str,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
         };
-        let dir = tempfile_dir("fstring_none_typed_name_panics");
-        let obj_path = dir.join("fstring_none_typed_name_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let dir = tempfile_dir("fstring_none_typed_parameter");
+        let obj_path = dir.join("fstring_none_typed_parameter.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("fstring_none_typed_parameter");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"None\n");
     }
 
     #[test]
