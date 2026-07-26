@@ -125,6 +125,9 @@ The active `.github/workflows/ci.yml` is byte-identical to
 whole-file digest, and structural mutation tests exercise the complete paired
 job shapes. The D-048 steady-state, pre-split, and activation fixtures, their
 digests, and their bootstrap tests are absent.
+The retired D-048 mean comparator and its standalone test are absent too;
+references to those paths in the historical D-042/D-044 decisions describe
+the repository state when those decisions were accepted, not active tooling.
 
 The paired lifecycle is fail-closed and predecessor-owned without an external
 baseline. Both performance jobs remain exact literal-success dependencies of

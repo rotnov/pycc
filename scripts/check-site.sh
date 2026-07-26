@@ -444,6 +444,7 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
+        "date_modified": "2026-07-26",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
@@ -763,7 +764,8 @@ for path_value in sys.argv[1:]:
         raise SystemExit(
             f"{slug} WebPage description must match meta description"
         )
-    if web_page.get("dateModified") != "2026-07-25":
+    expected_modified = spec.get("date_modified", "2026-07-25")
+    if web_page.get("dateModified") != expected_modified:
         raise SystemExit(f"{slug} WebPage dateModified is stale")
     if web_page.get("isPartOf") != {"@id": f"{ROOT}#webpage"}:
         raise SystemExit(f"{slug} WebPage must reference the root WebPage")

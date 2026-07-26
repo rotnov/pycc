@@ -95,8 +95,10 @@ so a newly covered compiler model cannot silently disappear. It also mutates
 the landing, status, architecture, comparison, Markdown, and `llms.txt`
 frontend/backend claims independently, preventing a structurally valid site
 from silently describing a superseded compiler milestone. It also removes the
-status page's exact-predecessor performance-baseline requirement so the
-validator rejects a public steady-state claim that no longer fails closed. The
+status page's paired same-runner measurement, exact-revision provenance,
+predecessor-before-candidate sealing, and fail-closed
+revision/contract/artifact/comparison requirements independently so the
+validator rejects a public performance-gate claim that no longer matches CI. The
 landing-page contract also requires
 exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
