@@ -14,13 +14,13 @@ history alone, not a full narrative.
 ## 2026-07-26 — Draft PR #140 fixes the clone-local iEvo hook lifecycle
 
 **Snapshot evidence:** draft [PR #140](https://github.com/rotnov/pycc/pull/140)
-was inspected `OPEN` and `MERGEABLE` at remote head
-`afa1b6f4ec7558d4b65eeded8c55c848694716bc`, based on
-`main@128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`. Implementation commit
-`4c5deacea832df8127b21bd7dabfde84c9c0e8d7` is its parent; `afa1b6f` added
-this checkpoint. This correction necessarily becomes a later session-log-only
-head, so a resuming agent must read PR #140's authoritative `headRefOid` rather
-than treat either recorded commit as current. The change is not merged; issue
+was inspected `OPEN`, draft, and `MERGEABLE` at remote implementation head
+`816a92c7a0bd1c0eb37338c4fb61b984374d220e`, based on
+`main@128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`. The branch contains the
+original lifecycle implementation plus all verified review fixes through
+`816a92c`; this refreshed checkpoint is the only later documentation change.
+A resuming agent must still read PR #140's authoritative `headRefOid` rather
+than treat the inspected hash as current. The change is not merged; issue
 [#34](https://github.com/rotnov/pycc/issues/34) remains open until it lands. A
 fresh overlap audit found no competing lifecycle fix: PR #59 changes pinned
 Claude plugin configuration, while PRs #36 and #132 are compiler/runtime work.
@@ -31,34 +31,39 @@ and Codex. The lifecycle preserves unrelated configuration, restores the
 project's whole-directory `.ievo/hooks/` ignore policy after upstream
 tracked-shim mutations, writes the local destination before removing shared
 wiring, removes local hook entries before their targets, and preserves the
-tracked `.ievo/evo-auto.flag` project-wide intent. Its isolated test starts
-from a committed clean baseline and requires the tracked view to return clean
-after enable-style mutations, localize, smoke, and repeated disable. Upstream
-`ievo-ai/skills#446` and merged PR #455 are linked in the PR; their tracked
-dispatcher design does not supersede D-023/D-025's local-execution policy.
+tracked `.ievo/evo-auto.flag` project-wide intent. Review fixes make refreshed
+shared metadata win over stale local copies, preserve unrelated empty hook
+structures, reject unsupported managed-target references before any mutation,
+and recursively cover shim, companion, and vendor targets even in future hook
+shapes. Its isolated test starts from a committed clean baseline and requires
+the tracked view to return clean after enable-style mutations, localize, smoke,
+and repeated disable. Upstream `ievo-ai/skills#446` and merged PR #455 are
+linked in the PR; their tracked dispatcher design does not supersede
+D-023/D-025's local-execution policy.
 
-**Validation and review at the inspected head:** exact-head CI passed hard
-coverage, agent-policy, agent-assets, workflow audit, both Linux legs, macOS,
-cross-build/verify, and both performance jobs; the Windows leg was still
-installing its existing vcpkg dependency at the last inspection. Codex reviewed
-`afa1b6f` and opened one P2 thread: this handoff named the earlier implementation
-head and still listed completed publication steps. This correction addresses
-that thread; it requires a new guarded review for the resulting head. Locally,
-ruff, 249 Python tests, both policy validators and marketplace checks, roadmap
-evidence (99 runs and 432 assertions), `cargo fmt`, workspace build/test after
-the explicit build, clippy, rustdoc, and `git diff --check` passed. Two unrelated
-baseline gaps remain recorded rather than hidden: a clean test without a prior
-workspace build reproduces open #20, and the strict local coverage command
-completes all tests but reports 99.98% lines / 99.96% regions from existing
-uncovered `src/main.rs` paths.
+**Validation and review at the inspected head:** the exact-head CI cycle for
+`816a92c` had already passed agent-policy, agent-assets, workflow audit,
+cross-build/verify, and one Linux leg; hard coverage, the remaining native legs,
+and performance jobs were still running at the last inspection. Earlier heads
+passed every job except a Windows leg that was superseded while installing its
+existing vcpkg dependency. Codex's first four completed review passes produced
+four verified implementation findings and this stale-handoff P2; the four code
+findings are fixed and all earlier threads are resolved. This checkpoint fixes
+the remaining P2 and requires one guarded exact-head review after publication.
+Locally, ruff on the changed files, 251 Python tests, both policy validators and
+marketplace checks, roadmap evidence (99 runs and 432 assertions), `cargo fmt`,
+workspace build/test after the explicit build, clippy, rustdoc, and
+`git diff --check` passed. Two unrelated baseline gaps remain recorded rather
+than hidden: a clean test without a prior workspace build reproduces open #20,
+and the strict local coverage command completes all tests but reports 99.98%
+lines / 99.96% regions from existing uncovered `src/main.rs` paths.
 
-**Required next steps:** publish this handoff correction, rerun focused
-policy/document checks, then refresh PR #140 from GitHub and verify its new
-exact head, open state, and mergeability. Run the Codex-review retry guard and
-request a new review only if allowed; resolve the P2 handoff thread only after
-the fix is present remotely. Keep the PR draft until CI is green for the new
-head and every review surface is clear. Merge only with no actionable unresolved
-thread and exact-head review evidence.
+**Required next steps:** after this checkpoint is present remotely, resolve the
+stale-handoff P2, run the retry guard, and request one review for the resulting
+exact head if allowed. Keep the PR draft until that review completes, every
+thread is resolved, and all exact-head checks including hard coverage and
+Windows are green. Then mark it ready, re-confirm branch protection and the
+authoritative head, and merge without adding another snapshot-only commit.
 
 ## 2026-07-26 — PR #138 merged; D-062 blocks PR #132
 
