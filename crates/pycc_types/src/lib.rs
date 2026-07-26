@@ -16,6 +16,13 @@ impl Environment {
         Self::default()
     }
 
+    fn with_function_capacity(function_count: usize) -> Self {
+        Self {
+            bindings: HashMap::new(),
+            functions: HashMap::with_capacity(function_count),
+        }
+    }
+
     pub fn lookup(&self, name: &str) -> Option<Ty> {
         self.bindings.get(name).copied()
     }
@@ -354,9 +361,14 @@ fn contains_return(body: &[HirStmt]) -> bool {
 fn infer_function_signatures(
     hir: &HirModule,
 ) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
+    let function_count = hir
+        .items
+        .iter()
+        .filter(|item| matches!(item, HirItem::Function { .. }))
+        .count();
     let mut parents = Vec::new();
     let mut concrete = Vec::new();
-    let mut signatures = HashMap::new();
+    let mut signatures = HashMap::with_capacity(function_count);
     for item in &hir.items {
         if let HirItem::Function {
             name,
@@ -475,7 +487,7 @@ fn infer_function_signatures(
         }
     }
 
-    let mut resolved = HashMap::new();
+    let mut resolved = HashMap::with_capacity(signatures.len());
     for (name, signature) in &signatures {
         let param_tys = signature
             .0
@@ -739,6 +751,7 @@ fn check_function_in(module_env: &Environment, function: &HirItem) -> Result<(),
         panic!("check_function called with a non-Function HirItem");
     };
     let mut env = module_env.clone();
+    env.bindings.reserve(params.len());
     let (resolved_params, resolved_return) = module_env
         .lookup_function(name)
         .cloned()
@@ -890,7 +903,7 @@ fn check_with_signatures(
     hir: &HirModule,
     signatures: &HashMap<String, (Vec<Ty>, Ty)>,
 ) -> Result<(), Diagnostic> {
-    let mut env = Environment::new();
+    let mut env = Environment::with_function_capacity(signatures.len());
     // Pass 1: register every function's signature before checking any
     // statement body, matching Python's own "a module runs top to bottom,
     // but any def already executed is callable" semantics -- top-level
