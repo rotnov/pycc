@@ -232,6 +232,26 @@ print(fib_iter(100))
 }
 
 #[test]
+fn multiplication_promotes_and_float_floor_division_matches_cpython() {
+    let source = "\
+print(3000000000 * 3000000000)
+print(1.0 // 0.1)
+";
+    let output = build_and_run("numeric_runtime_edges", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"9000000000000000000\n9.0\n");
+}
+
+#[test]
+fn true_division_by_zero_fails_explicitly() {
+    let output = build_and_run("float_division_by_zero", "print(1 / 0)\n");
+    assert!(
+        !output.status.success(),
+        "true division by zero must fail instead of producing infinity"
+    );
+}
+
+#[test]
 fn fizzbuzz_exercises_int_arithmetic_modulo_elif_chains_and_mixed_print_types() {
     let source = "\
 def fizzbuzz(n: int) -> None:

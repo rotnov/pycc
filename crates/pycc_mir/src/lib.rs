@@ -821,6 +821,356 @@ mod tests {
     }
 
     #[test]
+    fn a_function_local_shadowing_a_module_global_of_a_different_type_resolves_its_own_type() {
+        // D-055: a function that assigns a name anywhere in its body
+        // classifies that name as local for the *entire* body, independent
+        // of any same-named module global -- Python scoping, not a
+        // control-flow-sensitive fact. `x` is a module-level `str` here;
+        // `f`'s own `x = 5; return x` must resolve to `f`'s own fresh
+        // `Ty::Int`, never falling through to the module global's `Ty::Str`.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::StringLiteral("hello".to_string()),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(5),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::Assign {
+                        target: "x".to_string(),
+                        value: MirExpr::IntLiteral(5)
+                    },
+                    MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int
+                    })),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_sibling_function_after_a_shadowing_function_still_reads_the_unshadowed_global() {
+        // `lower_item` pushes and later pops an isolated function scope;
+        // lowering one function's shadowing assignment must not mutate the
+        // module scope seen by a later sibling function.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::StringLiteral("hello".to_string()),
+                }),
+                HirItem::Function {
+                    name: "shadows".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(5),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+                HirItem::Function {
+                    name: "reads_global".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Str,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[2],
+            MirItem::Function {
+                name: "reads_global".to_string(),
+                params: vec![],
+                return_ty: Ty::Str,
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Str
+                }))],
+            }
+        );
+    }
+
+    #[test]
+    fn a_function_parameter_shadowing_a_module_global_resolves_its_own_type() {
+        // Parameters are part of D-055's lexical-local list too: a
+        // parameter named the same as a module global must resolve to the
+        // parameter's own type, never fall through to the global's.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::StringLiteral("hello".to_string()),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Int
+                }))],
+            }
+        );
+    }
+
+    #[test]
+    fn a_for_range_variable_shadowing_a_module_global_resolves_its_own_type() {
+        // `ForRange`'s loop variable is also part of D-055's lexical-local
+        // list (it's a binding form, matching Python's own `for`-target
+        // classification), so it must shadow a same-named module global too.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "i".to_string(),
+                    value: HirExpr::StringLiteral("hello".to_string()),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::ForRange {
+                            var: "i".to_string(),
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(3),
+                            step: HirExpr::IntLiteral(1),
+                            body: vec![],
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("i".to_string()))),
+                    ],
+                },
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::ForRange {
+                        var: "i".to_string(),
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::IntLiteral(3),
+                        step: MirExpr::IntLiteral(1),
+                        body: vec![],
+                    },
+                    MirStmt::Return(Some(MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int
+                    })),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_local_first_assigned_inside_nested_if_and_else_bodies_shadows_a_module_global() {
+        // Exercises `lower_stmt` recursing into both `body` and `orelse` --
+        // D-055 classifies a name as
+        // function-local even when its only assignment is nested inside a
+        // conditional, not just when it appears directly in the body.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::StringLiteral("hello".to_string()),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::If {
+                            test: HirExpr::BoolLiteral(true),
+                            body: vec![HirStmt::Assign {
+                                target: "x".to_string(),
+                                value: HirExpr::IntLiteral(1),
+                            }],
+                            orelse: vec![HirStmt::Assign {
+                                target: "x".to_string(),
+                                value: HirExpr::IntLiteral(2),
+                            }],
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::If {
+                        test: MirExpr::BoolLiteral(true),
+                        body: vec![MirStmt::Assign {
+                            target: "x".to_string(),
+                            value: MirExpr::IntLiteral(1)
+                        }],
+                        orelse: vec![MirStmt::Assign {
+                            target: "x".to_string(),
+                            value: MirExpr::IntLiteral(2)
+                        }],
+                    },
+                    MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int
+                    })),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_local_first_assigned_inside_a_while_body_shadows_a_module_global() {
+        // Exercises `lower_stmt` recursing into a `While` body.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::StringLiteral("hello".to_string()),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::While {
+                            test: HirExpr::BoolLiteral(false),
+                            body: vec![HirStmt::Assign {
+                                target: "x".to_string(),
+                                value: HirExpr::IntLiteral(1),
+                            }],
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::While {
+                        test: MirExpr::BoolLiteral(false),
+                        body: vec![MirStmt::Assign {
+                            target: "x".to_string(),
+                            value: MirExpr::IntLiteral(1)
+                        }],
+                    },
+                    MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int
+                    })),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_local_first_assigned_inside_a_for_range_body_shadows_a_module_global() {
+        // Exercises `lower_stmt` recursing into a `ForRange` body (distinct from the loop variable
+        // itself, already covered by
+        // `a_for_range_variable_shadowing_a_module_global_resolves_its_own_type`).
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::StringLiteral("hello".to_string()),
+                }),
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::ForRange {
+                            var: "loop_i".to_string(),
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(3),
+                            step: HirExpr::IntLiteral(1),
+                            body: vec![HirStmt::Assign {
+                                target: "x".to_string(),
+                                value: HirExpr::IntLiteral(1),
+                            }],
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    MirStmt::ForRange {
+                        var: "loop_i".to_string(),
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::IntLiteral(3),
+                        step: MirExpr::IntLiteral(1),
+                        body: vec![MirStmt::Assign {
+                            target: "x".to_string(),
+                            value: MirExpr::IntLiteral(1)
+                        }],
+                    },
+                    MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int
+                    })),
+                ],
+            }
+        );
+    }
+
+    #[test]
     fn mir_expr_ty_covers_every_variant() {
         assert_eq!(MirExpr::IntLiteral(1).ty(), Ty::Int);
         assert_eq!(MirExpr::FloatLiteral(1.0).ty(), Ty::Float);

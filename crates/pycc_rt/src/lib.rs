@@ -326,12 +326,15 @@ pub extern "C" fn pycc_rt_int_sub(a: i64, b: i64) -> i64 {
 fn int_mul(a: i64, b: i64) -> i64 {
     require_smallint(a, "multiplying");
     require_smallint(b, "multiplying");
-    untag_smallint(a)
-        .checked_mul(untag_smallint(b))
+    // Two tagged operands are each at most 62 magnitude bits, so their exact
+    // product always fits in i128. Keep the tagged fast path when possible and
+    // promote only the result, matching add/sub without requiring general
+    // bigint multiplication yet.
+    let product = untag_smallint(a) as i128 * untag_smallint(b) as i128;
+    i64::try_from(product)
+        .ok()
         .and_then(fits_smallint)
-        .unwrap_or_else(|| {
-            panic!("pycc_rt: integer overflow (bigint promotion is not implemented yet)")
-        })
+        .unwrap_or_else(|| tag_bigint(bigint_from_i128(product)))
 }
 
 #[unsafe(no_mangle)]
@@ -574,24 +577,64 @@ pub extern "C" fn pycc_rt_int_to_float(tagged: i64) -> f64 {
     int_to_float(tagged)
 }
 
-/// Python's `//` on `float`: floors toward negative infinity, not
-/// truncation toward zero (matches `int_floordiv`'s own semantics, just
-/// without the tagging/overflow bookkeeping a `float` doesn't need).
-#[unsafe(no_mangle)]
-pub extern "C" fn pycc_rt_float_floordiv(a: f64, b: f64) -> f64 {
-    (a / b).floor()
+/// Python true division rejects both positive and negative zero divisors.
+/// Until v0.3's exception machinery exists, a runtime panic becomes an
+/// explicit process failure at the plain-C ABI boundary.
+fn float_div(a: f64, b: f64) -> f64 {
+    if b == 0.0 {
+        panic!("pycc_rt: float division by zero");
+    }
+    a / b
 }
 
-/// Python's `%` on `float`: result takes the divisor's sign (matches
-/// `int_floormod`'s own semantics).
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_float_div(a: f64, b: f64) -> f64 {
+    float_div(a, b)
+}
+
+/// CPython-compatible float floor-division and modulo. Computing both from
+/// the same adjusted remainder avoids the off-by-one quotient produced by a
+/// naive `(a / b).floor()` for values such as `1.0 // 0.1`.
+fn float_divmod(a: f64, b: f64) -> (f64, f64) {
+    if b == 0.0 {
+        panic!("pycc_rt: float division or modulo by zero");
+    }
+
+    let mut modulo = a % b;
+    let mut div = (a - modulo) / b;
+    if modulo != 0.0 {
+        if (b < 0.0) != (modulo < 0.0) {
+            modulo += b;
+            div -= 1.0;
+        }
+    } else {
+        modulo = 0.0_f64.copysign(b);
+    }
+
+    let floordiv = if div != 0.0 {
+        let mut floored = div.floor();
+        if div - floored > 0.5 {
+            floored += 1.0;
+        }
+        floored
+    } else {
+        0.0_f64.copysign(a / b)
+    };
+    (floordiv, modulo)
+}
+
+/// Python's `//` on `float`: floors toward negative infinity and snaps the
+/// quotient the same way CPython does after floating-point remainder error.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_float_floordiv(a: f64, b: f64) -> f64 {
+    float_divmod(a, b).0
+}
+
+/// Python's `%` on `float`: result takes the divisor's sign, including
+/// signed zero.
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_float_floormod(a: f64, b: f64) -> f64 {
-    let r = a % b;
-    if r != 0.0 && (r < 0.0) != (b < 0.0) {
-        r + b
-    } else {
-        r
-    }
+    float_divmod(a, b).1
 }
 
 /// Python's `**` on `float`: unlike `int_pow`, a negative exponent is
@@ -988,11 +1031,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "integer overflow")]
-    fn pycc_rt_int_mul_panics_on_overflow_before_bigint_promotion_exists() {
-        // Same rationale as `pycc_rt_int_sub_panics_...` above: `int_mul`'s
-        // own overflow closure was otherwise never exercised.
-        int_mul(tag_smallint(i64::MAX >> 1), tag_smallint(2));
+    fn pycc_rt_int_mul_promotes_a_product_outside_the_smallint_range() {
+        let product = pycc_rt_int_mul(tag_smallint(i64::MAX >> 1), tag_smallint(2));
+        assert!(!is_smallint(product));
+        let text = pycc_rt_int_to_str(product);
+        assert_eq!(unsafe { &*text }.bytes(), b"9223372036854775806");
+        unsafe { pycc_rt_str_decref(text) };
     }
 
     #[test]
@@ -1167,12 +1211,47 @@ mod tests {
     fn pycc_rt_float_floordiv_matches_python_floor_semantics() {
         assert_eq!(pycc_rt_float_floordiv(7.0, 2.0), 3.0);
         assert_eq!(pycc_rt_float_floordiv(-7.0, 2.0), -4.0);
+        assert_eq!(pycc_rt_float_floordiv(1.0, 0.1), 9.0);
+
+        // Exercises CPython's quotient snap-up correction: the intermediate
+        // quotient is -5603572390.000001, whose `floor()` alone is one low.
+        assert_eq!(
+            pycc_rt_float_floordiv(
+                f64::from_bits(0x8ec2_3615_82f2_e770),
+                f64::from_bits(0x0cbb_eab0_bc9a_0e0c),
+            ),
+            -5_603_572_390.0
+        );
+
+        let negative_zero = pycc_rt_float_floordiv(-0.0, 2.0);
+        assert_eq!(negative_zero, 0.0);
+        assert!(negative_zero.is_sign_negative());
+    }
+
+    #[test]
+    fn pycc_rt_float_div_computes_a_nonzero_division() {
+        assert_eq!(pycc_rt_float_div(7.0, 2.0), 3.5);
+    }
+
+    #[test]
+    #[should_panic(expected = "float division by zero")]
+    fn float_div_rejects_a_zero_divisor() {
+        float_div(1.0, -0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "float division or modulo by zero")]
+    fn float_divmod_rejects_a_zero_divisor() {
+        float_divmod(1.0, 0.0);
     }
 
     #[test]
     fn pycc_rt_float_floormod_matches_python_floor_semantics() {
         assert_eq!(pycc_rt_float_floormod(-7.0, 2.0), 1.0);
         assert_eq!(pycc_rt_float_floormod(7.0, 2.0), 1.0);
+        let negative_zero = pycc_rt_float_floormod(8.0, -2.0);
+        assert_eq!(negative_zero, 0.0);
+        assert!(negative_zero.is_sign_negative());
     }
 
     #[test]

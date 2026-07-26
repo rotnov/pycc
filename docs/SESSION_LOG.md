@@ -11,19 +11,20 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-26 — PR #132 current-main merge validated; concurrent head pending integration
+## 2026-07-26 — PR #132 concurrent merge and all live review fixes validated locally
 
-**Snapshot evidence:** local task branch `codex/fix-pr132-review-0764` has
-patch parent `0f19f225f81ebca5166708cec74b010d2d47336e` and a staged, uncommitted
-merge with exact refreshed `origin/main@78f5dcc0c3fd7c88fdc87e716e294fb0fc5cdb53`.
-The published [PR #132](https://github.com/rotnov/pycc/pull/132) advanced
-concurrently to `c63de02be35321b4a8b66821fb5cd04774056558`; GitHub reports it open,
-non-draft, conflicting, and based on the earlier `main@128285f`. Its only
-current check is a successful trusted `audit`; required PR CI has not started.
-The latest GitHub Codex review added four unresolved live findings: bigint
-multiplication promotion, pre-initialization globals, CPython-compatible float
-floor division, and explicit float division-by-zero failure. Older review
-threads also remain unresolved, although several are already outdated.
+**Snapshot evidence:** local task branch `codex/fix-pr132-review-0764` is at
+`c461edac12d0f4fc1e1fd3c464f22dc892ef6555`, which already combines review-fix
+patch `0f19f225f81ebca5166708cec74b010d2d47336e` with exact default branch
+`origin/main@78f5dcc0c3fd7c88fdc87e716e294fb0fc5cdb53`. A staged merge with
+`c63de02be35321b4a8b66821fb5cd04774056558` is in progress. A final fetch left
+the remote default branch unchanged and showed published
+[PR #132](https://github.com/rotnov/pycc/pull/132) at
+`5ff10f1ecd619bde410dfbf2ad3997f0d382cfeb`, a merge whose only parents are that
+same `c63de02` and `origin/main@78f5dcc`; it contains no unique non-merge commit.
+GitHub reports the PR open, non-draft, and blocked on conversations. All required
+checks on `5ff10f1` are green. Fourteen review threads are unresolved, eight of
+them non-outdated; all eight describe behavior covered by the staged local tree.
 
 **Validated local merge:** functions see completed module bindings; globals
 and maybe-bound non-parameter locals carry runtime initialization flags;
@@ -31,37 +32,92 @@ parameters remain initialized and reassignable; local allocations dominate
 their uses; accepted `bool`→`int` boundaries use the tagged representation; a
 `for` uses hidden SSA induction state so empty ranges, post-loop targets,
 negative steps, and body reassignment match Python; two-return merges are
-terminated; and `None` in an f-string renders as `None`. Current docs and site
-projections describe unary rejection as a spanned `C0001` capability diagnostic
-before MIR/backend lowering. This staged tree already addresses the new
-pre-initialization-global finding; the other three newest findings remain to be
-reconciled after the concurrent remote head is integrated.
+terminated; and `None` in an f-string renders as `None` while malformed
+`None`-typed non-call interpolation fails explicitly. The newest numeric fixes
+promote an out-of-range product of two smallints, implement CPython's adjusted
+float divmod algorithm (including signed zero and the `1.0 // 0.1 == 9.0`
+case), and route true division through a zero-divisor guard. Multiplication with
+an already-promoted bigint operand remains the documented boundary.
 
 **Local evidence:** the exact hard command
 `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100`
-passed with 14,850/14,850 regions and 10,485/10,485 lines. Workspace tests,
+passed with 15,844/15,844 regions and 11,391/11,391 lines. Workspace tests,
 Clippy with `-D warnings`, fresh `cargo doc`, site checks and mutation
 self-tests, 220 Python policy tests, Ruby CI-permission and roadmap-evidence
 suites, agent policy/assets validation, Codex/Claude alpha-skill evals, both
-marketplace checks, and `git diff --check` passed. The pinned staged iEvo review
-found only the stale version of this handoff entry; implementation and
-normative docs were otherwise clean. The known iEvo stale-catalog defect remains
-deduplicated in upstream
-[`ievo-ai/skills#459`](https://github.com/ievo-ai/skills/issues/459); no new
-confirmed iEvo defect was found.
+marketplace checks, and `git diff --check` passed. A final independent pinned
+iEvo review found one non-blocking conflict-resolution artifact: imported test
+names and comments still described allocation helpers removed by the merged
+implementation. Those descriptions now cover the actual module-global and
+preclassified function-local storage paths, the focused 119-test codegen suite
+passes, and the required follow-up deep review is clean with no findings. The
+known iEvo stale-catalog defect remains deduplicated in
+upstream [`ievo-ai/skills#459`](https://github.com/ievo-ai/skills/issues/459);
+no new confirmed iEvo defect was found.
 
-**Required next steps:** rerun the pinned staged review after this refresh,
-commit the current `origin/main` merge, then integrate concurrent PR head
-`c63de02` additively without overwriting it. Resolve overlap, address all four
-new live findings, rerun the full hard coverage/policy/documentation/local-review
-loop, push normally to `feat/v0-1-pr5-codegen-depth`, and resolve only findings
-verified against the resulting remote head. D-068 makes GitHub Codex review
-optional, but the user explicitly requested it; request one exact
-`@codex review` only for a resulting head not already reviewed, and do not treat
-asynchronous availability as a required gate. Merge only after required CI is
-green and no actionable thread remains. Monitor current open PRs, new merges,
-current checks, and current review threads; PR #119/#125 references are
-historical governance records, not live monitoring targets.
+**Required next steps:** commit the independently reviewed staged `c63de02`
+merge, then record `5ff10f1` as an additional merge parent without
+replacing the independently reviewed resolution (the remote merge has no
+unique non-merge input). Push normally to `feat/v0-1-pr5-codegen-depth`, resolve
+only threads verified against the resulting remote head, and request the
+user-required exact `@codex review` once for that new head. Merge only after the
+new head's required CI is green and no actionable thread remains. Monitor
+current open PRs, new merges, current checks, and current review threads; PR
+#119/#125 references are historical governance records, not live monitoring
+targets.
+
+## 2026-07-26 — PR #132 blocked on `frontend-perf-gate`; likely order/thermal drift, not a real regression; escalated to the user
+
+**Snapshot evidence:** head `1ae1b3c` (fifth merge round). CI run
+[30205958740](https://github.com/rotnov/pycc/actions/runs/30205958740):
+every job passed except `frontend-perf-gate`, which failed with
+`FAIL: pycc check replicated frontend median regressed 6.1931% (threshold: 2.00%)` —
+previous replicate medians `6686.28, 6777.54, 7088.44, 7228.73, 7185.40 ns`,
+current replicate medians `8498.72, 7405.25, 7527.44, 8023.83, 7353.21 ns`.
+(A first attempt on this same head also failed
+`frontend-perf-measure` on a plain DNS lookup failure fetching the Rust
+toolchain — pure infra, correctly retried via `gh run rerun --failed`,
+unrelated to the finding below.)
+
+**Why this looks like the gate's own known order/thermal-drift gap, not
+a PR-5 regression:**
+1. `git diff 45545bb...HEAD -- crates/pycc_parser crates/pycc_hir crates/pycc_types benches/ Cargo.toml Cargo.lock rust-toolchain.toml`
+   is empty, and neither `pycc_hir` nor `pycc_types`'s `Cargo.toml`
+   depends on `pycc_mir`/`pycc_codegen`/`pycc_rt`. The exact code path
+   this benchmark measures (`pycc_parser::parse` → `pycc_hir::lower_checked`
+   → `pycc_types::check` over a fixed fib/print fixture, all in-process,
+   no CLI subprocess spawn) is byte-for-byte identical to the predecessor.
+   A real algorithmic regression in the measured path is not possible.
+2. The two five-value sets show complete separation: every one of the 5
+   current replicates (min `7353.21`) is slower than every one of the 5
+   previous replicates (max `7228.73`). Under random per-round noise that
+   has roughly a 1-in-252 (~0.4%) chance; a full separation like this
+   points to a systematic effect, not noise scattered around a stable
+   mean. The measurement order is fixed (all 5 predecessor rounds run
+   first, then all 5 candidate rounds) — D-062's own text still runs
+   sequentially, and D-056's own text already names "order and thermal
+   drift inside one hosted runner" as a gap neither D-051 nor D-062
+   removes (interleaving was explicitly rejected on trust-boundary
+   grounds: candidate code must not run before the predecessor upload is
+   sealed).
+
+**Why not just retry:** D-051/D-056/D-062 all explicitly reject
+"rerun until one pair passes" as selection bias, and this session already
+burned five merge-conflict rounds while `main` kept advancing during
+each CI wait — a retry is also a bet that the same host-level order
+effect doesn't recur, not a fix for anything PR-5 controls. Widening the
+gate's classifier or changing its measurement order is the concurrent
+actor's byte-exact-reviewed CI-workflow domain, not something this PR
+can or should patch as a side effect of shipping compiler work.
+
+**Escalated to the user** with the two facts above, and three options:
+one documented probe re-run, a D-054-style audited exception for this
+one merge, or pausing/adjusting the gate's classifier so this stops
+recurring. Full CI check list at
+[the failed run](https://github.com/rotnov/pycc/actions/runs/30205958740).
+No action taken on the gate itself pending that decision; the fifth
+merge round's local verification (tests/clippy/doc/100% coverage/evals)
+already passed before this push.
 
 ## 2026-07-26 — PR #51 performance repair integrated with current main
 

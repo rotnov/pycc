@@ -72,6 +72,7 @@ struct RtFns<'ctx> {
     int_truthy: FunctionValue<'ctx>,
     range_continue: FunctionValue<'ctx>,
     int_to_float: FunctionValue<'ctx>,
+    float_div: FunctionValue<'ctx>,
     float_floordiv: FunctionValue<'ctx>,
     float_floormod: FunctionValue<'ctx>,
     float_pow: FunctionValue<'ctx>,
@@ -145,6 +146,10 @@ fn declare_rt_functions<'ctx>(
         int_to_float: declare(
             "pycc_rt_int_to_float",
             f64_type.fn_type(&[i64_type.into()], false),
+        ),
+        float_div: declare(
+            "pycc_rt_float_div",
+            f64_type.fn_type(&[f64_type.into(), f64_type.into()], false),
         ),
         float_floordiv: declare(
             "pycc_rt_float_floordiv",
@@ -636,11 +641,9 @@ fn emit_expr<'ctx>(
                                 .build_float_mul(l, r, "fmul")
                                 .expect("build_float_mul should not fail for two f64 operands"),
                         ),
-                        pycc_mir::BinOpKind::Div => Scalar::Float(
-                            builder
-                                .build_float_div(l, r, "fdiv")
-                                .expect("build_float_div should not fail for two f64 operands"),
-                        ),
+                        pycc_mir::BinOpKind::Div => {
+                            Scalar::Float(build_float_rt_binop(builder, rt.float_div, l, r))
+                        }
                         // Each arm binds its own `rt_fn` directly (rather
                         // than a shared `FloorDiv | Mod | Pow` arm re-matching
                         // `op` to pick one) so there is no redundant,
@@ -882,6 +885,12 @@ fn emit_expr<'ctx>(
                     }
                     pycc_mir::MirFStringPart::Interpolation(inner) => {
                         if inner.ty() == pycc_mir::Ty::None {
+                            if !matches!(inner.as_ref(), MirExpr::Call { .. }) {
+                                panic!(
+                                    "pycc_codegen: interpolating a `None`-typed value that isn't a \
+                                     direct call result is not supported yet"
+                                );
+                            }
                             emit_expr(context, builder, module, rt, user_functions, locals, inner);
                             emit_string_literal(context, builder, module, rt, "None")
                         } else {
@@ -3176,6 +3185,57 @@ mod tests {
     }
 
     #[test]
+    fn a_function_reads_a_module_level_global_it_does_not_itself_assign() {
+        // `x = 5` ; `def f() -> int:\n    return x` ; `print(f())` -- must
+        // print `5`. Before this fix, every function's `fn_locals` map
+        // started empty (seeded only with its own parameters), and every
+        // top-level name lived only in `main`'s own separate
+        // `top_level_locals` map -- entirely discarded once `main`'s body
+        // finished emitting, never visible to any function's own codegen.
+        // `emit_expr`'s `Name` arm panicked ("no local slot") the moment a
+        // function body read a module-level global it did not itself
+        // assign, even though `pycc_types` (D-055) and `pycc_mir` (this
+        // file's own sibling fix) both correctly accept and type this
+        // program. Fixed by giving every module-level binding real
+        // (non-stack) LLVM global storage and seeding each function's
+        // `fn_locals` map from those slots before parameters and lexical
+        // locals override same-named entries.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::IntLiteral(5),
+                }),
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("function_reads_module_global");
+        let obj_path = dir.join("function_reads_module_global.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("function_reads_module_global");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"5\n");
+    }
+
+    #[test]
     fn compiles_an_if_else_choosing_the_correct_branch_at_runtime() {
         // `x = 1; if x < 2: print(10) else: print(20)` -- must print 10.
         let mir = MirModule {
@@ -3384,6 +3444,57 @@ mod tests {
     }
 
     #[test]
+    fn a_while_loop_body_that_always_returns_skips_its_own_trailing_branch() {
+        // `def f() -> int:\n    while True:\n        return 1\n    return 2`
+        // ; `print(f())` -- must print `1`. The trailing `return 2` is
+        // unreachable dead code, present only because `pycc_types`' T0022
+        // fallthrough check (`block_always_returns`) always treats a
+        // `while`/`for` loop as *not* provably exhaustive on its own
+        // (deferred to issue #118, per D-055), so a bare `while True: return
+        // 1` with nothing after it would never actually be accepted source
+        // -- this shape is what real accepted source produces instead.
+        // Distinct region from every other `while` test in this file, all
+        // of whose *loop bodies* fall through normally and so always take
+        // `emit_body_then_branch`'s own trailing
+        // `build_unconditional_branch(test_bb)` back to the loop test: here
+        // the loop body's own `return` already terminates it, so that
+        // helper's terminator check must skip building a second (invalid)
+        // terminator on top of it.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        MirStmt::While {
+                            test: MirExpr::BoolLiteral(true),
+                            body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(1)))],
+                        },
+                        MirStmt::Return(Some(MirExpr::IntLiteral(2))),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("while_body_always_returns");
+        let obj_path = dir.join("while_body_always_returns.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("while_body_always_returns");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
     fn compiles_a_for_range_loop_with_a_positive_step() {
         // `for i in range(0, 6, 2): print(i)` -- prints 0, 2, 4.
         let mir = MirModule {
@@ -3409,6 +3520,55 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"0\n2\n4\n");
+    }
+
+    #[test]
+    fn a_second_top_level_for_range_loop_reusing_a_loop_variable_name_is_not_redeclared() {
+        // `for i in range(0, 2, 1): print(i)` followed by a second, separate
+        // `for i in range(0, 3, 1): print(i)` -- both loops share the same
+        // module-level loop variable name `i`. Exercises
+        // `collect_stmt_bindings`'s `ForRange` arm with an already-present
+        // `BTreeMap` entry: the second occurrence must not re-declare or
+        // change the type of its global slot.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::ForRange {
+                    var: "i".to_string(),
+                    start: MirExpr::IntLiteral(0),
+                    stop: MirExpr::IntLiteral(2),
+                    step: MirExpr::IntLiteral(1),
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        }],
+                        ty: Ty::None,
+                    })],
+                }),
+                MirItem::TopLevelStmt(MirStmt::ForRange {
+                    var: "i".to_string(),
+                    start: MirExpr::IntLiteral(0),
+                    stop: MirExpr::IntLiteral(3),
+                    step: MirExpr::IntLiteral(1),
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        }],
+                        ty: Ty::None,
+                    })],
+                }),
+            ],
+        };
+        let dir = tempfile_dir("for_range_reused_loop_var");
+        let obj_path = dir.join("for_range_reused_loop_var.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("for_range_reused_loop_var");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"0\n1\n0\n1\n2\n");
     }
 
     #[test]
@@ -3492,6 +3652,78 @@ mod tests {
         let dir = tempfile_dir("for_range_bad_step_panics");
         let obj_path = dir.join("for_range_bad_step_panics.o");
         let _ = compile_to_object(&mir, &obj_path, None);
+    }
+
+    #[test]
+    fn for_range_with_a_bool_start_stop_and_step_all_widen_to_int() {
+        // `for i in range(True, 4, True): print(i)` -- `bool` is an `int`
+        // subtype (`pycc_types::is_assignable`), and
+        // `a_for_range_loop_accepts_bool_as_an_int_subtype` proves
+        // `pycc_types` genuinely accepts a bool-typed `range()` argument for
+        // any of its three positions, so this reaches codegen with
+        // `Scalar::Bool` `start`/`stop`/`step` operands (`stop` is `4`, a
+        // plain int literal, to keep this a short, checkable loop; `start`
+        // and `step` are both `True` to exercise both of that arm's other
+        // two match sites). Before this fix, each position's
+        // `let Scalar::Int(..) = ... else { panic!(...) }` destructure
+        // rejected any non-`Int` scalar outright, crashing the compiler on
+        // this legitimate, accepted program instead of widening `True` to
+        // the tagged int `1` like every other bool-into-int site in this
+        // file already does.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ForRange {
+                var: "i".to_string(),
+                start: MirExpr::BoolLiteral(true),
+                stop: MirExpr::IntLiteral(4),
+                step: MirExpr::BoolLiteral(true),
+                body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })],
+            })],
+        };
+        let dir = tempfile_dir("for_range_bool_start_stop_step");
+        let obj_path = dir.join("for_range_bool_start_stop_step.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("for_range_bool_start_stop_step");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n2\n3\n");
+    }
+
+    #[test]
+    fn for_range_with_a_bool_stop_widens_to_int() {
+        // `for i in range(0, True, 1): print(i)` -- distinct region from
+        // the `start`/`step` coverage above: exercises `stop`'s own
+        // `scalar @ Scalar::Bool(_) => to_tagged_int(...)` arm specifically.
+        // `True` widens to the tagged int `1`, so this loop runs once.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ForRange {
+                var: "i".to_string(),
+                start: MirExpr::IntLiteral(0),
+                stop: MirExpr::BoolLiteral(true),
+                step: MirExpr::IntLiteral(1),
+                body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })],
+            })],
+        };
+        let dir = tempfile_dir("for_range_bool_stop");
+        let obj_path = dir.join("for_range_bool_stop.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("for_range_bool_stop");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"0\n");
     }
 
     #[test]
@@ -3799,6 +4031,59 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"120\n");
+    }
+
+    #[test]
+    fn a_function_returning_from_both_if_and_else_branches_compiles_and_runs() {
+        // `def f(x: int) -> int:\n    if x > 0:\n        return 1\n    else:\n        return 2`
+        // Every real path through `f` returns, so this is legal, ordinary
+        // Python -- but before this fix, `MirStmt::If`'s codegen
+        // unconditionally positioned the builder at `if_merge` after
+        // emitting both branches, even when both had already terminated via
+        // `return` (leaving `if_merge` an unreachable block with zero
+        // predecessors and no terminator of its own). `emit_body`'s caller
+        // (here, `compile_to_object`'s own end-of-function fallthrough
+        // check) then saw a terminator-less current block and raised its
+        // own "fell through without a `return`" internal-error panic --
+        // a false positive for a function that provably always returns.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::If {
+                        test: MirExpr::Compare {
+                            op: CmpOpKind::Gt,
+                            left: Box::new(MirExpr::Name {
+                                name: "x".to_string(),
+                                ty: Ty::Int,
+                            }),
+                            right: Box::new(MirExpr::IntLiteral(0)),
+                            ty: Ty::Bool,
+                        },
+                        body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(1)))],
+                        orelse: vec![MirStmt::Return(Some(MirExpr::IntLiteral(2)))],
+                    }],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![MirExpr::IntLiteral(5)],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("if_else_both_return");
+        let obj_path = dir.join("if_else_both_return.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("if_else_both_return");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
     }
 
     #[test]
@@ -4156,6 +4441,124 @@ mod tests {
         let dir = tempfile_dir("call_with_bool_arg");
         let obj_path = dir.join("call_with_bool_arg.o");
         compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn a_bool_argument_widens_to_int_when_the_parameter_is_declared_int() {
+        // `def f(x: int) -> None: print(x)` ; `f(True)` -- `bool` is an
+        // `int` subtype (`pycc_types::is_assignable`), so this is valid,
+        // type-checked v0.1 Python. `build_call_to` previously passed the
+        // evaluated `Scalar::Bool` (an `i8`) straight through with no
+        // widening, so the built call's argument type didn't match `f`'s
+        // declared `i64` parameter -- `module.verify()` rejected the IR.
+        // `x` is `int`-typed, so `True` widens to the tagged fixnum `1`;
+        // prints "1", not "True".
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        }],
+                        ty: Ty::None,
+                    })],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![MirExpr::BoolLiteral(true)],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("bool_arg_widens_to_int");
+        let obj_path = dir.join("bool_arg_widens_to_int.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("bool_arg_widens_to_int");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    fn a_bool_return_value_widens_to_int_when_the_function_declares_int() {
+        // `def f() -> int: return True` ; `print(f())` -- same
+        // `bool`-is-`int` widening as the argument case above, but for
+        // `MirStmt::Return`'s own value-emission arm: it previously mapped
+        // the returned `Scalar::Bool` straight to a `BasicValueEnum` with no
+        // widening, so the built `ret` instruction's operand type didn't
+        // match `f`'s declared `i64` return type -- `module.verify()`
+        // rejected the IR. Prints "1", not "True".
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::BoolLiteral(true)))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("bool_return_widens_to_int");
+        let obj_path = dir.join("bool_return_widens_to_int.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("bool_return_widens_to_int");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    fn reassigning_an_int_local_with_a_bool_value_widens_it_to_int() {
+        // `x = 5; x = True; print(x)` -- `pycc_types::check_assignment`'s
+        // sticky-first-type rule (T0023) keeps `x` typed `int` throughout
+        // (a later `bool` value is `is_assignable` into it, never rebinding
+        // it), so `pycc_mir` reports every `Name("x")` read as `Ty::Int`.
+        // `emit_assign` previously reused the first assignment's `i64`
+        // alloca but stored the second assignment's raw `Scalar::Bool` (an
+        // `i8`) into it verbatim -- an `i8` store into an `i64`-sized slot,
+        // followed by an `i64` load expecting a full tagged fixnum. Prints
+        // "1" (the tagged fixnum for the `int` value `1`), not "True".
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::IntLiteral(5),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::BoolLiteral(true),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("reassign_bool_into_int");
+        let obj_path = dir.join("reassign_bool_into_int.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("reassign_bool_into_int");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
     }
 
     #[test]
@@ -4636,23 +5039,94 @@ mod tests {
     }
 
     #[test]
+    fn an_int_local_first_assigned_inside_an_if_body_is_readable_after_the_if() {
+        // `if True: x = 1` then `print(x)` at the top level, after the
+        // `if`. `collect_module_bindings` finds `x` before emission, and
+        // `declare_module_globals` creates its process-wide slot and
+        // initialized flag before either branch exists. The taken branch
+        // stores into that dominating slot and marks it initialized, so the
+        // read after `if_merge` succeeds rather than depending on storage
+        // first created inside `if_then`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::BoolLiteral(true),
+                    body: vec![MirStmt::Assign {
+                        target: "x".to_string(),
+                        value: MirExpr::IntLiteral(1),
+                    }],
+                    orelse: vec![],
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("int_first_assign_in_if_body");
+        let obj_path = dir.join("int_first_assign_in_if_body.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("int_first_assign_in_if_body");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    fn an_int_local_assigned_in_both_branches_of_an_if_else_is_readable_after_the_if() {
+        // `if True: x = 1 else: x = 2` then `print(x)` -- module-binding
+        // collection predeclares one global slot and initialized flag for
+        // `x` before codegen reaches either sibling block. Both branches
+        // store into that same dominating slot and mark it initialized, so
+        // the merged read is independent of branch emission order.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::BoolLiteral(true),
+                    body: vec![MirStmt::Assign {
+                        target: "x".to_string(),
+                        value: MirExpr::IntLiteral(1),
+                    }],
+                    orelse: vec![MirStmt::Assign {
+                        target: "x".to_string(),
+                        value: MirExpr::IntLiteral(2),
+                    }],
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("int_first_assign_in_if_else_both");
+        let obj_path = dir.join("int_first_assign_in_if_else_both.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("int_first_assign_in_if_else_both");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
     fn a_str_local_first_assigned_inside_an_if_body_is_freed_at_top_level_completion() {
         // Regression test for a review finding against this file's first
         // `str`-codegen task: `if True: s = "hi"` -- `s`'s *first*
         // assignment executes inside the `if`'s own `then` block, never at
         // the top level directly, and `s` is never read by any user code
-        // either. The final read of `s`'s slot is
-        // `compile_to_object`'s own top-level-locals completion-decref loop,
-        // positioned right before `main`'s `build_return` -- outside the
-        // `if`'s `then` block entirely. Before this fix, `s`'s `alloca`
-        // lived wherever `builder` happened to be positioned when
-        // `emit_assign` first ran for `s` (inside the `then` block), which
-        // does not dominate that later completion-loop read: `module.
-        // verify()` rejected the resulting IR and `compile_to_object`
-        // panicked ("Instruction does not dominate all uses! %final_str =
-        // load ptr, ptr %s"). Preclassifying `s` and hoisting its initialized
-        // `alloca` to the function's entry block fixes this regardless of
-        // which nested block its first assignment executes in (D-074).
+        // either. `collect_module_bindings` predeclares `s` as an internal
+        // pointer global with a null initializer and a separate initialized
+        // flag before `main` is emitted. The nested assignment stores into
+        // that process-wide slot, and the top-level completion pass can load
+        // and decref it after the merge without any CFG-dominance dependency
+        // on the `then` block (D-074).
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::If {
                 test: MirExpr::BoolLiteral(true),
@@ -4674,12 +5148,12 @@ mod tests {
 
     #[test]
     fn a_str_local_assigned_in_both_branches_of_an_if_else_is_freed_at_top_level_completion() {
-        // `if True: s = "hi" else: s = "bye"` -- `s`'s slot is classified
-        // and initialized in the entry block before either branch is
-        // emitted. Both sibling branches then reuse that same dominating
-        // slot, rather than whichever branch is visited first creating it.
-        // This additionally proves the pre-store null/old-value decref path
-        // is safe from either predecessor (D-074).
+        // `if True: s = "hi" else: s = "bye"` -- `s` is classified and
+        // predeclared as one null-initialized module global before either
+        // branch is emitted. Both siblings store into that same slot rather
+        // than whichever branch is visited first creating storage. This
+        // additionally proves the pre-store null/old-value decref path is
+        // safe from either predecessor (D-074).
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::If {
                 test: MirExpr::BoolLiteral(true),
@@ -4705,12 +5179,12 @@ mod tests {
     #[test]
     fn a_str_local_first_assigned_inside_a_while_body_frees_previous_and_final_values() {
         // `i = 0; while i < 3: s = "x"; i = i + 1` -- `s`'s first assignment
-        // happens inside the `while`'s own body block, exercising the same
-        // entry-block-hoisting fix through a loop back-edge instead of an
-        // `if`/`else` merge. The slot is initialized to null in the entry
-        // block, so the emitted pre-store decref is harmless on the first
-        // iteration, frees the previous value on later iterations, and the
-        // top-level completion pass frees the final value (D-074).
+        // happens inside the `while`'s own body block. Its module-global
+        // pointer slot is nevertheless declared with a null initializer
+        // before `main` is emitted, so every loop iteration reuses the same
+        // storage: the pre-store decref is harmless on the first iteration,
+        // frees the previous value on later iterations, and the top-level
+        // completion pass frees the final value (D-074).
         let mir = MirModule {
             items: vec![
                 MirItem::TopLevelStmt(MirStmt::Assign {
@@ -4761,19 +5235,13 @@ mod tests {
     fn a_str_local_never_assigned_on_the_taken_path_decrefs_a_clean_null_at_completion() {
         // `flag = ""; if flag: s = "hi"` -- `flag` is falsy (the empty
         // string), so the `then` block containing `s`'s only assignment
-        // never runs at all. This exercises the *other* half of the same
-        // review finding the three tests above cover: hoisting `s`'s
-        // `alloca` to the entry block only fixes *dominance*; it's the
-        // explicit `store null` `alloca_local_at_entry` also does at entry
-        // that keeps this path safe, since `s`'s slot genuinely holds that
-        // null (never LLVM `undef`) when the top-level completion loop
-        // loads and decrefs it -- `pycc_rt_str_decref`'s own null guard
-        // then safely no-ops. Without the null store (hoisting the
-        // `alloca` alone), this exact path would load `undef` and hand it
-        // to `pycc_rt_str_decref`, which is undefined behavior no null
-        // guard can catch -- so this is the one test that would actually
-        // fail (or crash/UB, not just panic cleanly) if the null store were
-        // ever dropped while the hoist itself stayed in place.
+        // never runs at all. `declare_module_globals` still creates `s`'s
+        // pointer global with a null initializer and its initialized flag
+        // with a false initializer before `main` starts. The top-level
+        // completion pass therefore loads a real null rather than LLVM
+        // `undef`, and `pycc_rt_str_decref` safely no-ops. Dropping that
+        // global initializer would make this path load an indeterminate
+        // pointer even though no Python assignment executed.
         let mir = MirModule {
             items: vec![
                 MirItem::TopLevelStmt(MirStmt::Assign {
@@ -4803,6 +5271,176 @@ mod tests {
             output.status.success(),
             "should run without crashing (null-guarded decref of a never-assigned slot)"
         );
+    }
+
+    #[test]
+    fn a_str_local_first_assigned_inside_a_functions_own_leading_if_body() {
+        // `def f() -> None:\n    if True:\n        s = "hi"` ; `f()` --
+        // function-local collection finds `s` throughout the body before
+        // emitting its leading control flow. `storage_slot_at_entry` creates
+        // the null-initialized pointer slot and false initialized flag while
+        // the builder is still in `f`'s entry block; only then is the `if`
+        // emitted. The nested assignment marks that dominating per-call slot
+        // initialized without creating storage inside `if_then`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::If {
+                        test: MirExpr::BoolLiteral(true),
+                        body: vec![MirStmt::Assign {
+                            target: "s".to_string(),
+                            value: MirExpr::StringLiteral("hi".to_string()),
+                        }],
+                        orelse: vec![],
+                    }],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("str_first_assign_in_fn_leading_if");
+        let obj_path = dir.join("str_first_assign_in_fn_leading_if.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("str_first_assign_in_fn_leading_if");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    fn a_str_local_first_assigned_as_a_functions_own_plain_leading_statement() {
+        // `def f() -> None:\n    s = "hi"` ; `f()` -- the straight-line
+        // counterpart to the leading-`if` test above. Body preclassification
+        // still creates one guarded, null-initialized per-call slot before
+        // statement emission, and the assignment reuses it and flips its
+        // initialized flag.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Assign {
+                        target: "s".to_string(),
+                        value: MirExpr::StringLiteral("hi".to_string()),
+                    }],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("str_first_assign_in_fn_plain");
+        let obj_path = dir.join("str_first_assign_in_fn_plain.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("str_first_assign_in_fn_plain");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success(), "should run without crashing");
+    }
+
+    #[test]
+    fn an_int_local_assigned_in_both_branches_of_a_functions_own_leading_if_else() {
+        // `def f() -> int:\n    if True:\n        x = 1\n    else:\n        x = 2\n    return x`
+        // ; `print(f())` -- must print `1`. Function-local collection
+        // preclassifies `x`, and `storage_slot_at_entry` creates its slot and
+        // initialized flag before the leading `if` is emitted. Both sibling
+        // branches then store into that one dominating per-call slot, and
+        // the return reads the value selected by the executed branch.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        MirStmt::If {
+                            test: MirExpr::BoolLiteral(true),
+                            body: vec![MirStmt::Assign {
+                                target: "x".to_string(),
+                                value: MirExpr::IntLiteral(1),
+                            }],
+                            orelse: vec![MirStmt::Assign {
+                                target: "x".to_string(),
+                                value: MirExpr::IntLiteral(2),
+                            }],
+                        },
+                        MirStmt::Return(Some(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        })),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("int_first_assign_in_fn_leading_if_else");
+        let obj_path = dir.join("int_first_assign_in_fn_leading_if_else.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("int_first_assign_in_fn_leading_if_else");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    fn a_float_local_first_assigned_inside_a_function_uses_preclassified_storage() {
+        // `def f() -> float:\n    y = 2.5\n    return y` ; `print(f())` --
+        // body preclassification creates `y`'s guarded f64 storage in the
+        // function entry block before emission. The plain assignment reuses
+        // that slot and preserves its float representation through the
+        // subsequent return (distinct from the integer and string cases).
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Float,
+                    body: vec![
+                        MirStmt::Assign {
+                            target: "y".to_string(),
+                            value: MirExpr::FloatLiteral(2.5),
+                        },
+                        MirStmt::Return(Some(MirExpr::Name {
+                            name: "y".to_string(),
+                            ty: Ty::Float,
+                        })),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::Float,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("float_first_assign_in_fn");
+        let obj_path = dir.join("float_first_assign_in_fn.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("float_first_assign_in_fn");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"2.5\n");
     }
 
     #[test]
@@ -5256,6 +5894,78 @@ mod tests {
         let dir = tempfile_dir("fstring_str_passthrough");
         let obj_path = dir.join("fstring_str_passthrough.o");
         compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn interpolating_a_none_returning_call_in_an_f_string_renders_none_not_false() {
+        // `def f() -> None:\n    return` ; `s = f"got: {f()}"` ; `print(s)`
+        // -- must print `"got: None"`. Before this fix, a `None`-typed
+        // interpolation's placeholder `Scalar::Bool(0)` (see `emit_expr`'s
+        // `Call` arm doc comment) flowed straight into `to_str`, which has
+        // no way to tell it apart from a genuine `False` -- rendering
+        // `"got: False"` instead.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![MirStmt::Return(None)],
+                },
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::FString(vec![
+                        pycc_mir::MirFStringPart::Literal("got: ".to_string()),
+                        pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::Call {
+                            callee: "f".to_string(),
+                            args: vec![],
+                            ty: Ty::None,
+                        })),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "s".to_string(),
+                        ty: Ty::Str,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("fstring_none_call");
+        let obj_path = dir.join("fstring_none_call.o");
+        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        let bin_path = dir.join("fstring_none_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"got: None\n");
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "interpolating a `None`-typed value that isn't a direct call result is not supported yet"
+    )]
+    fn interpolating_a_none_typed_name_that_isnt_a_direct_call_result_panics() {
+        // Mirrors `printing_a_none_typed_name_that_isnt_a_direct_call_result_
+        // panics`'s own deliberately malformed MIR (a `Name` bound to a
+        // `None`-typed variable is not real `pycc_types` output -- see that
+        // test's own doc comment), exercising the same defensive guard on
+        // the f-string interpolation path instead of `print`'s.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "s".to_string(),
+                value: MirExpr::FString(vec![pycc_mir::MirFStringPart::Interpolation(Box::new(
+                    MirExpr::Name {
+                        name: "y".to_string(),
+                        ty: Ty::None,
+                    },
+                ))]),
+            })],
+        };
+        let dir = tempfile_dir("fstring_none_typed_name_panics");
+        let obj_path = dir.join("fstring_none_typed_name_panics.o");
+        let _ = compile_to_object(&mir, &obj_path, None);
     }
 
     #[test]

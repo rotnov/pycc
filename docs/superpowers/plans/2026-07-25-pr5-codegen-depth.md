@@ -3645,7 +3645,7 @@ git commit -m "feat(pycc_rt,pycc_codegen): f-string codegen and scalar-to-str co
 
 ## Task 9: `int` overflow-to-bigint runtime
 
-**Scope note:** per D-052's own design, this task touches only `pycc_rt` function *bodies* -- every `pycc_rt_int_*` signature is already fixed (Task 3), and `pycc_codegen` needs zero changes: `pycc_rt_int_add`/`pycc_rt_int_sub`/`pycc_rt_int_to_str`/`pycc_rt_int_print` gain real bigint handling; `pycc_rt_int_mul`/`floordiv`/`floormod`/`pow` keep their existing `require_smallint`-triggered panic for a bigint operand (multiplication/division/power on an already-promoted value is a documented, out-of-scope gap for v0.1 -- D-049 itself scopes the bigint mechanism to "overflow-safe arithmetic + `print`, not a general-purpose bignum API surface," and `pycc_rt_int_cmp` keeps D-052's already-recorded bigint-comparison gap unchanged). This keeps the scope to exactly what a realistic `fib`-style program (Task 11) needs: unbounded addition, with everything else either already correct (the fast path, for values that never overflow) or an honest, named "not supported yet."
+**Scope note:** per D-052's own design, this task touches only `pycc_rt` function *bodies* -- every `pycc_rt_int_*` signature is already fixed (Task 3), and `pycc_codegen` needs zero changes: `pycc_rt_int_add`/`pycc_rt_int_sub`/`pycc_rt_int_to_str`/`pycc_rt_int_print` gain real bigint handling; `pycc_rt_int_mul`/`floordiv`/`floormod`/`pow` keep their existing `require_smallint`-triggered panic for a bigint operand (multiplication/division/power on an already-promoted value is a documented, out-of-scope gap for v0.1 -- D-049 itself scopes the bigint mechanism to "overflow-safe arithmetic + `print`, not a general-purpose bignum API surface," and `pycc_rt_int_cmp` keeps D-052's already-recorded bigint-comparison gap unchanged). A later PR-review correction retained that operand boundary but made `pycc_rt_int_mul` promote an out-of-range product when both inputs are still smallints; this does not add general bigint multiplication. This keeps the scope to exactly what a realistic `fib`-style program (Task 11) needs: unbounded addition, with the remaining bigint-operand operations exposed as honest, named "not supported yet" boundaries.
 
 **Files:**
 - Modify: `crates/pycc_rt/src/lib.rs`
@@ -3988,7 +3988,7 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 }
 ```
 
-`pycc_rt_int_mul`/`pycc_rt_int_floordiv`/`pycc_rt_int_floormod`/`pycc_rt_int_pow`/`pycc_rt_int_cmp` are **unchanged** -- their existing `require_smallint(...)` calls already reject a bigint operand with a clear panic, which is exactly this task's intended scope boundary, not an oversight.
+The original Task 9 implementation left `pycc_rt_int_mul`/`pycc_rt_int_floordiv`/`pycc_rt_int_floormod`/`pycc_rt_int_pow`/`pycc_rt_int_cmp` unchanged because their existing `require_smallint(...)` calls reject a bigint operand with a clear panic. A later PR-review correction changed only `pycc_rt_int_mul`'s smallint-result overflow path to promote the exact `i128` product; all five operations still retain the documented bigint-*operand* boundary.
 
 - [ ] **Step 2 run:** `cargo test -p pycc_rt`
 Expected: PASS.
