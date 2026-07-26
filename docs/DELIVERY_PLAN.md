@@ -105,6 +105,17 @@ and requires any contract drift to use its own reviewed transition. Its active
 bytes equal the reviewed D-051 fixture; only that digest is authorized. The
 threshold, required `ci-gate` fan-in, and benchmark itself remain unchanged.
 
+D-056 is the staged successor for residual same-runner order variance. Main
+run 30198852753 failed at `+3.14%` even though `src/`, `crates/`, and every
+already-bound benchmark/build input were unchanged; run 30199477003 later
+passed the same unchanged-input class at `+0.86%`. The prospective workflow
+therefore retains both timings as telemetry but makes them non-blocking only
+when a pre-execution trusted comparison proves the complete executable inputs
+identical. Any `src/` or `crates/` difference still enters D-051's unchanged
+greater-than-2% median comparison. This branch stages the new digest and
+checker under distinct filenames; a separate fresh-base, byte-exact workflow
+activation is required before the policy becomes live.
+
 ## Autonomy policy ("no questions" mechanics)
 
 **Spec is law.** Where an existing doc already decided something, follow it literally. Where the spec is genuinely silent (as with the exact LLVM/inkwell version above), the agent picks the most conservative option that is *actually available in this environment* — never a hypothetical — records it as a new dated entry in [DECISIONS.md](./DECISIONS.md) using its existing template, and continues without stopping.
