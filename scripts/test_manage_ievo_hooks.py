@@ -627,7 +627,9 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 "FutureEvent": {
                     "custom": [
                         "run",
-                        manager.VENDOR_DIRECTORY.joinpath("runtime.sh").as_posix(),
+                        manager.VENDOR_DIRECTORY.joinpath("runtime.sh")
+                        .as_posix()
+                        .replace("/", "\\"),
                     ]
                 }
             }
@@ -635,8 +637,38 @@ class IevoHookLifecycleTests(unittest.TestCase):
 
         self.assertEqual(
             manager.managed_target_references(settings),
-            [("FutureEvent", manager.VENDOR_DIRECTORY)],
+            [("FutureEvent", manager.HOOK_DIRECTORY)],
         )
+
+    def test_localize_rejects_future_managed_hook_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            future_target = manager.HOOK_DIRECTORY / "scripts/future-capture.sh"
+            shared = {
+                "hooks": {
+                    "UserPromptSubmit": [self.group(self.command_entry(target))],
+                    "FutureEvent": [
+                        self.group(self.command_entry(future_target, shell_form=True))
+                    ],
+                }
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            shared_before = (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "unsupported iEvo hook reference",
+            ):
+                manager.localize(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                shared_before,
+            )
+            self.assertFalse((root / manager.CLAUDE_LOCAL).exists())
 
     def test_symlinked_hook_ancestor_blocks_smoke_and_disable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -692,6 +724,36 @@ class IevoHookLifecycleTests(unittest.TestCase):
             )
             self.assertTrue(external_target.is_file())
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
+
+    def test_symlinked_config_ancestor_blocks_disable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            external_claude = workspace / "external-claude"
+            external_claude.mkdir()
+            (root / ".claude").symlink_to(
+                external_claude,
+                target_is_directory=True,
+            )
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            local_path = external_claude / manager.CLAUDE_LOCAL.name
+            local_before = local_path.read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "symlink component",
+            ):
+                manager.disable(root)
+
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
 
 
 if __name__ == "__main__":

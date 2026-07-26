@@ -23,6 +23,7 @@ CLAUDE_LOCAL = Path(".claude/settings.local.json")
 CODEX_LOCAL = Path(".codex/hooks.json")
 FLAG = Path(".ievo/evo-auto.flag")
 SCRIPT_DIRECTORY = Path(".ievo/hooks/scripts")
+HOOK_DIRECTORY = SCRIPT_DIRECTORY.parent
 SCRIPT_TARGETS = {
     "correction-capture": SCRIPT_DIRECTORY / "correction-capture.sh",
     "evo-analysis-nudge": SCRIPT_DIRECTORY / "evo-analysis-nudge.sh",
@@ -275,19 +276,13 @@ def managed_target_references(settings: dict[str, Any]) -> list[ManagedReference
         return []
 
     references: list[ManagedReference] = []
-    managed_targets = (
-        *SCRIPT_TARGETS.values(),
-        *LOCAL_COMPANIONS,
-        VENDOR_DIRECTORY,
-    )
-    target_texts = {target.as_posix(): target for target in managed_targets}
+    managed_prefix = f"{HOOK_DIRECTORY.as_posix()}/"
     for event, value in hooks.items():
         if not isinstance(event, str):
             continue
-        values = tuple(string_values(value))
-        for target_text, target in target_texts.items():
-            if any(target_text in candidate for candidate in values):
-                references.append((event, target))
+        values = (candidate.replace("\\", "/") for candidate in string_values(value))
+        if any(managed_prefix in candidate for candidate in values):
+            references.append((event, HOOK_DIRECTORY))
     return list(dict.fromkeys(references))
 
 
@@ -350,6 +345,11 @@ def ensure_no_symlink_components(root: Path, relative: Path) -> None:
                 )
 
 
+def ensure_safe_lifecycle_paths(root: Path, relatives: Iterable[Path]) -> None:
+    for relative in relatives:
+        ensure_no_symlink_components(root, relative)
+
+
 def existing_targets(root: Path, records: Iterable[HookRecord]) -> None:
     missing: list[str] = []
     unsafe: list[str] = []
@@ -372,6 +372,10 @@ def existing_targets(root: Path, records: Iterable[HookRecord]) -> None:
 
 
 def localize(root: Path) -> None:
+    ensure_safe_lifecycle_paths(
+        root,
+        (CLAUDE_SHARED, CLAUDE_LOCAL, CODEX_LOCAL, FLAG, GITIGNORE),
+    )
     shared = read_json(root, CLAUDE_SHARED, required=True)
     local_value = read_json(root, CLAUDE_LOCAL, required=False)
     local = local_value or {}
@@ -435,6 +439,10 @@ def local_records(root: Path) -> list[HookRecord]:
 
 
 def check(root: Path, *, smoke: bool) -> None:
+    ensure_safe_lifecycle_paths(
+        root,
+        (CLAUDE_SHARED, CLAUDE_LOCAL, CODEX_LOCAL, FLAG, GITIGNORE),
+    )
     shared = read_json(root, CLAUDE_SHARED, required=True)
     assert shared is not None
     without_shared_ievo, shared_records = strip_ievo_entries(shared)
@@ -480,6 +488,7 @@ def remove_path(path: Path) -> None:
 
 
 def disable(root: Path) -> None:
+    ensure_safe_lifecycle_paths(root, (CLAUDE_SHARED, CLAUDE_LOCAL, CODEX_LOCAL))
     removal_targets = [
         *SCRIPT_TARGETS.values(),
         *LOCAL_COMPANIONS,
