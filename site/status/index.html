@@ -273,12 +273,18 @@
               integers, floats, strings, booleans, control flow, recursion, and
               basic f-strings. The required frontend measurement and
               greater-than-2% regression gate run independently of that compiler
-              sequence through <code>ci-gate</code>. This paired gate measures the
-              exact predecessor and candidate sequentially on one hosted runner,
-              seals the predecessor timing before candidate code runs, and
-              compares their medians through a hash-verified predecessor-owned
-              checker. Revision, benchmark-contract, artifact-identity, and
-              comparison drift fail closed.
+              sequence through <code>ci-gate</code>. This source-aware paired gate
+              measures the exact predecessor and candidate sequentially on one
+              hosted runner and seals the predecessor timing before candidate code
+              runs. Before candidate code runs, it classifies the complete
+              <code>src/</code> and <code>crates/</code> trees; the existing contract
+              independently binds every benchmark and build input. Identical
+              executable inputs keep the timing delta as visible, non-blocking
+              environment telemetry. Changed source keeps the hard greater-than-2%
+              median regression block. The gate compares through a hash-verified
+              predecessor-owned checker. Revision, benchmark-contract,
+              executable-input identity, artifact-identity, and comparison drift
+              fail closed.
               The conformance testkit, named demos, and final v0.1 acceptance pass
               follow the code-generation and runtime work.
             </p>

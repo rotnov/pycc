@@ -33,6 +33,7 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ]
 }.freeze
+# Historical audit-fixture digest. The public policy no longer accepts it.
 D51_PAIRED_PERF_CI_WORKFLOW_SHA256 =
   "4b1d11afba108745a2bc375e3447d92ecde843376c3bea95ab32f76b3fc53249"
 D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
@@ -1027,13 +1028,11 @@ def validate_evidence(root, _evidence_ids)
   end
   digest = Digest::SHA256.hexdigest(workflow_text)
   case digest
-  when D51_PAIRED_PERF_CI_WORKFLOW_SHA256
-    validate_perf_gate_baseline_lifecycle(workflow_text, workflow.to_s)
   when D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
     validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
   else
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match the reviewed D-051 active or D-056 prospective CI workflow"
+          "#{workflow}: does not match the reviewed active D-056 CI workflow"
   end
 end
 
