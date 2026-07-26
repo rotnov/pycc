@@ -404,11 +404,11 @@ def localize(root: Path) -> None:
 
     if rewritten_gitignore != original_gitignore:
         atomic_write_text(root, GITIGNORE, rewritten_gitignore)
+    ensure_machine_local_paths_ignored(root)
     if rewritten_local != local and (local_value is not None or claude_records):
         atomic_write_json(root, CLAUDE_LOCAL, rewritten_local)
     if rewritten_shared != shared:
         atomic_write_json(root, CLAUDE_SHARED, rewritten_shared)
-    ensure_machine_local_paths_ignored(root)
 
 
 def flag_enabled(root: Path) -> bool:

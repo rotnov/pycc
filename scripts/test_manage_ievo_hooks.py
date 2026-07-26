@@ -417,6 +417,38 @@ class IevoHookLifecycleTests(unittest.TestCase):
             )
             self.assertFalse((root / manager.CLAUDE_LOCAL).exists())
 
+    def test_localize_checks_effective_ignore_policy_before_config_writes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            shared = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            gitignore = root / manager.GITIGNORE
+            gitignore.write_text(
+                gitignore.read_text(encoding="utf-8")
+                + "!.claude/settings.local.json\n",
+                encoding="utf-8",
+            )
+            shared_before = (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "machine-local iEvo paths are not ignored",
+            ):
+                manager.localize(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                shared_before,
+            )
+            self.assertFalse((root / manager.CLAUDE_LOCAL).exists())
+
     def test_localize_writes_the_local_copy_before_removing_shared_entries(
         self,
     ) -> None:
