@@ -236,7 +236,10 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
 
     def test_feedback_skill_preserves_the_accepted_pr5_boundary(self) -> None:
-        for contract in ("codegen lands in PR-5", "intentional temporary"):
+        for contract in (
+            "using print()'s result as a nested expression is not supported yet",
+            "intentional temporary",
+        ):
             with self.subTest(contract=contract):
                 failures = self.alpha_contract_failures(
                     remove_feedback_text=contract

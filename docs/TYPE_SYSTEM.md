@@ -34,7 +34,9 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   remains the separate definite-assignment work tracked in #118.
 - The first assignment fixes a local variable's inferred type. Later
   assignments must be compatible or produce `T0023`; assigning `bool` to an
-  `int` binding preserves the `int` representation.
+  `int` binding preserves the `int` representation. D-074 carries that
+  decision through MIR and code generation at assignment, argument, return,
+  and `range` representation boundaries.
 - Python numeric semantics apply during inference: `bool` is an `int`
   subtype, mixed `int`/`float` arithmetic promotes to `float`, and true
   division `/` always returns `float` even for two integer operands.
@@ -45,7 +47,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 |---|---|---|
 | `int` | arbitrary precision (CPython-true) | `i64` + overflow promotion to heap bigint — see D-001 |
 | `float` | IEEE 754 double | `f64`, unboxed |
-| `bool` | subtype of `int` | `i1`, unboxed |
+| `bool` | subtype of `int` | `i8`, unboxed; `i1` is transient control-flow state only — see D-061/D-074 |
 | `str` | immutable Unicode | UTF-8 heap, small-string opt — see D-007 |
 | `bytes` / `bytearray` | per CPython | raw buffer |
 | `None` | unit | zero-sized; `T \| None` = nullable/tagged repr |

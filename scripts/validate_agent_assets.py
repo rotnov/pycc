@@ -48,7 +48,7 @@ FEEDBACK_CONSENT_GUARDS = (
     "make no external change",
     "sanitize every outbound query",
     "user-authored code",
-    "codegen lands in PR-5",
+    "using print()'s result as a nested expression is not supported yet",
     "intentional temporary",
 )
 ALPHA_EVAL_RUNNERS = {

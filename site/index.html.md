@@ -27,15 +27,16 @@ No project code is handwritten by a human.
 
 ## Honest status
 
-pycc is pre-alpha and is not ready for production. The repository contains a
-broadened v0.1 frontend plus a narrower native backend.
+pycc is pre-alpha and is not ready for production. The repository contains an
+implemented v0.1 frontend and native backend with documented gaps.
 `pycc check` now parses and type-checks the v0.1 frontend: arithmetic,
 comparisons, assignments, function calls and returns, recursion, control flow,
 primitive values, `range`, and basic f-strings. It enforces public annotations,
 rejects `Any`, infers private-helper signatures, and renders human or JSON
-diagnostics. `pycc build` and `pycc run` still compile only the original small
-source-to-native slice; full code generation, runtime behavior, conformance,
-and production readiness remain roadmap work.
+diagnostics. `pycc build` and `pycc run` compile that implemented surface through MIR,
+LLVM, the host linker, and the native runtime. Documented representation and
+lifetime gaps, conformance, named demos, final v0.1 acceptance, and production
+readiness remain roadmap work.
 
 Examples and CLI commands on the website are design targets unless explicitly
 identified as implemented behavior.

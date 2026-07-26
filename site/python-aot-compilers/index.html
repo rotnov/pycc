@@ -50,7 +50,7 @@
             "name": "Python AOT compilers compared — where pycc fits",
             "description": "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from official docs: language contract, output artifact, runtime model, and current positioning.",
             "inLanguage": "en",
-            "dateModified": "2026-07-25",
+            "dateModified": "2026-07-26",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -175,7 +175,7 @@
                     <th scope="row">pycc</th>
                     <td>Typed, standard Python 3.14 is the v1 design target</td>
                     <td>Standalone native executable without CPython is the design target</td>
-                    <td>Pre-alpha; frontend checker implemented for the v0.1 subset, while native code generation remains slice-only</td>
+                    <td>Pre-alpha; v0.1 frontend and native backend implemented with documented gaps; not production-ready</td>
                   </tr>
                   <tr>
                     <th scope="row">LPython</th>
@@ -246,11 +246,11 @@
               pycc aims to combine hard compile-time type enforcement,
               standard Python syntax, a native executable without an embedded
               CPython interpreter, and a five-target portability gate. The
-              repository now proves two different depths: <code>pycc
-              check</code> parses and type-checks the v0.1 frontend surface,
-              while <code>build</code> and <code>run</code> still prove only a
-              small source-to-native vertical slice. Broad backend and runtime
-              semantics are not implemented, and no production release exists.
+              repository now parses, type-checks, and compiles the implemented
+              v0.1 surface through MIR, LLVM, and its native runtime. Explicit
+              representation and lifetime gaps remain, the conformance and
+              final acceptance work is unfinished, and no production release
+              exists.
             </p>
             <div class="callout">
               <strong>Do not choose pycc for production today.</strong>

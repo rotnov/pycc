@@ -86,6 +86,7 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         .arg("-o")
         .arg(out);
     add_windows_system_libs(&mut cmd);
+    add_linux_system_libs(&mut cmd);
     let status = cmd.status().expect("the linker driver should run");
     if status.success() {
         Ok(())
@@ -272,6 +273,27 @@ fn add_windows_system_libs(cmd: &mut std::process::Command) {
 #[cfg(not(windows))]
 fn add_windows_system_libs(_cmd: &mut std::process::Command) {}
 
+/// `pycc_rt`'s `f64::powf` (used by `float ** float`, see D-001/RUNTIME.md's
+/// float support) lowers to a call to the C library's `pow` -- part of
+/// `libm`, not `libc`. macOS folds `libm` into `libSystem`, which every link
+/// already pulls in implicitly, and Windows's UCRT bundles it too, so
+/// neither platform needs an explicit flag (confirmed: this exact
+/// unmodified code already links and runs `native-build-test` on both). On
+/// Linux, GCC's and clang's default driver invocation does not add `-lm` on
+/// its own: PR-5's own CI run surfaced this directly (`native-build-test
+/// (ubuntu-latest, x86_64-unknown-linux-gnu)` and `(ubuntu-24.04-arm,
+/// aarch64-unknown-linux-gnu)` both failed link with "undefined reference to
+/// `pow'"), so every Linux link needs `-lm` explicitly, both with and
+/// without `--target` (see `linker_command`'s two Linux-reachable paths
+/// above).
+#[cfg(target_os = "linux")]
+fn add_linux_system_libs(cmd: &mut std::process::Command) {
+    cmd.arg("-lm");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn add_linux_system_libs(_cmd: &mut std::process::Command) {}
+
 fn run(path: &str) -> ExitCode {
     let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
     if let Err(code) = try_build(
@@ -284,7 +306,21 @@ fn run(path: &str) -> ExitCode {
     let status = std::process::Command::new(&out)
         .status()
         .expect("built binary should run");
-    ExitCode::from(status.code().unwrap_or(1) as u8)
+    ExitCode::from(exit_code_for_run(status) as u8)
+}
+
+/// `Command::status()` blocks until the child has fully exited, so
+/// `.code()` is `None` only on Unix, and only when the child was
+/// terminated by a signal rather than exiting normally (Rust's own docs:
+/// "this will return `None` on Unix if the process was terminated by a
+/// signal" -- Windows processes always report a definite code). That is
+/// exactly what happens when a `pycc_rt` panic crosses a plain
+/// (non-unwinding) `extern "C"` boundary and aborts the process
+/// (`SIGABRT`), so it maps to the `101` CLI_SPEC.md promises for
+/// "compiled program panicked/uncaught exception" instead of silently
+/// falling back to `1`.
+fn exit_code_for_run(status: std::process::ExitStatus) -> i32 {
+    status.code().unwrap_or(101)
 }
 
 /// `target: None` (the common case) returns this workspace's ordinary

@@ -86,7 +86,7 @@ thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
 They are intentionally absent from `skills-lock.json`, `rotnov/skills`, and
 skills.sh until their trigger and output evals mature.
 
-`pycc` distinguishes the implemented compiler slice from planned
+`pycc` distinguishes the implemented v0.1 compiler surface from planned
 specifications before running commands. `pycc-feedback` may reproduce,
 minimize, sanitize, run sanitized duplicate searches, and prepare a public
 GitHub draft without approval. Non-public search terms require a separate
@@ -100,11 +100,11 @@ both the Codex wrapper and the Claude Code canonical entrypoint. The primary
 freshly built compiler, executes the generated binary and the `pycc run` path,
 and checks their exact output. Its diagnostic scenario proves that the current
 strict `check` path emits `T0021` before separately observing that the planned
-`--fix` flag is still rejected. Its backend scenario proves that the same
-inferred-assignment fixture passes `check` before `build` reaches the current
-exit-101 `pycc_mir` PR-5 boundary, so the skill must classify the raw public-CLI
-panic as D-035's intentional temporary alpha gap rather than a reportable
-defect. The `pycc-feedback` cases exercise refusal to report that accepted
+`--fix` flag is still rejected. Its backend scenario proves that a
+`print()`-result-as-nested-expression fixture passes `check` before `build`
+reaches the current exit-101 `pycc_codegen` boundary, so the skill must
+classify the raw public-CLI panic as D-072's intentional temporary alpha gap
+rather than a reportable defect. The `pycc-feedback` cases exercise refusal to report that accepted
 boundary, private-source refusal, and context-free-consent invariants through
 a fail-closed safety oracle that cannot perform a network write. All four
 reviewed `i-have-an-issue` scenarios validate their distinct

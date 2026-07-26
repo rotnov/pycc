@@ -26,6 +26,8 @@ MIR (typed SSA, ownership-annotated)
 LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pycc_rt + pycc_std)
 ```
 
+**Current state (through PR-5):** the diagram above is the v1.0 target. As of PR-5, `pycc_own` does not exist (deferred to v0.5, per DELIVERY_PLAN.md's crate scope), so there is no separate ownership-analysis stage and no THIR; `pycc_types` produces a checked HIR directly, and `pycc_mir`'s `MIR` is a typed *structural mirror* of HIR (D-057), not the ownership-annotated SSA form shown above -- LLVM codegen uses one `alloca` per local/parameter and relies on no optimization pass, matching this project's `--debug`-only v0.1 profile. The `optimizations` stage does not exist yet either. This is a deliberate, currently-accepted gap between the target architecture and today's implementation, not an unplanned deviation.
+
 ## Workspace crates (Rust 1.97+, edition 2024)
 
 | Crate | Role |
@@ -58,11 +60,19 @@ concrete private-helper signatures use `pycc_types::check_and_resolve`, which
 performs the same validation and returns HIR with those signatures
 materialized.
 
-`pycc check` stops after the check-only frontend pipeline. The MIR/backend
-boundary is deliberately narrower until PR-5: it currently lowers only
-integer-literal `print()` calls and zero-argument user-function calls. Other
-valid frontend constructs reach the explicit D-035 PR-5 boundary in
-`pycc_mir` rather than being advertised as code-generation support.
+`pycc check` stops after the check-only frontend pipeline. `build`/`run`
+continue through `pycc_mir` and `pycc_codegen` into the full v0.1 language
+surface as of PR-5 (arithmetic including `int` overflow-to-bigint, `if`/
+`while`/`for`+`range`, functions with real parameters/return values and
+recursion, `int`/`float`/`bool`/`str`, string concatenation, basic
+f-strings, and type-aware `print`) -- the PR-4-era "only integer-literal
+`print()` and zero-argument calls" boundary this paragraph used to describe
+no longer exists (D-072 records `pycc_mir`'s own D-035 boundary panic
+closing for real, and D-074 records the backend lexical-scope and
+representation fixes needed to preserve it). See
+[ROADMAP.md](./ROADMAP.md)'s "Language surface" row for the specific,
+still-open gaps (unary operators, bigint-operand arithmetic beyond
+overflow, etc.), not a broad "backend is narrower" statement.
 
 Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [DECISIONS.md](./DECISIONS.md) D-003).
 
@@ -78,13 +88,16 @@ The check-only frontend path validates the original HIR against its inferred
 signature table without materializing a resolved HIR clone. Compiler stages
 that need concrete private-helper signatures use `check_and_resolve` and pay
 for that returned clone; `pycc check` does not construct and discard it.
-When every declared function signature is already concrete, the checker builds
-that signature table directly and proceeds to the ordinary validation pass;
-the constraint-collection walk is reserved for modules that contain an actual
-private-helper inference variable. A concrete module that fails validation
-falls back to the historical solver-first sequence so the selected diagnostic
-does not change when multiple errors are present; valid concrete modules keep
-the single-pass fast path.
+When every declared function signature is already concrete, the validation-only
+checker builds its function environment directly rather than materializing and
+then cloning an intermediate signature table; the constraint-collection walk
+is reserved for modules that contain an actual private-helper inference
+variable. A concrete module that fails validation falls back to the historical
+solver-first sequence so the selected diagnostic does not change when multiple
+errors are present; valid concrete modules keep the single-pass fast path.
+Call validation preserves its all-arguments-before-arity diagnostic order while
+holding up to four inferred argument types in a stack buffer; wider calls use a
+heap-backed fallback.
 Per-function checking also shares the immutable module function registry
 through an `Arc`-backed copy-on-write table. Function-local environments still
 clone global bindings so parameter and assignment changes remain isolated, but

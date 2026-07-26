@@ -96,6 +96,33 @@ fn defining_main_without_calling_it_produces_no_output() {
 }
 
 #[test]
+fn build_and_run_a_function_reading_a_module_level_global_it_does_not_assign() {
+    // `x = 5` ; `def f() -> int:\n    return x` ; `print(f())` -- through
+    // the real `check`/`build`/codegen pipeline (not hand-crafted MIR):
+    // proves `pycc_types` (D-055), `pycc_mir` (local-shadowing
+    // classification), and `pycc_codegen` (module globals as real LLVM
+    // globals, reachable from any function) all agree end to end that a
+    // function may read a module-level global it does not itself assign.
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_module_global_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "reads_global.py",
+        "x = 5\n\ndef f() -> int:\n    return x\n\nprint(f())\n",
+    );
+    let out = dir.join("reads_global");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"5\n");
+}
+
+#[test]
 fn build_and_run_top_level_print_with_no_main() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_toplevel_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -138,6 +165,27 @@ fn run_subcommand_propagates_a_build_failure() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("L0001"));
+}
+
+#[cfg(unix)]
+#[test]
+fn run_subcommand_maps_a_signal_terminated_compiled_program_to_exit_code_101() {
+    // A `pycc_rt` panic crosses a plain (non-unwinding) `extern "C"`
+    // boundary and aborts the child process via `SIGABRT` (see pycc_rt's
+    // own panic-across-FFI convention), so on Unix `Command::status()`'s
+    // `.code()` is `None` (the child was killed by a signal, not a normal
+    // exit) -- `run`'s previous `.unwrap_or(1)` silently mapped that to
+    // exit code 1 instead of the `101` CLI_SPEC.md promises for "compiled
+    // program panicked/uncaught exception".
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_run_signal_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "div_zero_run.py", "print(1.0 / 0.0)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(101));
 }
 
 #[test]
