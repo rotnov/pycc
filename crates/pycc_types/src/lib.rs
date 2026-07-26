@@ -460,6 +460,38 @@ fn concrete_function_signatures(hir: &HirModule) -> Option<HashMap<String, (Vec<
     Some(signatures)
 }
 
+/// Builds the function registry for a fully annotated module directly from
+/// HIR. Unlike [`concrete_function_signatures`] followed by
+/// [`check_with_signatures`], this creates each owned name and parameter vector
+/// only once. `check` does not need to materialize a second signature map for a
+/// downstream consumer, so its overwhelmingly common concrete, valid path can
+/// validate with this registry directly.
+fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
+    let mut functions = HashMap::new();
+    for item in &hir.items {
+        let HirItem::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
+            return None;
+        }
+        functions.insert(
+            name.clone(),
+            (params.iter().map(|(_, ty)| *ty).collect(), *return_ty),
+        );
+    }
+    Some(Environment {
+        bindings: HashMap::new(),
+        functions: Arc::new(functions),
+    })
+}
+
 fn infer_function_signatures_with_solver(
     hir: &HirModule,
     function_local_names: &[Vec<&str>],
@@ -707,10 +739,25 @@ fn infer_expr_in(
                     Err(unbound_local(callee))
                 };
             }
-            let arg_tys = args
-                .iter()
-                .map(|a| infer_expr_in(env, local_names, a))
-                .collect::<Result<Vec<_>, _>>()?;
+            // Preserve the established diagnostic order by inferring every
+            // argument before validating arity or compatibility. Most Python
+            // calls are small, so keep up to four inferred types on the stack
+            // and reserve a heap vector only for wider calls.
+            const INLINE_ARG_TYPES: usize = 4;
+            let mut inline_arg_tys = [Ty::Infer; INLINE_ARG_TYPES];
+            let heap_arg_tys;
+            let arg_tys: &[Ty] = if args.len() <= INLINE_ARG_TYPES {
+                for (slot, arg) in inline_arg_tys.iter_mut().zip(args) {
+                    *slot = infer_expr_in(env, local_names, arg)?;
+                }
+                &inline_arg_tys[..args.len()]
+            } else {
+                heap_arg_tys = args
+                    .iter()
+                    .map(|arg| infer_expr_in(env, local_names, arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                &heap_arg_tys
+            };
             if callee == "print" {
                 return Ok(Ty::None); // print's own signature isn't user-declarable in v0.1
             }
@@ -1093,6 +1140,14 @@ fn check_with_signatures(
             env.bind_function(name.clone(), param_tys.clone(), *return_ty);
         }
     }
+    check_with_environment(hir, env, function_local_names)
+}
+
+fn check_with_environment(
+    hir: &HirModule,
+    mut env: Environment,
+    function_local_names: &[Vec<&str>],
+) -> Result<(), Diagnostic> {
     // Pass 2: check every top-level statement in source order, growing
     // `env`'s bindings as module-level assignments are encountered --
     // ordinary top-level code is still checked top-to-bottom (a top-level
@@ -1123,7 +1178,18 @@ fn check_with_signatures(
 /// private-helper signatures in the returned HIR.
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     let function_local_names = module_function_local_names(hir);
-    checked_function_signatures(hir, &function_local_names).map(|_| ())
+    // The public validation-only API has no resolved-signature result to
+    // return. Avoid building a temporary concrete signature map and then
+    // cloning it into an `Environment`: construct that environment directly.
+    // On validation failure, preserve the historical solver-first diagnostic
+    // selection exactly as `checked_function_signatures` does.
+    if let Some(env) = concrete_function_environment(hir)
+        && check_with_environment(hir, env, &function_local_names).is_ok()
+    {
+        return Ok(());
+    }
+    let signatures = infer_function_signatures_with_solver(hir, &function_local_names)?;
+    check_with_signatures(hir, &signatures, &function_local_names)
 }
 
 #[cfg(test)]
@@ -1197,11 +1263,14 @@ mod tests {
         let validation_first = check_with_signatures(&hir, &concrete, &local_names).unwrap_err();
         let solver_first = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
         let fast_path = checked_function_signatures(&hir, &local_names).unwrap_err();
+        let public_check = check(&hir).unwrap_err();
 
         assert_eq!(validation_first.code, "T0021");
         assert_eq!(solver_first.code, "T0022");
         assert_eq!(fast_path.code, solver_first.code);
         assert_eq!(fast_path.message, solver_first.message);
+        assert_eq!(public_check.code, solver_first.code);
+        assert_eq!(public_check.message, solver_first.message);
     }
 
     #[test]
@@ -2805,6 +2874,17 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_call_uses_the_heap_argument_type_buffer() {
+        let mut env = Environment::new();
+        env.bind_function("wide".to_string(), vec![Ty::Int; 5], Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "wide".to_string(),
+            args: vec![HirExpr::IntLiteral(1); 5],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
     fn calling_a_function_with_a_bool_argument_for_an_int_parameter_succeeds() {
         let mut env = Environment::new();
         env.bind_function("f".to_string(), vec![Ty::Int], Ty::None);
@@ -2843,6 +2923,25 @@ mod tests {
                 && err.message.contains("int")
                 && err.message.contains("float")
         );
+    }
+
+    #[test]
+    fn a_wide_calls_later_inference_error_precedes_an_earlier_type_mismatch() {
+        let mut env = Environment::new();
+        env.bind_function("f".to_string(), vec![Ty::Int; 5], Ty::None);
+        let expr = HirExpr::Call {
+            callee: "f".to_string(),
+            args: vec![
+                HirExpr::StringLiteral("wrong".to_string()),
+                HirExpr::IntLiteral(2),
+                HirExpr::IntLiteral(3),
+                HirExpr::IntLiteral(4),
+                HirExpr::Name("undefined".to_string()),
+            ],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "name `undefined` is not defined");
     }
 
     #[test]

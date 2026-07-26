@@ -2190,6 +2190,14 @@ pub extern "C" fn pycc_rt_float_pow(a: f64, b: f64) -> f64 {
 }
 ```
 
+**PR-review correction:** the final runtime does not use these three literal
+helper bodies as its semantic contract. Float floor division and modulo share
+the CPython-compatible adjusted-remainder algorithm and reject a zero divisor;
+float power rejects zero-to-negative, negative-base/fractional, and
+finite-overflow domains explicitly until exception and complex-number support
+exists. The owning current-state contract and regressions are in
+[`docs/RUNTIME.md`](../../RUNTIME.md) and `crates/pycc_rt/src/lib.rs`.
+
 - [ ] **Step 2 run:** `cargo test -p pycc_rt`
 Expected: PASS.
 
@@ -3645,7 +3653,7 @@ git commit -m "feat(pycc_rt,pycc_codegen): f-string codegen and scalar-to-str co
 
 ## Task 9: `int` overflow-to-bigint runtime
 
-**Scope note:** per D-052's own design, this task touches only `pycc_rt` function *bodies* -- every `pycc_rt_int_*` signature is already fixed (Task 3), and `pycc_codegen` needs zero changes: `pycc_rt_int_add`/`pycc_rt_int_sub`/`pycc_rt_int_to_str`/`pycc_rt_int_print` gain real bigint handling; `pycc_rt_int_mul`/`floordiv`/`floormod`/`pow` keep their existing `require_smallint`-triggered panic for a bigint operand (multiplication/division/power on an already-promoted value is a documented, out-of-scope gap for v0.1 -- D-049 itself scopes the bigint mechanism to "overflow-safe arithmetic + `print`, not a general-purpose bignum API surface," and `pycc_rt_int_cmp` keeps D-052's already-recorded bigint-comparison gap unchanged). A later PR-review correction retained that operand boundary but made `pycc_rt_int_mul` promote an out-of-range product when both inputs are still smallints; this does not add general bigint multiplication. This keeps the scope to exactly what a realistic `fib`-style program (Task 11) needs: unbounded addition, with the remaining bigint-operand operations exposed as honest, named "not supported yet" boundaries.
+**Scope note:** per D-052's own design, this task touches only `pycc_rt` function *bodies* -- every `pycc_rt_int_*` signature is already fixed (Task 3), and `pycc_codegen` needs zero changes: `pycc_rt_int_add`/`pycc_rt_int_sub`/`pycc_rt_int_to_str`/`pycc_rt_int_print` gain real bigint handling; `pycc_rt_int_mul`/`floordiv`/`floormod`/`pow` keep their existing `require_smallint`-triggered panic for a bigint operand (multiplication/division/power on an already-promoted value is a documented, out-of-scope gap for v0.1 -- D-049 itself scopes the bigint mechanism to "overflow-safe arithmetic + `print`, not a general-purpose bignum API surface," and `pycc_rt_int_cmp` keeps D-052's already-recorded bigint-comparison gap unchanged). Later PR-review corrections retained that operand boundary but made `pycc_rt_int_mul` promote an out-of-range product when both inputs are still smallints and made a smallint floor-division quotient outside the tagged range promote; neither change adds general bigint-operand arithmetic. This keeps the scope to exactly what a realistic `fib`-style program (Task 11) needs: unbounded addition plus the corrected smallint-result cases, with the remaining bigint-operand operations exposed as honest, named "not supported yet" boundaries.
 
 **Files:**
 - Modify: `crates/pycc_rt/src/lib.rs`
@@ -3988,7 +3996,7 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 }
 ```
 
-The original Task 9 implementation left `pycc_rt_int_mul`/`pycc_rt_int_floordiv`/`pycc_rt_int_floormod`/`pycc_rt_int_pow`/`pycc_rt_int_cmp` unchanged because their existing `require_smallint(...)` calls reject a bigint operand with a clear panic. A later PR-review correction changed only `pycc_rt_int_mul`'s smallint-result overflow path to promote the exact `i128` product; all five operations still retain the documented bigint-*operand* boundary.
+The original Task 9 implementation left `pycc_rt_int_mul`/`pycc_rt_int_floordiv`/`pycc_rt_int_floormod`/`pycc_rt_int_pow`/`pycc_rt_int_cmp` unchanged because their existing `require_smallint(...)` calls reject a bigint operand with a clear panic. Later PR-review corrections changed `pycc_rt_int_mul`'s smallint-result overflow path to promote the exact `i128` product and changed the single out-of-tag-range smallint floor-division quotient to promote as well; all five operations still retain the documented bigint-*operand* boundary.
 
 - [ ] **Step 2 run:** `cargo test -p pycc_rt`
 Expected: PASS.

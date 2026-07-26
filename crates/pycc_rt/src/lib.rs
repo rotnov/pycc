@@ -366,10 +366,10 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
     // this empirically: the removed branch's body never executed under
     // any test, including one written specifically to try to hit it.
     // The `fits_smallint` check below still catches the *actual*
-    // reachable overflow case: floor-dividing the minimum taggable value
+    // reachable promotion case: floor-dividing the minimum taggable value
     // by `-1` negates it, producing exactly one more than the maximum
     // taggable magnitude (see
-    // `pycc_rt_int_floordiv_panics_when_negating_the_minimum_taggable_value_overflows`).
+    // `pycc_rt_int_floordiv_promotes_the_negated_minimum_taggable_value`).
     let q = a / b;
     let r = a % b;
     let floored = if r != 0 && (r < 0) != (b < 0) {
@@ -377,9 +377,7 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
     } else {
         q
     };
-    fits_smallint(floored).unwrap_or_else(|| {
-        panic!("pycc_rt: integer overflow (bigint promotion is not implemented yet)")
-    })
+    fits_smallint(floored).unwrap_or_else(|| tag_bigint(bigint_from_i128(floored as i128)))
 }
 
 #[unsafe(no_mangle)]
@@ -640,7 +638,8 @@ pub extern "C" fn pycc_rt_float_floormod(a: f64, b: f64) -> f64 {
 /// Python's `**` on `float`: unlike `int_pow`, a negative exponent is
 /// perfectly ordinary here (`2.0 ** -1 == 0.5`). But three domains where
 /// `f64::powf` silently returns an IEEE-754 special value diverge from
-/// Python, which raises instead (verified against `python3.13`):
+/// Python, which raises or produces a complex result instead (verified against
+/// `python3.13`):
 /// zero raised to a negative power (`ZeroDivisionError`), a negative base
 /// raised to a non-integer power (a complex result -- `pycc` has no
 /// complex type), and a finite base/exponent pair whose true result
@@ -648,13 +647,20 @@ pub extern "C" fn pycc_rt_float_floormod(a: f64, b: f64) -> f64 {
 /// instead of a silently wrong `inf`/`NaN`, matching this crate's
 /// division-by-zero convention above.
 fn float_pow(a: f64, b: f64) -> f64 {
-    if a == 0.0 && b < 0.0 {
-        panic!("pycc_rt: 0.0 cannot be raised to a negative power");
-    }
-    if a < 0.0 && b.fract() != 0.0 {
-        panic!(
-            "pycc_rt: a negative float raised to a non-integer power is not supported yet (would require a complex result)"
-        );
+    // CPython delegates non-finite exponent/base domains to libm: for
+    // example, `(-1.0) ** inf == 1.0`, `0.0 ** -inf == inf`, and
+    // `(-inf) ** 0.5 == inf`. The explicit exception/complex guards apply
+    // only to finite operands; `fract()` is NaN for an infinite or NaN
+    // exponent and would otherwise misclassify those ordinary real results.
+    if b.is_finite() {
+        if a == 0.0 && b < 0.0 {
+            panic!("pycc_rt: 0.0 cannot be raised to a negative power");
+        }
+        if a.is_finite() && a < 0.0 && b.fract() != 0.0 {
+            panic!(
+                "pycc_rt: a negative float raised to a non-integer power is not supported yet (would require a complex result)"
+            );
+        }
     }
     let result = a.powf(b);
     if result.is_infinite() && a.is_finite() && b.is_finite() {
@@ -1128,16 +1134,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "integer overflow")]
-    fn pycc_rt_int_floordiv_panics_when_negating_the_minimum_taggable_value_overflows() {
-        // The actual reachable overflow case for `int_floordiv` (see its
+    fn pycc_rt_int_floordiv_promotes_the_negated_minimum_taggable_value() {
+        // The actual reachable promotion case for `int_floordiv` (see its
         // comment): floor-dividing the minimum taggable value by `-1`
         // negates it, producing exactly one more than the maximum taggable
-        // magnitude -- a real overflow of the *result*, distinct from (and
+        // magnitude -- a real overflow of the tagged result, distinct from (and
         // the reason the brief's original i64::MIN/-1 *input* guard turned
         // out to be dead code).
         let min = i64::MIN >> 1;
-        int_floordiv(tag_smallint(min), tag_smallint(-1));
+        let quotient = int_floordiv(tag_smallint(min), tag_smallint(-1));
+        assert!(!is_smallint(quotient));
+        let text = pycc_rt_int_to_str(quotient);
+        assert_eq!(unsafe { &*text }.bytes(), b"4611686018427387904");
+        unsafe { pycc_rt_str_decref(text) };
     }
 
     #[test]
@@ -1281,6 +1290,12 @@ mod tests {
     fn pycc_rt_float_pow_computes_the_correct_power() {
         assert_eq!(pycc_rt_float_pow(2.0, 10.0), 1024.0);
         assert_eq!(pycc_rt_float_pow(9.0, 0.5), 3.0);
+        assert_eq!(pycc_rt_float_pow(2.0, -1.0), 0.5);
+        assert_eq!(pycc_rt_float_pow(-1.0, f64::INFINITY), 1.0);
+        assert_eq!(pycc_rt_float_pow(-2.0, f64::NEG_INFINITY), 0.0);
+        assert_eq!(pycc_rt_float_pow(0.0, f64::NEG_INFINITY), f64::INFINITY);
+        assert_eq!(pycc_rt_float_pow(f64::NEG_INFINITY, 0.5), f64::INFINITY);
+        assert!(pycc_rt_float_pow(-1.0, f64::NAN).is_nan());
     }
 
     #[test]
@@ -1294,10 +1309,10 @@ mod tests {
     }
 
     #[test]
-    fn pycc_rt_float_pow_underflowing_to_zero_is_not_an_error() {
-        // Verified against `python3.13`: `2.0 ** -1024.0` underflows to a
-        // tiny finite positive value, no exception -- only *overflow* to
-        // infinity is a Python `OverflowError`, not underflow to zero.
+    fn pycc_rt_float_pow_accepts_a_tiny_finite_result() {
+        // Verified against `python3.13`: `2.0 ** -1024.0` produces a tiny
+        // finite positive value, no exception -- only *overflow* to infinity
+        // is a Python `OverflowError`, not a representable subnormal result.
         let result = pycc_rt_float_pow(2.0, -1024.0);
         assert!(result > 0.0 && result < 1e-300);
     }

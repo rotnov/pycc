@@ -285,6 +285,39 @@ fn true_division_by_zero_fails_explicitly() {
 }
 
 #[test]
+fn a_floor_division_quotient_outside_the_tagged_range_promotes() {
+    let source = "\
+minimum = 0 - 4611686018427387903 - 1
+print(minimum // (0 - 1))
+";
+    let output = build_and_run("floor_div_promotes", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"4611686018427387904\n");
+}
+
+#[test]
+fn a_float_power_requiring_an_exception_fails_explicitly() {
+    let source = "print(0.0 ** (0.0 - 1.0))\n";
+    let output = build_and_run("float_pow_zero_negative", source);
+    assert!(
+        !output.status.success(),
+        "zero to a negative float power must not silently produce infinity"
+    );
+}
+
+#[test]
+fn non_finite_float_power_domains_preserve_real_python_results() {
+    let source = "\
+print((0.0 - 1.0) ** 1e309)
+print((0.0 - 1e309) ** 0.5)
+print(0.0 ** (0.0 - 1e309))
+";
+    let output = build_and_run("float_pow_non_finite", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1.0\ninf\ninf\n");
+}
+
+#[test]
 fn fizzbuzz_exercises_int_arithmetic_modulo_elif_chains_and_mixed_print_types() {
     let source = "\
 def fizzbuzz(n: int) -> None:
