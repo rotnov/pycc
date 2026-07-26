@@ -129,6 +129,13 @@
 - Check implementation against the relevant documents linked from `docs/SPEC.md`, especially public contracts, diagnostics, portability, error paths, ownership, and cross-crate boundaries.
 - Flag concrete correctness, security, compatibility, test, and documentation defects. Leave formatting, lint, and other deterministic mechanical checks to CI.
 
+## Keep a retrospective log and a session handoff log ([D-055](docs/DECISIONS.md#d-055-maintain-an-agent-retrospective-log-and-a-session-handoff-log))
+
+- `docs/AGENT_RETROSPECTIVE.md` is a process-mistake journal, not a code-bug tracker: log a mistake in *how the work was done* (wasted time, a wrong assumption, thrashing against a moving target, a convention violated before it was caught) when it cost meaningful time and the lesson is something a future session could actually act on. Do not log routine debugging, ordinary compiler errors, or first-try successes. Write date, what happened, root cause, what fixed it, and an actionable lesson — newest entry first.
+- `docs/SESSION_LOG.md` is a running handoff snapshot, not a transcript: update it at meaningful checkpoints (a PR opened or merged, a milestone reached, before a long session ends or hands off) with overall status, what's currently in flight, known follow-ups, and where a fresh session should look to resume. Ground each snapshot in the exact commit and repository state actually inspected, distinguish uncommitted or unmerged work from delivered work, and keep the newest entry first.
+- Neither file is a merge gate, CI-enforced, or machine-generated; both are reviewed like any other documentation change. Never write credentials, secrets, or personal information into either file.
+- These logs do not relax `docs/DECISIONS.md`'s own scope: an irreversible or project-wide design choice still belongs in `docs/DECISIONS.md` with its alternatives considered, not summarized here instead.
+
 ## Completion check
 
 Before finishing a change:
