@@ -80,7 +80,7 @@ pipeline stage failed from current source and stderr instead of guessing.
 - Compare with CPython 3.14 only when Python semantics are relevant; a planned
   pycc feature being absent is not by itself a compiler bug.
 - Match a panic against accepted project decisions before classifying it. In
-  particular, D-064 defines the current `pycc_codegen: using print()'s result
+  particular, D-072 defines the current `pycc_codegen: using print()'s result
   as a nested expression is not supported yet` panic (e.g. `value =
   print(42)`) as an intentional temporary alpha boundary. Explain that
   boundary and do not route it to feedback. Treat other uncaught compiler

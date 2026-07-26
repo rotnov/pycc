@@ -1305,7 +1305,7 @@ pub fn compile_to_object(
             OptimizationLevel::None,
             // `RelocMode::Default` resolves to absolute (non-PIC)
             // addressing for this LLVM/target pairing on Linux, but
-            // Ubuntu's `cc`/`gcc` links as a PIE by default (D-065):
+            // Ubuntu's `cc`/`gcc` links as a PIE by default (D-073):
             // large-`.rodata` programs (confirmed with the
             // `mandelbrot_ascii` fixture -- its ASCII palette/float
             // constants push a relocation past what a 32-bit absolute
@@ -4053,7 +4053,7 @@ mod tests {
         // entry-block-hoisting fix through a loop back-edge instead of an
         // `if`/`else` merge. This is the only test in this file whose first
         // binding of a `str` local is itself inside a loop body, so it also
-        // pins D-061's accepted leak class (b) (see D-062): codegen visits
+        // pins D-061's accepted leak class (b) (see D-070): codegen visits
         // this `Assign` exactly once, when `s` is not yet in `locals`, so
         // `decref_old_str_if_reassigning` never fires for it and no decref is
         // emitted into the loop body at all. At runtime every iteration but

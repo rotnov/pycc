@@ -47,7 +47,7 @@ external change.
 Do not report a documented unsupported feature merely because it is absent.
 Do not report the current panic (e.g. from `value = print(42)`):
 `pycc_codegen: using print()'s result as a nested expression is not supported yet`.
-D-064 defines it as an intentional temporary alpha gap. Do report a crash or
+D-072 defines it as an intentional temporary alpha gap. Do report a crash or
 panic outside an accepted boundary, silent wrong code, an unstable diagnostic
 contract, an incorrect exit status, or behavior that contradicts an
 implemented and tested contract.
