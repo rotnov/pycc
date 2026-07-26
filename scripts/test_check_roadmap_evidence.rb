@@ -13,8 +13,6 @@ require_relative "check_roadmap_evidence"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
-  D48_STEADY_WORKFLOW_FIXTURE =
-    Pathname(__dir__).parent / "tests/fixtures/d48-steady-ci.yml"
   D51_PAIRED_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d51-paired-ci.yml"
   COVERAGE_STEP_HEADER =
@@ -672,24 +670,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_allowlist_retains_only_current_and_staged_digests
+  def test_tier1_workflow_allowlist_retains_only_the_active_d51_digest
     assert_equal(
-      [
-        D48_STEADY_PERF_CI_WORKFLOW_SHA256,
-        D51_PAIRED_PERF_CI_WORKFLOW_SHA256
-      ],
+      [D51_PAIRED_PERF_CI_WORKFLOW_SHA256],
       TIER1_CI_WORKFLOW_SHA256S
     )
   end
 
-  def test_d48_steady_workflow_digest_matches_the_reviewed_fixture
-    assert_equal(
-      D48_STEADY_PERF_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D48_STEADY_WORKFLOW_FIXTURE).hexdigest
-    )
-    assert validate_perf_gate_baseline_lifecycle(
-      D48_STEADY_WORKFLOW_FIXTURE.read,
-      D48_STEADY_WORKFLOW_FIXTURE.to_s
+  def test_tier1_workflow_allowlist_retires_the_d48_steady_digest
+    refute_includes(
+      TIER1_CI_WORKFLOW_SHA256S,
+      "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
     )
   end
 

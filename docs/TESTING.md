@@ -112,44 +112,31 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The D-048 steady-state workflow replaces the superseded single-job performance
-design with a split trust boundary. `frontend-perf-measure`
-executes pull-request benchmark code and uploads only Criterion's estimates
-JSON as untrusted data. `frontend-perf-gate` executes only the two sparse
-checked-out Ruby checker files after verifying their reviewed SHA-256 digests,
-then validates the downloaded measurement against the canonical baseline.
-Artifact and checkout actions use immutable reviewed pins.
+The historical D-048 workflow established the split trust boundary:
+`frontend-perf-measure` executed pull-request benchmark code and uploaded only
+Criterion estimates as untrusted data, while `frontend-perf-gate` executed the
+hash-verified main-owned comparator against an exact successful-main artifact.
+D-051/D-053 retain that isolation while retiring the cross-run artifact
+dependency, the D-048 digest, and its fixture. Artifact and checkout actions
+remain immutable reviewed pins.
 
-The completed D-048 transition retains
-`tests/fixtures/d48-steady-ci.yml` as the active workflow fixture. The active
-`.github/workflows/ci.yml` is byte-identical to that reviewed fixture, the
-checker binds its whole-file digest, and structural mutation tests exercise
-the bootstrap-free job shapes. The retired pre-split and activation fixtures,
-their digests, and their shell-level bootstrap tests are removed. D-051 also
-stages `tests/fixtures/d51-paired-ci.yml` and its prospective digest as inert
-review material; that second fixture does not describe the active workflow
-until a separate byte-exact activation pull request lands.
+The active `.github/workflows/ci.yml` is byte-identical to
+`tests/fixtures/d51-paired-ci.yml`. The checker allowlist contains only that
+whole-file digest, and structural mutation tests exercise the complete paired
+job shapes. The D-048 steady-state, pre-split, and activation fixtures, their
+digests, and their bootstrap tests are absent.
 
-The baseline lifecycle is fail-closed and main-owned. The gate queries only a
-successful `push` run of `ci.yml` on `main` whose `head_sha` is the exact PR
-base SHA (or the exact `before` SHA for a main push), verifies the returned
-`head_sha`, then downloads that run's non-expired `frontend-perf-current`
-artifact by explicit run ID. It never falls back to an older successful run and
-never restores an Actions cache, so neither overlapping main workflows nor a
-pull-request merge ref can weaken baseline provenance. The artifact is retained
-for 90 days and each successful main run refreshes it.
+The paired lifecycle is fail-closed and predecessor-owned without an external
+baseline. Both performance jobs remain exact literal-success dependencies of
+`ci-gate`; the trusted checker validates their complete shapes and the aggregate
+fan-in. Each run derives the predecessor exclusively from
+`pull_request.base.sha` or `push.before`, rejects missing, zero, or unsupported
+event inputs, and measures both revisions inside that same run. There is no
+missing-evidence exception, reusable bootstrap, repository variable, cache
+fallback, older convenient SHA, or failed-run artifact path.
 
-There is no missing-baseline exception. Both performance jobs are required by
-an exact fail-closed `ci-gate`; the trusted checker validates their complete
-job shapes and the aggregate fan-in. The gate requires the exact predecessor
-artifact unconditionally and compares without a skip expression. A missing,
-expired, cancelled, or non-exact predecessor artifact fails the pull request
-or `main` run. The completed one-time activation and its deletion evidence are
-recorded in [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md); the
-repository variable is absent and is not standing configuration.
-
-D-051/D-053's staged successor removes between-runner timing from the eventual
-comparison without changing the 2% threshold. Its prospective measurement job
+D-051/D-053 remove between-runner timing from the live comparison without
+changing the 2% threshold. The active measurement job
 resolves `pull_request.base.sha` or `push.before`, checks out that exact
 predecessor and `github.sha` into separate directories, verifies both
 revisions, and rejects drift in the bound benchmark-definition and
@@ -161,7 +148,7 @@ directories. The predecessor
 JSON is uploaded through the pinned v4 artifact action before candidate code
 executes, closing the same-user background-process race that a local
 hash-then-copy sequence would leave open; the candidate JSON is uploaded
-separately afterward. The prospective gate checks out and hash-verifies the
+separately afterward. The active gate checks out and hash-verifies the
 dedicated median comparator and its tests from the exact predecessor, validates
 the distinct numeric artifact identities returned by the trusted upload steps,
 downloads both same-run inputs by those exact IDs rather than replaceable
@@ -182,11 +169,11 @@ local paired validation with identical Rust and benchmark code produced a
 high outliers, while the medians differed by `-0.56%`. The merge threshold
 remains greater than 2%, and the comparator remains isolated and digest-bound.
 
-Staging does not silently switch the live contract: until the active workflow
-is replaced byte-for-byte in the follow-up activation, pull requests still use
-the D-048 exact-successful-main artifact lifecycle above. The activation then
-retires the D-048 workflow digest and fixture; no new administrative bootstrap
-is required because each D-051 run measures both sides of its own comparison.
+The byte-exact activation retired the D-048 workflow digest and fixture. No
+administrative bootstrap is required because each D-051 run measures both sides
+of its own comparison. D-054's one-shot staging recovery is historical audit
+evidence only; normal `audit` plus `ci-gate` protection was restored before this
+activation branch was created and is not encoded in repository configuration.
 A pull request that changes a bound manifest, local build script, lockfile,
 toolchain, Cargo configuration, or benchmark source must first stage a
 reviewed transition for that benchmark contract; the gate intentionally does

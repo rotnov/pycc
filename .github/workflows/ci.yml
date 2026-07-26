@@ -322,17 +322,102 @@ jobs:
   # leave an old, now-nonexistent name required forever (permanently
   # unsatisfiable) while the new leg goes unenforced. This job's own name
   # never changes regardless of matrix edits.
-  # The measurement job executes pull-request code and is therefore
-  # untrusted. It exports only Criterion's estimates JSON as data. The
-  # separate gate job never executes compiler/build code from the PR.
+  # The measurement job eventually executes pull-request code and is
+  # therefore untrusted. It seals the exact predecessor timing in an immutable
+  # artifact before candidate code runs, then measures the candidate on the
+  # same hosted runner so host-to-host variance cannot masquerade as a compiler
+  # regression. The separate gate job never executes compiler/build code from
+  # the PR.
   frontend-perf-measure:
     runs-on: macos-14
     permissions:
       contents: read
+    outputs:
+      predecessor_sha: ${{ steps.predecessor.outputs.sha }}
+      predecessor_artifact_id: ${{ steps.previous_upload.outputs.artifact-id }}
+      current_artifact_id: ${{ steps.current_upload.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Resolve exact predecessor
+        id: predecessor
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              predecessor_sha="$PR_BASE_SHA"
+              ;;
+            push)
+              predecessor_sha="$PUSH_BEFORE_SHA"
+              ;;
+            *)
+              echo "cannot resolve a performance predecessor for event $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          if [ -z "$predecessor_sha" ] ||
+             [ "$predecessor_sha" = "0000000000000000000000000000000000000000" ]; then
+            echo "cannot resolve the exact performance predecessor SHA" >&2
+            exit 1
+          fi
+          printf 'sha=%s\n' "$predecessor_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact predecessor
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          ref: ${{ steps.predecessor.outputs.sha }}
+          path: previous
+
+      - name: Check out candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: current
+
+      - name: Verify exact benchmark revisions
+        env:
+          EXPECTED_PREDECESSOR_SHA: ${{ steps.predecessor.outputs.sha }}
+          EXPECTED_CURRENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C previous rev-parse HEAD)" = "$EXPECTED_PREDECESSOR_SHA"
+          test "$(git -C current rev-parse HEAD)" = "$EXPECTED_CURRENT_SHA"
+          contract_paths=(
+            benches
+            Cargo.toml
+            Cargo.lock
+            rust-toolchain.toml
+            rust-toolchain
+            .cargo
+          )
+          for contract_path in "${contract_paths[@]}"; do
+            previous_path="previous/$contract_path"
+            current_path="current/$contract_path"
+            if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+               [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+              continue
+            fi
+            git diff --no-index --exit-code -- "$previous_path" "$current_path"
+          done
+          local_contract_digest() {
+            checkout="$1"
+            (
+              cd "$checkout"
+              git ls-files -z -- \
+                ':(glob)crates/**/Cargo.toml' \
+                ':(glob)**/build.rs' |
+                while IFS= read -r -d '' relative_path; do
+                  file_digest="$(/usr/bin/shasum -a 256 "$relative_path" |
+                    /usr/bin/awk '{print $1}')"
+                  printf '%s\0%s\0' "$relative_path" "$file_digest"
+                done
+            ) | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
+          }
+          test "$(local_contract_digest previous)" = \
+            "$(local_contract_digest current)"
 
       - name: Show pinned toolchain
         run: rustup show
@@ -343,22 +428,60 @@ jobs:
       - name: Export LLVM_SYS_221_PREFIX
         run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
 
-      - name: Run frontend benchmark
-        run: cargo bench --bench check_bench -- --save-baseline current
+      - name: Benchmark exact predecessor
+        id: previous_benchmark
+        run: |
+          set -euo pipefail
+          previous_target="$RUNNER_TEMP/pycc-paired-perf-previous"
+          (
+            cd previous
+            CARGO_TARGET_DIR="$previous_target" \
+              cargo bench --locked --bench check_bench -- --save-baseline paired
+          )
+          previous_timing="$previous_target/criterion/pycc_check_frontend_fixture/paired/estimates.json"
+          timing_dir="$(mktemp -d "$RUNNER_TEMP/pycc-previous-timing.XXXXXX")"
+          cp "$previous_timing" "$timing_dir/estimates.json"
+          printf 'timing_path=%s\n' "$timing_dir/estimates.json" >> "$GITHUB_OUTPUT"
 
-      - name: Upload current frontend timing
+      - name: Upload sealed predecessor frontend timing
+        id: previous_upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: frontend-perf-current
-          path: target/criterion/pycc_check_frontend_fixture/current/estimates.json
+          name: frontend-perf-previous
+          path: ${{ steps.previous_benchmark.outputs.timing_path }}
           if-no-files-found: error
           retention-days: 90
 
-  # Required by ci-gate (D-044/D-046). This job consumes the measurement only
-  # as JSON data, verifies immutable hashes for the reviewed comparator and
-  # its tests before executing them, and downloads a baseline only from an
-  # explicitly successful push run of ci.yml on main. It never restores an
-  # Actions cache, whose merge-ref lookup could be shadowed by an earlier PR.
+      # Candidate code cannot mutate the immutable v4 predecessor artifact:
+      # this is deliberately after the sealed upload, not merely after a local
+      # hash check in the same writable runner filesystem.
+      - name: Benchmark exact candidate
+        id: current_benchmark
+        run: |
+          set -euo pipefail
+          current_target="$RUNNER_TEMP/pycc-paired-perf-current"
+          (
+            cd current
+            CARGO_TARGET_DIR="$current_target" \
+              cargo bench --locked --bench check_bench -- --save-baseline paired
+          )
+          current_timing="$current_target/criterion/pycc_check_frontend_fixture/paired/estimates.json"
+          timing_dir="$(mktemp -d "$RUNNER_TEMP/pycc-current-timing.XXXXXX")"
+          cp "$current_timing" "$timing_dir/estimates.json"
+          printf 'timing_path=%s\n' "$timing_dir/estimates.json" >> "$GITHUB_OUTPUT"
+
+      - name: Upload candidate frontend timing
+        id: current_upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: frontend-perf-current
+          path: ${{ steps.current_benchmark.outputs.timing_path }}
+          if-no-files-found: error
+          retention-days: 90
+
+  # Required by ci-gate (D-044/D-051). This job consumes the paired
+  # measurement only as JSON data and verifies immutable hashes for the
+  # reviewed comparator and its tests before executing them.
   frontend-perf-gate:
     needs: frontend-perf-measure
     runs-on: macos-14
@@ -370,111 +493,77 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          ref: ${{ needs.frontend-perf-measure.outputs.predecessor_sha }}
           sparse-checkout: |
-            scripts/check_perf_regression.rb
-            scripts/test_check_perf_regression.rb
+            scripts/check_paired_perf_regression.rb
+            scripts/test_check_paired_perf_regression.rb
           sparse-checkout-cone-mode: false
 
       - name: Verify reviewed performance checker
         run: |
           printf '%s  %s\n' \
-            ae52a100b8e2d0c8a7a85e73dc1233c5dff7c6d1dc5b1a55704419c2260d0459 \
-            scripts/check_perf_regression.rb \
-            db27692e03fbfd930fbce5a935b47a51810233039641f765e6d3bc52e69f00ce \
-            scripts/test_check_perf_regression.rb |
+            257d37974b1d862de4df9561a9f37b05a125af0404aea7a6f0861271e5fbc56b \
+            scripts/check_paired_perf_regression.rb \
+            5c45928a89f099d6e175a1d30bccbef59c58501d89cac252963e84b9e00952c5 \
+            scripts/test_check_paired_perf_regression.rb |
             shasum -a 256 --check
 
       - name: Test reviewed performance checker
-        run: ruby scripts/test_check_perf_regression.rb
+        run: ruby scripts/test_check_paired_perf_regression.rb
 
-      - name: Locate latest successful main baseline
-        id: locate_baseline
+      - name: Require sealed artifact identities
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PREVIOUS_ARTIFACT_ID: ${{ needs.frontend-perf-measure.outputs.predecessor_artifact_id }}
+          CURRENT_ARTIFACT_ID: ${{ needs.frontend-perf-measure.outputs.current_artifact_id }}
         run: |
           set -euo pipefail
-          case "$GITHUB_EVENT_NAME" in
-            pull_request)
-              baseline_sha="$PR_BASE_SHA"
-              ;;
-            push)
-              baseline_sha="$PUSH_BEFORE_SHA"
-              ;;
-            *)
-              echo "cannot resolve a performance predecessor for event $GITHUB_EVENT_NAME" >&2
-              exit 1
-              ;;
-          esac
-          if [ -z "$baseline_sha" ] ||
-             [ "$baseline_sha" = "0000000000000000000000000000000000000000" ]; then
-            echo "cannot resolve the exact performance predecessor SHA" >&2
+          for artifact_id in "$PREVIOUS_ARTIFACT_ID" "$CURRENT_ARTIFACT_ID"; do
+            case "$artifact_id" in
+              ""|*[!0-9]*)
+                echo "paired frontend timing has an invalid artifact identity" >&2
+                exit 1
+                ;;
+            esac
+          done
+          if [ "$PREVIOUS_ARTIFACT_ID" = "$CURRENT_ARTIFACT_ID" ]; then
+            echo "paired frontend timings must have distinct artifact identities" >&2
             exit 1
           fi
 
-          run_rows="$(
-            gh api --method GET \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs" \
-              -f branch=main \
-              -f event=push \
-              -f head_sha="$baseline_sha" \
-              -f status=success \
-              -f per_page=100 \
-              --jq '.workflow_runs[] | [.id, .head_sha] | @tsv'
-          )"
-          while IFS="$(printf '\t')" read -r run_id run_head_sha; do
-            if [ -z "$run_id" ] || [ "$run_head_sha" != "$baseline_sha" ]; then
-              continue
-            fi
-            artifact_id="$(
-              gh api --method GET \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
-                -f name=frontend-perf-current \
-                -f per_page=100 \
-                --jq '.artifacts[] | select(.expired == false) | .id' |
-                sed -n '1p'
-            )"
-            if [ -n "$artifact_id" ]; then
-              printf 'found=true\nrun_id=%s\n' "$run_id" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done <<EOF
-          $run_rows
-          EOF
-          printf 'found=false\n' >> "$GITHUB_OUTPUT"
-
-      - name: Download canonical main frontend timing
-        if: steps.locate_baseline.outputs.found == 'true'
+      - name: Download sealed predecessor frontend timing
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: frontend-perf-current
+          artifact-ids: ${{ needs.frontend-perf-measure.outputs.predecessor_artifact_id }}
           path: target/criterion/pycc_check_frontend_fixture/previous
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ steps.locate_baseline.outputs.run_id }}
+          merge-multiple: true
 
-      - name: Require canonical main frontend timing
+      - name: Download candidate frontend timing
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.frontend-perf-measure.outputs.current_artifact_id }}
+          path: target/criterion/pycc_check_frontend_fixture/current
+          merge-multiple: true
+
+      - name: Require exact predecessor and candidate timing
         run: |
           set -euo pipefail
-          if [ ! -f target/criterion/pycc_check_frontend_fixture/previous/estimates.json ]; then
-            echo "the exact predecessor has no non-expired canonical frontend timing" >&2
+          timing_root="target/criterion/pycc_check_frontend_fixture"
+          for revision in previous current; do
+            timing="$timing_root/$revision/estimates.json"
+            if [ ! -f "$timing" ] || [ -L "$timing" ]; then
+              echo "paired frontend timing is missing $revision/estimates.json" >&2
+              exit 1
+            fi
+          done
+          file_count="$(find "$timing_root" -type f | wc -l | tr -d '[:space:]')"
+          if [ "$file_count" -ne 2 ] || find "$timing_root" -type l | grep -q .; then
+            echo "paired frontend timing must contain exactly two regular files" >&2
             exit 1
           fi
 
-      - name: Download current frontend timing
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: frontend-perf-current
-          path: target/criterion/pycc_check_frontend_fixture/current
-
-      - name: Compare against canonical main baseline
+      - name: Compare exact predecessor and candidate
         run: |
-          ruby scripts/check_perf_regression.rb \
+          ruby scripts/check_paired_perf_regression.rb \
             target/criterion/pycc_check_frontend_fixture/current/estimates.json \
             target/criterion/pycc_check_frontend_fixture/previous/estimates.json
 
