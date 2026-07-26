@@ -91,6 +91,30 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
   = help: did you mean `int("35")`?
 ```
 
+## Pre-commit (experimental)
+
+The repository publishes a `pycc-check` hook for the
+[pre-commit](https://pre-commit.com/) framework. Pin it to a pycc release tag
+or commit:
+
+```yaml
+repos:
+  - repo: https://github.com/rotnov/pycc
+    rev: <release-tag-or-commit>
+    hooks:
+      - id: pycc-check
+```
+
+The hook passes staged Python files to serial frontend-only `pycc check`
+batches and never modifies them. At most one hook process runs at a time;
+pre-commit may split a large path set to respect platform command-line limits.
+This is currently a pre-alpha integration:
+`pycc check` recognizes only the implemented v0.1 language slice, and
+pre-commit's first `language: rust` installation builds the existing complete
+`pycc` package, so LLVM 22.1.1 is still required even though checking does not
+run code generation. See [`docs/DISTRIBUTION.md`](./docs/DISTRIBUTION.md) for
+the exact contract and limitations.
+
 ## How it works
 
 ```
@@ -143,7 +167,8 @@ Cross-platform is not a roadmap item — Linux, macOS and Windows (x64 + arm64) 
 
 ## Building from source
 
-Requires Rust 1.97+ (`rustup update stable`) and LLVM. `cargo build --release`. That's it — the compiler has no Python dependency.
+Requires Rust 1.97+ (`rustup update stable`) and LLVM 22.1.1.
+`cargo build --release`. The compiler itself has no Python dependency.
 
 ## License
 

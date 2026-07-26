@@ -44,6 +44,28 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pyc
 | `pycc_diag` | Diagnostics engine, error registry (see DIAGNOSTICS.md) |
 | `pycc_testkit` | Conformance/differential test harness (see TESTING.md) |
 
+The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
+the AST. `pycc_hir::lower_checked` preserves module statement order and lowers
+primitive literals and annotations, assignments, arithmetic, comparisons,
+calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. Function items
+carry their parameter and return types, while call expressions retain only the
+bare callee name plus ordered argument expressions; HIR does not yet assign
+binding identities or build and memoize a
+call graph. Syntactically valid constructs outside that implemented HIR subset
+return a spanned `C0001` capability diagnostic, so `pycc check` never turns an
+unsupported statement or expression into an uncaught lowering panic.
+`pycc_types::check` validates the lowered module against the
+inferred signature table without cloning HIR. Compiler stages that need
+concrete private-helper signatures use `pycc_types::check_and_resolve`, which
+performs the same validation and returns HIR with those signatures
+materialized.
+
+`pycc check` stops after the check-only frontend pipeline. The MIR/backend
+boundary is deliberately narrower until PR-5: it currently lowers only
+integer-literal `print()` calls and zero-argument user-function calls. Other
+valid frontend constructs reach the explicit D-035 PR-5 boundary in
+`pycc_mir` rather than being advertised as code-generation support.
+
 Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [DECISIONS.md](./DECISIONS.md) D-003).
 
 ## Performance requirements (compiler itself)
@@ -58,6 +80,13 @@ The check-only frontend path validates the original HIR against its inferred
 signature table without materializing a resolved HIR clone. Compiler stages
 that need concrete private-helper signatures use `check_and_resolve` and pay
 for that returned clone; `pycc check` does not construct and discard it.
+When every declared function signature is already concrete, the checker builds
+that signature table directly and proceeds to the ordinary validation pass;
+the constraint-collection walk is reserved for modules that contain an actual
+private-helper inference variable. A concrete module that fails validation
+falls back to the historical solver-first sequence so the selected diagnostic
+does not change when multiple errors are present; valid concrete modules keep
+the single-pass fast path.
 Per-function checking also shares the immutable module function registry
 through an `Arc`-backed copy-on-write table. Function-local environments still
 clone global bindings so parameter and assignment changes remain isolated, but

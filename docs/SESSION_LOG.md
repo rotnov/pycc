@@ -103,6 +103,97 @@ reservations, and this has now happened four times.
 
 ---
 
+## 2026-07-26 — PR #51 performance repair integrated with current main
+
+**Snapshot evidence:** the containing merge integrates local performance-repair
+parent `a7f048d` with refreshed `main@128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`.
+[PR #51](https://github.com/rotnov/pycc/pull/51) remained open and non-draft at
+remote head `c1e855590a23307bcd8472979ff37f8bbfd0f8d9` before this local integration
+was pushed. That remote head ran required CI as run `30206099702` from
+active-D-062 `main@45545bb057f5cd9e8712610c6137f53ef56d3aae`.
+Immediately before preparing the follow-up commit, a fetch confirmed
+`origin/main` still at `128285fbfbcfaa29b1a6c8fa81da4d84bae8d67f`; GitHub
+still reported the old remote head as open, non-draft, and dirty, with one
+unresolved P1 review thread.
+
+**Gate result:** trusted audit, agent checks, 100% coverage, Linux/macOS,
+cross-compile, and the 5+5 measurement job passed. The isolated comparator
+correctly blocked the changed-source candidate at `+10.7215%`: predecessor
+aggregate median `7964.08 ns`, candidate `8817.95 ns`. This was not retried or
+waived. The benchmark does not execute the changed root CLI sources, but it
+exposed an existing redundant type-checker walk that could be removed without
+changing the gate.
+
+**Repair:** `pycc_types::check` now constructs already-concrete
+function signatures directly and reserves constraint collection for modules
+that contain real `Ty::Infer` signatures; a failed concrete validation falls
+back to the historical solver-first order so diagnostic selection is stable.
+The workspace coverage gate passes at 100% lines and regions, including
+explicit fast-path, diagnostic-parity, solver-path, and collector edge cases;
+workspace clippy, Rust documentation, roadmap evidence, and agent-asset checks
+also pass. An initial local Criterion comparison improved from about `7.15 µs`
+to `5.85 µs` (`−18.0%`); a later run after the diagnostic-order fallback
+measured `6.99 µs` (about `−2.3%` from the same original observation). This
+single-host evidence is noisy and is not selected as the gate result; the next
+fixed 5+5 CI comparison remains authoritative.
+
+**Pre-merge review repair:** the unresolved thread correctly found that valid
+but unsupported Python could still panic during HIR lowering, aborting the
+pre-commit batch with exit 101. The follow-up converts every user-reachable HIR
+capability rejection to a spanned `C0001` diagnostic, keeps only an internal
+parser-invariant assertion, and proves both exact CLI rendering and continued
+multi-file checking after an unsupported construct. The workspace coverage
+gate passes at 100% lines and regions; clippy, Rust documentation, roadmap
+evidence, and agent-asset checks pass as well.
+
+**Local review:** the exact pinned staged-diff reviewer found no implementation,
+contract, security, test, or documentation defect in the repair; its only
+finding was that the previous handoff text still listed that now-completed
+review as pending. This paragraph replaces that stale instruction.
+The subsequent full-range review found that adding a direct `ruff_text_size`
+dependency would violate D-062's byte-identical manifest/lock precondition and
+block CI before measurement. The fix keeps `Cargo.toml` and `Cargo.lock`
+identical to the predecessor and exposes byte ranges through the existing
+`pycc_ast` facade instead; an exhaustive facade test covers every upstream
+statement and expression variant at 100% line and region coverage.
+
+**Where to resume:** commit and push the verified repair, repeat exact-revision
+`pre-commit try-repo`, and resolve the P1 thread only after the remote head
+contains the verified fix. Treat the new CI run as new candidate evidence, not
+a rerun of the failed head, and merge only if every required check is green
+with no unresolved actionable review thread.
+
+## 2026-07-26 — PR #51 pre-commit hook awaiting final CI and merge
+
+**Snapshot evidence:** the checked-out `codex/pre-commit-hook` branch was at
+commit `171eceb` with a clean tree before integrating refreshed
+`origin/main@841048ec37e20d85a5a0406778f9ec8b66224b04`. The integration was in
+progress with its documentation conflicts resolved but not yet committed at
+this snapshot. [PR #51](https://github.com/rotnov/pycc/pull/51) is open and no
+longer a draft.
+
+**Overall status:** the pull request publishes `pycc-check` from the main
+repository as a serial, read-only `language: rust` pre-commit hook; extends
+`pycc check` to aggregate diagnostics across native input paths and supported
+source encodings; and replaces required asynchronous GitHub review comments
+with the immutable pinned local-review loop. D-067 and D-068 record the two
+project-wide choices after confirming PR #132's reconciled D-057…D-061 and
+D-070…D-073 allocations.
+
+**Validation already observed:** the Rust workspace tests, clippy, generated
+API documentation, agent-policy and marketplace checks, roadmap checks, and
+100% line/region coverage passed before the latest default-branch integration.
+An isolated `pre-commit try-repo` install selected exact revision `10a0502`
+and passed `pycc check`; the final merged revision still needs the same check,
+the pinned full-range local review, required pull-request CI, and normal
+protected-branch merge.
+
+**Where to resume:** finish and review the `841048e` merge, rerun affected
+checks, push `codex/pre-commit-hook`, wait for every required PR #51 check and
+conversation to clear, then merge normally and verify the post-merge
+`main-history-audit`. Do not request `@codex review`; D-068 makes that external
+service optional rather than a required gate.
+
 ## 2026-07-26 — PR #138 merged; D-062 blocks PR #132
 
 **Delivered state:** [PR #137](https://github.com/rotnov/pycc/pull/137)
@@ -168,7 +259,6 @@ request Codex review through the retry guard, and monitor required CI plus
 all review surfaces. Merge only after required checks are green and no
 actionable review thread remains; then verify the post-merge `main` run and
 history audit.
-
 ## 2026-07-26 — D-062 activation PR #137 green; refresh onto current main in progress
 
 **Snapshot evidence:** draft [PR #137](https://github.com/rotnov/pycc/pull/137)
