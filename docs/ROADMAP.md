@@ -32,7 +32,7 @@ remains work in flight.
 - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
 - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
 
-The next delivery slices remain the sequence defined in [DELIVERY_PLAN.md](./DELIVERY_PLAN.md): full v0.1 codegen/runtime breadth, the conformance testkit and named demos, then the final v0.1 acceptance pass.
+Full v0.1 codegen/runtime breadth (this milestone's own codegen-depth slice, see the "Compiler pipeline"/"Language surface" rows above) is now implemented, with the documented gaps those rows list. The next delivery slices remain the sequence defined in [DELIVERY_PLAN.md](./DELIVERY_PLAN.md): the conformance testkit and named demos, then the final v0.1 acceptance pass.
 
 ## CPython release alignment
 
