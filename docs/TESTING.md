@@ -130,10 +130,13 @@ D-056 retains the same boundary. Artifact and checkout actions remain immutable
 reviewed pins.
 
 The active `.github/workflows/ci.yml` is byte-identical to
-`tests/fixtures/d56-source-aware-ci.yml`. The checker allowlist contains only
-that whole-file digest, and structural mutation tests exercise the complete
-source-aware paired job shapes. The retired D-051 fixture and comparator remain
-historical audit evidence, but the public policy rejects their workflow digest.
+`tests/fixtures/d56-source-aware-ci.yml`. During D-062 staging the checker
+allowlist contains that active whole-file digest plus only the inert prospective
+`tests/fixtures/d62-replicated-paired-ci.yml` digest, and structural mutation
+tests exercise both complete source-aware job pairs. A reviewed prospective
+digest does not change live CI: a fresh pull request must replace the workflow
+byte-for-byte before D-062 runs. The retired D-051 fixture and comparators remain
+historical audit evidence, but the public policy rejects its workflow digest.
 The D-048 steady-state, pre-split, and activation fixtures, their digests, and
 their bootstrap tests are absent.
 The retired D-048 mean comparator and its standalone test are absent too;
@@ -201,8 +204,34 @@ classification, step ordering, output propagation, comparator binding, and
 the unchanged failure path have focused positive and negative tests.
 
 This is current behavior. The live workflow is byte-identical to the reviewed
-D-056 fixture and the allowlist accepts only that digest. The D-051 workflow
-digest is retired and has a public-CLI rejection test.
+D-056 fixture. D-051's workflow digest is retired and has a public-CLI rejection
+test; only D-056 and the inert D-062 digest are accepted during staging.
+
+D-062 addresses the residual single-observation defect tracked in #109 without
+changing D-056's identity rule or threshold. PR run `30200982922` and immediate
+post-merge main run `30201385971` measured the same changed-source pair at
+`+0.10%` and `+3.66%` respectively, even though every provenance and artifact
+check succeeded. D-056 correctly leaves such a pair in the blocking `false`
+path, so D-062 fixes that path's sample plan before execution: five full
+Criterion runs for the exact predecessor, immutable upload of all five JSON
+files, then five full candidate runs. Exact `true` remains non-blocking
+telemetry. The gate requires the exact
+`round-1.json` through `round-5.json` set in both artifact directories, rejects
+symlinks and extras, extracts every per-run median, and applies the unchanged
+greater-than-2% rule to the median of each five-value set. No retry count or
+sample can depend on an observed result. Predecessor-first sealing remains
+mandatory; alternating execution was rejected because candidate code could
+leave a process that influences a later supposedly trusted predecessor sample.
+The fixed-replicate comparator independently rejects missing directories or
+rounds, extra samples, symlinks, malformed/root-shape/median-shape JSON,
+non-numeric, non-positive, or non-finite estimates, and invalid thresholds.
+A synthetic isolated extreme outlier passes only when the other four samples
+keep the aggregate within 2%; three regressed samples make the median fail. An
+exact `true` passes even for an extreme delta. An identical-tree local 5+5 run
+retained all samples and measured aggregate medians `7068.84 ns -> 7054.06 ns`
+(`-0.21%`). These are staging proofs, not activation evidence; #109 remains open
+until the reviewed workflow is active and repeated changed-source PR/main runs
+pass without selection.
 
 The byte-exact activation retired the D-048 workflow digest and fixture. No
 administrative bootstrap is required because each D-056 run measures both sides

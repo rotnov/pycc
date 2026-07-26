@@ -24,8 +24,13 @@ enforce the normal delivery path.
   artifacts by distinct numeric IDs, flattens each into an exact destination,
   verifies the predecessor-owned source-aware comparator, and fails closed on
   revision, benchmark-contract, executable-input identity, artifact-identity,
-  file-set, or comparison drift. Only the reviewed D-056 source-aware workflow
-  digest is authorized. The standalone `agent-policy` job provides faster
+  file-set, or comparison drift. D-062 records the residual changed-source
+  single-observation variance in open issue #109. During its two-phase
+  transition, reviewed D-056 remains active and the exact D-062 source-aware
+  five-replicate digest is pre-authorized only as an inert prospective fixture;
+  no live control changes until a fresh activation pull request replaces the
+  workflow byte-for-byte and retires D-056's active digest. The standalone
+  `agent-policy` job provides faster
   feedback until its exact context has run successfully on `main` and is
   added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
@@ -92,11 +97,22 @@ identical. Changed source keeps the existing `>2%` block.
 
 The active `.github/workflows/ci.yml` is byte-identical to the reviewed
 [`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml), and the
-allowlist contains only its digest. The D-051 fixture and comparator remain
+allowlist contains its digest plus only D-062's inert, byte-exact prospective
+source-aware five-replicate successor. The D-051 fixture and comparators remain
 historical audit evidence, but the active policy rejects that older workflow
-digest. Every pull request and `main` push still measures both exact revisions
-inside its own run, so no successful external baseline artifact or
-administrative bootstrap state is required.
+digest; D-048 remains absent. Every pull request and `main` push still measures
+both exact revisions inside its own run, so no successful external baseline
+artifact or administrative bootstrap state is required.
+
+PR #131 and its post-merge main run later gave contradictory `+0.10%` and
+`+3.66%` outcomes for byte-identical Git trees, proving that one paired median
+still permits within-run/order variance to decide a changed-source gate. D-062's
+staged successor fixes the sample count at five per revision and compares the
+median of those five medians when D-056's classifier reports `false`; exact
+`true` keeps D-056's non-blocking telemetry result. Predecessor-first sealing
+and the unchanged greater-than-2% block remain. It is not active merely because
+its digest and fixture are reviewed; activation must arrive through a separate
+up-to-date PR whose workflow bytes exactly equal that fixture.
 
 When a new check is introduced, first merge and observe it successfully on `main`,
 then add its exact reported context to branch protection. Never require a guessed or
