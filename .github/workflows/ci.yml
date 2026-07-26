@@ -39,6 +39,28 @@ jobs:
       - name: Add x86_64-apple-darwin Rust target
         run: rustup target add x86_64-apple-darwin
 
+      # tests/conformance.rs (PR-6, D-078) shells out to a hardcoded
+      # "python3.14" oracle binary. This must land before the coverage gate
+      # below: `cargo llvm-cov --workspace` executes the whole workspace test
+      # suite (including this integration test) to measure coverage, so the
+      # oracle needs to already be on PATH by that point, not merely before
+      # the plain `cargo test --workspace` step later in this job. Pinned to
+      # the exact same 3.14.6 the local oracle uses (docs/ROADMAP.md's
+      # "v1 stable oracle" row).
+      - name: Set up CPython 3.14.6 conformance oracle
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14.6"
+
+      - name: Verify oracle version
+        shell: bash
+        run: |
+          python3.14 --version | grep -qx "Python 3.14.6" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.6'"
+            python3.14 --version
+            exit 1
+          }
+
       # Hard merge invariant from D-014. These thresholds must never be
       # lowered or bypassed to make a pull request pass.
       - name: Hard coverage gate — 100% lines + regions (D-014)
@@ -50,12 +72,28 @@ jobs:
           TRUSTED_RUSTDOC="$(rustup which rustdoc)"
           TRUSTED_COV="/Users/runner/.cargo/bin/cargo-llvm-cov"
           TRUSTED_TOOLCHAIN="$(dirname "$(dirname "$TRUSTED_CARGO")")"
+          # tests/conformance.rs's oracle_python_bin() needs "python3.14" on
+          # PATH inside the isolated run below too (see the "Set up CPython"
+          # step above for why). Resolved dynamically from wherever
+          # actions/setup-python installed it on this runner -- never a
+          # hardcoded hostedtoolcache path, since that layout isn't part of
+          # this project's contract.
+          ORACLE_PYTHON_DIR="$(dirname "$(command -v python3.14)")"
           cd "$RUNNER_TEMP"
           RUSTC="$TRUSTED_RUSTC" RUSTDOC="$TRUSTED_RUSTDOC" "$TRUSTED_CARGO" install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
           "$TRUSTED_COV" llvm-cov --version
           sudo chmod o+x /Users/runner /Users/runner/.cargo /Users/runner/.cargo/bin /Users/runner/.rustup /Users/runner/.rustup/toolchains
           sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"
           sudo chmod o+rx "$TRUSTED_COV"
+          # actions/setup-python installs under $RUNNER_TOOL_CACHE, which the
+          # isolated "nobody" sandbox otherwise can't traverse or read --
+          # grant it the same o+x/o+rX access already given to the Rust
+          # toolchain above, so the sandboxed test run can still exec the
+          # pinned oracle and load its stdlib/shared libs.
+          if [ -n "${RUNNER_TOOL_CACHE:-}" ] && [ -d "$RUNNER_TOOL_CACHE" ]; then
+            sudo chmod o+x "$RUNNER_TOOL_CACHE"
+            sudo chmod -R o+rX "$RUNNER_TOOL_CACHE"
+          fi
           ISOLATED_ROOT="$RUNNER_TEMP/pycc-coverage"
           mkdir -p "$ISOLATED_ROOT/home" "$ISOLATED_ROOT/tmp" "$ISOLATED_ROOT/cargo-home" "$ISOLATED_ROOT/target"
           sudo chown -R nobody:nobody "$ISOLATED_ROOT"
@@ -68,7 +106,7 @@ jobs:
             "RUSTC=$TRUSTED_RUSTC"
             "RUSTDOC=$TRUSTED_RUSTDOC"
             "LLVM_SYS_221_PREFIX=$LLVM_SYS_221_PREFIX_VALUE"
-            "PATH=$(dirname "$TRUSTED_CARGO"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+            "PATH=$(dirname "$TRUSTED_CARGO"):$ORACLE_PYTHON_DIR:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
           )
           run_isolated() {
             sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
@@ -215,6 +253,24 @@ jobs:
           }
           Copy-Item $xml2Lib.FullName "$libDir\xml2s.lib" -Force
           echo "LIB=$libDir;$env:LIB" >> $env:GITHUB_ENV
+
+      # tests/conformance.rs (PR-6, D-078) shells out to a hardcoded
+      # "python3.14" oracle binary via cargo test --workspace below, on every
+      # Tier-1 target alike -- pinned here to the exact same 3.14.6 the local
+      # oracle uses (docs/ROADMAP.md's "v1 stable oracle" row).
+      - name: Set up CPython 3.14.6 conformance oracle
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14.6"
+
+      - name: Verify oracle version
+        shell: bash
+        run: |
+          python3.14 --version | grep -qx "Python 3.14.6" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.6'"
+            python3.14 --version
+            exit 1
+          }
 
       - name: cargo build --workspace
         run: cargo build --workspace
