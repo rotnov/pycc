@@ -109,6 +109,7 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         .arg("-o")
         .arg(out);
     add_windows_system_libs(&mut cmd);
+    add_linux_system_libs(&mut cmd);
     let status = cmd.status().expect("the linker driver should run");
     if status.success() {
         Ok(())
@@ -216,6 +217,27 @@ fn add_windows_system_libs(cmd: &mut std::process::Command) {
 
 #[cfg(not(windows))]
 fn add_windows_system_libs(_cmd: &mut std::process::Command) {}
+
+/// `pycc_rt`'s `f64::powf` (used by `float ** float`, see D-001/RUNTIME.md's
+/// float support) lowers to a call to the C library's `pow` -- part of
+/// `libm`, not `libc`. macOS folds `libm` into `libSystem`, which every link
+/// already pulls in implicitly, and Windows's UCRT bundles it too, so
+/// neither platform needs an explicit flag (confirmed: this exact
+/// unmodified code already links and runs `native-build-test` on both). On
+/// Linux, GCC's and clang's default driver invocation does not add `-lm` on
+/// its own: PR-5's own CI run surfaced this directly (`native-build-test
+/// (ubuntu-latest, x86_64-unknown-linux-gnu)` and `(ubuntu-24.04-arm,
+/// aarch64-unknown-linux-gnu)` both failed link with "undefined reference to
+/// `pow'"), so every Linux link needs `-lm` explicitly, both with and
+/// without `--target` (see `linker_command`'s two Linux-reachable paths
+/// above).
+#[cfg(target_os = "linux")]
+fn add_linux_system_libs(cmd: &mut std::process::Command) {
+    cmd.arg("-lm");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn add_linux_system_libs(_cmd: &mut std::process::Command) {}
 
 fn run(path: &str) -> ExitCode {
     let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
