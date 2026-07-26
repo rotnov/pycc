@@ -22,12 +22,13 @@ complete pycc interface.
 
 At this alpha revision, `build`, `run`, `check`, and `version --verbose` have
 implementations. `check` accepts one or more native file paths, runs the
-broader parser, checked HIR lowering, and strict type-checker subset, reports
-every frontend failure, and can render human or JSON diagnostics. `build` and
-`run` still support a narrower backend slice. `test`, `explain`, `init`, and
-`clean` return an explicit not-implemented error, and `check --fix` is not
-parsed yet. Re-verify these statements against source whenever using the
-skill; do not let this snapshot override newer code.
+broader parser, checked HIR lowering, and strict type-checker subset for every
+supplied file, reports one current frontend diagnostic for each failing input,
+and can render human or JSON diagnostics. `build` and `run` still support a
+narrower backend slice. `test`, `explain`, `init`, and `clean` return an
+explicit not-implemented error, and `check --fix` is not parsed yet. Re-verify
+these statements against source whenever using the skill; do not let this
+snapshot override newer code.
 
 ## Build and run
 

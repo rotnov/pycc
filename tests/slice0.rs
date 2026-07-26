@@ -716,8 +716,8 @@ fn check_subcommand_reports_a_type_error() {
     // Distinct from the T0001/T0002 cases above -- those are raised during
     // pycc_hir::lower_checked itself. `x = undefined` parses and lowers
     // cleanly; the undefined-name error only surfaces from
-    // pycc_types::check's own inference pass, exercising try_check's third
-    // (and otherwise untested) diagnostic-producing stage.
+    // pycc_types::check's own inference pass, exercising check_frontend's
+    // third (and otherwise untested) diagnostic-producing stage.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_typeerr_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "bad.py", "x = undefined\n");
