@@ -65,6 +65,10 @@ EMBEDDED_PATH_OPTIONS = {
 }
 LOADER_URL_PREFIXES = ("data:", "file:", "http:", "https:")
 FAIL_SILENT_WRAPPER_CONTRACTS: dict[str, str] = {}
+MACHINE_LOCAL_HOOK_CONFIGS = (
+    ".claude/settings.local.json",
+    ".codex/hooks.json",
+)
 TRUSTED_POSIX_EXECUTABLE_PREFIXES = (
     "/bin/",
     "/usr/bin/",
@@ -891,6 +895,19 @@ def validate_machine_local_files(tracked: Collection[str]) -> list[str]:
     ]
 
 
+def validate_machine_local_hook_configs_ignored(root: Path = ROOT) -> list[str]:
+    failures: list[str] = []
+    for relative in MACHINE_LOCAL_HOOK_CONFIGS:
+        ignore_check = subprocess.run(
+            ["git", "check-ignore", "--quiet", "--", relative],
+            cwd=root,
+            check=False,
+        )
+        if ignore_check.returncode != 0:
+            failures.append(f"{relative} must remain ignored")
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
     settings = json.loads(
@@ -905,13 +922,7 @@ def main() -> int:
     failures.extend(validate_wrapper_contracts(tracked))
     failures.extend(validate_machine_local_files(tracked))
 
-    ignore_check = subprocess.run(
-        ["git", "check-ignore", "--quiet", ".claude/settings.local.json"],
-        cwd=ROOT,
-        check=False,
-    )
-    if ignore_check.returncode != 0:
-        failures.append(".claude/settings.local.json must remain ignored")
+    failures.extend(validate_machine_local_hook_configs_ignored())
 
     flag = parse_flag((ROOT / ".ievo" / "evo-auto.flag").read_text(encoding="utf-8"))
     if flag.get("enabled") != "true":

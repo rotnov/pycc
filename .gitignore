@@ -29,6 +29,7 @@ Thumbs.db
 
 # iEvo local-only artifacts
 .claude/settings.local.json
+.codex/hooks.json
 .ievo/log/
 .ievo/cache/
 .ievo/hooks/

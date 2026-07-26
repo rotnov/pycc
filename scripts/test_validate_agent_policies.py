@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 import validate_agent_policies as validator
 
@@ -2539,6 +2542,27 @@ class AgentPolicyValidationTests(unittest.TestCase):
                 "auto_write_scope": "project-wide-only",
             },
         )
+
+    def test_both_machine_local_hook_configs_must_be_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+            (root / ".gitignore").write_text(
+                ".claude/settings.local.json\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                validator.validate_machine_local_hook_configs_ignored(root),
+                [".codex/hooks.json must remain ignored"],
+            )
+
+            with (root / ".gitignore").open("a", encoding="utf-8") as handle:
+                handle.write(".codex/hooks.json\n")
+            self.assertEqual(
+                validator.validate_machine_local_hook_configs_ignored(root),
+                [],
+            )
 
 
 if __name__ == "__main__":
