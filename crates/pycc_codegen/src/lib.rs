@@ -1303,7 +1303,18 @@ pub fn compile_to_object(
             "generic",
             "",
             OptimizationLevel::None,
-            RelocMode::Default,
+            // `RelocMode::Default` resolves to absolute (non-PIC)
+            // addressing for this LLVM/target pairing on Linux, but
+            // Ubuntu's `cc`/`gcc` links as a PIE by default (D-065):
+            // large-`.rodata` programs (confirmed with the
+            // `mandelbrot_ascii` fixture -- its ASCII palette/float
+            // constants push a relocation past what a 32-bit absolute
+            // reloc can express in a PIE) fail with "relocation
+            // R_X86_64_32 against `.rodata' can not be used when making
+            // a PIE object". `RelocMode::PIC` matches every Tier-1
+            // linker's actual default (mandatory on macOS, standard on
+            // Windows/MSVC, and Linux's own PIE default) uniformly.
+            RelocMode::PIC,
             CodeModel::Default,
         )
         .expect(
