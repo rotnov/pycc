@@ -2543,6 +2543,16 @@ class AgentPolicyValidationTests(unittest.TestCase):
             },
         )
 
+    def test_flag_parser_accepts_matching_duplicates(self) -> None:
+        self.assertEqual(
+            validator.parse_flag("enabled: true\nenabled: true\n"),
+            {"enabled": "true"},
+        )
+
+    def test_flag_parser_rejects_conflicting_duplicates(self) -> None:
+        with self.assertRaisesRegex(ValueError, "conflicting duplicate.*signal"):
+            validator.parse_flag("signal: all-feedback\nsignal: corrections-only\n")
+
     def test_both_machine_local_hook_configs_must_be_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
