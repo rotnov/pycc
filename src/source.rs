@@ -1,6 +1,3 @@
-use regex::bytes::Regex;
-use std::sync::OnceLock;
-
 const UTF8_BOM: &[u8] = b"\xef\xbb\xbf";
 
 #[derive(Clone, Copy)]
@@ -74,19 +71,44 @@ fn take_line(bytes: &[u8]) -> (&[u8], &[u8]) {
 }
 
 fn find_cookie(line: &[u8]) -> Option<String> {
-    cookie_regex().captures(line).map(|captures| {
-        std::str::from_utf8(&captures[1])
-            .expect("the encoding-cookie capture only permits ASCII")
-            .to_string()
-    })
-}
+    let leading_whitespace = line
+        .iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\x0c'))
+        .count();
+    let comment = line[leading_whitespace..].strip_prefix(b"#")?;
+    let mut search_start = 0;
 
-fn cookie_regex() -> &'static Regex {
-    static COOKIE: OnceLock<Regex> = OnceLock::new();
-    COOKIE.get_or_init(|| {
-        Regex::new(r"^[ \t\x0c]*#.*?coding[:=][ \t]*([-_.A-Za-z0-9]+)")
-            .expect("the PEP 263 encoding-cookie regex must compile")
-    })
+    while let Some(relative_start) = comment[search_start..]
+        .windows(b"coding".len())
+        .position(|window| window == b"coding")
+    {
+        let coding_start = search_start + relative_start;
+        let after_coding = &comment[coding_start + b"coding".len()..];
+        if let Some(after_marker) = after_coding
+            .strip_prefix(b":")
+            .or_else(|| after_coding.strip_prefix(b"="))
+        {
+            let label_start = after_marker
+                .iter()
+                .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                .count();
+            let label_len = after_marker[label_start..]
+                .iter()
+                .take_while(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                })
+                .count();
+            if label_len != 0 {
+                return Some(
+                    std::str::from_utf8(&after_marker[label_start..label_start + label_len])
+                        .expect("the encoding-cookie label only permits ASCII")
+                        .to_string(),
+                );
+            }
+        }
+        search_start = coding_start + 1;
+    }
+    None
 }
 
 fn is_comment_or_blank(line: &[u8]) -> bool {
@@ -209,6 +231,20 @@ mod tests {
             decode_python_source(b"# coding: latin-1 # Andr\xe9\n# \x80\xe9\nprint(42)\n").unwrap(),
             "# coding: latin-1 # Andr\u{e9}\n# \u{80}\u{e9}\nprint(42)\n"
         );
+    }
+
+    #[test]
+    fn recognizes_the_full_pep_263_cookie_shape_without_a_regex_dependency() {
+        assert_eq!(
+            find_cookie(b" \t\x0c# coding= latin_1\n").as_deref(),
+            Some("latin_1")
+        );
+        assert_eq!(
+            find_cookie(b"# coding utf-8; coding: ascii\n").as_deref(),
+            Some("ascii")
+        );
+        assert_eq!(find_cookie(b"# coding: !utf-8\n"), None);
+        assert_eq!(find_cookie(b"print('# coding: latin-1')\n"), None);
     }
 
     #[test]

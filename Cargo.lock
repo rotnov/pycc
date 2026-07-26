@@ -788,7 +788,6 @@ dependencies = [
  "pycc_mir",
  "pycc_parser",
  "pycc_types",
- "regex",
  "serde_json",
 ]
 
@@ -814,7 +813,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "unicode-width",
 ]
 
 [[package]]

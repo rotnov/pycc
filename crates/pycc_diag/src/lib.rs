@@ -1,5 +1,4 @@
 use std::fmt::Write;
-use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
@@ -237,8 +236,83 @@ fn is_bidi_format_control(character: char) -> bool {
     )
 }
 
+const ZERO_WIDTH_RANGES: &[(u32, u32)] = &[
+    (0x0300, 0x036f),
+    (0x1ab0, 0x1aff),
+    (0x1dc0, 0x1dff),
+    (0x20d0, 0x20ff),
+    (0xfe00, 0xfe0f),
+    (0xfe20, 0xfe2f),
+    (0x1f3fb, 0x1f3ff),
+    (0xe0100, 0xe01ef),
+];
+
+const WIDE_RANGES: &[(u32, u32)] = &[
+    (0x1100, 0x115f),
+    (0x2329, 0x232a),
+    (0x2e80, 0xa4cf),
+    (0xac00, 0xd7a3),
+    (0xf900, 0xfaff),
+    (0xfe10, 0xfe19),
+    (0xfe30, 0xfe6f),
+    (0xff00, 0xff60),
+    (0xffe0, 0xffe6),
+    (0x1f300, 0x1faff),
+    (0x20000, 0x3fffd),
+];
+
+fn in_scalar_ranges(character: char, ranges: &[(u32, u32)]) -> bool {
+    let scalar = u32::from(character);
+    ranges
+        .iter()
+        .any(|&(start, end)| start <= scalar && scalar <= end)
+}
+
+fn scalar_display_width(character: char) -> usize {
+    if in_scalar_ranges(character, ZERO_WIDTH_RANGES) {
+        0
+    } else if in_scalar_ranges(character, WIDE_RANGES) {
+        2
+    } else {
+        1
+    }
+}
+
+fn is_emoji_presentation_extension(character: char) -> bool {
+    matches!(character, '\u{fe0f}' | '\u{1f3fb}'..='\u{1f3ff}')
+}
+
 fn display_width(text: &str) -> usize {
-    text.split('\t').map(UnicodeWidthStr::width).sum()
+    let mut width = 0;
+    let mut current_cluster_width = 0;
+    let mut joins_next = false;
+    for character in text.chars() {
+        if character == '\u{200d}' {
+            joins_next = true;
+            continue;
+        }
+        if is_emoji_presentation_extension(character) {
+            if current_cluster_width == 1 {
+                width += 1;
+                current_cluster_width = 2;
+            }
+            continue;
+        }
+        let scalar_width = scalar_display_width(character);
+        if scalar_width == 0 {
+            continue;
+        }
+        if joins_next {
+            let joined_width = current_cluster_width.max(scalar_width);
+            width += joined_width - current_cluster_width;
+            current_cluster_width = joined_width;
+            joins_next = false;
+        } else {
+            width += scalar_width;
+            current_cluster_width = scalar_width;
+        }
+    }
+    width
 }
 
 fn display_padding(text: &str) -> String {
@@ -247,7 +321,7 @@ fn display_padding(text: &str) -> String {
         if index > 0 {
             padding.push('\t');
         }
-        padding.extend(std::iter::repeat_n(' ', UnicodeWidthStr::width(segment)));
+        padding.extend(std::iter::repeat_n(' ', display_width(segment)));
     }
     padding
 }
@@ -450,6 +524,8 @@ warning[W1001]: unreachable code
     #[test]
     fn diagnostic_padding_uses_whole_unicode_sequences_and_retains_tabs() {
         assert_eq!(display_padding("👩‍💻👍🏽"), "    ");
+        assert_eq!(display_padding("☝🏽❤️‍🔥"), "    ");
+        assert_eq!(display_padding("e\u{301}"), " ");
         assert_eq!(display_padding("\t👩‍💻"), "\t  ");
     }
 

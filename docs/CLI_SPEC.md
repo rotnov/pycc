@@ -115,6 +115,7 @@ Control characters and Unicode bidirectional-formatting controls in displayed
 paths and source excerpts are rendered as visible escapes so filenames or
 source text cannot inject terminal controls or visually reorder diagnostics.
 Literal source tabs remain tabs, and ordinary Unicode joiners remain intact.
-Human-format caret padding measures each complete non-tab Unicode sequence
-rather than summing individual scalar widths, so combining marks, emoji
-modifiers, and zero-width joiner sequences align with the rendered source.
+Human-format caret padding handles the current wide-character and common
+combining-mark blocks, emoji modifiers, and well-formed zero-width-joiner
+emoji sequences as terminal sequences rather than summing every scalar as one
+column. Full Unicode terminal-width conformance remains future work.
