@@ -63,7 +63,7 @@ evidence is a hard failure; there is no reusable bootstrap or administrative
 feature flag. D-048 and D-050 preserve the historical activation lifecycle and
 the reason it was bounded.
 
-### Staged paired-runner successor (D-051)
+### Staged paired-runner successor (D-051/D-053)
 
 Three complete CI attempts for PR #107 measured a documentation-and-test-only
 candidate at `+80.82%`, `+12.82%`, and `+7.30%` against the same exact
@@ -79,7 +79,9 @@ sequentially on one runner with separate target state. It seals the predecessor
 artifact before candidate code runs, so a lingering same-user process cannot
 rewrite the trusted side of the pair. The gate binds both downloads to the
 distinct numeric artifact IDs emitted by the trusted upload steps, so deleting
-and replacing an artifact under the same name fails closed. Its isolated gate
+and replacing an artifact under the same name fails closed. Each single-ID
+download is flattened into its own exact comparison directory, so the pinned
+action cannot add an artifact-name path component. Its isolated gate
 keeps the 2% threshold and hash-verified review boundary while using an
 exact-predecessor median comparator that is robust to isolated high outliers
 and accepts exactly two regular-file estimates. In this staging commit the

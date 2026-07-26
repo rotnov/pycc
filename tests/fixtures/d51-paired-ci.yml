@@ -535,12 +535,14 @@ jobs:
         with:
           artifact-ids: ${{ needs.frontend-perf-measure.outputs.predecessor_artifact_id }}
           path: target/criterion/pycc_check_frontend_fixture/previous
+          merge-multiple: true
 
       - name: Download candidate frontend timing
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           artifact-ids: ${{ needs.frontend-perf-measure.outputs.current_artifact_id }}
           path: target/criterion/pycc_check_frontend_fixture/current
+          merge-multiple: true
 
       - name: Require exact predecessor and candidate timing
         run: |
