@@ -411,18 +411,27 @@ class AgentAssetValidationTests(unittest.TestCase):
         claude_text: str,
         *,
         include_agents: bool = True,
+        agents_text: str | None = None,
     ) -> list[str]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             if include_agents:
+                if agents_text is None:
+                    agents_text = self.valid_agent_instructions()
                 (root / "AGENTS.md").write_text(
-                    "# Shared instructions\n",
+                    agents_text,
                     encoding="utf-8",
                 )
             (root / "CLAUDE.md").write_text(claude_text, encoding="utf-8")
             failures: list[str] = []
             validator.validate_instruction_parity(failures, root)
             return failures
+
+    @staticmethod
+    def valid_agent_instructions() -> str:
+        return "# Shared instructions\n\n" + "\n".join(
+            validator.REQUIRED_LIVE_MONITORING_INSTRUCTIONS
+        )
 
     def test_claude_instructions_import_the_canonical_agents_file(self) -> None:
         self.assertEqual(
@@ -450,11 +459,27 @@ class AgentAssetValidationTests(unittest.TestCase):
             ["AGENTS.md: canonical shared instructions are required"],
         )
 
+    def test_live_monitoring_instructions_are_required(self) -> None:
+        complete = self.valid_agent_instructions()
+        for instruction in validator.REQUIRED_LIVE_MONITORING_INSTRUCTIONS:
+            with self.subTest(instruction=instruction):
+                failures = self.instruction_parity_failures(
+                    "@AGENTS.md\n",
+                    agents_text=complete.replace(instruction, "missing", 1),
+                )
+                self.assertEqual(
+                    failures,
+                    [
+                        "AGENTS.md: missing required live-monitoring instruction: "
+                        f"{instruction}"
+                    ],
+                )
+
     def test_invalid_claude_instruction_encoding_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "AGENTS.md").write_text(
-                "# Shared instructions\n",
+                self.valid_agent_instructions(),
                 encoding="utf-8",
             )
             (root / "CLAUDE.md").write_bytes(b"\xffinvalid")
@@ -462,6 +487,16 @@ class AgentAssetValidationTests(unittest.TestCase):
             validator.validate_instruction_parity(failures, root)
             self.assertEqual(len(failures), 1)
             self.assertIn("could not read instruction import", failures[0])
+
+    def test_invalid_agents_instruction_encoding_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "AGENTS.md").write_bytes(b"\xffinvalid")
+            (root / "CLAUDE.md").write_text("@AGENTS.md\n", encoding="utf-8")
+            failures: list[str] = []
+            validator.validate_instruction_parity(failures, root)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("could not read canonical instructions", failures[0])
 
     def claude_settings(
         self,

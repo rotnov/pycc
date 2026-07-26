@@ -71,6 +71,21 @@ REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
 PINNED_CLAUDE_PLUGINS = {"ievo@ievo-skills"}
 INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md"}
 CLAUDE_INSTRUCTION_IMPORT = "@AGENTS.md\n"
+REQUIRED_LIVE_MONITORING_INSTRUCTIONS = (
+    "## Monitor only live repository events",
+    "Establish an explicit monitoring checkpoint",
+    "After the checkpoint, monitor only a newly observed default-branch commit",
+    "A pull request or issue cited only by documentation",
+    "is historical evidence, not a live target",
+    "Do not poll a closed or merged pull request or a closed issue",
+    "inspect an issue only when the active task explicitly names it",
+    "query the pull request's current state, draft status, mergeability, "
+    "head commit, and unresolved review threads",
+    "Stop waiting and re-evaluate when it closes, merges, becomes conflicting, "
+    "or its head changes",
+    "never keep polling checks for a superseded head",
+    "Advance the checkpoint only after recording the new authoritative state",
+)
 CLAUDE_SETTINGS_PATH = Path(".claude/settings.json")
 CLAUDE_MARKETPLACE_DECLARATION_FIELDS = {
     "enabledPlugins",
@@ -2151,6 +2166,20 @@ def validate_instruction_parity(
     agents_path = root / "AGENTS.md"
     if not agents_path.is_file():
         failures.append("AGENTS.md: canonical shared instructions are required")
+    else:
+        try:
+            agents_text = agents_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            failures.append(
+                f"AGENTS.md: could not read canonical instructions: {error}"
+            )
+        else:
+            for instruction in REQUIRED_LIVE_MONITORING_INSTRUCTIONS:
+                if instruction not in agents_text:
+                    failures.append(
+                        "AGENTS.md: missing required live-monitoring instruction: "
+                        f"{instruction}"
+                    )
 
     claude_path = root / "CLAUDE.md"
     try:
