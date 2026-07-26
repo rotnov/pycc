@@ -108,6 +108,33 @@ fizzbuzz(15)
 }
 
 #[test]
+fn a_for_loop_over_range_binds_its_variable_as_int_and_iterates_the_expected_values() {
+    // Post-review follow-up (fix round, same shape as the f-string gap
+    // caught in the original post-review pass): `docs/ROADMAP.md`'s
+    // "Compiler pipeline" and "Language surface" rows cite `tests/slice0.rs`
+    // and this file together as proving `if`/`while`/`for`+`range` end to
+    // end in `build`/`run`, but neither file previously contained a single
+    // `for ... in range(...)` fixture (`tests/slice0.rs`'s two `for` hits
+    // are Rust harness loops, not compiled Python source). `for`/`range` is
+    // genuinely implemented end to end (`pycc_hir` -> `pycc_types` ->
+    // `pycc_mir` -> `pycc_codegen`, each with its own unit tests), so this
+    // closes the citation gap rather than adding a new feature. Exercises
+    // both the one-argument (`range(stop)`, implicit `start=0`/`step=1`)
+    // and two-argument (`range(start, stop)`) forms.
+    let source = "\
+total = 0
+for i in range(5):
+    total = total + i
+print(total)
+for j in range(1, 4):
+    print(j)
+";
+    let output = build_and_run("for_range_basic", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"10\n1\n2\n3\n");
+}
+
+#[test]
 fn a_basic_f_string_interpolates_a_str_and_an_int_local_between_literal_parts() {
     // Not in the plan brief's own Step 2-5 list, but this file's own task
     // description ("recursive functions, control flow, arithmetic, strings,
