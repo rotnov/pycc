@@ -462,9 +462,10 @@ PAGE_SPECS = {
             "seals the predecessor timing before candidate code runs",
             "Before candidate code runs, it classifies the complete src/ and crates/ trees",
             "Identical executable inputs keep the timing delta as visible, non-blocking environment telemetry.",
-            "Changed source keeps the hard greater-than-2% median regression block.",
+            "Changed source uses exactly five complete runs per revision, compares the median of their per-run medians, and keeps the hard greater-than-2% regression block.",
+            "All ten timing files are retained.",
             "The gate compares through a hash-verified predecessor-owned checker.",
-            "Revision, benchmark-contract, executable-input identity, artifact-identity, and comparison drift fail closed.",
+            "Revision, benchmark-contract, executable-input identity, artifact-identity, exact file-set, and comparison drift fail closed.",
         ),
     },
     "architecture": {

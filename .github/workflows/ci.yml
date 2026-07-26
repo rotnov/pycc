@@ -326,8 +326,10 @@ jobs:
   # therefore untrusted. It seals the exact predecessor timing in an immutable
   # artifact before candidate code runs, then measures the candidate on the
   # same hosted runner. It also proves whether every executable benchmark input
-  # is byte-identical before candidate code runs. The separate gate job never
-  # executes compiler/build code from the PR.
+  # is byte-identical before candidate code runs. Five fixed complete samples
+  # per revision make an isolated runner spike non-decisive when those inputs
+  # changed, without selecting retries after seeing a result. The separate gate
+  # job never executes compiler/build code from the PR.
   frontend-perf-measure:
     runs-on: macos-14
     permissions:
@@ -455,15 +457,18 @@ jobs:
         run: |
           set -euo pipefail
           previous_target="$RUNNER_TEMP/pycc-paired-perf-previous"
-          (
-            cd previous
-            CARGO_TARGET_DIR="$previous_target" \
-              cargo bench --locked --bench check_bench -- --save-baseline paired
-          )
-          previous_timing="$previous_target/criterion/pycc_check_frontend_fixture/paired/estimates.json"
           timing_dir="$(mktemp -d "$RUNNER_TEMP/pycc-previous-timing.XXXXXX")"
-          cp "$previous_timing" "$timing_dir/estimates.json"
-          printf 'timing_path=%s\n' "$timing_dir/estimates.json" >> "$GITHUB_OUTPUT"
+          for round in 1 2 3 4 5; do
+            baseline="replicate-$round"
+            (
+              cd previous
+              CARGO_TARGET_DIR="$previous_target" \
+                cargo bench --locked --bench check_bench -- --save-baseline "$baseline"
+            )
+            previous_timing="$previous_target/criterion/pycc_check_frontend_fixture/$baseline/estimates.json"
+            cp "$previous_timing" "$timing_dir/round-$round.json"
+          done
+          printf 'timing_path=%s\n' "$timing_dir" >> "$GITHUB_OUTPUT"
 
       - name: Upload sealed predecessor frontend timing
         id: previous_upload
@@ -482,15 +487,18 @@ jobs:
         run: |
           set -euo pipefail
           current_target="$RUNNER_TEMP/pycc-paired-perf-current"
-          (
-            cd current
-            CARGO_TARGET_DIR="$current_target" \
-              cargo bench --locked --bench check_bench -- --save-baseline paired
-          )
-          current_timing="$current_target/criterion/pycc_check_frontend_fixture/paired/estimates.json"
           timing_dir="$(mktemp -d "$RUNNER_TEMP/pycc-current-timing.XXXXXX")"
-          cp "$current_timing" "$timing_dir/estimates.json"
-          printf 'timing_path=%s\n' "$timing_dir/estimates.json" >> "$GITHUB_OUTPUT"
+          for round in 1 2 3 4 5; do
+            baseline="replicate-$round"
+            (
+              cd current
+              CARGO_TARGET_DIR="$current_target" \
+                cargo bench --locked --bench check_bench -- --save-baseline "$baseline"
+            )
+            current_timing="$current_target/criterion/pycc_check_frontend_fixture/$baseline/estimates.json"
+            cp "$current_timing" "$timing_dir/round-$round.json"
+          done
+          printf 'timing_path=%s\n' "$timing_dir" >> "$GITHUB_OUTPUT"
 
       - name: Upload candidate frontend timing
         id: current_upload
@@ -501,7 +509,7 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  # Required by ci-gate (D-044/D-056). This job consumes the paired
+  # Required by ci-gate (D-044/D-062). This job consumes the paired
   # measurement only as JSON data and verifies immutable hashes for the
   # reviewed comparator and its tests before executing them.
   frontend-perf-gate:
@@ -517,21 +525,21 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.frontend-perf-measure.outputs.predecessor_sha }}
           sparse-checkout: |
-            scripts/check_source_aware_perf_regression.rb
-            scripts/test_check_source_aware_perf_regression.rb
+            scripts/check_replicated_paired_perf_regression.rb
+            scripts/test_check_replicated_paired_perf_regression.rb
           sparse-checkout-cone-mode: false
 
       - name: Verify reviewed performance checker
         run: |
           printf '%s  %s\n' \
-            55ce7259ff164a43a98187cb7b611794a8417dc3dfddf3f4fb689776ab83adcb \
-            scripts/check_source_aware_perf_regression.rb \
-            b5ccd35af90dcff6f9fff30ec9075ab9d780694fc9941954913f5bd4407b2b34 \
-            scripts/test_check_source_aware_perf_regression.rb |
+            d296e48859b1813685f06244c6d401119de57ec1842fe7c47d8ecbbdb1318c06 \
+            scripts/check_replicated_paired_perf_regression.rb \
+            bdda7c21cf96d35ee00af6893493b9f84025b35998e5a4bcba88019604757b10 \
+            scripts/test_check_replicated_paired_perf_regression.rb |
             shasum -a 256 --check
 
       - name: Test reviewed performance checker
-        run: ruby scripts/test_check_source_aware_perf_regression.rb
+        run: ruby scripts/test_check_replicated_paired_perf_regression.rb
 
       - name: Require sealed artifact identities
         env:
@@ -583,15 +591,19 @@ jobs:
           set -euo pipefail
           timing_root="target/criterion/pycc_check_frontend_fixture"
           for revision in previous current; do
-            timing="$timing_root/$revision/estimates.json"
-            if [ ! -f "$timing" ] || [ -L "$timing" ]; then
-              echo "paired frontend timing is missing $revision/estimates.json" >&2
-              exit 1
-            fi
+            for round in 1 2 3 4 5; do
+              timing="$timing_root/$revision/round-$round.json"
+              if [ ! -f "$timing" ] || [ -L "$timing" ]; then
+                echo "replicated frontend timing is missing $revision/round-$round.json" >&2
+                exit 1
+              fi
+            done
           done
           file_count="$(find "$timing_root" -type f | wc -l | tr -d '[:space:]')"
-          if [ "$file_count" -ne 2 ] || find "$timing_root" -type l | grep -q .; then
-            echo "paired frontend timing must contain exactly two regular files" >&2
+          entry_count="$(find "$timing_root" -mindepth 1 | wc -l | tr -d '[:space:]')"
+          if [ "$file_count" -ne 10 ] || [ "$entry_count" -ne 12 ] || \
+              find "$timing_root" -type l | grep -q .; then
+            echo "replicated frontend timing must contain exactly two directories and ten regular files" >&2
             exit 1
           fi
 
@@ -599,9 +611,9 @@ jobs:
         env:
           EXECUTABLE_INPUTS_EQUAL: ${{ needs.frontend-perf-measure.outputs.executable_inputs_equal }}
         run: |
-          ruby scripts/check_source_aware_perf_regression.rb \
-            target/criterion/pycc_check_frontend_fixture/current/estimates.json \
-            target/criterion/pycc_check_frontend_fixture/previous/estimates.json \
+          ruby scripts/check_replicated_paired_perf_regression.rb \
+            target/criterion/pycc_check_frontend_fixture/current \
+            target/criterion/pycc_check_frontend_fixture/previous \
             "$EXECUTABLE_INPUTS_EQUAL"
 
   ci-gate:

@@ -44,15 +44,18 @@ slice. Code-generation and runtime breadth are the next delivery step. These
 facts must move with the authoritative roadmap whenever implementation depth
 changes.
 
-The status page presents D-051/D-053/D-056's active source-aware paired gate
+The status page presents D-051/D-053/D-056/D-062's active fixed-replicate,
+source-aware paired gate
 independently of later compiler slices. It states that the frontend measurement
 and regression gate are required through `ci-gate`, measure the exact
 predecessor and candidate sequentially on one hosted runner, seal the
 predecessor timing before candidate code runs, and classify complete
 repository-owned executable inputs before that execution. Identical inputs
-make timing non-blocking environment telemetry; changed source keeps the hard
-greater-than-2% block. The gate fails closed on revision, benchmark-contract,
-executable-input identity, artifact-identity, or comparison drift.
+make timing non-blocking environment telemetry; changed source uses exactly
+five complete runs per revision, compares the median of their per-run medians,
+and keeps the hard greater-than-2% block. The gate fails closed on revision,
+benchmark-contract, executable-input identity, artifact-identity, exact
+ten-file evidence, or comparison drift.
 
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile

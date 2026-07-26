@@ -533,13 +533,25 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "Changed source keeps the hard greater-than-2%",
-        "Changed source disables the greater-than-2%",
+        "Changed source uses exactly five complete",
+        "Changed source uses one convenient",
+        "status page without fixed changed-source replicates",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "keeps the hard greater-than-2%",
+        "disables the greater-than-2%",
         "status page without the changed-source hard threshold",
     ),
     (
         site_dir / "status" / "index.html",
-        "Revision, benchmark-contract,\n              executable-input identity, artifact-identity, and",
+        "All ten timing\n              files are retained.",
+        "Only the favorable timing file is retained.",
+        "status page without complete fixed-sample evidence",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "Revision, benchmark-contract,\n              executable-input identity, artifact-identity, exact file-set, and",
         "Revision and comparison differences are tolerated, and",
         "status page without fail-closed source-aware paired evidence",
     ),
