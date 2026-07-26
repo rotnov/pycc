@@ -224,7 +224,9 @@ place. Codex's `.codex/hooks.json` is also ignored and checked as local state. I
 newer iEvo release rewrites `.gitignore` to propose tracked dispatcher shims, the
 helper removes only those known exception lines and restores the repository's
 whole-directory `.ievo/hooks/` ignore rule. Missing or symlinked targets fail closed
-before configuration is relocated.
+before configuration is relocated. A reference to a managed target under an unknown
+event or command form also fails closed before mutation rather than allowing disable
+to delete a still-referenced script.
 
 Use the repository's clone-local inverse rather than generic disable alone:
 
@@ -235,6 +237,7 @@ python3 scripts/manage_ievo_hooks.py disable
 It parses all present shared and local configurations before changing any of them,
 removes only exact iEvo entries from both Claude locations and the Codex hook file,
 then removes the generated scripts/companions and their vendored fallback directory.
+Empty or otherwise unrelated hook groups are preserved exactly.
 The tracked `.ievo/evo-auto.flag` remains unchanged because it records repository
 intent and is required by agent-policy validation; disabling that shared intent is a
 separate reviewed repository change under D-023. Repeating either lifecycle operation

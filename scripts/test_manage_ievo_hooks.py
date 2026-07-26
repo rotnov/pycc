@@ -154,7 +154,9 @@ class IevoHookLifecycleTests(unittest.TestCase):
                             "matcher": "project",
                             "hooks": [unrelated_entry],
                         }
-                    ]
+                    ],
+                    "Stop": [{"matcher": "empty", "hooks": []}],
+                    "Notification": [],
                 },
             }
             shared = {
@@ -193,6 +195,8 @@ class IevoHookLifecycleTests(unittest.TestCase):
                             )
                         )
                     ],
+                    "Stop": [{"matcher": "empty", "hooks": []}],
+                    "Notification": [],
                 },
             }
             local = {
@@ -279,6 +283,11 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 rewritten_shared["hooks"]["UserPromptSubmit"][0]["hooks"],
                 [unrelated_entry],
             )
+            self.assertEqual(
+                rewritten_shared["hooks"]["Stop"],
+                [{"matcher": "empty", "hooks": []}],
+            )
+            self.assertEqual(rewritten_shared["hooks"]["Notification"], [])
             self.assertEqual(rewritten_local["env"], {"LOCAL_ONLY": "true"})
             self.assertEqual(
                 rewritten_local["hooks"]["UserPromptSubmit"][0]["matcher"],
@@ -549,6 +558,33 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 self.records(self.read_json(root, manager.CLAUDE_SHARED)),
                 set(),
             )
+
+    def test_disable_rejects_an_unsupported_reference_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            shared = {
+                "hooks": {
+                    "UserPromptSubmit": [self.group(self.command_entry(target))],
+                    "Stop": [self.group(self.command_entry(target, shell_form=True))],
+                }
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            self.create_generated_files(root)
+            before = (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "unsupported iEvo hook reference",
+            ):
+                manager.disable(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                before,
+            )
+            self.assertTrue((root / manager.FLAG).is_file())
+            self.assertTrue((root / target).is_file())
 
 
 if __name__ == "__main__":

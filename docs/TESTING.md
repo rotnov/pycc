@@ -267,8 +267,10 @@ ignore exceptions are removed; repeated localize and disable operations are stab
 and disable removes every exact iEvo entry before its generated targets while
 preserving the tracked shared-intent flag. The full lifecycle also verifies that the
 tracked view returns to clean after upstream-style enable mutations are normalized.
-Separate
-negative cases prove a missing target or malformed local JSON fails before mutation.
+It preserves unrelated empty hook groups/events and makes refreshed shared metadata
+win over stale duplicate local metadata. Separate negative cases prove a missing
+target, malformed local JSON, or an unsupported reference to a managed target fails
+before mutation.
 `scripts/validate_agent_policies.py` additionally requires both
 `.claude/settings.local.json` and `.codex/hooks.json` to remain ignored in the real
 tracked checkout.

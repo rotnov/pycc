@@ -224,31 +224,85 @@ def strip_ievo_entries(
             rewritten_hooks[event] = groups
             continue
         rewritten_groups: list[Any] = []
+        event_changed = False
         for group in groups:
             if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
                 rewritten_groups.append(group)
                 continue
             remaining_entries: list[Any] = []
+            group_changed = False
             for entry in group["hooks"]:
                 target = hook_target(event, entry)
                 if target is None:
                     remaining_entries.append(entry)
                     continue
+                group_changed = True
+                event_changed = True
                 moved_group = copy.deepcopy(group)
                 moved_group["hooks"] = [copy.deepcopy(entry)]
                 records.append((event, target, moved_group))
-            if remaining_entries:
+            if remaining_entries or not group_changed:
                 rewritten_group = copy.deepcopy(group)
                 rewritten_group["hooks"] = remaining_entries
                 rewritten_groups.append(rewritten_group)
-        if rewritten_groups:
+        if rewritten_groups or not event_changed:
             rewritten_hooks[event] = rewritten_groups
 
-    if rewritten_hooks:
+    if rewritten_hooks or not records:
         result["hooks"] = rewritten_hooks
     else:
         result.pop("hooks", None)
     return result, records
+
+
+ManagedReference = tuple[str, Path]
+
+
+def managed_target_references(settings: dict[str, Any]) -> list[ManagedReference]:
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return []
+
+    references: list[ManagedReference] = []
+    target_texts = {target.as_posix(): target for target in SCRIPT_TARGETS.values()}
+    for event, groups in hooks.items():
+        if not isinstance(event, str) or not isinstance(groups, list):
+            continue
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                continue
+            for entry in group["hooks"]:
+                if not isinstance(entry, dict):
+                    continue
+                values: list[str] = []
+                command = entry.get("command")
+                if isinstance(command, str):
+                    values.append(command)
+                arguments = entry.get("args")
+                if isinstance(arguments, list):
+                    values.extend(
+                        value for value in arguments if isinstance(value, str)
+                    )
+                for target_text, target in target_texts.items():
+                    if any(target_text in value for value in values):
+                        references.append((event, target))
+    return list(dict.fromkeys(references))
+
+
+def ensure_no_managed_target_references(
+    relative: Path,
+    settings: dict[str, Any],
+) -> None:
+    references = managed_target_references(settings)
+    if not references:
+        return
+    details = ", ".join(
+        f"{event} -> {target.as_posix()}" for event, target in references
+    )
+    raise HookLifecycleError(
+        f"unsupported iEvo hook reference remains in {relative}: {details}; "
+        "update the lifecycle helper before deleting managed targets"
+    )
 
 
 def add_records(
@@ -301,7 +355,13 @@ def localize(root: Path) -> None:
 
     rewritten_shared, shared_records = strip_ievo_entries(shared)
     stripped_local, local_records = strip_ievo_entries(local)
-    _, codex_records = strip_ievo_entries(codex)
+    stripped_codex, codex_records = strip_ievo_entries(codex)
+    for relative, stripped in (
+        (CLAUDE_SHARED, rewritten_shared),
+        (CLAUDE_LOCAL, stripped_local),
+        (CODEX_LOCAL, stripped_codex),
+    ):
+        ensure_no_managed_target_references(relative, stripped)
     # A refresh writes authoritative metadata to shared settings. Prefer that
     # record over an older local copy when add_records() deduplicates by target.
     claude_records = [*shared_records, *local_records]
@@ -343,7 +403,8 @@ def local_records(root: Path) -> list[HookRecord]:
         settings = read_json(root, relative, required=False)
         if settings is None:
             continue
-        _, found = strip_ievo_entries(settings)
+        without_ievo, found = strip_ievo_entries(settings)
+        ensure_no_managed_target_references(relative, without_ievo)
         records.extend(found)
     return records
 
@@ -351,7 +412,8 @@ def local_records(root: Path) -> list[HookRecord]:
 def check(root: Path, *, smoke: bool) -> None:
     shared = read_json(root, CLAUDE_SHARED, required=True)
     assert shared is not None
-    _, shared_records = strip_ievo_entries(shared)
+    without_shared_ievo, shared_records = strip_ievo_entries(shared)
+    ensure_no_managed_target_references(CLAUDE_SHARED, without_shared_ievo)
     if shared_records:
         raise HookLifecycleError(
             "iEvo hook entries remain in shared .claude/settings.json; run localize"
@@ -402,6 +464,7 @@ def disable(root: Path) -> None:
     rewritten: list[tuple[Path, dict[str, Any], dict[str, Any]]] = []
     for relative, settings in configurations:
         without_ievo, _ = strip_ievo_entries(settings)
+        ensure_no_managed_target_references(relative, without_ievo)
         rewritten.append((relative, settings, without_ievo))
     for relative, original, updated in rewritten:
         if updated != original:
