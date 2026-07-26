@@ -4597,10 +4597,10 @@ mod tests {
 
     /// Test-only linking helper. `pycc`'s real CLI (Task 8) does this via
     /// `cc`/clang (see `src/main.rs`'s `linker_command`/`effective_link_target`/
-    /// `add_windows_system_libs`); duplicated minimally here so
-    /// pycc_codegen's own tests can prove the object file it produces
-    /// actually links and runs, without depending on the `pycc` binary
-    /// crate (that would be a dependency cycle: pycc depends on
+    /// `add_windows_system_libs`/`add_linux_system_libs`); duplicated
+    /// minimally here so pycc_codegen's own tests can prove the object file
+    /// it produces actually links and runs, without depending on the `pycc`
+    /// binary crate (that would be a dependency cycle: pycc depends on
     /// pycc_codegen, not the other way around). Needs the same Windows
     /// handling as `main.rs`, and for the same reasons: there's no default
     /// `cc` there (D-028) -- on this runner it silently resolved to
@@ -4609,7 +4609,12 @@ mod tests {
     /// already diagnosed for `main.rs`, reproduced here because this
     /// helper wasn't covered by that fix); clang's bare-invocation default
     /// target also proved unreliable (D-028), so `-target` must be
-    /// explicit too.
+    /// explicit too. Needs the same Linux handling too, for the same
+    /// reason `main.rs` does (`f64::powf` -> libm's `pow`, not linked by
+    /// GCC's/clang's default driver invocation): this helper's own
+    /// `undefined reference to 'pow'` failure on both Linux architectures
+    /// wasn't covered by that fix either, since it's a separate linker
+    /// invocation from `main.rs`'s.
     fn link_object_with_runtime(obj_path: &std::path::Path, bin_path: &std::path::Path) {
         let rt_lib_dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug");
@@ -4649,6 +4654,9 @@ mod tests {
         ] {
             cmd.arg(format!("-l{lib}"));
         }
+
+        #[cfg(target_os = "linux")]
+        cmd.arg("-lm");
 
         let status = cmd.status().expect("the linker driver should run");
         assert!(status.success(), "linking failed");
