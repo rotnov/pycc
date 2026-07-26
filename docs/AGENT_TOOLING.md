@@ -94,16 +94,23 @@ before creating an issue or comment in `rotnov/pycc`.
 The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary
 `pycc` offline eval creates a self-contained temporary source file, invokes the
-freshly built compiler, executes the generated binary, and checks its exact
-output. Its two failure scenarios also execute the current `check --fix`
-rejection and a self-created parser failure. The `pycc-feedback` cases exercise
-draft-only, private-source refusal, and context-free-consent invariants through
-a fail-closed safety oracle that cannot perform a network write. All four
-reviewed `i-have-an-issue` scenarios validate their distinct evidence criteria
-and execute the vendored search helper's local help path without a network
-request. The unit suite covers full scenario dispatch, build failure, wrong
-output, entrypoint drift, incomplete runner registration, and every consent
-predicate.
+freshly built compiler, executes the generated binary and the `pycc run` path,
+and checks their exact output. Its diagnostic scenario proves that the current
+strict `check` path emits `T0021` before separately observing that the planned
+`--fix` flag is still rejected. Its backend scenario proves that the same
+inferred-assignment fixture passes `check` before `build` reaches the current
+exit-101 `pycc_mir` PR-5 boundary, so the skill must classify the raw public-CLI
+panic without confusing frontend and backend support. The `pycc-feedback`
+cases exercise exact-draft, private-source refusal, and context-free-consent
+invariants through a fail-closed safety oracle that cannot perform a network
+write. All four reviewed `i-have-an-issue` scenarios validate their distinct
+evidence criteria and execute the vendored search helper's local help path
+without a network request. The unit suite covers full scenario dispatch,
+build failure, wrong output, stale frontend claims, current-stage panic drift,
+entrypoint drift, incomplete runner registration, and every consent predicate.
+Every offline subprocess fails closed after 30 seconds, and every declared
+project-alpha case must bind an executable runner instead of being silently
+skipped.
 
 These deterministic checks do not invoke a language model and do not claim
 that either client's generated response conforms to the prompts. Authenticated

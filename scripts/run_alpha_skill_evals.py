@@ -22,13 +22,14 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
+COMMAND_TIMEOUT_SECONDS = 30
 CANONICAL_REFERENCE = re.compile(
     r"`(?P<path>\.claude/skills/(?P<name>[a-z][a-z0-9-]*)/SKILL\.md)`"
 )
 EXPECTED_RUNNERS = {
     "pycc": {
         "build-and-run-self-created-fixture",
-        "capture-parser-failure-without-write",
+        "classify-backend-panic-without-write",
         "observe-current-check-fix-rejection",
     },
     "pycc-feedback": {
@@ -101,12 +102,19 @@ def run_command(
     arguments: list[str],
     cwd: Path,
 ) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        arguments,
-        cwd=cwd,
-        check=False,
-        capture_output=True,
-    )
+    try:
+        return subprocess.run(
+            arguments,
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise EvalError(
+            f"alpha eval command timed out after {COMMAND_TIMEOUT_SECONDS}s: "
+            f"{arguments[0]}"
+        ) from error
 
 
 def canonical_skill(
@@ -167,11 +175,9 @@ def load_cases(name: str, root: Path = ROOT) -> list[dict[str, Any]]:
                 f"{path} must retain every reviewed research scenario"
             )
     else:
-        runner_names = {
-            case["runner"]
-            for case in cases
-            if isinstance(case.get("runner"), str)
-        }
+        if not all(isinstance(case.get("runner"), str) for case in cases):
+            raise EvalError(f"{path} requires an executable runner for every eval")
+        runner_names = {case["runner"] for case in cases}
         if runner_names != EXPECTED_RUNNERS[name]:
             raise EvalError(
                 f"{path} must bind exactly the executable runners for {name}"
@@ -231,6 +237,13 @@ def run_pycc_success(
                 "alpha pycc executable must emit exactly stdout '42\\n' "
                 "and empty stderr"
             )
+        pycc_run = runner([str(pycc_binary), "run", str(source)], root)
+        require_success(pycc_run, "alpha pycc run eval")
+        if pycc_run.stdout != b"42\n" or pycc_run.stderr != b"":
+            raise EvalError(
+                "alpha pycc run must emit exactly stdout '42\\n' "
+                "and empty stderr"
+            )
 
 
 def run_pycc_check_rejection(
@@ -243,24 +256,51 @@ def run_pycc_check_rejection(
     if "check --fix" not in case["prompt"]:
         raise EvalError("pycc check eval must exercise the planned --fix path")
     expected = case["expected_output"]
-    for fragment in ("recognized but unimplemented", "not currently parsed"):
+    for fragment in (
+        "implemented check command",
+        "T0021 diagnostic",
+        "--fix is not parsed",
+    ):
         if fragment not in expected:
             raise EvalError("pycc check eval has an incomplete expected output")
-    for contract in ("planned", "not-implemented", "exit `0`"):
-        if contract not in skill_text:
+    normalized_skill = " ".join(skill_text.split())
+    for contract in (
+        "strict type-checker subset",
+        "`check --fix` is not parsed",
+        "exit `1`",
+    ):
+        if contract not in normalized_skill:
             raise EvalError(f"pycc skill is missing {contract!r}")
 
-    result = runner([str(pycc_binary), "check", "--fix"], root)
-    stderr = result.stderr.decode("utf-8", errors="replace")
-    if (
-        result.returncode != 2
-        or result.stdout != b""
-        or "unexpected argument '--fix' found" not in stderr
-        or "Usage: pycc check [OPTIONS] [PATH]" not in stderr
-    ):
-        raise EvalError(
-            "pycc check --fix must remain an observed invalid invocation"
+    with tempfile.TemporaryDirectory(prefix="pycc-alpha-check-eval-") as directory:
+        source = Path(directory) / "type-error.py"
+        source.write_text(
+            'for item in range("three"):\n    print(item)\n',
+            encoding="utf-8",
         )
+        check = runner([str(pycc_binary), "check", str(source)], root)
+        if (
+            check.returncode != 1
+            or b"error[T0021]" not in check.stdout
+            or check.stderr != b""
+        ):
+            raise EvalError(
+                "implemented pycc check must emit the observed T0021 diagnostic"
+            )
+
+        fix = runner(
+            [str(pycc_binary), "check", str(source), "--fix"],
+            root,
+        )
+        stderr = fix.stderr.decode("utf-8", errors="replace")
+        if (
+            fix.returncode != 2
+            or fix.stdout != b""
+            or "unexpected argument '--fix' found" not in stderr
+        ):
+            raise EvalError(
+                "pycc check --fix must remain an observed invalid invocation"
+            )
 
 
 def run_pycc_failure(
@@ -270,15 +310,27 @@ def run_pycc_failure(
     root: Path = ROOT,
     runner: CommandRunner = run_command,
 ) -> None:
-    if "makes pycc panic" not in case["prompt"]:
-        raise EvalError("pycc failure eval must start from a suspected panic")
+    if not all(
+        fragment in case["prompt"]
+        for fragment in ("passes pycc check", "pycc build panics")
+    ):
+        raise EvalError(
+            "pycc failure eval must compare check with the backend panic"
+        )
     expected = case["expected_output"]
-    for fragment in ("identifies the failing compiler stage", "without posting"):
+    for fragment in (
+        "check succeeds",
+        "build exits 101",
+        "pycc_mir backend lowering",
+        "robustness defect",
+        "without posting",
+    ):
         if fragment not in expected:
             raise EvalError("pycc failure eval has an incomplete expected output")
     for contract in (
         "smallest self-contained",
-        "parser, type-checker, lowering, codegen, linker",
+        "uncaught compiler panic",
+        "public CLI acceptable",
         "$pycc-feedback",
     ):
         if contract not in skill_text:
@@ -286,10 +338,24 @@ def run_pycc_failure(
 
     with tempfile.TemporaryDirectory(prefix="pycc-alpha-failure-eval-") as directory:
         temporary = Path(directory)
-        source = temporary / "parser-error.py"
-        source.write_text("def\n", encoding="utf-8")
-        executable_name = "parser-error.exe" if os.name == "nt" else "parser-error"
-        result = runner(
+        source = temporary / "backend-panic.py"
+        source.write_text(
+            "def main() -> None:\n"
+            "    value = 1\n"
+            "    print(42)\n\n"
+            "main()\n",
+            encoding="utf-8",
+        )
+        check = runner([str(pycc_binary), "check", str(source)], root)
+        if check.returncode != 0 or check.stdout != b"" or check.stderr != b"":
+            raise EvalError(
+                "backend panic fixture must first pass frontend-only check"
+            )
+
+        executable_name = (
+            "backend-panic.exe" if os.name == "nt" else "backend-panic"
+        )
+        build = runner(
             [
                 str(pycc_binary),
                 "build",
@@ -300,12 +366,13 @@ def run_pycc_failure(
             root,
         )
         if (
-            result.returncode != 1
-            or result.stdout != b""
-            or b"error[L0001]" not in result.stderr
+            build.returncode != 101
+            or build.stdout != b""
+            or b"panicked at" not in build.stderr
+            or b"pycc_mir" not in build.stderr
         ):
             raise EvalError(
-                "synthetic parser failure must return one L0001 diagnostic"
+                "backend fixture must reproduce the current exit-101 MIR panic"
             )
 
 
@@ -370,13 +437,17 @@ def run_feedback_case(
     publications: list[str] = []
     if runner_name == "prepare-sanitized-draft-without-write":
         state = SubmissionState(False, False, True)
-        required = ("sanitizes the payload", "waits for explicit approval")
+        required = (
+            "Must reproduce",
+            "sanitize the payload",
+            "wait for explicit approval",
+        )
     elif runner_name == "refuse-private-automatic-publication":
         state = SubmissionState(False, False, False)
-        required = ("Refuses automatic", "exact per-payload approval")
+        required = ("Must refuse automatic", "exact per-payload approval")
     elif runner_name == "require-exact-payload-preview":
         state = SubmissionState(False, True, True)
-        required = ("context-free consent", "exact repository")
+        required = ("Must not treat context-free consent", "exact repository")
     else:
         raise EvalError(f"unknown feedback runner {runner_name!r}")
 
@@ -397,7 +468,7 @@ def run_evals(
     pycc_cases = load_cases("pycc", root)
     pycc_dispatch = {
         "build-and-run-self-created-fixture": run_pycc_success,
-        "capture-parser-failure-without-write": run_pycc_failure,
+        "classify-backend-panic-without-write": run_pycc_failure,
         "observe-current-check-fix-rejection": run_pycc_check_rejection,
     }
     for case in pycc_cases:
@@ -409,8 +480,7 @@ def run_evals(
 
     feedback_skill = canonical_skill(client, "pycc-feedback", root)
     for case in load_cases("pycc-feedback", root):
-        if "runner" in case:
-            run_feedback_case(case, feedback_skill)
+        run_feedback_case(case, feedback_skill)
 
     research_skill = canonical_skill(client, "i-have-an-issue", root)
     for case in load_cases("i-have-an-issue", root):

@@ -48,11 +48,12 @@ FEEDBACK_CONSENT_GUARDS = (
     "make no external change",
     "sanitize every outbound query",
     "user-authored code",
+    "uncaught panic from the public compiler CLI",
 )
 ALPHA_EVAL_RUNNERS = {
     "pycc": {
         "build-and-run-self-created-fixture",
-        "capture-parser-failure-without-write",
+        "classify-backend-panic-without-write",
         "observe-current-check-fix-rejection",
     },
     "pycc-feedback": {
@@ -2249,6 +2250,7 @@ def validate_alpha_skill_contracts(
             and bool(case["prompt"].strip())
             and isinstance(case.get("expected_output"), str)
             and bool(case["expected_output"].strip())
+            and isinstance(case.get("runner"), str)
             for case in cases
         ):
             failures.append(f"{evals_relative}: contains a malformed eval")

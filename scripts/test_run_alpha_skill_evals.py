@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import run_alpha_skill_evals as evals
 
@@ -17,7 +18,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 evals.canonical_skill("claude", name),
             )
 
-    def test_primary_eval_executes_build_and_generated_program(self) -> None:
+    def test_primary_eval_executes_both_supported_run_paths(self) -> None:
         calls: list[list[str]] = []
 
         def runner(
@@ -43,6 +44,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
         self.assertEqual(calls[0][1], "build")
         self.assertEqual(calls[0][3], "-o")
         self.assertEqual(len(calls[1]), 1)
+        self.assertEqual(calls[2][1], "run")
 
     def test_primary_eval_fails_when_compilation_fails(self) -> None:
         def runner(
@@ -100,19 +102,25 @@ class AlphaSkillEvalTests(unittest.TestCase):
             if arguments[-1] == "--help":
                 return subprocess.CompletedProcess(arguments, 0, b"usage\n", b"")
             if len(arguments) > 1 and arguments[1] == "check":
-                stderr = (
-                    b"error: unexpected argument '--fix' found\n"
-                    b"Usage: pycc check [OPTIONS] [PATH]\n"
-                )
-                return subprocess.CompletedProcess(arguments, 2, b"", stderr)
+                if "--fix" in arguments:
+                    stderr = b"error: unexpected argument '--fix' found\n"
+                    return subprocess.CompletedProcess(arguments, 2, b"", stderr)
+                if Path(arguments[2]).name == "type-error.py":
+                    return subprocess.CompletedProcess(
+                        arguments,
+                        1,
+                        b"error[T0021]: range stop expects `int`, got `str`\n",
+                        b"",
+                    )
+                return subprocess.CompletedProcess(arguments, 0, b"", b"")
             if len(arguments) > 1 and arguments[1] == "build":
                 if Path(arguments[2]).name == "program.py":
                     return subprocess.CompletedProcess(arguments, 0, b"", b"")
                 return subprocess.CompletedProcess(
                     arguments,
-                    1,
+                    101,
                     b"",
-                    b"error[L0001]: synthetic parser error\n",
+                    b"thread 'main' panicked at pycc_mir: PR-5 boundary\n",
                 )
             return subprocess.CompletedProcess(arguments, 0, b"42\n", b"")
 
@@ -122,7 +130,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
             runner=runner,
         )
 
-        self.assertEqual(len(calls), 8)
+        self.assertEqual(len(calls), 11)
         self.assertEqual(
             sum(arguments[-1] == "--help" for arguments in calls),
             4,
@@ -133,7 +141,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
         self.assertTrue(
             any(
                 len(arguments) > 2
-                and Path(arguments[2]).name == "parser-error.py"
+                and Path(arguments[2]).name == "backend-panic.py"
                 for arguments in calls
             )
         )
@@ -149,12 +157,50 @@ class AlphaSkillEvalTests(unittest.TestCase):
             arguments: list[str],
             _cwd: Path,
         ) -> subprocess.CompletedProcess[bytes]:
+            if "--fix" not in arguments:
+                return subprocess.CompletedProcess(
+                    arguments,
+                    1,
+                    b"error[T0021]: range stop expects `int`, got `str`\n",
+                    b"",
+                )
             return subprocess.CompletedProcess(arguments, 0, b"", b"")
 
         with self.assertRaisesRegex(evals.EvalError, "invalid invocation"):
             evals.run_pycc_check_rejection(
                 case,
                 evals.canonical_skill("codex", "pycc"),
+                Path(__file__),
+                runner=runner,
+            )
+
+    def test_backend_failure_eval_requires_the_current_mir_panic(self) -> None:
+        case = next(
+            case
+            for case in evals.load_cases("pycc")
+            if case.get("runner") == "classify-backend-panic-without-write"
+        )
+        call_count = 0
+
+        def runner(
+            arguments: list[str],
+            _cwd: Path,
+        ) -> subprocess.CompletedProcess[bytes]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return subprocess.CompletedProcess(arguments, 0, b"", b"")
+            return subprocess.CompletedProcess(
+                arguments,
+                1,
+                b"",
+                b"error[E0100]: controlled backend rejection\n",
+            )
+
+        with self.assertRaisesRegex(evals.EvalError, "exit-101 MIR panic"):
+            evals.run_pycc_failure(
+                case,
+                evals.canonical_skill("claude", "pycc"),
                 Path(__file__),
                 runner=runner,
             )
@@ -189,6 +235,36 @@ class AlphaSkillEvalTests(unittest.TestCase):
         with self.assertRaisesRegex(evals.EvalError, "unknown client"):
             evals.canonical_skill("other", "pycc")
 
+    def test_command_timeout_fails_closed(self) -> None:
+        with mock.patch.object(
+            evals.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(["pycc"], 30),
+        ) as run:
+            with self.assertRaisesRegex(evals.EvalError, "timed out after 30s"):
+                evals.run_command(["pycc", "check"], evals.ROOT)
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_extra_eval_without_runner_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".claude" / "skills" / "pycc" / "evals"
+            path.mkdir(parents=True)
+            cases = evals.load_cases("pycc")
+            cases.append(
+                {
+                    "id": 4,
+                    "prompt": "A future scenario.",
+                    "expected_output": "A future result.",
+                }
+            )
+            (path / "evals.json").write_text(
+                json.dumps({"skill_name": "pycc", "evals": cases}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(evals.EvalError, "runner for every eval"):
+                evals.load_cases("pycc", root)
+
     def test_eval_runner_set_is_exact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -209,7 +285,7 @@ class AlphaSkillEvalTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(evals.EvalError, "bind exactly"):
+            with self.assertRaisesRegex(evals.EvalError, "runner"):
                 evals.load_cases("pycc", root)
 
 
