@@ -321,7 +321,7 @@ def run_pycc_boundary(
     for fragment in (
         "check succeeds",
         "build exits 101",
-        "pycc_mir backend lowering",
+        "pycc_codegen backend lowering",
         "intentional temporary alpha boundary",
         "rather than a reportable defect",
         "does not offer or post pycc feedback",
@@ -331,7 +331,7 @@ def run_pycc_boundary(
     normalized_skill = " ".join(skill_text.split())
     for contract in (
         "smallest self-contained",
-        "D-035",
+        "D-072",
         "intentional temporary alpha boundary",
         "$pycc-feedback",
     ):
@@ -343,8 +343,7 @@ def run_pycc_boundary(
         source = temporary / "backend-panic.py"
         source.write_text(
             "def main() -> None:\n"
-            "    value = 1\n"
-            "    print(42)\n\n"
+            "    value = print(42)\n\n"
             "main()\n",
             encoding="utf-8",
         )
@@ -371,12 +370,12 @@ def run_pycc_boundary(
             build.returncode != 101
             or build.stdout != b""
             or b"panicked at" not in build.stderr
-            or b"pycc_mir: this statement kind's codegen lands in PR-5"
-            not in build.stderr
+            or b"pycc_codegen: using print()'s result as a nested expression "
+            b"is not supported yet" not in build.stderr
         ):
             raise EvalError(
                 "backend fixture must reproduce the exact current exit-101 "
-                "D-035 MIR panic"
+                "D-072 codegen panic"
             )
 
 
@@ -443,7 +442,7 @@ def run_feedback_case(
         state = SubmissionState(False, False, True)
         required = (
             "Must reproduce",
-            "read D-035",
+            "read D-072",
             "not reportable",
             "no GitHub payload",
         )

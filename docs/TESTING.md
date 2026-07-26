@@ -260,7 +260,7 @@ authorizes its checked roadmap markers.
 
 The required Python discovery run includes
 `scripts/test_manage_ievo_hooks.py`. Its isolated synthetic repository covers the
-complete D-067 lifecycle: shared Claude entries plus pre-existing local state are
+complete D-077 lifecycle: shared Claude entries plus pre-existing local state are
 localized without duplicates; unrelated settings and hooks survive; both Claude and
 Codex hook scripts execute successfully with a no-op payload; upstream tracked-shim
 ignore exceptions are removed; repeated localize and disable operations are stable;
@@ -270,7 +270,8 @@ tracked view returns to clean after upstream-style enable mutations are normaliz
 It preserves unrelated empty hook groups/events and makes refreshed shared metadata
 win over stale duplicate local metadata. Separate negative cases prove a missing
 target, malformed local JSON, or an unsupported reference to a managed target fails
-before mutation.
+before mutation, including lexical and case-insensitive aliases of the managed hook
+directory and a managed path preceded by length-changing Unicode case-fold text.
 `scripts/validate_agent_policies.py` additionally requires both
 `.claude/settings.local.json` and `.codex/hooks.json` to remain ignored in the real
 tracked checkout.

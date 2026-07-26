@@ -120,8 +120,8 @@ class AlphaSkillEvalTests(unittest.TestCase):
                     arguments,
                     101,
                     b"",
-                    b"thread 'main' panicked at pycc_mir: this statement kind's "
-                    b"codegen lands in PR-5: fixture\n",
+                    b"thread 'main' panicked at pycc_codegen: using print()'s "
+                    b"result as a nested expression is not supported yet\n",
                 )
             return subprocess.CompletedProcess(arguments, 0, b"42\n", b"")
 

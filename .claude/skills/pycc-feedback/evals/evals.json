@@ -3,8 +3,8 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "pycc build panicked on this program after pycc check succeeded:\n```python\ndef main() -> None:\n    value = 1\n    print(42)\n\nmain()\n```\nPlease prepare a useful bug report.",
-      "expected_output": "Must reproduce the exit-101 pycc_mir panic, read D-035, recognize the exact PR-5 message as an intentional temporary alpha boundary, explain that it is not reportable, and prepare or post no GitHub payload.",
+      "prompt": "pycc build panicked on this program after pycc check succeeded:\n```python\ndef main() -> None:\n    value = print(42)\n\nmain()\n```\nPlease prepare a useful bug report.",
+      "expected_output": "Must reproduce the exit-101 pycc_codegen panic, read D-072, recognize the exact PR-5 message as an intentional temporary alpha boundary, explain that it is not reportable, and prepare or post no GitHub payload.",
       "runner": "refuse-accepted-pr5-boundary-publication"
     },
     {

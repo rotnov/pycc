@@ -7,6 +7,8 @@ import argparse
 import copy
 import json
 import os
+import posixpath
+import re
 import shutil
 import stat
 import subprocess
@@ -270,18 +272,41 @@ def string_values(value: object) -> Iterable[str]:
             yield from string_values(nested)
 
 
+def references_managed_hook_path(value: str) -> bool:
+    # Hook commands are persisted as strings and can spell the same path with
+    # Windows separators, shell quote concatenation, repeated separators, or
+    # lexical aliases such as `.ievo/tmp/../hooks`. Normalize those static
+    # forms without resolving the path through the filesystem.
+    text = value.replace("\\", "/").replace('"', "").replace("'", "")
+    for match in re.finditer(r"\.ievo", text, flags=re.IGNORECASE | re.ASCII):
+        start = match.start()
+        end = start
+        while end < len(text):
+            character = text[end]
+            if character.isspace() or character in ";|&()<>":
+                break
+            end += 1
+        candidate = posixpath.normpath(text[start:end]).casefold()
+        if candidate == HOOK_DIRECTORY.as_posix() or candidate.startswith(
+            f"{HOOK_DIRECTORY.as_posix()}/"
+        ):
+            return True
+    return False
+
+
 def managed_target_references(settings: dict[str, Any]) -> list[ManagedReference]:
     hooks = settings.get("hooks")
     if not isinstance(hooks, dict):
         return []
 
     references: list[ManagedReference] = []
-    managed_prefix = f"{HOOK_DIRECTORY.as_posix()}/"
     for event, value in hooks.items():
         if not isinstance(event, str):
             continue
-        values = (candidate.replace("\\", "/") for candidate in string_values(value))
-        if any(managed_prefix in candidate for candidate in values):
+        if any(
+            references_managed_hook_path(candidate)
+            for candidate in string_values(value)
+        ):
             references.append((event, HOOK_DIRECTORY))
     return list(dict.fromkeys(references))
 

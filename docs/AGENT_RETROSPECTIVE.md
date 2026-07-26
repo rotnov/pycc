@@ -28,6 +28,86 @@ never a merge gate.
 
 ---
 
+## 2026-07-26 — Re-derived a parallel session's already-planned PR #132 reconciliation from git archaeology instead of reading `SESSION_LOG.md` first
+
+**What happened:** a push to `feat/v0-1-pr5-codegen-depth` was rejected as
+non-fast-forward after another session had pushed 5 commits directly to the
+same branch (via a `codex/fix-pr132-review-0764` lineage), independently
+fixing an overlapping-but-not-identical subset of the same 8 Codex review
+findings. Before reading `docs/SESSION_LOG.md`, roughly 30 minutes were spent
+manually diffing commits (`git show <sha>:<path>`, function-by-function) to
+figure out which findings the other session had already fixed, whether its
+`D-074` collided with a local draft entry, and whether the two lineages were
+genuinely complementary or in conflict.
+
+**Root cause:** `docs/SESSION_LOG.md` (added by D-066 specifically to answer
+"what state is the work in and what's next" across sessions) already
+contained a same-day entry recording that exact reconciliation as planned and
+partly executed — which commits to keep, which review threads it covered, and
+the exact next steps ("push normally... resolve only threads verified against
+the resulting remote head... request `@codex review` once for that new
+head"). Reading it first would have made the manual diffing largely
+redundant: the log already answered "is this a rogue conflicting process or
+planned parallel work," which is exactly the question the diffing was trying
+to answer from first principles.
+
+**What fixed it:** the manual diffing still reached the correct
+conclusion (remote is a superset in every substantive area except two doc
+files it never touched), so no rework was needed — but reading the log
+partway through confirmed it was reinventing an already-recorded plan.
+
+**Lesson:** when a push conflict or unexpected remote state is discovered on
+a branch this project's own automation actively works, check
+`docs/SESSION_LOG.md` for a same-branch entry *before* reaching for `git
+show`/`git diff` archaeology to reconstruct intent — the log exists
+precisely to make that reconstruction unnecessary. Git diffing is still the
+right tool to *verify* what the log claims, just not the right first step to
+*discover* it.
+
+## 2026-07-26 — Historical governance PRs were mistaken for live monitors
+
+**What happened:** PR #119 and issue/PR-era #125 were included in the live
+monitoring set even though their only current role is historical evidence for
+the one-shot governance recovery recorded in D-054. This created irrelevant
+status noise and required the user to ask why completed history was still being
+watched.
+
+**Root cause:** links found in current governance documentation were treated as
+operational targets without first checking whether they were open, changing,
+or named by an active task. Documentary relevance was conflated with live
+state.
+
+**What fixed it:** removed #119/#125 from the monitoring scope and retained only
+the active PR #132 plus newly opened PRs and newly merged default-branch
+commits.
+
+**Lesson:** build every monitoring set from current remote state first. A PR or
+issue referenced by an ADR is historical unless it is still open or the active
+task explicitly names it; do not poll documentation citations as live work.
+
+## 2026-07-26 — Retried a hanging Apple Git submodule probe before inspecting it
+
+**What happened:** the exact-revision `pre-commit try-repo` verification for
+PR #51 twice stopped after “Initializing environment.” Both attempts were left
+waiting for several minutes before the process tree was inspected. The blocked
+child was Apple Git 2.50.1 running `git submodule update` in a repository with
+no submodules; the same command also hung when invoked directly.
+
+**Root cause:** the second attempt repeated the first with the same Git binary
+instead of first reducing the stall to its child process. The visible
+pre-commit message was mistaken for a slow Rust environment build even though
+Cargo had not started.
+
+**What fixed it:** inspected the process tree, reproduced the empty-submodule
+command directly, and then ran the same command with the already installed
+bundled Git 2.53.0, which returned immediately. Putting that verified Git first
+in the isolated command's `PATH` let `pre-commit try-repo` reach Cargo and pass.
+
+**Lesson:** after one silent repeatable stall, inspect the youngest child and
+reduce it outside the orchestrating tool before retrying. Distinguish “no
+output” from “build in progress” by confirming that the expected compiler
+process actually exists.
+
 ## 2026-07-26 — A handoff correction was drafted against moving PR state
 
 **What happened:** the session snapshot committed in `1671223` still
@@ -55,6 +135,47 @@ referenced head, merge state, review thread, and check; if anything moved,
 rewrite the newest snapshot instead of preserving completed work as a future
 step.
 
+## 2026-07-26 — Re-verifying before picking an ADR ID isn't enough against a live concurrent actor; park the tail ahead instead
+
+**What happened:** PR #132 (PR-5, "Codegen depth") hit the *same* ADR-ID
+collision with `main`'s independent concurrent actor four separate times
+within one session, despite following the exact lesson recorded below
+("re-check the current highest ID immediately before picking a new one").
+Each time, this branch renumbered its own colliding tail to whatever was
+free *at that moment* (D-048–053 → D-056–061 → D-057–064), and each time
+`main` advanced again before the next push landed, reusing the next ID
+this branch had just claimed (`D-056` for MIR-mirror, then `D-056` again
+for source-aware telemetry, then `D-062` for fixed-replicate
+stabilization). Re-verifying immediately before writing an entry does not
+help when the other actor's own next commit — landing minutes to hours
+later, with no coordination signal — claims the exact ID just re-verified
+as free.
+
+**Root cause:** "re-check before picking" only defends against *stale*
+information; it does nothing against a genuinely *live* concurrent writer
+with no reservation protocol. Adjacent-to-the-current-tip numbering
+guarantees a race whenever both sides advance the tip during the same
+open-PR window, no matter how recently either side last checked.
+
+**What fixed it:** on the third and fourth collisions, stopped picking
+"the next free ID after the current tip" and instead parked this branch's
+entire remaining tail (four entries: str-leak correction, the
+renumbering-record itself, the `print()`-nested-expression boundary, and
+the `RelocMode::PIC` fix) at D-070–073 — a block chosen to sit well ahead
+of `main`'s observed advancement rate, not merely past its tip at that
+instant. `main`'s own next two advances (D-062's refinement, then new
+D-066) landed with zero further collision against that parked range.
+
+**Lesson:** against a live, uncoordinated concurrent writer to the same
+ID sequence, "re-verify immediately before picking" bounds staleness but
+not races — prefer parking a colliding tail several IDs beyond the other
+actor's *observed rate of advancement* (not just its current tip) once a
+collision has already happened twice, rather than continuing to claim
+the adjacent-next ID each time. This trades a temporary gap in the
+sequence (harmless — IDs are not required to be contiguous) for
+eliminating the renumber-repush-collide cycle for the rest of the PR's
+open lifetime.
+
 ## 2026-07-26 — CI monitoring started before checking the pull-request state
 
 **What happened:** agents monitoring
@@ -81,7 +202,6 @@ conflicting PR needs state-specific handling; only a PR that can actually
 run its required workflows belongs in the CI polling loop. Distinguish a
 base-trusted `pull_request_target` policy check from the ordinary head CI
 whose absence may be the symptom being diagnosed.
-
 ## 2026-07-26 — A parallel agent changed this file's introducing PR branch
 
 **What happened:** while this pull request (adding this very file and

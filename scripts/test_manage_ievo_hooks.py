@@ -640,6 +640,21 @@ class IevoHookLifecycleTests(unittest.TestCase):
             [("FutureEvent", manager.HOOK_DIRECTORY)],
         )
 
+    def test_managed_references_normalize_static_path_aliases(self) -> None:
+        aliases = (
+            "sh .ievo/tmp/../hooks/scripts/future-capture.sh",
+            "sh .IEVO//hooks/scripts/future-capture.sh",
+            'sh ".ievo"/hooks/scripts/future-capture.sh',
+            "echo ß; sh .ievo/hooks/scripts/future-capture.sh",
+        )
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                settings = {"hooks": {"FutureEvent": [alias]}}
+                self.assertEqual(
+                    manager.managed_target_references(settings),
+                    [("FutureEvent", manager.HOOK_DIRECTORY)],
+                )
+
     def test_localize_rejects_future_managed_hook_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -669,6 +684,110 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 shared_before,
             )
             self.assertFalse((root / manager.CLAUDE_LOCAL).exists())
+
+    def test_localize_rejects_a_lexical_managed_path_alias_before_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            shared = {
+                "hooks": {
+                    "UserPromptSubmit": [self.group(self.command_entry(target))],
+                    "FutureEvent": [
+                        self.group(
+                            self.command_entry(
+                                Path(".ievo/tmp/../hooks/scripts/future-capture.sh"),
+                                shell_form=True,
+                            )
+                        )
+                    ],
+                }
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            self.create_generated_files(root)
+            self.create_gitignore(root, upstream_shims=False)
+            shared_before = (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "unsupported iEvo hook reference",
+            ):
+                manager.localize(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                shared_before,
+            )
+            self.assertFalse((root / manager.CLAUDE_LOCAL).exists())
+
+    def test_disable_rejects_a_case_insensitive_managed_path_alias_before_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            shared = {
+                "hooks": {
+                    "FutureEvent": [
+                        self.group(
+                            self.command_entry(
+                                Path(".IEVO/hooks/scripts/correction-capture.sh"),
+                                shell_form=True,
+                            )
+                        )
+                    ]
+                }
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            self.create_generated_files(root)
+            shared_before = (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "unsupported iEvo hook reference",
+            ):
+                manager.disable(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                shared_before,
+            )
+            self.assertTrue((root / target).is_file())
+
+    def test_disable_rejects_a_managed_path_after_unicode_before_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            shared = {
+                "hooks": {
+                    "FutureEvent": [
+                        self.group(
+                            {
+                                "type": "command",
+                                "command": f"echo ß; sh {target.as_posix()}",
+                            }
+                        )
+                    ]
+                }
+            }
+            self.write_json(root, manager.CLAUDE_SHARED, shared)
+            self.create_generated_files(root)
+            shared_before = (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "unsupported iEvo hook reference",
+            ):
+                manager.disable(root)
+
+            self.assertEqual(
+                (root / manager.CLAUDE_SHARED).read_text(encoding="utf-8"),
+                shared_before,
+            )
+            self.assertTrue((root / target).is_file())
 
     def test_symlinked_hook_ancestor_blocks_smoke_and_disable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

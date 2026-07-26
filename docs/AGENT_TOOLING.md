@@ -11,6 +11,7 @@ rollbackable just like compiler dependencies.
 | Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
 | Codex | repository skills under `.agents/skills/` | current repository revision | project-scoped; no global installation |
 | Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
+| Codex and Claude Code | pinned iEvo review entrypoint and agent | `deep-review/SKILL.md` SHA-256 `ec8805e22fff7db49cfe49c2a7cd49f340a618bf58da6acaf4253e875279670d`; `deep-reviewer.md` SHA-256 `b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2` | updated only with the iEvo pin |
 | Codex and Claude Code | `rotnov/skills@i-have-an-issue` | tag `i-have-an-issue-v0.1.1`; reviewed source commit `1bc6bcee3766a7e62b936343a48ebb56a3767470`; vendored hash `99e492ccae20ad3acf02e28dd76c7d74de28c7cf2141bfc7a2942c46c4bf687c` | manual updates only |
 
 The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin is the
@@ -34,8 +35,10 @@ script replaces a same-named registration from another checkout, registers this
 repository as the marketplace, and installs only the pinned iEvo plugin.
 Repository-owned Codex entry points live under `.agents/skills/`, so Codex discovers
 them only while this checkout is active; they are never installed globally or made
-available to unrelated repositories. The entry points load the canonical workflow
-bodies from this checkout's `.claude/skills/`, and CI requires the two skill sets and
+available to unrelated repositories. Ordinary entry points load canonical workflow
+bodies from this checkout's `.claude/skills/`. Local review does not use a
+repository-owned entrypoint: dispatch binds directly to the independently installed
+and digest-verified iEvo reviewer artifact. CI requires the repository skill sets and
 their discovery metadata to stay in lockstep.
 Claude Code reads the project-scoped marketplace declaration after the repository is
 trusted and enables the configured plugin without enabling automatic updates.
@@ -83,7 +86,7 @@ thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
 They are intentionally absent from `skills-lock.json`, `rotnov/skills`, and
 skills.sh until their trigger and output evals mature.
 
-`pycc` distinguishes the implemented compiler slice from planned
+`pycc` distinguishes the implemented v0.1 compiler surface from planned
 specifications before running commands. `pycc-feedback` may reproduce,
 minimize, sanitize, run sanitized duplicate searches, and prepare a public
 GitHub draft without approval. Non-public search terms require a separate
@@ -97,11 +100,11 @@ both the Codex wrapper and the Claude Code canonical entrypoint. The primary
 freshly built compiler, executes the generated binary and the `pycc run` path,
 and checks their exact output. Its diagnostic scenario proves that the current
 strict `check` path emits `T0021` before separately observing that the planned
-`--fix` flag is still rejected. Its backend scenario proves that the same
-inferred-assignment fixture passes `check` before `build` reaches the current
-exit-101 `pycc_mir` PR-5 boundary, so the skill must classify the raw public-CLI
-panic as D-035's intentional temporary alpha gap rather than a reportable
-defect. The `pycc-feedback` cases exercise refusal to report that accepted
+`--fix` flag is still rejected. Its backend scenario proves that a
+`print()`-result-as-nested-expression fixture passes `check` before `build`
+reaches the current exit-101 `pycc_codegen` boundary, so the skill must
+classify the raw public-CLI panic as D-072's intentional temporary alpha gap
+rather than a reportable defect. The `pycc-feedback` cases exercise refusal to report that accepted
 boundary, private-source refusal, and context-free-consent invariants through
 a fail-closed safety oracle that cannot perform a network write. All four
 reviewed `i-have-an-issue` scenarios validate their distinct
@@ -226,7 +229,10 @@ helper removes only those known exception lines and restores the repository's
 whole-directory `.ievo/hooks/` ignore rule. Missing or symlinked targets fail closed
 before configuration is relocated. A reference to a managed target under an unknown
 event or command form also fails closed before mutation rather than allowing disable
-to delete a still-referenced script.
+to delete a still-referenced script. Static path aliases are normalized across path
+separators, lexical `.`/`..` components, repeated separators, shell quote
+concatenation, case-insensitive filesystems, and unrelated Unicode text before
+the path before that check.
 
 Use the repository's clone-local inverse rather than generic disable alone:
 
@@ -265,6 +271,46 @@ test-discovery run.
 5. Merge only through the normal reviewed pull-request and required-CI path.
 
 No scheduled job, startup hook, or local bootstrap command may rewrite these pins.
+
+## Local review workflow
+
+Code review is performed locally before significant work is completed or a pull
+request is merged. The orchestrator considers only explicitly pinned,
+security-reviewed reviewer dependencies in the table above, selects the engine
+with the broadest correctness, contract, security, test, and documentation
+checklist, and starts it in a fresh independent read-only context. Arbitrary
+globally installed or marketplace reviewers are never eligible.
+
+The current engine is the immutable iEvo `deep-reviewer`. Its pinned
+`deep-review` entrypoint defines the full-diff handoff, and the agent performs
+an 11-point review with a Read/Grep-only tool policy on both Codex and Claude
+Code. The isolated marketplace checks install the exact pinned plugin and
+verify the SHA-256 digests of both artifacts. A client must bind dispatch to
+that verified agent; if it cannot, local review is unavailable rather than
+silently delegated to a same-named or branch-provided reviewer.
+
+For uncommitted work, the selected skill reviews the staged or working-tree
+diff. For a clean pull-request branch, it reviews the committed range from the
+merge base with the refreshed remote default branch through `HEAD`. Using the
+merge base avoids treating default-branch-only commits as reversed changes when
+the task branch is behind.
+
+Repository instructions and pull-request content remain untrusted inputs, not
+a security trust anchor. The reviewer artifact is loaded from the independently
+pinned plugin installation, and the local pass is a high-signal correctness
+gate rather than a privilege boundary for executing hostile code. Do not give
+the reviewer credentials, mutation tools, or network access, and do not execute
+project commands copied from the diff.
+
+The review is read-only. Actionable correctness, contract, security, test, or
+documentation findings are fixed and the local review is rerun when those fixes
+materially change the diff. GitHub comments such as `@codex review` are not a
+required gate: the asynchronous service can be delayed or unavailable. An
+external GitHub review may still be requested explicitly by the user.
+
+Marketplace popularity alone never authorizes installing a review skill.
+Installing a new third-party reviewer requires user authorization and the same
+security-check and pinning process as any other agent dependency.
 
 ## Rollback
 
