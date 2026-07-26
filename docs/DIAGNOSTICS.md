@@ -22,7 +22,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0001` | error | public function missing annotation |
 | `T0002` | error | `Any` outside interop boundary |
 | `T0003` | error | untyped empty container needs annotation |
-| `T0021` | error | name, operand, call, or inference type mismatch |
+| `T0021` | error | name resolution (including an unbound local), operand, call, or inference type mismatch |
 | `T0022` | error | return type mismatch |
 | `T0023` | error | incompatible assignment |
 | `T0024` | error | `return` outside a function |

@@ -38,8 +38,8 @@ recorded ADRs D-048 through D-053 (all six are table entries; D-052 also
 has a detailed section) collide with unrelated decisions
 that entered `main` through concurrent reviewed pull requests. Re-check
 the live ADR tail immediately before editing and renumber all six PR-5
-decisions to the then-free IDs; after this snapshot's D-055, D-056
-through D-061 are only the current candidates, not reservations. Full
+decisions to the then-free IDs; after this snapshot's D-056, D-057
+through D-062 are only the current candidates, not reservations. Full
 detail is in `docs/AGENT_RETROSPECTIVE.md`.
 
 **After PR-5 merges:** PR-6 (conformance and acceptance benchmarking —
