@@ -218,12 +218,13 @@ python3 scripts/manage_ievo_hooks.py check --smoke
 
 `localize` recognizes only iEvo's three generated script targets and their known
 Claude events. It moves those exact entries out of `.claude/settings.json`, merges
-them into ignored `.claude/settings.local.json`, and leaves every unrelated setting
-or hook in place. Codex's `.codex/hooks.json` is also ignored and checked as local
-state. If a newer iEvo release rewrites `.gitignore` to propose tracked dispatcher
-shims, the helper removes only those known exception lines and restores the
-repository's whole-directory `.ievo/hooks/` ignore rule. Missing or symlinked targets
-fail closed before configuration is relocated.
+them into ignored `.claude/settings.local.json`, prefers refreshed shared metadata
+over a duplicate stale local record, and leaves every unrelated setting or hook in
+place. Codex's `.codex/hooks.json` is also ignored and checked as local state. If a
+newer iEvo release rewrites `.gitignore` to propose tracked dispatcher shims, the
+helper removes only those known exception lines and restores the repository's
+whole-directory `.ievo/hooks/` ignore rule. Missing or symlinked targets fail closed
+before configuration is relocated.
 
 Use the repository's clone-local inverse rather than generic disable alone:
 

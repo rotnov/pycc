@@ -302,7 +302,9 @@ def localize(root: Path) -> None:
     rewritten_shared, shared_records = strip_ievo_entries(shared)
     stripped_local, local_records = strip_ievo_entries(local)
     _, codex_records = strip_ievo_entries(codex)
-    claude_records = [*local_records, *shared_records]
+    # A refresh writes authoritative metadata to shared settings. Prefer that
+    # record over an older local copy when add_records() deduplicates by target.
+    claude_records = [*shared_records, *local_records]
     all_records = [*claude_records, *codex_records]
     if not all_records:
         raise HookLifecycleError(

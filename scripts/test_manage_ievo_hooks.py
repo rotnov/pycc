@@ -281,6 +281,10 @@ class IevoHookLifecycleTests(unittest.TestCase):
             )
             self.assertEqual(rewritten_local["env"], {"LOCAL_ONLY": "true"})
             self.assertEqual(
+                rewritten_local["hooks"]["UserPromptSubmit"][0]["matcher"],
+                "project",
+            )
+            self.assertEqual(
                 self.records(rewritten_local),
                 {
                     (
