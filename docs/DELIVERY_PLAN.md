@@ -112,8 +112,16 @@ therefore retains both timings as telemetry but makes them non-blocking only
 when a pre-execution trusted comparison proves the complete executable inputs
 identical. Any `src/` or `crates/` difference still enters the unchanged
 greater-than-2% median comparison. The live workflow is byte-identical to the
-reviewed D-056 fixture and only its digest is authorized; D-051 remains
-historical audit evidence rather than an accepted live workflow.
+reviewed D-056 fixture. D-062 responds to the later identical-source-pair
+`+0.10%`/`+3.66%` contradiction that D-056's changed-input path intentionally
+does not remove. It stages a source-aware five-replicate successor:
+median-of-five per revision when inputs changed, D-056's non-blocking telemetry
+when they are identical, all ten JSON files retained, predecessor samples
+sealed before candidate execution, and no result-dependent retries. The
+checker temporarily authorizes only active D-056 and the exact inert D-062
+fixture; a fresh byte-exact activation PR must make the latter live and retire
+the former. The 2% threshold, `ci-gate` fan-in, benchmark contract, artifact-ID
+binding, and isolated predecessor-owned comparison boundary remain unchanged.
 
 ## Autonomy policy ("no questions" mechanics)
 

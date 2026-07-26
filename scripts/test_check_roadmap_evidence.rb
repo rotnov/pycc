@@ -19,6 +19,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent / "tests/fixtures/d51-paired-ci.yml"
   D56_SOURCE_AWARE_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d56-source-aware-ci.yml"
+  D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d62-replicated-paired-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -126,6 +128,19 @@ class RoadmapEvidenceCliTest < Minitest::Test
     { "jobs" => jobs }.to_yaml
   end
 
+  def replicated_perf_workflow
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(REPLICATED_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(Marshal.dump(REPLICATED_PERF_GATE_JOB)),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_CI_GATE_JOB))
+    }
+    yield jobs if block_given?
+    { "jobs" => jobs }.to_yaml
+  end
+
   def without_workflow_jobs(workflow, *job_names)
     skipping = false
     workflow.lines.reject do |line|
@@ -209,6 +224,22 @@ class RoadmapEvidenceCliTest < Minitest::Test
         "bash",
         "-s",
         stdin_data: PAIRED_PERF_REQUIRE_SCRIPT,
+        chdir: directory
+      )
+    end
+  end
+
+  def run_replicated_timing_requirement
+    Dir.mktmpdir do |directory|
+      root =
+        Pathname(directory) /
+        "target/criterion/pycc_check_frontend_fixture"
+      FileUtils.mkdir_p(root)
+      yield root
+      return Open3.capture3(
+        "bash",
+        "-s",
+        stdin_data: REPLICATED_PERF_REQUIRE_SCRIPT,
         chdir: directory
       )
     end
@@ -678,6 +709,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
+  def test_tier1_workflow_authorization_contains_only_active_d56_and_staged_d62
+    assert_equal(
+      [
+        D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+        D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
+      ],
+      REVIEWED_PERF_CI_WORKFLOW_SHA256S
+    )
+  end
+
   def test_tier1_workflow_allowlist_retires_the_pre_alpha_eval_digest
     refute_equal(
       D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
@@ -685,7 +726,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_allowlist_retains_only_the_active_d56_digest
+  def test_tier1_workflow_allowlist_retains_the_active_d56_digest
     assert_equal(
       "c696da18f4f8b876d4398c43f94fe574e870579badd84cf579fbe91fbd9d7b4b",
       D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
@@ -843,6 +884,31 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
+  def test_d62_replicated_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_equal(
+      REPLICATED_PERF_CHECKER_SHA256,
+      Digest::SHA256.file(
+        Pathname(__dir__).parent /
+          "scripts/check_replicated_paired_perf_regression.rb"
+      ).hexdigest
+    )
+    assert_equal(
+      REPLICATED_PERF_CHECKER_TEST_SHA256,
+      Digest::SHA256.file(
+        Pathname(__dir__).parent /
+          "scripts/test_check_replicated_paired_perf_regression.rb"
+      ).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.read,
+      D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
   def test_tier1_workflow_allowlist_retires_the_superseded_single_job_digest
     refute_equal(
       D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
@@ -855,6 +921,38 @@ class RoadmapEvidenceCliTest < Minitest::Test
       paired_perf_workflow,
       "ci.yml"
     )
+  end
+
+  def test_accepts_the_reviewed_fixed_replicate_perf_trust_boundary
+    assert validate_source_aware_perf_gate_lifecycle(
+      replicated_perf_workflow,
+      "ci.yml"
+    )
+  end
+
+  def test_public_cli_accepts_the_staged_d62_workflow
+    stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.read
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_public_cli_rejects_drift_in_the_staged_d62_workflow
+    workflow = D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.read.sub(
+      "for round in 1 2 3 4 5; do",
+      "for round in 1 2 3; do"
+    )
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_an_active_workflow_without_both_perf_jobs
@@ -870,7 +968,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-056 CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_with_unchecked_tier1_claim
@@ -880,7 +978,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-056 CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_without_a_tier1_claim
@@ -890,7 +988,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-056 CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_requires_active_digest_without_a_tier1_claim
@@ -903,7 +1001,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-056 CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_accepts_the_reviewed_d56_activation_workflow
@@ -922,7 +1020,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-056 CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_unreviewed_d56_workflow_drift
@@ -934,7 +1032,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-056 CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_paired_measurement_resolves_the_exact_pull_request_base
@@ -1274,6 +1372,194 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "missing current/estimates.json"
   end
 
+  def test_replicated_timing_requirement_accepts_exactly_ten_regular_files
+    _stdout, stderr, status = run_replicated_timing_requirement do |root|
+      %w[previous current].each do |revision|
+        FileUtils.mkdir_p(root / revision)
+        5.times do |index|
+          (root / revision / "round-#{index + 1}.json").write("{}")
+        end
+      end
+    end
+
+    assert status.success?, stderr
+  end
+
+  def test_replicated_timing_requirement_rejects_a_missing_fixed_sample
+    %w[previous current].each do |missing_revision|
+      _stdout, stderr, status = run_replicated_timing_requirement do |root|
+        %w[previous current].each do |revision|
+          FileUtils.mkdir_p(root / revision)
+          5.times do |index|
+            next if revision == missing_revision && index == 2
+
+            (root / revision / "round-#{index + 1}.json").write("{}")
+          end
+        end
+      end
+
+      refute status.success?
+      assert_includes stderr, "missing #{missing_revision}/round-3.json"
+    end
+  end
+
+  def test_replicated_timing_requirement_rejects_an_extra_file
+    _stdout, stderr, status = run_replicated_timing_requirement do |root|
+      %w[previous current].each do |revision|
+        FileUtils.mkdir_p(root / revision)
+        5.times do |index|
+          (root / revision / "round-#{index + 1}.json").write("{}")
+        end
+      end
+      (root / "unexpected.txt").write("extra")
+    end
+
+    refute status.success?
+    assert_includes stderr, "exactly two directories and ten regular files"
+  end
+
+  def test_replicated_timing_requirement_rejects_an_extra_empty_directory
+    _stdout, stderr, status = run_replicated_timing_requirement do |root|
+      %w[previous current].each do |revision|
+        FileUtils.mkdir_p(root / revision)
+        5.times do |index|
+          (root / revision / "round-#{index + 1}.json").write("{}")
+        end
+      end
+      FileUtils.mkdir_p(root / "unexpected")
+    end
+
+    refute status.success?
+    assert_includes stderr, "exactly two directories and ten regular files"
+  end
+
+  def test_replicated_timing_requirement_rejects_a_symlink
+    _stdout, stderr, status = run_replicated_timing_requirement do |root|
+      %w[previous current].each do |revision|
+        FileUtils.mkdir_p(root / revision)
+        5.times do |index|
+          (root / revision / "round-#{index + 1}.json").write("{}")
+        end
+      end
+      File.unlink(root / "current/round-5.json")
+      File.symlink(root / "current/round-4.json", root / "current/round-5.json")
+    end
+
+    refute status.success?
+    assert_includes stderr, "missing current/round-5.json"
+  end
+
+  def test_rejects_replicated_measurement_with_a_changed_fixed_sample_count
+    ["Benchmark exact predecessor", "Benchmark exact candidate"].each do |step_name|
+      workflow = replicated_perf_workflow do |jobs|
+        benchmark = jobs.fetch("frontend-perf-measure").fetch("steps").find do |step|
+          step["name"] == step_name
+        end
+        benchmark["run"] = benchmark.fetch("run").sub(
+          "for round in 1 2 3 4 5; do",
+          "for round in 1 2 3; do"
+        )
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed source-aware measurement job"
+    end
+  end
+
+  def test_rejects_replicated_gate_with_a_paired_single_sample_comparator
+    workflow = replicated_perf_workflow do |jobs|
+      jobs["frontend-perf-gate"] =
+        Marshal.load(Marshal.dump(PAIRED_PERF_GATE_JOB))
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware comparison job"
+  end
+
+  def test_rejects_replicated_measurement_that_runs_candidate_before_sealing_predecessor
+    workflow = replicated_perf_workflow do |jobs|
+      steps = jobs.fetch("frontend-perf-measure").fetch("steps")
+      upload_index = steps.index do |step|
+        step["name"] == "Upload sealed predecessor frontend timing"
+      end
+      upload = steps.delete_at(upload_index)
+      candidate_index = steps.index do |step|
+        step["name"] == "Benchmark exact candidate"
+      end
+      steps.insert(candidate_index + 1, upload)
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware measurement job"
+  end
+
+  def test_rejects_mutable_actions_in_the_replicated_jobs
+    [
+      ["frontend-perf-measure", "Upload candidate frontend timing", "actions/upload-artifact@v4"],
+      ["frontend-perf-gate", "Download candidate frontend timing", "actions/download-artifact@v4"]
+    ].each do |job_name, step_name, mutable_action|
+      workflow = replicated_perf_workflow do |jobs|
+        step = jobs.fetch(job_name).fetch("steps").find do |candidate|
+          candidate["name"] == step_name
+        end
+        step["uses"] = mutable_action
+      end
+
+      error = assert_raises(RoadmapEvidenceError) do
+        validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+      end
+      assert_includes error.message, "reviewed"
+    end
+  end
+
+  def test_rejects_replicated_gate_without_flat_id_bound_downloads
+    workflow = replicated_perf_workflow do |jobs|
+      download = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Download candidate frontend timing"
+      end
+      download.fetch("with").delete("merge-multiple")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware comparison job"
+  end
+
+  def test_rejects_replicated_gate_with_a_head_controlled_comparator
+    workflow = replicated_perf_workflow do |jobs|
+      checkout = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Check out only the reviewed performance checker"
+      end
+      checkout.fetch("with").delete("ref")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware comparison job"
+  end
+
+  def test_rejects_replicated_gate_without_executable_input_binding
+    workflow = replicated_perf_workflow do |jobs|
+      compare = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
+        step["name"] == "Compare exact predecessor and candidate"
+      end
+      compare.delete("env")
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware comparison job"
+  end
+
   def test_rejects_paired_gate_that_can_skip_the_comparison
     workflow = paired_perf_workflow do |jobs|
       compare = jobs.fetch("frontend-perf-gate").fetch("steps").find do |step|
@@ -1401,7 +1687,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-056 CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_requires_the_hard_coverage_gate_while_its_roadmap_claim_is_unchecked
