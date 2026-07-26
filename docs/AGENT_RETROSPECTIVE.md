@@ -28,6 +28,33 @@ never a merge gate.
 
 ---
 
+## 2026-07-26 — CI monitoring started before checking the pull-request state
+
+**What happened:** agents monitoring
+[PR #132](https://github.com/rotnov/pycc/pull/132) treated the missing
+head-branch CI checks as work still in progress and waited for them. A live
+PR-state query at 12:58 UTC instead reported the open PR as
+`mergeable=CONFLICTING` and `mergeStateStatus=DIRTY`; only the separate
+`Workflow policy` check was present. The useful next action was conflict
+resolution, not another CI poll.
+
+**Root cause:** the monitoring loop started from the checks collection and
+interpreted an absent or incomplete check set as a timing condition. It did
+not first establish whether the PR was open and ready, whether its head was
+current, or whether conflicts prevented the normal head workflow from
+starting.
+
+**What fixed it:** queried the PR's lifecycle and mergeability fields before
+examining its checks, surfaced the conflict immediately, and recorded the
+ordering rule in `.ievo/evolution/project.md`.
+
+**Lesson:** before waiting for PR CI, inspect `state`, `isDraft`, head SHA,
+`mergeable`, and `mergeStateStatus`. A closed, merged, draft, stale, or
+conflicting PR needs state-specific handling; only a PR that can actually
+run its required workflows belongs in the CI polling loop. Distinguish a
+base-trusted `pull_request_target` policy check from the ordinary head CI
+whose absence may be the symptom being diagnosed.
+
 ## 2026-07-26 — A parallel agent changed this file's introducing PR branch
 
 **What happened:** while this pull request (adding this very file and
