@@ -23,6 +23,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent / "tests/fixtures/d62-replicated-paired-ci.yml"
   D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d80-conformance-oracle-ci.yml"
+  D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d84-throughput-floor-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -711,11 +713,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d62_and_staged_d80
+  def test_tier1_workflow_authorization_contains_only_active_d62_and_staged_d80_and_d84
     assert_equal(
       [
         D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
-        D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
+        D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256,
+        D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256
       ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
@@ -924,6 +927,22 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert validate_source_aware_perf_gate_lifecycle(
       D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.read,
       D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  # Staged, not yet active: D84's fixture is the PR-6/Task 7 target content
+  # (D80's own content plus the pycc check throughput-floor CI step) that a
+  # later PR will flip the live ci.yml to. Unlike test_d62_..._is_active_and_reviewed
+  # above, this does not compare against ACTIVE_D62_REPLICATED_WORKFLOW --
+  # the live workflow is still D62's content at this point.
+  def test_d84_throughput_floor_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read,
+      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.to_s
     )
   end
 
