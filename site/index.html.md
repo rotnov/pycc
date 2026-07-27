@@ -34,8 +34,12 @@ comparisons, assignments, function calls and returns, recursion, control flow,
 primitive values, `range`, and basic f-strings. It enforces public annotations,
 rejects `Any`, infers private-helper signatures, and renders human or JSON
 diagnostics. `pycc build` and `pycc run` compile that implemented surface through MIR,
-LLVM, the host linker, and the native runtime. Documented representation and
-lifetime gaps, conformance, named demos, final v0.1 acceptance, and production
+LLVM, the host linker, and the native runtime. v0.1's own acceptance criteria
+are now met: `fib` and `mandelbrot-ascii` match pinned CPython output on all
+five Tier-1 targets, `pycc check` clears its <50ms/1000 LOC throughput floor,
+and diagnostic output matches the stable CLI specification's example.
+Documented representation and lifetime gaps, the full multi-version
+conformance matrix, differential fuzzing, corpus testing, and production
 readiness remain roadmap work.
 
 Examples and CLI commands on the website are design targets unless explicitly

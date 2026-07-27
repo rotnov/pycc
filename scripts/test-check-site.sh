@@ -490,6 +490,12 @@ mutations = (
         "landing page with a superseded backend status",
     ),
     (
+        site_dir / "index.html",
+        "v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)",
+        "v0.1 acceptance criteria remain unmet",
+        "landing page with a superseded acceptance status",
+    ),
+    (
         site_dir / "status" / "index.html",
         "<strong>Strict checking and inference</strong>",
         "<strong>Type checker placeholder</strong>",
@@ -503,9 +509,19 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "PR-5 implements the v0.1 frontend surface through MIR, LLVM",
-        "PR-5 leaves code generation unimplemented",
-        "status page with a superseded backend boundary",
+        "All five v0.1 acceptance-checklist bullets are green",
+        "Most v0.1 acceptance-checklist bullets are green",
+        "status page that understates v0.1 acceptance-checklist completion",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        (
+            "The full\n              multi-version conformance matrix, "
+            "differential fuzzing, corpus\n              testing, and "
+            "v0.2's collections and generics work remain planned."
+        ),
+        "The full multi-version conformance matrix is already complete.",
+        "status page that overclaims conformance-matrix completion",
     ),
     (
         site_dir / "status" / "index.html",
