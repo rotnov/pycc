@@ -17,12 +17,19 @@ fn pycc_bin() -> PathBuf {
 /// invisible to this lookup even though shells like bash find it fine
 /// (bash's own exec resolution does try appending `.exe`). Passing the
 /// extension explicitly on Windows sidesteps the mismatch (D-080 addendum).
+///
+/// Testable core of `oracle_python_bin`: takes the "is this a Windows
+/// target" check as a parameter instead of calling `cfg!(windows)` directly,
+/// so one test can assert both filenames regardless of the host OS actually
+/// running the test (matching `pycc_rt_lib_filename` in `src/main.rs`,
+/// which parameterizes an analogous host-vs-target naming choice the same
+/// way after an earlier host-`cfg!`-keyed version was caught in review).
+fn oracle_binary_name(is_windows: bool) -> &'static str {
+    if is_windows { "python3.14.exe" } else { "python3.14" }
+}
+
 fn oracle_python_bin() -> PathBuf {
-    let bin = if cfg!(windows) {
-        PathBuf::from("python3.14.exe")
-    } else {
-        PathBuf::from("python3.14")
-    };
+    let bin = PathBuf::from(oracle_binary_name(cfg!(windows)));
     let output = Command::new(&bin)
         .arg("--version")
         .output()
@@ -83,6 +90,12 @@ fn run_conformance_fixture(label: &str, py_path: &Path) -> (Vec<u8>, Vec<u8>) {
         pycc_output.stdout,
         strip_windows_newline_translation(cpython_output.stdout),
     )
+}
+
+#[test]
+fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
+    assert_eq!(oracle_binary_name(true), "python3.14.exe");
+    assert_eq!(oracle_binary_name(false), "python3.14");
 }
 
 #[test]
