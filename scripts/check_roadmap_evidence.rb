@@ -41,8 +41,15 @@ D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
   "c696da18f4f8b876d4398c43f94fe574e870579badd84cf579fbe91fbd9d7b4b"
 D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
   "a5135f7a8ebe2b0c0924ad026612ef9c90ade105c9a4fd484f803e10cf5b5c8d"
+# PR-6, Task 6/D-080's staged target: the conformance oracle's CI setup
+# moved to after the D-014 coverage gate. Staged alongside D62 (still the
+# live, active workflow's own digest) until the PR that actually flips
+# ci.yml to this content lands and retires D62.
+D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
+  "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
+  D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+  D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -1150,7 +1157,7 @@ def validate_evidence(root, _evidence_ids)
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match the reviewed active D-062 performance CI workflow"
+          "#{workflow}: does not match a reviewed active or staged performance CI workflow"
   end
   validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
 end
