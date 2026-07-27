@@ -29,7 +29,7 @@ and What's New documents on **2026-07-24**:
 
 | Track | Upstream checkpoint | pycc consequence |
 |---|---|---|
-| v1 stable oracle | Python **3.14.6** final, released 2026-06-10 | Pin new conformance recordings and CI oracle setup to 3.14.6; re-record outputs when the oracle moves from 3.14.3. |
+| v1 stable oracle | Python **3.14.6** final, released 2026-06-10 | Conformance recordings and CI oracle setup are pinned to 3.14.6 (moved from 3.14.3 in PR-6); re-record outputs again whenever the oracle version next changes. |
 | Post-v1 preview | Python **3.15.0b4**, released 2026-07-18 | Feature-frozen since 3.15.0b1; track only Final/Accepted Standards Track PEPs below until 3.15.0 final. |
 
 D-012 remains unchanged: v1 accepts exactly Python 3.14. The 3.15 rows do not
