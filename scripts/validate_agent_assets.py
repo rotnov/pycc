@@ -71,6 +71,42 @@ REQUIRED_MODEL_EVAL_CLIENTS = {"codex", "claude"}
 PINNED_CLAUDE_PLUGINS = {"ievo@ievo-skills"}
 INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md"}
 CLAUDE_INSTRUCTION_IMPORT = "@AGENTS.md\n"
+LIVE_MONITORING_HEADING = (
+    "## Monitor only live repository events "
+    "([D-078](docs/DECISIONS.md#d-078-external-repository-monitoring-is-"
+    "checkpointed-and-event-driven))"
+)
+REQUIRED_LIVE_MONITORING_BULLETS = (
+    "Establish an explicit monitoring checkpoint from the refreshed remote "
+    "default-branch commit. For every open pull request, record its number, "
+    "state, draft status, and head commit; for every task-active pull request, "
+    "also record mergeability, unresolved review threads, and required checks. "
+    "Report the default-branch commit when monitoring starts or resumes.",
+    "After the checkpoint, monitor only a newly observed default-branch commit; "
+    "a newly opened or reopened pull request; a state, draft-status, or head "
+    "change relative to the recorded baseline for an inventoried open pull "
+    "request; or a mergeability, review-thread, or required-check change on a "
+    "pull request already active in the current task. Ignore `updated_at` changes "
+    "caused only by comments, reactions, labels, or other activity outside those "
+    "fields.",
+    "A pull request or issue cited only by documentation, an ADR, a retrospective, "
+    "or a session log is historical evidence, not a live target. Do not poll a "
+    "closed or merged pull request or a closed issue. Evaluate a task-active pull "
+    "request's post-checkpoint close or merge once, then remove it from the live "
+    "set; inspect an issue only when the active task explicitly names it.",
+    "Before waiting on CI, query the pull request's current state, draft status, "
+    "mergeability, head commit, and unresolved review threads. Stop waiting and "
+    "re-evaluate when it closes, merges, becomes conflicting, or its head changes; "
+    "never keep polling checks for a superseded head.",
+    "When a new default-branch merge appears, inspect the introduced commit range "
+    "and the exact post-merge workflows for that merge commit. Advance the "
+    "checkpoint only after recording the new authoritative state, so the next "
+    "cycle cannot rediscover the same event as new work.",
+)
+REQUIRED_LIVE_MONITORING_INSTRUCTIONS = (
+    LIVE_MONITORING_HEADING,
+    *REQUIRED_LIVE_MONITORING_BULLETS,
+)
 CLAUDE_SETTINGS_PATH = Path(".claude/settings.json")
 CLAUDE_MARKETPLACE_DECLARATION_FIELDS = {
     "enabledPlugins",
@@ -2144,6 +2180,977 @@ def validate_skill_parity(
                     "invocation gate"
                 )
 
+def markdown_indent(line: str) -> tuple[int, int]:
+    columns = 0
+    for index, character in enumerate(line):
+        if character == " ":
+            columns += 1
+        elif character == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            return columns, index
+    return columns, len(line)
+
+
+def markdown_columns(text: str) -> int:
+    columns = 0
+    for character in text:
+        if character == "\t":
+            columns += 4 - (columns % 4)
+        else:
+            columns += 1
+    return columns
+
+
+def markdown_blank(text: str) -> bool:
+    return re.fullmatch(r"[ \t]*", text) is not None
+
+
+def markdown_fence(
+    line: str,
+    *,
+    opening: bool,
+    min_indent: int = 0,
+    max_indent: int = 3,
+) -> tuple[str, str, int] | None:
+    columns, content_start = markdown_indent(line)
+    if columns < min_indent or columns > max_indent:
+        return None
+    match = re.match(r"(`{3,}|~{3,})(.*)$", line[content_start:])
+    if match is None:
+        return None
+    marker, suffix = match.groups()
+    if opening and marker[0] == "`" and "`" in suffix:
+        return None
+    return marker, suffix, columns
+
+
+def markdown_list_fence(
+    line: str,
+    *,
+    at_block_start: bool,
+) -> tuple[str, str, int] | None:
+    columns, content_start = markdown_indent(line)
+    if columns >= 4:
+        return None
+    match = re.match(
+        r"(?P<list_marker>[-+*]|[0-9]{1,9}[.)])"
+        r"(?P<padding>[ \t]+)(?P<marker>`{3,}|~{3,})(?P<suffix>.*)$",
+        line[content_start:],
+    )
+    if match is None:
+        return None
+    list_marker = match.group("list_marker")
+    if not at_block_start and list_marker[0].isdigit() and list_marker[:-1] != "1":
+        return None
+    marker = match.group("marker")
+    suffix = match.group("suffix")
+    if marker[0] == "`" and "`" in suffix:
+        return None
+    marker_start = content_start + match.start("marker")
+    list_marker_end = content_start + match.end("list_marker")
+    marker_column = markdown_columns(line[:marker_start])
+    padding_columns = marker_column - markdown_columns(line[:list_marker_end])
+    if padding_columns > 4:
+        return None
+    return marker, suffix, marker_column
+
+
+def markdown_html_comment_start(text: str) -> int | None:
+    index = 0
+    while index < len(text):
+        if text[index] == "\\" and index + 1 < len(text):
+            index += 2
+            continue
+        if text[index] == "`":
+            run_end = index + 1
+            while run_end < len(text) and text[run_end] == "`":
+                run_end += 1
+            run_length = run_end - index
+            candidate = run_end
+            while candidate < len(text):
+                candidate = text.find("`", candidate)
+                if candidate == -1:
+                    break
+                candidate_end = candidate + 1
+                while candidate_end < len(text) and text[candidate_end] == "`":
+                    candidate_end += 1
+                if candidate_end - candidate == run_length:
+                    index = candidate_end
+                    break
+                candidate = candidate_end
+            else:
+                return None
+            if candidate == -1:
+                index = run_end
+            continue
+        if text.startswith("<!--", index):
+            return index
+        index += 1
+    return None
+
+
+def markdown_list_comment_kind(
+    prefix: str,
+    *,
+    at_block_start: bool,
+) -> str | None:
+    remainder = prefix
+    consumed_container = False
+    while True:
+        columns, content_start = markdown_indent(remainder)
+        if columns >= 4:
+            return "literal" if consumed_container else None
+        content = remainder[content_start:]
+        if content.startswith(">"):
+            consumed_container = True
+            remainder = content[1:]
+            if remainder.startswith((" ", "\t")):
+                remainder = remainder[1:]
+            at_block_start = True
+            continue
+        match = re.match(
+            r"(?P<marker>[-+*]|[0-9]{1,9}[.)])(?P<padding>[ \t]+)",
+            content,
+        )
+        if match is None:
+            break
+        marker = match.group("marker")
+        if not at_block_start and marker[0].isdigit() and marker[:-1] != "1":
+            return None
+        marker_end = match.end("marker")
+        body_start = match.end("padding")
+        padding_columns = markdown_columns(content[:body_start]) - markdown_columns(
+            content[:marker_end]
+        )
+        consumed_container = True
+        if padding_columns > 4:
+            return "literal"
+        remainder = content[body_start:]
+        at_block_start = True
+    if consumed_container and markdown_blank(remainder):
+        return "block"
+    return None
+
+
+COMMONMARK_HTML_BLOCK_TAGS = (
+    "address|article|aside|base|basefont|blockquote|body|caption|center|col|"
+    "colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|"
+    "footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|"
+    "link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|"
+    "section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul"
+)
+
+
+def markdown_html_block_start(
+    content: str,
+    *,
+    at_block_start: bool,
+) -> tuple[str | None, bool] | None:
+    raw_tag = re.match(r"<(script|pre|style|textarea)(?:[ \t]|>|$)", content, re.I)
+    if raw_tag is not None:
+        return f"</{raw_tag.group(1).lower()}>", False
+    if content.startswith("<?"):
+        return "?>", False
+    if content.startswith("<![CDATA["):
+        return "]]>", False
+    if re.match(r"<![A-Z]", content):
+        return ">", False
+    if re.match(rf"</?(?:{COMMONMARK_HTML_BLOCK_TAGS})(?:[ \t]|/?>|$)", content, re.I):
+        return None, True
+    if at_block_start:
+        attribute_name = r"[A-Za-z_:][A-Za-z0-9_.:-]*"
+        attribute_value = r'''(?:[^ "'=<>`\x00-\x20]+|'[^']*'|"[^"]*")'''
+        attribute = rf"[ \t]+{attribute_name}(?:[ \t]*=[ \t]*{attribute_value})?"
+        open_tag = rf"<[A-Za-z][A-Za-z0-9-]*(?:{attribute})*[ \t]*/?>"
+        close_tag = r"</[A-Za-z][A-Za-z0-9-]*[ \t]*>"
+        if re.fullmatch(rf"(?:{open_tag}|{close_tag})[ \t]*", content):
+            return None, True
+    return None
+
+
+def markdown_interrupts_paragraph(line: str) -> bool:
+    columns, content_start = markdown_indent(line)
+    if columns > 3:
+        return False
+    content = line[content_start:]
+    compact = re.sub(r"[ \t]", "", content)
+    return bool(
+        re.match(r"#{1,6}(?:[ \t]+|$)", content)
+        or re.match(r">(?:[ \t]+|$)", content)
+        or markdown_fence(line, opening=True) is not None
+        or re.match(r"(?:[-+*]|1[.)])[ \t]+", content)
+        or (
+            len(compact) >= 3
+            and compact[0] in "*-_"
+            and set(compact) == {compact[0]}
+        )
+        or markdown_html_block_start(content, at_block_start=False) is not None
+    )
+
+
+def markdown_line_ends_paragraph(
+    content: str,
+    *,
+    at_block_start: bool,
+) -> bool:
+    compact = re.sub(r"[ \t]", "", content)
+    if re.match(r"#{1,6}(?:[ \t]+|$)", content):
+        return True
+    if (
+        len(compact) >= 3
+        and compact[0] in "*-_"
+        and set(compact) == {compact[0]}
+    ):
+        return True
+    if not at_block_start and re.fullmatch(r"[=-]+[ \t]*", content):
+        return True
+    return markdown_list_item_starts_block(
+        content,
+        at_block_start=at_block_start,
+    )
+
+
+def markdown_list_item_starts_block(
+    content: str,
+    *,
+    at_block_start: bool,
+) -> bool:
+    compact = re.sub(r"[ \t]", "", content)
+    if (
+        len(compact) >= 3
+        and compact[0] in "*-_"
+        and set(compact) == {compact[0]}
+    ):
+        return False
+    list_item = re.match(
+        r"(?P<marker>[-+*]|[0-9]{1,9}[.)])"
+        r"(?:(?P<padding>[ \t]+)(?P<body>.*)|$)",
+        content,
+    )
+    if list_item is None:
+        return False
+    if at_block_start:
+        return True
+    marker = list_item.group("marker")
+    body = list_item.group("body") or ""
+    return not markdown_blank(body) and (
+        not marker[0].isdigit() or marker[:-1] == "1"
+    )
+
+
+def markdown_list_item_has_lazy_paragraph(content: str) -> bool:
+    list_item = re.match(
+        r"(?P<marker>[-+*]|[0-9]{1,9}[.)])(?P<padding>[ \t]+)(?P<body>.*)",
+        content,
+    )
+    if list_item is None:
+        return False
+    marker_end = list_item.end("marker")
+    body_start = list_item.start("body")
+    padding_columns = markdown_columns(content[:body_start]) - markdown_columns(
+        content[:marker_end]
+    )
+    body = list_item.group("body")
+    return padding_columns <= 4 and markdown_container_body_has_lazy_paragraph(body)
+
+
+def markdown_list_item_structure(
+    line: str,
+) -> tuple[tuple[int, ...], int | None]:
+    columns, content_start = markdown_indent(line)
+    if columns > 3:
+        return (), None
+    content = line[content_start:]
+    compact = re.sub(r"[ \t]", "", content)
+    if (
+        len(compact) >= 3
+        and compact[0] in "*-_"
+        and set(compact) == {compact[0]}
+    ):
+        return (), None
+    list_item = re.match(
+        r"(?P<marker>[-+*]|[0-9]{1,9}[.)])"
+        r"(?:(?P<padding>[ \t]+)(?P<body>.*)|$)",
+        content,
+    )
+    if list_item is None:
+        return (), None
+    marker_end = list_item.end("marker")
+    padding = list_item.group("padding")
+    if padding is None:
+        item_indent = columns + markdown_columns(content[:marker_end]) + 1
+        body = ""
+    else:
+        body_start = list_item.start("body")
+        padding_columns = markdown_columns(content[:body_start]) - markdown_columns(
+            content[:marker_end]
+        )
+        if padding_columns > 4:
+            item_indent = columns + markdown_columns(content[:marker_end]) + 1
+            body = content[marker_end + 1 :]
+        else:
+            item_indent = columns + markdown_columns(content[:body_start])
+            body = list_item.group("body") or ""
+    nested, nested_empty_indent = markdown_list_item_structure(body)
+    indents = (item_indent,) + tuple(item_indent + indent for indent in nested)
+    empty_indent = (
+        item_indent + nested_empty_indent
+        if nested_empty_indent is not None
+        else item_indent if markdown_blank(body) else None
+    )
+    return indents, empty_indent
+
+
+def markdown_container_body_has_lazy_paragraph(body: str) -> bool:
+    if markdown_blank(body):
+        return False
+    columns, content_start = markdown_indent(body)
+    if columns > 3:
+        return False
+    content = body[content_start:]
+    if content.startswith(">"):
+        nested = content[1:]
+        if nested.startswith((" ", "\t")):
+            nested = nested[1:]
+        return markdown_container_body_has_lazy_paragraph(nested)
+    nested_list = re.match(
+        r"(?P<marker>[-+*]|[0-9]{1,9}[.)])(?P<padding>[ \t]+)(?P<body>.*)",
+        content,
+    )
+    if nested_list is not None:
+        marker_end = nested_list.end("marker")
+        body_start = nested_list.start("body")
+        padding_columns = markdown_columns(content[:body_start]) - markdown_columns(
+            content[:marker_end]
+        )
+        return padding_columns <= 4 and markdown_container_body_has_lazy_paragraph(
+            nested_list.group("body")
+        )
+    compact = re.sub(r"[ \t]", "", content)
+    return not (
+        content.startswith("<!--")
+        or re.match(r"#{1,6}(?:[ \t]+|$)", content)
+        or markdown_fence(body, opening=True) is not None
+        or (
+            len(compact) >= 3
+            and compact[0] in "*-_"
+            and set(compact) == {compact[0]}
+        )
+        or markdown_html_block_start(content, at_block_start=True) is not None
+    )
+
+
+def visible_markdown_lines(text: str) -> list[str]:
+    visible_lines: list[str] = []
+    in_html_comment = False
+    html_comment_is_block = False
+    in_html_block = False
+    html_block_terminator: str | None = None
+    html_block_until_blank = False
+    fence_character: str | None = None
+    fence_length = 0
+    fence_close_min_indent = 0
+    fence_close_indent = 3
+    fence_is_list_nested = False
+    at_block_start = True
+    lazy_container_active = False
+    lazy_container_saw_blank = False
+    lazy_list_indents: tuple[int, ...] = ()
+    empty_list_indent: int | None = None
+
+    for raw_line in text.split("\n"):
+        if fence_character is not None:
+            columns, _ = markdown_indent(raw_line)
+            container_ended = (
+                fence_is_list_nested
+                and not markdown_blank(raw_line)
+                and columns < fence_close_min_indent
+            )
+            if container_ended:
+                lazy_list_indents = tuple(
+                    indent for indent in lazy_list_indents if indent <= columns
+                )
+                fence_character = None
+                fence_length = 0
+                fence_close_min_indent = 0
+                fence_close_indent = 3
+                fence_is_list_nested = False
+                at_block_start = True
+                lazy_container_active = False
+                lazy_container_saw_blank = False
+            else:
+                fence_closed = False
+                fence_match = markdown_fence(
+                    raw_line,
+                    opening=False,
+                    min_indent=fence_close_min_indent,
+                    max_indent=fence_close_indent,
+                )
+                if fence_match is not None:
+                    marker, suffix, _ = fence_match
+                    if (
+                        marker[0] == fence_character
+                        and len(marker) >= fence_length
+                        and markdown_blank(suffix)
+                    ):
+                        fence_character = None
+                        fence_length = 0
+                        fence_close_min_indent = 0
+                        fence_close_indent = 3
+                        fence_is_list_nested = False
+                        fence_closed = True
+                at_block_start = fence_closed or markdown_blank(raw_line)
+                continue
+
+        if in_html_block:
+            html_block_ended = False
+            if html_block_until_blank:
+                if markdown_blank(raw_line):
+                    in_html_block = False
+                    html_block_until_blank = False
+                    html_block_ended = True
+            elif (
+                html_block_terminator is not None
+                and html_block_terminator in raw_line.lower()
+            ):
+                in_html_block = False
+                html_block_terminator = None
+                html_block_ended = True
+            at_block_start = html_block_ended or markdown_blank(raw_line)
+            continue
+
+        if in_html_comment:
+            inline_comment_ended = not html_comment_is_block and (
+                markdown_blank(raw_line) or markdown_interrupts_paragraph(raw_line)
+            )
+            if inline_comment_ended:
+                in_html_comment = False
+                at_block_start = True
+                if markdown_blank(raw_line):
+                    visible_lines.append("")
+                    continue
+            else:
+                if "-->" in raw_line:
+                    comment_was_block = html_comment_is_block
+                    in_html_comment = False
+                    html_comment_is_block = False
+                    at_block_start = comment_was_block
+                else:
+                    at_block_start = markdown_blank(raw_line)
+                continue
+
+        if markdown_blank(raw_line):
+            visible_lines.append("")
+            at_block_start = True
+            if empty_list_indent is not None:
+                lazy_list_indents = tuple(
+                    indent
+                    for indent in lazy_list_indents
+                    if indent < empty_list_indent
+                )
+                empty_list_indent = None
+            if lazy_container_active:
+                lazy_container_saw_blank = True
+            continue
+
+        columns, content_start = markdown_indent(raw_line)
+        if empty_list_indent is not None:
+            if columns < empty_list_indent:
+                lazy_list_indents = tuple(
+                    indent for indent in lazy_list_indents if indent <= columns
+                )
+            empty_list_indent = None
+        if (
+            lazy_list_indents
+            and (not lazy_container_active or lazy_container_saw_blank)
+            and columns < lazy_list_indents[0]
+        ):
+            lazy_list_indents = ()
+
+        continuation_fence_match: tuple[str, str, int] | None = None
+        continuation_fence_indent = 0
+        for indent in reversed(lazy_list_indents):
+            candidate = markdown_fence(
+                raw_line,
+                opening=True,
+                min_indent=indent,
+                max_indent=indent + 3,
+            )
+            if candidate is not None:
+                continuation_fence_match = candidate
+                continuation_fence_indent = indent
+                break
+        if continuation_fence_match is not None:
+            marker, _, _ = continuation_fence_match
+            fence_character = marker[0]
+            fence_length = len(marker)
+            fence_close_min_indent = continuation_fence_indent
+            fence_close_indent = continuation_fence_indent + 3
+            fence_is_list_nested = True
+            lazy_list_indents = tuple(
+                indent
+                for indent in lazy_list_indents
+                if indent <= continuation_fence_indent
+            )
+            at_block_start = False
+            lazy_container_active = False
+            lazy_container_saw_blank = False
+            continue
+        if columns >= 4:
+            continue
+
+        fence_match = markdown_fence(raw_line, opening=True)
+        if fence_match is not None:
+            marker, _, _ = fence_match
+            fence_character = marker[0]
+            fence_length = len(marker)
+            fence_close_min_indent = 0
+            fence_close_indent = 3
+            fence_is_list_nested = False
+            at_block_start = False
+            lazy_container_active = False
+            lazy_container_saw_blank = False
+            lazy_list_indents = ()
+            continue
+        list_fence_match = markdown_list_fence(
+            raw_line,
+            at_block_start=at_block_start,
+        )
+        if list_fence_match is not None:
+            marker, _, marker_column = list_fence_match
+            fence_character = marker[0]
+            fence_length = len(marker)
+            fence_close_min_indent = marker_column
+            fence_close_indent = marker_column + 3
+            fence_is_list_nested = True
+            lazy_list_indents = (
+                *(
+                    indent
+                    for indent in lazy_list_indents
+                    if indent <= columns
+                ),
+                marker_column,
+            )
+            at_block_start = False
+            lazy_container_active = False
+            lazy_container_saw_blank = False
+            continue
+        content = raw_line[content_start:]
+        if content.startswith(">"):
+            at_block_start = True
+            nested = content[1:]
+            if nested.startswith((" ", "\t")):
+                nested = nested[1:]
+            lazy_container_active = markdown_container_body_has_lazy_paragraph(nested)
+            lazy_container_saw_blank = False
+            lazy_list_indents = tuple(
+                indent for indent in lazy_list_indents if indent <= columns
+            )
+            continue
+        if content.startswith("<!--"):
+            if "-->" not in raw_line[content_start + 4 :]:
+                in_html_comment = True
+                html_comment_is_block = True
+            at_block_start = True
+            lazy_container_active = False
+            lazy_container_saw_blank = False
+            lazy_list_indents = tuple(
+                indent for indent in lazy_list_indents if indent <= columns
+            )
+            continue
+        html_block = markdown_html_block_start(
+            content,
+            at_block_start=at_block_start or lazy_container_active,
+        )
+        if html_block is not None:
+            terminator, until_blank = html_block
+            if until_blank or (
+                terminator is not None and terminator not in content.lower()
+            ):
+                in_html_block = True
+                html_block_terminator = terminator
+                html_block_until_blank = until_blank
+            at_block_start = not in_html_block
+            lazy_container_active = False
+            lazy_container_saw_blank = False
+            lazy_list_indents = tuple(
+                indent for indent in lazy_list_indents if indent <= columns
+            )
+            continue
+
+        visible_parts: list[str] = []
+        remainder = raw_line
+        line_started_at_block = at_block_start
+        while remainder:
+            if in_html_comment:
+                comment_end = remainder.find("-->")
+                if comment_end == -1:
+                    remainder = ""
+                    continue
+                remainder = remainder[comment_end + 3 :]
+                in_html_comment = False
+                continue
+
+            comment_start = markdown_html_comment_start(remainder)
+            if comment_start is None:
+                visible_parts.append(remainder)
+                remainder = ""
+            else:
+                visible_parts.append(remainder[:comment_start])
+                comment_kind = markdown_list_comment_kind(
+                    remainder[:comment_start],
+                    at_block_start=line_started_at_block,
+                )
+                if comment_kind == "literal":
+                    visible_parts.append(remainder[comment_start:])
+                    remainder = ""
+                    continue
+                html_comment_is_block = comment_kind == "block"
+                remainder = remainder[comment_start + 4 :]
+                in_html_comment = True
+
+        line = "".join(visible_parts)
+        columns, content_start = markdown_indent(line)
+        if columns >= 4 or line[content_start:].startswith(">"):
+            continue
+        visible_lines.append(line)
+        line_started_list = markdown_list_item_starts_block(
+            content,
+            at_block_start=at_block_start,
+        )
+        line_ended_paragraph = markdown_line_ends_paragraph(
+            content,
+            at_block_start=at_block_start,
+        )
+        if line_started_list:
+            lazy_container_active = markdown_list_item_has_lazy_paragraph(content)
+            lazy_container_saw_blank = False
+            new_list_indents, empty_list_indent = markdown_list_item_structure(
+                raw_line
+            )
+            lazy_list_indents = (
+                *(
+                    indent
+                    for indent in lazy_list_indents
+                    if indent <= columns
+                ),
+                *new_list_indents,
+            )
+        elif lazy_container_active and (
+            lazy_container_saw_blank or line_ended_paragraph
+        ):
+            lazy_container_active = False
+            lazy_container_saw_blank = False
+            lazy_list_indents = tuple(
+                indent for indent in lazy_list_indents if indent <= columns
+            )
+        at_block_start = line_ended_paragraph
+
+    return visible_lines
+
+
+def markdown_section_paragraph_open(line: str, *, was_open: bool) -> bool:
+    if markdown_blank(line):
+        return False
+    columns, content_start = markdown_indent(line)
+    if columns > 3:
+        return was_open
+    content = line[content_start:]
+    compact = re.sub(r"[ \t]", "", content)
+    if (
+        len(compact) >= 3
+        and compact[0] in "*-_"
+        and set(compact) == {compact[0]}
+    ):
+        return False
+    if markdown_list_item_starts_block(
+        content,
+        at_block_start=not was_open,
+    ):
+        return False
+    return True
+
+
+def markdown_escapable(character: str) -> bool:
+    return bool(re.fullmatch(r"[!-/:-@\[-`{-~]", character))
+
+
+def markdown_reference_label_fragment(
+    content: str,
+    *,
+    source_length: int = 0,
+    has_nonspace: bool = False,
+) -> tuple[str, int, bool, str | None]:
+    index = 0
+    while index < len(content):
+        character = content[index]
+        if character == "\\" and index + 1 < len(content):
+            escaped = content[index + 1]
+            if markdown_escapable(escaped):
+                source_length += 2
+                if source_length > 999:
+                    return "invalid", source_length, has_nonspace, None
+                has_nonspace = has_nonspace or not escaped.isspace()
+                index += 2
+                continue
+        if character == "[":
+            return "invalid", source_length, has_nonspace, None
+        if character == "]":
+            if index + 1 >= len(content) or content[index + 1] != ":":
+                return "invalid", source_length, has_nonspace, None
+            if source_length > 999 or not has_nonspace:
+                return "invalid", source_length, has_nonspace, None
+            return "complete", source_length, has_nonspace, content[index + 2 :]
+        source_length += 1
+        if source_length > 999:
+            return "invalid", source_length, has_nonspace, None
+        has_nonspace = has_nonspace or not character.isspace()
+        index += 1
+    return "incomplete", source_length, has_nonspace, None
+
+
+def markdown_reference_destination_state(text: str) -> tuple[bool, str | None]:
+    remainder = text.lstrip(" \t")
+    if not remainder:
+        return False, None
+    if remainder.startswith("<"):
+        end = 1
+        escaped = False
+        while end < len(remainder):
+            character = remainder[end]
+            if character in "\r\n":
+                return False, None
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == "<":
+                return False, None
+            elif character == ">":
+                break
+            end += 1
+        if end >= len(remainder):
+            return False, None
+        remainder = remainder[end + 1 :].lstrip(" \t")
+    else:
+        index = 0
+        depth = 0
+        while index < len(remainder):
+            character = remainder[index]
+            if character in " \t":
+                break
+            if ord(character) < 0x20 or character == "\x7f":
+                return False, None
+            if character == "\\" and index + 1 < len(remainder):
+                escaped = remainder[index + 1]
+                if escaped in " \t":
+                    return False, None
+                if markdown_escapable(escaped):
+                    index += 2
+                    continue
+            elif character == "(":
+                depth += 1
+                if depth > 32:
+                    return False, None
+            elif character == ")":
+                if depth == 0:
+                    return False, None
+                depth -= 1
+            index += 1
+        if index == 0 or depth != 0:
+            return False, None
+        remainder = remainder[index:].lstrip(" \t")
+    if not remainder:
+        return True, "may_title"
+    if remainder[0] not in "\"'(":
+        return False, None
+    closer = ")" if remainder[0] == "(" else remainder[0]
+    escaped = False
+    for index, character in enumerate(remainder[1:], start=1):
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == closer:
+            return markdown_blank(remainder[index + 1 :]), None
+    return True, f"title:{closer}"
+
+
+def markdown_reference_definition_state(line: str) -> tuple[bool, str | None]:
+    columns, content_start = markdown_indent(line)
+    if columns > 3:
+        return False, None
+    content = line[content_start:]
+    if not content.startswith("["):
+        return False, None
+    status, source_length, has_nonspace, remainder = markdown_reference_label_fragment(
+        content[1:]
+    )
+    if status == "invalid":
+        return False, None
+    if status == "incomplete":
+        return True, f"label:{source_length}:{int(has_nonspace)}"
+    assert remainder is not None
+    if markdown_blank(remainder):
+        return True, "destination"
+    return markdown_reference_destination_state(remainder)
+
+
+def markdown_reference_continuation_state(
+    line: str,
+    state: str,
+) -> tuple[bool, str | None]:
+    columns, content_start = markdown_indent(line)
+    content = line[content_start:]
+    if state.startswith("label:"):
+        if markdown_blank(line):
+            return False, None
+        _, source_text, nonspace_text = state.split(":")
+        status, source_length, has_nonspace, remainder = (
+            markdown_reference_label_fragment(
+                content,
+                source_length=int(source_text) + 1,
+                has_nonspace=bool(int(nonspace_text)),
+            )
+        )
+        if status == "invalid":
+            return False, None
+        if status == "incomplete":
+            return True, f"label:{source_length}:{int(has_nonspace)}"
+        assert remainder is not None
+        if markdown_blank(remainder):
+            return True, "destination"
+        return markdown_reference_destination_state(remainder)
+    if state == "destination":
+        if columns == 0 or columns > 3:
+            return False, None
+        return markdown_reference_destination_state(content)
+    if state == "may_title":
+        if columns == 0 or columns > 3 or not content.startswith(("\"", "'", "(")):
+            return False, None
+        closer = ")" if content[0] == "(" else content[0]
+        escaped = False
+        for index, character in enumerate(content[1:], start=1):
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == closer:
+                return markdown_blank(content[index + 1 :]), None
+        return True, f"title:{closer}"
+    closer = state.removeprefix("title:")
+    if markdown_blank(line):
+        return False, None
+    escaped = False
+    for index, character in enumerate(content):
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == closer:
+            return markdown_blank(content[index + 1 :]), None
+    return True, state
+
+
+def live_monitoring_sections(text: str) -> list[str]:
+    sections: list[str] = []
+    current: list[str] | None = None
+    paragraph_open = False
+    reference_state: str | None = None
+    reference_start_index: int | None = None
+
+    for line in visible_markdown_lines(text):
+        if line == LIVE_MONITORING_HEADING:
+            if current is not None:
+                sections.append("\n".join(current))
+            current = [line]
+            paragraph_open = False
+            reference_state = None
+            reference_start_index = None
+            continue
+        if current is not None and reference_state is not None:
+            consumed, next_state = markdown_reference_continuation_state(
+                line,
+                reference_state,
+            )
+            if consumed:
+                current.append(line)
+                reference_state = next_state
+                if next_state is None:
+                    reference_start_index = None
+                paragraph_open = False
+                continue
+            invalid_reference = (
+                reference_state == "destination"
+                or reference_state.startswith("title:")
+                or reference_state.startswith("label:")
+            )
+            if invalid_reference and reference_start_index is not None:
+                sections.append("\n".join(current[:reference_start_index]))
+                current = None
+                paragraph_open = False
+                reference_state = None
+                reference_start_index = None
+                continue
+            reference_state = None
+            reference_start_index = None
+        if current is not None and not paragraph_open:
+            is_definition, next_state = markdown_reference_definition_state(line)
+            if is_definition:
+                reference_start_index = len(current)
+                current.append(line)
+                reference_state = next_state
+                if next_state is None:
+                    reference_start_index = None
+                paragraph_open = False
+                continue
+        setext_heading = re.match(r"^[ \t]{0,3}(?:=+|-+)[ \t]*$", line)
+        if (
+            setext_heading is not None
+            and current is not None
+            and paragraph_open
+        ):
+            sections.append("\n".join(current))
+            current = None
+            paragraph_open = False
+            reference_state = None
+            reference_start_index = None
+            continue
+        heading = re.match(
+            r"^[ \t]{0,3}(#{1,6})(?:[ \t]+.*)?[ \t]*$",
+            line,
+        )
+        if heading is not None:
+            level = len(heading.group(1))
+            if level <= 2 and current is not None:
+                sections.append("\n".join(current))
+                current = None
+            paragraph_open = False
+            reference_state = None
+            reference_start_index = None
+            if current is not None:
+                current.append(line)
+            continue
+        if current is not None:
+            current.append(line)
+            paragraph_open = markdown_section_paragraph_open(
+                line,
+                was_open=paragraph_open,
+            )
+
+    if (
+        current is not None
+        and reference_state is not None
+        and reference_state != "may_title"
+        and reference_start_index is not None
+    ):
+        current = current[:reference_start_index]
+    if current is not None:
+        sections.append("\n".join(current))
+    return sections
+
+
 def validate_instruction_parity(
     failures: list[str],
     root: Path = ROOT,
@@ -2151,6 +3158,38 @@ def validate_instruction_parity(
     agents_path = root / "AGENTS.md"
     if not agents_path.is_file():
         failures.append("AGENTS.md: canonical shared instructions are required")
+    else:
+        try:
+            agents_text = agents_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            failures.append(
+                f"AGENTS.md: could not read canonical instructions: {error}"
+            )
+        else:
+            sections = live_monitoring_sections(agents_text)
+            if not sections:
+                failures.append(
+                    "AGENTS.md: missing required live-monitoring instruction: "
+                    f"{LIVE_MONITORING_HEADING}"
+                )
+            elif len(sections) != 1:
+                failures.append(
+                    "AGENTS.md: live-monitoring policy must contain exactly one "
+                    "active section"
+                )
+            else:
+                section = sections[0]
+                for instruction in REQUIRED_LIVE_MONITORING_INSTRUCTIONS:
+                    present = (
+                        instruction in section
+                        if instruction == LIVE_MONITORING_HEADING
+                        else f"- {instruction}" in section.splitlines()
+                    )
+                    if not present:
+                        failures.append(
+                            "AGENTS.md: missing required live-monitoring "
+                            f"instruction: {instruction}"
+                        )
 
     claude_path = root / "CLAUDE.md"
     try:
