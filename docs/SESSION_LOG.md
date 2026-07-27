@@ -73,7 +73,7 @@ evidence only and must not become recurring polling targets.
 including hard coverage and `ci-gate`, and received a clean user-requested
 GitHub Codex review with no inline comments or unresolved threads. Those checks
 do not authorize the integration head after `main` advanced. The integrated
-repair passes all 297 Python discovery tests (four platform-only skips),
+repair passes all 298 Python discovery tests (four platform-only skips),
 including a warnings-as-errors run, both agent validators, Ruff, 100
 roadmap-policy tests with 434 assertions,
 roadmap evidence, `cargo fmt`, workspace build and all 581 Rust tests, clippy
@@ -108,8 +108,10 @@ opened on list continuation lines retain each active list indentation boundary.
 Thematic breaks take precedence over otherwise list-like marker sequences.
 Reference-definition regressions cover escaped and multiline labels, the raw
 999-character limit, balanced destinations through CommonMark's 32-level parenthesis
-limit, rejection at level 33, multiline titles, and fail-closed invalidation or
-end-of-file state. Negative regressions cover every bypass class.
+limit, rejection at level 33, ASCII-control rejection in bare destinations,
+line-ending rejection in angle-bracket destinations, multiline titles, and
+fail-closed invalidation or end-of-file state. Negative regressions cover every
+bypass class.
 The code-bearing repair commit `3d3c985d4050b32e210355c78c42778437acdfa5`
 was published only after pinned deep review returned zero findings across all 11
 points; its additional adversarial comparison covered 418 generated Markdown cases

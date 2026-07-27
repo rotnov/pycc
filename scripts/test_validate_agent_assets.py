@@ -785,6 +785,11 @@ class AgentAssetValidationTests(unittest.TestCase):
             ("[" + r"\*" * 500 + "]: /url", "---"),
             ("[foo]: foo)", "---"),
             ("[foo]: " + "(" * 33 + "url" + ")" * 33, "---"),
+            ("[foo]: /url\x01tail", "---"),
+            ("[foo]: /url\rtail", "---"),
+            ("[foo]: /url\x7ftail", "---"),
+            ("[foo]: <a\rb>", "---"),
+            ("[foo]: <a\\\rb>", "---"),
             (r"[foo]: foo\ bar", "---"),
             ('[foo]: /url "title\n\nend"', "---"),
         ):
@@ -833,6 +838,19 @@ class AgentAssetValidationTests(unittest.TestCase):
                         agents_text=agents_text,
                     ),
                     [],
+                )
+
+    def test_angle_reference_destination_rejects_line_endings(self) -> None:
+        for destination in (
+            "<a\rb>",
+            "<a\nb>",
+            "<a\\\rb>",
+            "<a\\\nb>",
+        ):
+            with self.subTest(destination=repr(destination)):
+                self.assertEqual(
+                    validator.markdown_reference_destination_state(destination),
+                    (False, None),
                 )
 
     def test_unterminated_reference_state_cannot_supply_policy(self) -> None:

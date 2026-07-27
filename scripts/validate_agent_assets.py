@@ -2919,6 +2919,8 @@ def markdown_reference_destination_state(text: str) -> tuple[bool, str | None]:
         escaped = False
         while end < len(remainder):
             character = remainder[end]
+            if character in "\r\n":
+                return False, None
             if escaped:
                 escaped = False
             elif character == "\\":
@@ -2938,6 +2940,8 @@ def markdown_reference_destination_state(text: str) -> tuple[bool, str | None]:
             character = remainder[index]
             if character in " \t":
                 break
+            if ord(character) < 0x20 or character == "\x7f":
+                return False, None
             if character == "\\" and index + 1 < len(remainder):
                 escaped = remainder[index + 1]
                 if escaped in " \t":

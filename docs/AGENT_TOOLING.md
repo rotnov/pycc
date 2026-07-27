@@ -166,7 +166,8 @@ headings both end the active monitoring section, while link-reference definition
 followed by thematic breaks remain within it, including escaped and multiline labels,
 continued destinations, destinations within CommonMark's 32-level parenthesis limit,
 and valid multiline titles. Invalid empty, nested, oversized, over-nested, or
-unbalanced definitions and titles containing blank lines remain paragraph text.
+unbalanced definitions, control-bearing bare destinations, angle-bracket destinations
+with line endings, and titles containing blank lines remain paragraph text.
 Unterminated label, destination, or title state at end of file, or later invalidation
 after buffered lines, fails closed at the same reference start. Lazy list and
 blockquote paragraphs retain their container boundary, while indented lazy paragraph
