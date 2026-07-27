@@ -86,7 +86,16 @@ bodies update the same complete heading path, and a checked task continuing an
 empty list marker is still evidence-bearing. Adding a new evidence type starts
 with a failing public-CLI mutation in
 `scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
-and documented claim land together.
+and documented claim land together. Registering a new identifier is itself
+staged the same way a digest change is (see `ci-tier1-cross-compile` below):
+`.github/workflows/workflow-policy.yml`'s `audit` job checks out
+`scripts/check_roadmap_evidence.rb` from the base branch under
+`pull_request_target`, so a single pull request that both registers a new
+identifier and checks a roadmap item citing it can never pass its own
+audit — the checker that runs is always the base branch's prior version,
+which does not yet know the new identifier. Register first, with every
+roadmap checkbox that will cite it left unchecked; merge; only then open a
+second pull request that checks the box.
 
 The initial `ci-build-test-coverage-100` evidence requires all of the following:
 
@@ -119,6 +128,22 @@ and roadmap claim, and finally remove the superseded digest. A digest is
 retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
+
+The `conformance-fib-mandelbrot-tier1` and `check-throughput-1k-loc-50ms`
+evidence bind the same reviewed `ci.yml` digest as `ci-tier1-cross-compile`:
+the fib/mandelbrot-ascii byte-for-byte CPython differential
+(`tests/conformance.rs`, D-085/D-080) and the `pycc check` <50ms/1000 LOC
+absolute-throughput-floor step (`scripts/check_frontend_throughput.rb`,
+D-079/D-084) are both steps that digest already pins, so proving the digest
+is reviewed and current also proves these two claims execute for real, on
+every Tier-1 target. The `cli-spec-diagnostic-match` evidence instead binds
+the `cli_spec_example` diagnostic-snapshot test (`tests/diagnostics_test.rs`,
+D-083), which runs inside the same digest-pinned, 100%-coverage-gated
+`cargo test`/`cargo llvm-cov` step `ci-build-test-coverage-100`'s evidence
+already requires -- none of these three add a second, evidence-ID-specific
+repository check beyond the roadmap claim/section binding every evidence ID
+gets, since the underlying capability proof is already exhaustively covered
+by the two structural checks the other evidence IDs already established.
 
 The historical D-048 workflow established the split trust boundary:
 `frontend-perf-measure` executed pull-request benchmark code and uploaded only

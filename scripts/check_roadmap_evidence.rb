@@ -19,7 +19,13 @@ EVIDENCE_CLAIMS = {
   "ci-tier1-cross-compile" =>
     "The five-target native CI matrix and one cross-host compilation path are live on `main`.",
   "ci-build-test-coverage-100" =>
-    "The 100% line and region coverage gate is required and green for the current slice."
+    "The 100% line and region coverage gate is required and green for the current slice.",
+  "conformance-fib-mandelbrot-tier1" =>
+    "`fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets.",
+  "check-throughput-1k-loc-50ms" =>
+    "`pycc check` processes 1k LOC in under 50 ms.",
+  "cli-spec-diagnostic-match" =>
+    "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output."
 }.freeze
 EVIDENCE_SECTIONS = {
   "ci-tier1-cross-compile" => [
@@ -28,6 +34,21 @@ EVIDENCE_SECTIONS = {
     "v0.1 acceptance checklist"
   ],
   "ci-build-test-coverage-100" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
+  "conformance-fib-mandelbrot-tier1" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
+  "check-throughput-1k-loc-50ms" => [
+    "pycc Roadmap",
+    "Current delivery status",
+    "v0.1 acceptance checklist"
+  ],
+  "cli-spec-diagnostic-match" => [
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"
