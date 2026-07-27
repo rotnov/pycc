@@ -57,12 +57,13 @@
 - Do not report expected behavior, ordinary project failures, or unverified suspicions. Gather enough evidence to make the report actionable and avoid automated issue spam.
 - Link the upstream issue in the task summary and in the local PR when the reported bug affects the change being delivered.
 
-## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution), [D-025](docs/DECISIONS.md#d-025-registered-contracts-for-shared-hook-targets), [D-077](docs/DECISIONS.md#d-077-project-local-ievo-hook-lifecycle-is-symmetric))
+## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution), [D-025](docs/DECISIONS.md#d-025-registered-contracts-for-shared-hook-targets), [D-077](docs/DECISIONS.md#d-077-project-local-ievo-hook-lifecycle-is-symmetric), [D-081](docs/DECISIONS.md#d-081-harden-the-project-local-ievo-lifecycle-boundary))
 
 - Shared `.claude/settings.json` entries must not invoke scripts or other targets that are absent from a clean checkout. A hook whose target is gitignored is a clean-clone defect even when the hook failure is non-blocking.
 - iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Claude hook wiring belongs only in gitignored `.claude/settings.local.json`; Codex hook wiring belongs only in gitignored `.codex/hooks.json`. Never commit those entries or generated scripts.
 - After enabling or refreshing iEvo, run `python3 scripts/manage_ievo_hooks.py localize` and then `python3 scripts/manage_ievo_hooks.py check --smoke`. The helper removes only the exact iEvo entries from shared Claude settings, preserves unrelated hooks, restores the repository's ignore policy if newer iEvo releases propose tracked shims, and validates both client surfaces.
 - To disable auto-evolution in this clone, run `python3 scripts/manage_ievo_hooks.py disable`, not the generic iEvo disable workflow by itself. The project helper removes the exact iEvo entries from shared and local Claude settings plus Codex hooks before deleting their local targets, preserves the tracked project-wide intent flag, and is safe to repeat.
+- Do not edit or regenerate hook configuration, or relocate `.claude`, `.codex`, `.ievo`, or their managed ancestors, while `localize`, `check`, or `disable` is running. The helper lock serializes its own invocations only; arbitrary editors and upstream tools do not participate, and portable path replacement/removal is not an atomic compare-and-swap.
 - Shared hooks must not hide executable targets behind shell control separators, including literal line breaks, or in inline/stdin interpreter forms such as `sh -c`, `bash -s`, `python -c`, or `node --eval`.
 - Interpreter options are fail-closed unless the validator explicitly models their operands; an option operand must never be mistaken for the executable hook target.
 - Before changing shared hook configuration, test the tracked-file view of the repository. Every referenced filesystem target must be tracked and registered in `FAIL_SILENT_WRAPPER_CONTRACTS` with a tracked `scripts/test_*.py` contract that runs in required CI.
@@ -117,6 +118,12 @@
   request with a clean tree, refresh the remote default branch and review the
   full committed range from its merge base through `HEAD`, not a two-dot diff
   against the default-branch tip.
+- Before invoking the pinned reviewer, inspect `git status --short` and ensure
+  every intended new file is part of the selected diff. iEvo `deep-review`
+  through 0.70.1 omits untracked files from `--working`; stage new files before
+  a staged review, and never treat a working-tree verdict as complete while
+  relevant untracked files remain. Track the upstream fix in
+  [ievo-ai/skills#483](https://github.com/ievo-ai/skills/issues/483).
 - Do not select arbitrary globally installed or marketplace review skills.
   Add a new eligible reviewer only through the repository's agent-tool
   security-check and pinning process.

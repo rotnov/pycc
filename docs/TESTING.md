@@ -258,9 +258,13 @@ authorizes its checked roadmap markers.
 
 ### Agent hook lifecycle
 
-The required Python discovery run includes
-`scripts/test_manage_ievo_hooks.py`. Its isolated synthetic repository covers the
-complete D-077 lifecycle: shared Claude entries plus pre-existing local state are
+The required macOS Python discovery run includes
+`scripts/test_manage_ievo_hooks.py`. A Windows-only Rust integration harness runs
+that lifecycle suite plus `scripts/test_validate_agent_policies.py` inside the
+required native Windows matrix, so native reparse-point, advisory-lock, and DOS 8.3
+branches execute in CI without modifying D-062's byte-pinned workflow. Its isolated
+synthetic repository covers the
+complete D-077/D-081 lifecycle: shared Claude entries plus pre-existing local state are
 localized without duplicates; unrelated settings and hooks survive; both Claude and
 Codex hook scripts execute successfully with a no-op payload; upstream tracked-shim
 ignore exceptions are removed; repeated localize and disable operations are stable;
@@ -269,10 +273,29 @@ preserving the tracked shared-intent flag. The full lifecycle also verifies that
 tracked view returns to clean after upstream-style enable mutations are normalized.
 It preserves unrelated empty hook groups/events and makes refreshed shared metadata
 win over stale duplicate local metadata. Separate negative cases prove a missing
-target, malformed local JSON, or an unsupported reference to a managed target fails
-before mutation, including lexical and case-insensitive aliases of the managed hook
-directory, POSIX shell-escaped path components, and a managed path preceded by
-length-changing Unicode case-fold text.
+target, incomplete or conflicting corrections-only intent, malformed local JSON, an
+unsupported reference to a managed target (including lexical, case, quoted-fragment,
+line-continuation, POSIX within-component backslash/expansion, and Windows-shell
+expansion aliases), an
+applicable wildcard (including POSIX bracket-class)/brace/extglob alias, a PowerShell
+backtick/constant-expression or cmd caret alias, an LF/CRLF Windows continuation or
+multiline substitution alias, a Windows DOS 8.3-shaped path component, an unignored/force-tracked local
+configuration, a directory-shaped script target, a force-tracked vendor descendant,
+or a vendor traversal failure fails before mutation or target deletion.
+Additional race/error cases cover an inaccessible vendor root, an active advisory
+lock, harmless recovery from an orphaned lock file, absolute/relative linked-worktree
+gitdir lock resolution and malformed metadata, symlink/junction gitdir components and
+lock entries, the root-local non-git fallback, a configuration edit observed
+before its replacement, a generated script changed between snapshots, a vendor entry
+inserted between initial validation and removal, an ancestor relocated and replaced
+with a symlink after snapshots, and successful deepest-first removal of a nested vendor
+tree without touching an unrelated sibling. Windows-only junction and native 8.3
+short-path regressions cover reparse redirection and lexical aliasing. Platform-neutral
+mount simulations prove that neither a
+mounted configuration ancestor nor a mounted generated-hook ancestor can redirect
+writes or deletion outside the worktree. Matching duplicate values for all intent
+fields are accepted by localize, check, disable, and the policy parser, while missing
+or conflicting values fail closed before every lifecycle mutation.
 `scripts/validate_agent_policies.py` additionally requires both
 `.claude/settings.local.json` and `.codex/hooks.json` to remain ignored in the real
 tracked checkout.

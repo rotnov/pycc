@@ -692,7 +692,11 @@ def parse_flag(contents: str) -> dict[str, str]:
     for line in contents.splitlines():
         key, separator, value = line.partition(":")
         if separator:
-            result[key.strip()] = value.strip()
+            key = key.strip()
+            value = value.strip()
+            if key in result and result[key] != value:
+                raise ValueError(f"conflicting duplicate flag field: {key}")
+            result[key] = value
     return result
 
 
@@ -924,7 +928,13 @@ def main() -> int:
 
     failures.extend(validate_machine_local_hook_configs_ignored())
 
-    flag = parse_flag((ROOT / ".ievo" / "evo-auto.flag").read_text(encoding="utf-8"))
+    try:
+        flag = parse_flag(
+            (ROOT / ".ievo" / "evo-auto.flag").read_text(encoding="utf-8")
+        )
+    except ValueError as error:
+        failures.append(str(error))
+        flag = {}
     if flag.get("enabled") != "true":
         failures.append(".ievo/evo-auto.flag must state the shared enabled intent")
     if flag.get("signal") != "corrections-only":
