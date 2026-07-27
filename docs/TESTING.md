@@ -85,9 +85,11 @@ tab-indented pseudo-headings. Rendered headings in blockquotes and list-item
 bodies update the same complete heading path, and a checked task continuing an
 empty list marker is still evidence-bearing. Adding a new evidence type starts
 with a failing public-CLI mutation in
-`scripts/test_check_roadmap_evidence.rb`; the checker implementation, marker,
-and documented claim land together. Registering a new identifier is itself
-staged the same way a digest change is (see `ci-tier1-cross-compile` below):
+`scripts/test_check_roadmap_evidence.rb`; the checker implementation and
+documented claim land together in that same pull request, but the inline
+marker on an actually-checked roadmap item lands separately, in a later pull
+request, because registering a new identifier is itself staged the same way
+a digest change is (see `ci-tier1-cross-compile` below):
 `.github/workflows/workflow-policy.yml`'s `audit` job checks out
 `scripts/check_roadmap_evidence.rb` from the base branch under
 `pull_request_target`, so a single pull request that both registers a new
