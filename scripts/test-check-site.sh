@@ -491,7 +491,7 @@ mutations = (
     ),
     (
         site_dir / "index.html",
-        "v0.1 acceptance criteria met on all five Tier-1 targets",
+        "v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)",
         "v0.1 acceptance criteria remain unmet",
         "landing page with a superseded acceptance status",
     ),

@@ -419,7 +419,7 @@ required_disclosures = (
     "No project code is handwritten by a human.",
     "pycc check now runs the v0.1 frontend",
     "v0.1 native backend with documented gaps",
-    "v0.1 acceptance criteria met on all five Tier-1 targets",
+    "v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)",
     "The full conformance matrix and v0.2 collections/generics are next",
 )
 for disclosure in required_disclosures:
@@ -450,8 +450,8 @@ PAGE_SPECS = {
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
-            "implements today, what remains planned for v0.1, and the CI "
-            "evidence behind each claim."
+            "implements today, what's complete for v0.1 and what's planned "
+            "next, and the CI evidence behind each claim."
         ),
         "required_visible_text": (
             "pycc check runs the parser → HIR → strict type checker",
