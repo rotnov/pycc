@@ -8,8 +8,21 @@ fn pycc_bin() -> PathBuf {
 /// The pinned CPython 3.14.6 oracle (D-001's "python3.14" pin, upgraded to
 /// 3.14.6 per this PR's own Task 1). A missing or wrong-version oracle is a
 /// clean, actionable panic, not a silently-skipped or falsely-passing check.
+///
+/// Windows needs its own file name here: `std::process::Command::new` on
+/// Windows resolves a bare program name by searching `PATH` for that exact
+/// file name and does not append `.exe` when the name already contains a
+/// `.` (the version dot in "python3.14" reads as an extension to that
+/// resolver). A CI-side `python3.14.exe` alias on `PATH` is therefore
+/// invisible to this lookup even though shells like bash find it fine
+/// (bash's own exec resolution does try appending `.exe`). Passing the
+/// extension explicitly on Windows sidesteps the mismatch (D-080 addendum).
 fn oracle_python_bin() -> PathBuf {
-    let bin = PathBuf::from("python3.14");
+    let bin = if cfg!(windows) {
+        PathBuf::from("python3.14.exe")
+    } else {
+        PathBuf::from("python3.14")
+    };
     let output = Command::new(&bin)
         .arg("--version")
         .output()
