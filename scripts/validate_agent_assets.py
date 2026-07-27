@@ -74,7 +74,16 @@ CLAUDE_INSTRUCTION_IMPORT = "@AGENTS.md\n"
 REQUIRED_LIVE_MONITORING_INSTRUCTIONS = (
     "## Monitor only live repository events",
     "Establish an explicit monitoring checkpoint",
+    "For every open pull request, record its number, state, draft status, "
+    "and head commit",
+    "for every task-active pull request, also record mergeability, unresolved "
+    "review threads, and required checks",
     "After the checkpoint, monitor only a newly observed default-branch commit",
+    "a newly opened or reopened pull request",
+    "a state, draft-status, or head change relative to the recorded baseline",
+    "mergeability, review-thread, or required-check change on a pull request "
+    "already active",
+    "Ignore `updated_at` changes caused only by comments, reactions, labels",
     "A pull request or issue cited only by documentation",
     "is historical evidence, not a live target",
     "Do not poll a closed or merged pull request or a closed issue",

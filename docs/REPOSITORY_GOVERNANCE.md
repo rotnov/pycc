@@ -120,13 +120,17 @@ not-yet-emitted context, because that creates an unfulfillable merge gate.
 ## Live monitoring scope
 
 Every external monitoring cycle starts by fetching the remote, resolving its
-default branch, and recording that branch's exact commit, the current open
-pull-request inventory, and the current state of every task-active pull request.
-Subsequent work is event-driven from that checkpoint: a new default-branch
-commit, a newly opened or reopened pull request, an updated pull-request head,
-or a changed review/check/merge state is live work. Once the new state has been
-evaluated and recorded, it becomes the next checkpoint rather than an event to
-rediscover on every poll.
+default branch, and recording that branch's exact commit. For every open pull
+request, the checkpoint records its number, state, draft status, and exact head;
+for every task-active pull request it also records mergeability, unresolved
+review threads, and required checks. Subsequent work is event-driven from that
+checkpoint: a new default-branch commit; a newly opened or reopened pull
+request; a state, draft-status, or head change relative to an inventoried pull
+request's baseline; or a mergeability, review-thread, or required-check change
+on a task-active pull request is live work. An `updated_at` change caused only
+by comments, reactions, labels, or activity outside those fields is not a live
+event. Once an eligible new state has been evaluated and recorded, it becomes
+the next checkpoint rather than an event to rediscover on every poll.
 
 Links in this specification, an ADR, the roadmap, a retrospective, or a session
 log do not enter the live monitoring set by citation alone. Closed incidents,

@@ -11,40 +11,62 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-27 — PR #157 integrates the new live `main` event
+## 2026-07-27 — PR #157 integrates new live `main` events
 
 **Advanced monitoring checkpoint:** while draft
-[PR #157](https://github.com/rotnov/pycc/pull/157) was completing CI, the
-refreshed default branch advanced from
-`2d9c2c4599f9c07b74404d14e0efc361aa4f5c50` to
-`6f541c5974930d4a6271092f6797439e043915ed`, the merge commit for
+[PR #157](https://github.com/rotnov/pycc/pull/157) was completing review, the
+refreshed default branch advanced first to
+`6f541c5974930d4a6271092f6797439e043915ed`, the merge of
 [PR #158](https://github.com/rotnov/pycc/pull/158) at source head
-`b153d4dd41c57c494a99d0f76fb68bcc7eeeab2e`. The introduced range and its
-12-file iEvo lifecycle-hardening diff were inspected. All exact-merge
-post-merge workflows (`CI`, `Agent assets`, `Agent policy`, and `Main history
-audit`) completed successfully; `CI` includes the 100% line/region coverage
-job, the Tier-1 matrix, frontend performance gate, and green `ci-gate`. This
-commit is therefore the new authoritative checkpoint.
+`b153d4dd41c57c494a99d0f76fb68bcc7eeeab2e`, and then to
+`3a5662c180ac1c6c7028331f8323f73a7d365ce8`, the merge of
+[PR #159](https://github.com/rotnov/pycc/pull/159) at source head
+`3e3a9623b53d7e9ee2f7403d1887457763adf8c2`. Both introduced ranges were
+inspected: PR #158 supplies the 12-file iEvo lifecycle hardening and PR #159
+stages D-080's five-file conformance-oracle workflow fixture and trust-anchor
+evidence without activating it. PR #158's exact-merge workflows all passed.
+For PR #159's exact merge, `Agent assets`, `Agent policy`, and `Main history
+audit` passed. Its
+[exact-merge `CI`](https://github.com/rotnov/pycc/actions/runs/30255055309)
+also completed successfully, including hard 100% line/region coverage, the
+complete Tier-1 matrix, cross compilation, frontend performance measurement
+and gate, and aggregate `ci-gate`. The verified current default-branch
+checkpoint is therefore
+`3a5662c180ac1c6c7028331f8323f73a7d365ce8`.
 
-**Remote PR inventory at the checkpoint:** the complete open set was #36
-(draft), #59 (draft), #91 (draft), #92 (draft), #112 (ready), #153 (ready),
-#157 (draft and task-active), and #159 (ready). Inventory membership alone does
-not make the historical open PRs live targets; only a later post-checkpoint
-event does. Immediately before the containing merge commit, PR #157 was
-explicitly `OPEN`, draft, `CONFLICTING` with `mergeStateStatus=DIRTY`, at remote
-head `f5bd5d49bc46b5459f42689b98a2516850bdbfcd` against recorded base
-`2d9c2c4599f9c07b74404d14e0efc361aa4f5c50`, with no unresolved review thread.
-The local integration with `main@6f541c5` resolves that superseded-head conflict;
-its new remote state and checks must be evaluated only after the merge is
-committed and pushed.
+**Remote PR inventory at the refreshed checkpoint:** the complete open set,
+with the baseline fields required by D-078, is #36 (`OPEN`, draft,
+`8d1f7a252c75d7c6858bef00ab7e07b48422a361`), #59 (`OPEN`, draft,
+`e9a0e3828e25cb7695bd180234083948a98385ab`), #91 (`OPEN`, draft,
+`c4833fd9b03538d7eab885d7447576e7037d5be5`), #92 (`OPEN`, draft,
+`2cd67390b8f8903e2cd01b32e6056438d27ccdd5`), #112 (`OPEN`, ready,
+`6f4f4f50db9878bf39e8f2043c14e1c631df5de6`), #153 (`OPEN`, ready,
+`74a355f86613da346c10ba83cc62d521eb984679`), and #157 (`OPEN`, draft and
+task-active, `2efdfbd50a01b024d824021afcd6da38fcc58a28`). PR #159's merge was
+evaluated once and it is no longer in the live PR set. Inventory membership
+alone does not make a historical open PR live; an eligible field transition
+relative to this baseline does. GitHub's task-active baseline reports PR #157
+as `CONFLICTING` with `mergeStateStatus=DIRTY` because its published head still
+targets `main@6f541c5`. The local branch contains two-parent integration merge
+`9bcf0aed9d97b4b24f81659ef0346cfe71cd51ab`, which preserves
+`main@3a5662c`; publishing the next head must trigger a fresh mergeability
+computation. The remote review baseline has
+three unresolved Codex threads
+([baseline fields](https://github.com/rotnov/pycc/pull/157#discussion_r3655951310),
+[eligible events](https://github.com/rotnov/pycc/pull/157#discussion_r3655951313),
+and [handoff state](https://github.com/rotnov/pycc/pull/157#discussion_r3655951319)).
+The complete required-check baseline is `audit: SUCCESS` and
+`ci-gate: FAILURE`; every completed non-aggregate CI job except
+`build-test-coverage` succeeded, and that failure propagated to `ci-gate`.
 
-**Integrated scope:** the containing merge preserves PR #158's D-081 lifecycle
-hardening and adds PR #157's D-078 event-driven monitoring contract. Canonical
-`AGENTS.md` now limits the live set to post-checkpoint default-branch and
-task-active PR events; `docs/REPOSITORY_GOVERNANCE.md`, the ADR map, roadmap,
-and fail-closed agent-asset validator agree. Claude Code receives the same rule
-through the exact `CLAUDE.md` import. D-054's issue #125 and PR #119 remain
-historical evidence only and must not become recurring polling targets.
+**Integrated scope:** the containing merges preserve PR #158's D-081 lifecycle
+hardening and PR #159's staged D-080 artifacts while adding PR #157's D-078
+event-driven monitoring contract. Canonical `AGENTS.md` now limits the live set
+to eligible post-checkpoint default-branch and pull-request field transitions;
+`docs/REPOSITORY_GOVERNANCE.md`, the ADR map, roadmap, and fail-closed
+agent-asset validator agree. Claude Code receives the same rule through the
+exact `CLAUDE.md` import. D-054's issue #125 and PR #119 remain historical
+evidence only and must not become recurring polling targets.
 
 **Superseded and current evidence:** PR #157's previous exact head
 `f5bd5d49bc46b5459f42689b98a2516850bdbfcd` passed every required job,
@@ -52,15 +74,26 @@ including hard coverage and `ci-gate`, and received a clean user-requested
 GitHub Codex review with no inline comments or unresolved threads. Those checks
 do not authorize the integration head after `main` advanced. The integrated
 working tree passes all 270 Python discovery tests (four platform-only skips),
-both agent validators, Ruff, 99 roadmap-policy tests with 432 assertions,
+including a warnings-as-errors run, both agent validators, Ruff, 100
+roadmap-policy tests with 434 assertions,
 roadmap evidence, `cargo fmt`, workspace build and all 581 Rust tests, clippy
 with warnings denied, fresh Rust API documentation, and `git diff --check`.
 
-**Remaining gates:** complete pinned deep review of the integrated range,
-commit and push the merge, then request exactly one new `@codex review` for the
-new head. Keep the PR draft until its new hard 100% coverage gate and every
-other required check pass; resolve any actionable inline thread, re-confirm
-fresh `main`, and merge only through branch protection.
+**Current review repair and remaining gates:** the exact-head Codex review of
+`2efdfbd` found three actionable P2 threads: record baseline fields for every
+open PR, enumerate eligible PR field transitions instead of using an
+unqualified update signal, and remove the completed commit step from this
+handoff. The same head's Rust coverage was exactly 100% for lines and regions,
+but `build-test-coverage` failed because an unclosed mocked `HTTPError` emitted
+a Python 3.14 `ResourceWarning` into another test's captured `stderr`; the
+containing follow-up explicitly closes that resource. Pinned deep review
+confirmed those repairs, then correctly blocked publication when PR #159 moved
+`main`; integration merge `9bcf0ae` addresses that event and preserves D-080.
+The fully integrated diff must pass the final pinned review before publication.
+On its published exact head, request exactly one new `@codex review`. Keep the
+PR draft until its hard 100% coverage gate and every other required check pass,
+resolve all actionable threads, re-confirm fresh `main`, and merge only through
+branch protection.
 
 ## 2026-07-26 — Post-merge iEvo lifecycle hardening on current main
 
