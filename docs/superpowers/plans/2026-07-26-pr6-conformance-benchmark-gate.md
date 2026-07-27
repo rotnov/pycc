@@ -547,7 +547,7 @@ git commit -m "ci: add pycc check <50ms/1000 LOC absolute throughput floor (D-07
 
 ---
 
-## Task 8: Record the diagnostic-conformance decision (D-080) and close the gap
+## Task 8: Record the diagnostic-conformance decision (D-082) and close the gap
 
 **Files:**
 - Modify: `docs/DECISIONS.md`
@@ -571,18 +571,18 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
 ```
 Note the two real divergences from `docs/CLI_SPEC.md`'s current prose example: (a) the caret label repeats the full message (no short, independent label like `expected \`int\``), and (b) there is no `= help: ...` line (D-043's documented, accepted gap — `render_human`'s own doc comment already says so).
 
-- [ ] **Step 2: Append the D-080 table row**
+- [ ] **Step 2: Append the D-082 table row**
 
 Add to `docs/DECISIONS.md`'s table (after D-079):
 ```markdown
-| D-080 | `docs/CLI_SPEC.md`'s diagnostics-output-contract example is corrected to match `render_human`'s real current output (full-message caret label, no `help:` line) instead of an aspirational format nothing implements yet; a checked-in fixture proves the corrected example byte-for-byte, closing DELIVERY_PLAN.md row 6's third acceptance bullet without growing new diagnostic-rendering scope | accepted |
+| D-082 | `docs/CLI_SPEC.md`'s diagnostics-output-contract example is corrected to match `render_human`'s real current output (full-message caret label, no `help:` line) instead of an aspirational format nothing implements yet; a checked-in fixture proves the corrected example byte-for-byte, closing DELIVERY_PLAN.md row 6's third acceptance bullet without growing new diagnostic-rendering scope | accepted |
 ```
 
-- [ ] **Step 3: Append the D-080 long-form section**
+- [ ] **Step 3: Append the D-082 long-form section**
 
 Insert after D-079's section:
 ```markdown
-## D-080: Correct CLI_SPEC.md's diagnostic example to match reality instead of building new rendering features
+## D-082: Correct CLI_SPEC.md's diagnostic example to match reality instead of building new rendering features
 
 - Status: accepted
 - Context: `docs/DELIVERY_PLAN.md` row 6's third acceptance bullet is "diagnostic output matches CLI_SPEC.md's example byte-for-byte." `docs/CLI_SPEC.md`'s current example shows a short, message-independent caret label (`expected \`int\``) and a populated `= help: did you mean \`int("35")\`?` line -- neither exists in `render_human` today. `crates/pycc_diag/src/lib.rs`'s own `render_human_matches_cli_spec_format` test (already passing) proves the *actual* current output: the caret label duplicates the full diagnostic message, and there is no help line at all, exactly matching D-043's already-accepted, already-documented gap ("`help:` suggestions are never populated"). No fixture anywhere in `tests/diagnostics/` currently proves CLI_SPEC.md's example byte-for-byte, because that example doesn't match anything the compiler actually emits.
@@ -642,7 +642,7 @@ Run: `cargo build --workspace && cargo test --workspace && cargo clippy --worksp
 
 ```bash
 git add docs/DECISIONS.md docs/CLI_SPEC.md tests/diagnostics/cli_spec_example.py tests/diagnostics/cli_spec_example.expected.txt tests/diagnostics_test.rs
-git commit -m "docs+test: correct CLI_SPEC.md's diagnostic example to match reality (D-080), enforce it"
+git commit -m "docs+test: correct CLI_SPEC.md's diagnostic example to match reality (D-082), enforce it"
 ```
 
 ---
@@ -670,7 +670,7 @@ A narrow two-fixture conformance check (fib, mandelbrot-ascii vs. pinned CPython
 
 - [ ] **Step 2: Check `docs/ROADMAP.md`'s "Language surface" row for any now-stale claim**
 
-Read it once more end-to-end; confirm nothing this PR changed (D-078/D-079/D-080, the corrected CLI_SPEC.md example) contradicts anything it currently says. It shouldn't — this PR added test/CI infrastructure and one docs correction, not new language-surface behavior.
+Read it once more end-to-end; confirm nothing this PR changed (D-078/D-079/D-080/D-081, the corrected CLI_SPEC.md example) contradicts anything it currently says. It shouldn't — this PR added test/CI infrastructure and one docs correction, not new language-surface behavior.
 
 - [ ] **Step 3: Grep for any other stale reference to this PR's changed state**
 

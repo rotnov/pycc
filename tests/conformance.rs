@@ -46,7 +46,14 @@ fn run_conformance_fixture(label: &str, py_path: &Path) -> (Vec<u8>, Vec<u8>) {
     (pycc_output.stdout, cpython_output.stdout)
 }
 
+// Ignored by default: this test shells out to a real "python3.14" oracle,
+// which the D-014 coverage gate's isolated `nobody` sandbox deliberately does
+// not provision (installing a network-fetched interpreter inside that
+// trust boundary would expand it far beyond what the gate is reviewed for).
+// CI runs these explicitly with `-- --include-ignored` in a step placed
+// after that sandboxed gate, on every Tier-1 target (D-078/D-080).
 #[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
 fn fib_matches_cpython_3_14_6_byte_for_byte() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance_fib.py");
     let (pycc_stdout, cpython_stdout) = run_conformance_fixture("conformance_fib", &fixture);
@@ -57,6 +64,7 @@ fn fib_matches_cpython_3_14_6_byte_for_byte() {
 }
 
 #[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
 fn mandelbrot_ascii_matches_cpython_3_14_6_byte_for_byte() {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance_mandelbrot.py");
