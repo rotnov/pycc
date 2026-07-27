@@ -262,12 +262,18 @@ jobs:
       # one hardcoded name uniformly on every Tier-1 target (D-078), so this
       # copies the just-installed interpreter under the name it expects
       # rather than special-casing the Rust lookup itself for one platform.
+      # Resolved via $pythonLocation (the exact directory actions/setup-python
+      # itself exports and prepends to the real Windows PATH), not bash's own
+      # `command -v python` -- Git Bash's PATH view can be reordered relative
+      # to the real Windows PATH that later `pwsh`-run steps (and the Rust
+      # test binary's own Command::new PATH search) actually search, so a
+      # bash-resolved "python" is not guaranteed to be the same interpreter.
       - name: Alias python3.14 (Windows lacks a version-suffixed python binary)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          PY_BIN="$(command -v python)"
-          cp "$PY_BIN" "$(dirname "$PY_BIN")/python3.14.exe"
+          PY_DIR="$(cygpath -u "$pythonLocation")"
+          cp "$PY_DIR/python.exe" "$PY_DIR/python3.14.exe"
 
       - name: Verify oracle version
         shell: bash

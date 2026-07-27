@@ -380,8 +380,8 @@ In `ci.yml`'s `native-build-test` job, add a step before the `cargo test --works
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          PY_BIN="$(command -v python)"
-          cp "$PY_BIN" "$(dirname "$PY_BIN")/python3.14.exe"
+          PY_DIR="$(cygpath -u "$pythonLocation")"
+          cp "$PY_DIR/python.exe" "$PY_DIR/python3.14.exe"
       - name: Verify oracle version
         shell: bash
         run: |
@@ -391,7 +391,7 @@ In `ci.yml`'s `native-build-test` job, add a step before the `cargo test --works
             exit 1
           }
 ```
-`actions/setup-python` only puts a plain `python.exe` (not `python3.14`) on `PATH` on Windows — the `Alias python3.14` step above copies it to a `python3.14.exe` sibling so `tests/conformance.rs`'s one hardcoded `"python3.14"` lookup keeps working uniformly across all 5 targets, instead of special-casing the Rust lookup itself for one platform. This must run before `Verify oracle version`, since that step checks `python3.14` unconditionally on every OS. Then change the job's existing `cargo test --workspace` step(s) — both the non-Windows and the `--test-threads=1` Windows variant — to add `-- --include-ignored` (the Windows variant becomes `-- --test-threads=1 --include-ignored`), since `tests/conformance.rs`'s two tests are `#[ignore]`d by default and need that flag to actually execute.
+`actions/setup-python` only puts a plain `python.exe` (not `python3.14`) on `PATH` on Windows — the `Alias python3.14` step above copies it to a `python3.14.exe` sibling so `tests/conformance.rs`'s one hardcoded `"python3.14"` lookup keeps working uniformly across all 5 targets, instead of special-casing the Rust lookup itself for one platform. Resolve the source directory via `$pythonLocation` (the exact directory `actions/setup-python` itself exports and prepends to the real Windows `PATH`), converted to a POSIX path with `cygpath -u` for bash's `cp` — **not** bash's own `command -v python`, which was tried first and failed in real CI: Git Bash's own `PATH` view can be reordered relative to the real Windows `PATH` that later `pwsh`-run steps (and the Rust test binary's own `Command::new` PATH search) actually search, so a bash-resolved "python" is not guaranteed to be the interpreter those later steps will find. This must run before `Verify oracle version`, since that step checks `python3.14` unconditionally on every OS. Then change the job's existing `cargo test --workspace` step(s) — both the non-Windows and the `--test-threads=1` Windows variant — to add `-- --include-ignored` (the Windows variant becomes `-- --test-threads=1 --include-ignored`), since `tests/conformance.rs`'s two tests are `#[ignore]`d by default and need that flag to actually execute.
 
 - [ ] **Step 3: Add oracle setup to `build-test-coverage`, strictly *after* its coverage step**
 

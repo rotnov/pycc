@@ -727,7 +727,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
   def test_tier1_workflow_allowlist_retains_the_active_d80_digest
     assert_equal(
-      "7d5da263d17cb620e795b3026760c2d5db46591eb2fe42e63cd26bba41118913",
+      "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234",
       D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
     )
   end

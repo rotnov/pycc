@@ -46,7 +46,7 @@ D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
 # build-test-coverage and native-build-test without touching the D-014
 # coverage gate's own trusted step prefix or script -- see D-080's text.
 D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
-  "7d5da263d17cb620e795b3026760c2d5db46591eb2fe42e63cd26bba41118913"
+  "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
 ].freeze
