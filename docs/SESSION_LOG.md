@@ -42,22 +42,22 @@ with the baseline fields required by D-078, is #36 (`OPEN`, draft,
 `2cd67390b8f8903e2cd01b32e6056438d27ccdd5`), #112 (`OPEN`, ready,
 `6f4f4f50db9878bf39e8f2043c14e1c631df5de6`), #153 (`OPEN`, ready,
 `74a355f86613da346c10ba83cc62d521eb984679`), and #157 (`OPEN`, draft and
-task-active, `2efdfbd50a01b024d824021afcd6da38fcc58a28`). PR #159's merge was
+task-active, `6e951e2563d1cd05850c0564c79ac975d4780de7`). PR #159's merge was
 evaluated once and it is no longer in the live PR set. Inventory membership
 alone does not make a historical open PR live; an eligible field transition
-relative to this baseline does. GitHub's task-active baseline reports PR #157
-as `CONFLICTING` with `mergeStateStatus=DIRTY` because its published head still
-targets `main@6f541c5`. The local branch contains two-parent integration merge
-`9bcf0aed9d97b4b24f81659ef0346cfe71cd51ab`, which preserves
-`main@3a5662c`; publishing the next head must trigger a fresh mergeability
-computation. The remote review baseline has
-three unresolved Codex threads
-([baseline fields](https://github.com/rotnov/pycc/pull/157#discussion_r3655951310),
-[eligible events](https://github.com/rotnov/pycc/pull/157#discussion_r3655951313),
-and [handoff state](https://github.com/rotnov/pycc/pull/157#discussion_r3655951319)).
-The complete required-check baseline is `audit: SUCCESS` and
-`ci-gate: FAILURE`; every completed non-aggregate CI job except
-`build-test-coverage` succeeded, and that failure propagated to `ci-gate`.
+relative to this baseline does. The reviewed published PR #157 head was
+`MERGEABLE` with `mergeStateStatus=BLOCKED` against exact base `3a5662c`.
+Both local Git and the GitHub commit API show `6e951e2` has parent `9bcf0ae`,
+whose parents are `2efdfbd` and `3a5662c`; the review claim that those
+integration commits were not ancestors was factually incorrect. The previous
+three Codex threads are resolved. The `6e951e2` review added two unresolved P2
+threads for the
+[handoff snapshot](https://github.com/rotnov/pycc/pull/157#discussion_r3656142150)
+and [active-section validation](https://github.com/rotnov/pycc/pull/157#discussion_r3656142157).
+Its required-check baseline had `audit: SUCCESS`; hard coverage also passed,
+but the aggregate `ci-gate` had not completed when the actionable review made
+that head ineligible to authorize merge. Its remaining checks will not be used
+as evidence for the forthcoming repair head.
 
 **Integrated scope:** the containing merges preserve PR #158's D-081 lifecycle
 hardening and PR #159's staged D-080 artifacts while adding PR #157's D-078
@@ -73,27 +73,44 @@ evidence only and must not become recurring polling targets.
 including hard coverage and `ci-gate`, and received a clean user-requested
 GitHub Codex review with no inline comments or unresolved threads. Those checks
 do not authorize the integration head after `main` advanced. The integrated
-working tree passes all 270 Python discovery tests (four platform-only skips),
+working tree passes all 296 Python discovery tests (four platform-only skips),
 including a warnings-as-errors run, both agent validators, Ruff, 100
 roadmap-policy tests with 434 assertions,
 roadmap evidence, `cargo fmt`, workspace build and all 581 Rust tests, clippy
 with warnings denied, fresh Rust API documentation, and `git diff --check`.
 
 **Current review repair and remaining gates:** the exact-head Codex review of
-`2efdfbd` found three actionable P2 threads: record baseline fields for every
-open PR, enumerate eligible PR field transitions instead of using an
-unqualified update signal, and remove the completed commit step from this
-handoff. The same head's Rust coverage was exactly 100% for lines and regions,
-but `build-test-coverage` failed because an unclosed mocked `HTTPError` emitted
-a Python 3.14 `ResourceWarning` into another test's captured `stderr`; the
-containing follow-up explicitly closes that resource. Pinned deep review
-confirmed those repairs, then correctly blocked publication when PR #159 moved
-`main`; integration merge `9bcf0ae` addresses that event and preserves D-080.
-The fully integrated diff must pass the final pinned review before publication.
-On its published exact head, request exactly one new `@codex review`. Keep the
-PR draft until its hard 100% coverage gate and every other required check pass,
-resolve all actionable threads, re-confirm fresh `main`, and merge only through
-branch protection.
+`2efdfbd` found three actionable P2 threads; `6e951e2` fixed them, closed the
+mocked `HTTPError` that caused Python 3.14 warning leakage, and integrated
+`main` through `9bcf0ae`. The exact-head review of `6e951e2` then found the two
+threads recorded above. The handoff finding's ancestry premise was wrong, but
+the published-head baseline still needed this refresh. The validator finding
+was correct: raw substring matching allowed retired rules inside Markdown
+fences or HTML comments to satisfy CI. The containing follow-up requires exact,
+unindented list items in exactly one active level-two monitoring section; plain
+prose, fenced, commented, indented, blockquoted, nested-container, duplicate,
+and out-of-section copies cannot satisfy it. Fence-before-comment recognition
+and state, leading HTML-comment blocks, CommonMark tab stops, and invalid
+backtick-info handling prevent the three additional review reproductions. The
+final pinned pass also found list-container close indentation, list-indented
+code, and escaped or inline-code comment tokens; its next pass found raw HTML,
+list-container termination, inline-comment block boundaries, and renamed-heading
+cases. Exact regressions cover each repair, including quoted type-7 attributes
+and peer boundaries without a blank. Tab-separated thematic breaks and
+non-interrupting list-like paragraph lines have exact regressions as well.
+List-contained HTML comments and Unicode whitespace block terminators have exact
+regressions as well; Setext and empty ATX H1/H2 headings terminate the active
+section without misclassifying link-reference definitions. The final
+container-state regressions distinguish lazy list and blockquote paragraphs,
+indented paragraph continuations, and five-space list code from inline comments.
+Completed fenced and raw-HTML blocks clear stale lazy-container state.
+Reference-definition regressions cover escaped and multiline labels, the raw
+999-character limit, balanced destinations, multiline titles, and fail-closed
+invalidation or end-of-file state. Negative regressions cover every bypass class.
+Its integrated diff must pass pinned review before publication. On the resulting
+published exact head, request exactly one new `@codex review`; keep the PR draft
+until hard 100% coverage and every other required check pass, resolve all actionable
+threads, re-confirm fresh `main`, and merge only through branch protection.
 
 ## 2026-07-26 — Post-merge iEvo lifecycle hardening on current main
 
