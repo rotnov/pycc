@@ -117,6 +117,37 @@ When a new check is introduced, first merge and observe it successfully on `main
 then add its exact reported context to branch protection. Never require a guessed or
 not-yet-emitted context, because that creates an unfulfillable merge gate.
 
+## Live monitoring scope
+
+Every external monitoring cycle starts by fetching the remote, resolving its
+default branch, and recording that branch's exact commit. For every open pull
+request, the checkpoint records its number, state, draft status, and exact head;
+for every task-active pull request it also records mergeability, unresolved
+review threads, and required checks. Subsequent work is event-driven from that
+checkpoint: a new default-branch commit; a newly opened or reopened pull
+request; a state, draft-status, or head change relative to an inventoried pull
+request's baseline; or a mergeability, review-thread, or required-check change
+on a task-active pull request is live work. An `updated_at` change caused only
+by comments, reactions, labels, or activity outside those fields is not a live
+event. Once an eligible new state has been evaluated and recorded, it becomes
+the next checkpoint rather than an event to rediscover on every poll.
+
+Links in this specification, an ADR, the roadmap, a retrospective, or a session
+log do not enter the live monitoring set by citation alone. Closed incidents,
+closed issues, and closed or merged pull requests remain historical evidence.
+A task-active pull request's post-checkpoint close or merge is evaluated once
+and then removed from the live set. Issues are not part of general repository
+polling and are inspected only when the active task names one for a bounded
+audit. In particular, D-054's incident #125 and staging PR #119 remain evidence
+for the completed one-shot emergency path, not recurring poll targets.
+
+Before waiting for CI, the monitor verifies the pull request's current state,
+draft state, mergeability, exact head, and unresolved review threads. A merge,
+closure, conflict, or head change ends the old wait immediately. For a newly
+observed `main` merge, the monitor evaluates the introduced commit range and
+verifies the expected post-merge workflows against that exact merge commit
+before advancing the checkpoint.
+
 ## Direct-commit audit
 
 `.github/workflows/main-history-audit.yml` checks out the pre-push `main` revision of

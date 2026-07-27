@@ -138,17 +138,49 @@ that marketplace name. Repository instructions, tests, and required workflows mu
 not depend on optional plugins. The agent-asset validator also requires `CLAUDE.md`
 to contain exactly the `@AGENTS.md` import, keeping the shared Codex and Claude
 instruction contract fail-closed instead of relying on documentation alone. It scans
-the shared instructions (including scoped `AGENTS.md` and `CLAUDE.md` files), every tracked file
-under the Codex, Claude, and iEvo evolution trees, tracked tests (including source
-formats that can contain inline tests), required workflows, the repository `scripts/`
-tree, local action manifests anywhere in the repository, every tracked file under the
-conventional `.github/actions/` tree, interpreter-recognized script formats, and
-tracked executables. It follows repository-relative script invocations from those
-required assets through recognized interpreters, including recursively referenced
-extensionless, non-executable scripts and scripts supplied on standard input with
-shell `<` or `0<` redirection. Known interpreter options distinguish ordinary
-values, loaded code files, and inline-code modes; ambiguous future options fail closed
-by selecting every repository-relative operand. Windows `.exe` interpreter names and
+the shared instructions (including scoped `AGENTS.md` and `CLAUDE.md` files), every
+tracked file under the Codex, Claude, and iEvo evolution trees, tracked tests
+(including source formats that can contain inline tests), required workflows, the
+repository `scripts/` tree, local action manifests anywhere in the repository, every
+tracked file under the conventional `.github/actions/` tree,
+interpreter-recognized script formats, and tracked executables. D-078's required
+monitoring clauses must appear as exact, unindented list items under the exact
+D-078-linked level-two heading in canonical `AGENTS.md`; plain prose, fenced, raw
+HTML, HTML-commented, indented-code, blockquoted, nested-container, duplicate, and
+out-of-section copies are ignored or rejected so retired text cannot satisfy the
+gate. Fence recognition and state take precedence over comment-like literals,
+indentation uses CommonMark tab stops, leading HTML-comment blocks remain non-policy,
+and an invalid backtick info string cannot hide the active section. List-contained
+fences, including openers on list continuation lines, retain their complete nested
+container indentation and end at any real peer or outer block boundary; list-indented
+code, escaped comment markers, and comment-like inline code cannot change parser state.
+Inline comment state cannot
+cross a blank or interrupting block boundary. Type-7 HTML block detection
+distinguishes true CommonMark block boundaries from non-interrupting list-like
+paragraph lines, preserves comment-only list content for block classification, and
+gives spaced or tabbed thematic breaks precedence over structural list tracking. The
+container/comment classifier applies recursively through nested lists and blockquotes.
+The parser treats only CommonMark spaces and tabs as blank or fence-closing
+whitespace; Unicode whitespace cannot terminate a hidden block. ATX and Setext H1/H2
+headings both end the active monitoring section, while link-reference definitions
+followed by thematic breaks remain within it, including escaped and multiline labels,
+continued destinations, destinations within CommonMark's 32-level parenthesis limit,
+and valid multiline titles. Invalid empty, nested, oversized, over-nested, or
+unbalanced definitions, control-bearing bare destinations, angle-bracket destinations
+with line endings, and titles containing blank lines remain paragraph text.
+Unterminated label, destination, or title state at end of file, or later invalidation
+after buffered lines, fails closed at the same reference start. Lazy list and
+blockquote paragraphs retain their container boundary, while indented lazy paragraph
+continuations do not create one; an intervening fenced or raw-HTML block clears stale
+container state. Comment-only, heading-only, thematic-break-only, fenced, and
+indented-code container items do not fabricate lazy paragraph state, including
+recursively nested list and blockquote items. The validator follows
+repository-relative script invocations from those required assets through recognized
+interpreters, including recursively referenced extensionless, non-executable scripts
+and scripts supplied on standard input with shell `<` or `0<` redirection. Known
+interpreter options distinguish ordinary values, loaded code files, and inline-code
+modes; ambiguous future options fail closed by selecting every repository-relative
+operand. Windows `.exe` interpreter names and
 backslash paths are normalized to the same Git/POSIX tracked paths without accepting
 drive-qualified, UNC, or absolute targets. Parent components are resolved lexically
 against the command's effective working directory when the result stays inside the

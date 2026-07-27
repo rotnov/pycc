@@ -77,6 +77,14 @@
 - A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
 - The push audit executes the pre-push `main` revision of `scripts/check_main_history.py`, with an immutable reviewed bootstrap fallback when that parent predates the checker; it never executes the revision being audited. Its workflow definition is still supplied by the pushed revision, so treat the job as defense-in-depth: the external repository monitor must verify the workflow content and expected run independently.
 
+## Monitor only live repository events ([D-078](docs/DECISIONS.md#d-078-external-repository-monitoring-is-checkpointed-and-event-driven))
+
+- Establish an explicit monitoring checkpoint from the refreshed remote default-branch commit. For every open pull request, record its number, state, draft status, and head commit; for every task-active pull request, also record mergeability, unresolved review threads, and required checks. Report the default-branch commit when monitoring starts or resumes.
+- After the checkpoint, monitor only a newly observed default-branch commit; a newly opened or reopened pull request; a state, draft-status, or head change relative to the recorded baseline for an inventoried open pull request; or a mergeability, review-thread, or required-check change on a pull request already active in the current task. Ignore `updated_at` changes caused only by comments, reactions, labels, or other activity outside those fields.
+- A pull request or issue cited only by documentation, an ADR, a retrospective, or a session log is historical evidence, not a live target. Do not poll a closed or merged pull request or a closed issue. Evaluate a task-active pull request's post-checkpoint close or merge once, then remove it from the live set; inspect an issue only when the active task explicitly names it.
+- Before waiting on CI, query the pull request's current state, draft status, mergeability, head commit, and unresolved review threads. Stop waiting and re-evaluate when it closes, merges, becomes conflicting, or its head changes; never keep polling checks for a superseded head.
+- When a new default-branch merge appears, inspect the introduced commit range and the exact post-merge workflows for that merge commit. Advance the checkpoint only after recording the new authoritative state, so the next cycle cannot rediscover the same event as new work.
+
 ## Testing and hard coverage gate
 
 - One hundred percent line and region coverage is a hard merge invariant under D-014, not a target or guideline.

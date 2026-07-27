@@ -102,7 +102,7 @@ fn strip_windows_newline_translation_removes_cr_before_lf_only() {
 // not provision (installing a network-fetched interpreter inside that
 // trust boundary would expand it far beyond what the gate is reviewed for).
 // CI runs these explicitly with `-- --include-ignored` in a step placed
-// after that sandboxed gate, on every Tier-1 target (D-078/D-080).
+// after that sandboxed gate, on every Tier-1 target (D-085/D-080).
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
 fn fib_matches_cpython_3_14_6_byte_for_byte() {
