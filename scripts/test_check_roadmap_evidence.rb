@@ -704,6 +704,165 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stdout, "Roadmap evidence policy passed."
   end
 
+  def test_accepts_conformance_tier1_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_conformance_tier1_evidence_with_the_wrong_claim
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `fib` and `mandelbrot-ascii` compile on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not prove this roadmap claim"
+  end
+
+  def test_rejects_conformance_tier1_evidence_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
+
+      - [x] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
+  def test_accepts_throughput_floor_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_throughput_floor_evidence_with_the_wrong_claim
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `pycc check` processes 1k LOC in under 5 seconds. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not prove this roadmap claim"
+  end
+
+  def test_rejects_throughput_floor_evidence_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
+
+      - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
+  def test_accepts_cli_spec_diagnostic_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_cli_spec_diagnostic_evidence_with_the_wrong_claim
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The error demonstration matches CLI_SPEC.md. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not prove this roadmap claim"
+  end
+
+  def test_rejects_cli_spec_diagnostic_evidence_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
+
+      - [x] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
   def test_tier1_workflow_authorization_is_the_active_d84_digest
     assert_equal(
       D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
