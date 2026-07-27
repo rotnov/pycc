@@ -11,44 +11,109 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-26 — PR #157 makes repository monitoring event-driven
+## 2026-07-27 — PR #157 integrates the new live `main` event
 
-**Authoritative checkpoint:** immediately before this entry, the refreshed
-remote default branch was exact `main@2d9c2c4599f9c07b74404d14e0efc361aa4f5c50`.
-That commit is the merge of [PR #140](https://github.com/rotnov/pycc/pull/140),
-whose final branch head was `1682cc1aeebfe8f3f1b074c6788113fc654e6b3a`;
-[#34](https://github.com/rotnov/pycc/issues/34) is closed. The four exact-SHA
+**Advanced monitoring checkpoint:** while draft
+[PR #157](https://github.com/rotnov/pycc/pull/157) was completing CI, the
+refreshed default branch advanced from
+`2d9c2c4599f9c07b74404d14e0efc361aa4f5c50` to
+`6f541c5974930d4a6271092f6797439e043915ed`, the merge commit for
+[PR #158](https://github.com/rotnov/pycc/pull/158) at source head
+`b153d4dd41c57c494a99d0f76fb68bcc7eeeab2e`. The introduced range and its
+12-file iEvo lifecycle-hardening diff were inspected. All exact-merge
 post-merge workflows (`CI`, `Agent assets`, `Agent policy`, and `Main history
-audit`) all completed successfully. No later default-branch merge or new PR
-event was observed before the task branch started.
+audit`) completed successfully; `CI` includes the 100% line/region coverage
+job, the Tier-1 matrix, frontend performance gate, and green `ci-gate`. This
+commit is therefore the new authoritative checkpoint.
 
-**Active work:** draft [PR #157](https://github.com/rotnov/pycc/pull/157) is
-`OPEN` from `codex/monitor-new-events-only-0764` at source-policy head
-`0faa94cd3bee0338a4c62f15ec2c5d17d4564406`, based directly on the checkpoint
-above. It adds D-078's checkpointed, event-driven monitoring rule to canonical
-`AGENTS.md`, the repository-governance specification, and the roadmap, then
-makes agent-asset validation fail closed if the essential live-set, historical
-target, PR-state, superseded-head, or checkpoint-advance clauses disappear.
-The policy is shared with Claude Code through the existing exact `CLAUDE.md`
-import, so no separate client-specific rule is needed.
+**Remote PR inventory at the checkpoint:** the complete open set was #36
+(draft), #59 (draft), #91 (draft), #92 (draft), #112 (ready), #153 (ready),
+#157 (draft and task-active), and #159 (ready). Inventory membership alone does
+not make the historical open PRs live targets; only a later post-checkpoint
+event does. Immediately before the containing merge commit, PR #157 was
+explicitly `OPEN`, draft, `CONFLICTING` with `mergeStateStatus=DIRTY`, at remote
+head `f5bd5d49bc46b5459f42689b98a2516850bdbfcd` against recorded base
+`2d9c2c4599f9c07b74404d14e0efc361aa4f5c50`, with no unresolved review thread.
+The local integration with `main@6f541c5` resolves that superseded-head conflict;
+its new remote state and checks must be evaluated only after the merge is
+committed and pushed.
 
-**Historical boundary:** D-054's issue #125 and PR #119 remain durable evidence
-for the completed emergency recovery, but neither is a live monitoring target.
-Do not poll either object from this entry or another documentation citation.
-After this checkpoint, inspect only a new default-branch commit, a new or
-changed PR, or a state/review/check/head change on PR #157 while it remains
-task-active. A future issue enters scope only when the active task explicitly
-names it for a bounded audit.
+**Integrated scope:** the containing merge preserves PR #158's D-081 lifecycle
+hardening and adds PR #157's D-078 event-driven monitoring contract. Canonical
+`AGENTS.md` now limits the live set to post-checkpoint default-branch and
+task-active PR events; `docs/REPOSITORY_GOVERNANCE.md`, the ADR map, roadmap,
+and fail-closed agent-asset validator agree. Claude Code receives the same rule
+through the exact `CLAUDE.md` import. D-054's issue #125 and PR #119 remain
+historical evidence only and must not become recurring polling targets.
 
-**Local evidence and next gates:** all 240 discovered Python tests, both agent
-validators, roadmap evidence (99 runs and 432 assertions), Ruff, fresh Rust API
-documentation, and `git diff --check` pass. The pinned iEvo reviewer found and
-closed validation gaps for the historical-target and superseded-head semantics;
-its source-policy rerun is clean across all 11 checklist areas. Re-run that
-review over this containing session-log update, push the resulting final head,
-request exactly one `@codex review` for that head, resolve every actionable
-inline thread, and merge only after the hard 100% line/region coverage gate and
-all other required checks are green.
+**Superseded and current evidence:** PR #157's previous exact head
+`f5bd5d49bc46b5459f42689b98a2516850bdbfcd` passed every required job,
+including hard coverage and `ci-gate`, and received a clean user-requested
+GitHub Codex review with no inline comments or unresolved threads. Those checks
+do not authorize the integration head after `main` advanced. The integrated
+working tree passes all 270 Python discovery tests (four platform-only skips),
+both agent validators, Ruff, 99 roadmap-policy tests with 432 assertions,
+roadmap evidence, `cargo fmt`, workspace build and all 581 Rust tests, clippy
+with warnings denied, fresh Rust API documentation, and `git diff --check`.
+
+**Remaining gates:** complete pinned deep review of the integrated range,
+commit and push the merge, then request exactly one new `@codex review` for the
+new head. Keep the PR draft until its new hard 100% coverage gate and every
+other required check pass; resolve any actionable inline thread, re-confirm
+fresh `main`, and merge only through branch protection.
+
+## 2026-07-26 — Post-merge iEvo lifecycle hardening on current main
+
+**Authoritative snapshot and priority:** a fresh fetch resolved
+`origin/main@2d9c2c4599f9c07b74404d14e0efc361aa4f5c50`, the merge of
+[PR #140](https://github.com/rotnov/pycc/pull/140) at source head
+`1682cc1aeebfe8f3f1b074c6788113fc654e6b3a`. The PR is merged, issue
+[#34](https://github.com/rotnov/pycc/issues/34) is closed, every required check
+on that head passed, and all eleven review threads are resolved. The follow-up
+branch starts directly from that current main rather than pushing to the closed
+PR. Treat the confirmed follow-up as P1 before selecting another issue: an
+ambiguous destructive disable could violate the repository's fail-closed
+contract, and Windows-only safety branches had no required native execution.
+All five open pull requests (#112, #92, #91, #59, and #36) were inspected for
+overlap; none owns this lifecycle hardening.
+
+**Follow-up repair:** D-081 strengthens D-077 with complete corrections-only
+intent validation before every lifecycle transition; conservative detection of
+lexical, case, shell-expansion, glob, PowerShell-expression, and DOS 8.3
+managed-path aliases; symlink/reparse/mount/device rejection; regular-file and
+complete vendor snapshots; per-entry ancestry/identity revalidation; and
+crash-released per-worktree advisory locking. Disable never uses broad
+`rmtree`, preserves unrelated configuration, and documents the remaining
+non-atomic external-writer limitation. The pinned independent review's latest
+two warnings are addressed: `disable` now validates missing/conflicting intent
+before mutation, and a Windows-only Rust integration test runs the lifecycle
+and policy-parser suites inside the existing required native Windows matrix
+without changing D-062's byte-pinned workflow.
+
+**Review and evidence:** both pinned reviewer artifacts still match their
+recorded SHA-256 digests. The staged follow-up tree based on
+`origin/main@2d9c2c4599f9c07b74404d14e0efc361aa4f5c50` passes 268 Python
+discovery tests (four platform-only tests skipped on macOS), agent-policy and
+agent-assets validation, ruff format/check, workflow permission policy, 99
+roadmap-policy tests with 432 assertions, roadmap evidence validation,
+workspace build, 581 Rust tests, clippy with warnings denied, rustdoc with
+warnings denied, and `git diff --check`. The pinned independent staged review
+completed all eleven checklist points: implementation, tests, error paths,
+security, and normative contracts were clean; its only warning was this
+snapshot's former attribution of follow-up evidence to main and its stale
+instruction to rerun the completed review, corrected in the containing change.
+During that review, iEvo `deep-review --working` was confirmed to omit untracked
+files even in upstream 0.70.1; duplicate search found no report, so
+[ievo-ai/skills#483](https://github.com/ievo-ai/skills/issues/483) records the
+public bug and the local D-068 instructions now require every intended new file
+to enter the reviewed diff.
+
+**Required next steps:** commit the corrected staged snapshot, refresh current
+main, repeat a committed merge-base range review, push the new follow-up branch,
+and open a draft PR that links #34 and upstream #483. Treat the new exact-head
+CI and Windows lifecycle execution as fresh evidence; do not reuse #140's green
+checks. Merge only through protected main after required checks pass and no
+actionable thread remains.
 
 ## 2026-07-26 — PR #140 addresses final exact-head review findings
 

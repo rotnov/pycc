@@ -9,14 +9,22 @@ import json
 import os
 import posixpath
 import re
-import shutil
+import shlex
 import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from fnmatch import fnmatchcase
+from functools import wraps
 from pathlib import Path
 from typing import Any
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +50,38 @@ LOCAL_COMPANIONS = tuple(
     target.with_name(f"{target.stem}.local.sh") for target in SCRIPT_TARGETS.values()
 )
 VENDOR_DIRECTORY = SCRIPT_DIRECTORY / "vendor"
+FLAG_REQUIREMENTS = {
+    "enabled": "true",
+    "signal": "corrections-only",
+    "auto_write_scope": "project-wide-only",
+}
+REFERENCE_TOKEN_SPLIT = re.compile(r"[\s`;|&()<>{}\[\],=]+")
+GLOB_TOKEN_SPLIT = re.compile(r"[\s`;|&()<>{},=]+")
+SHELL_EXPANSION_MARKER = "__pycc_shell_expansion__"
+SHELL_EXPANSIONS = (
+    re.compile(r"\$\([^()\r\n]*\)"),
+    re.compile(r"\$\[[^\]\r\n]*\]"),
+    re.compile(r"\$'(?:\\.|[^'\\])*'"),
+    re.compile(r'\$"(?:\\.|[^"\\])*"'),
+    re.compile(r"[@+?!*]\([^()\r\n]*\)"),
+    re.compile(r"@[A-Za-z_][A-Za-z0-9_]*"),
+    re.compile(r"`[^`]*`"),
+    re.compile(r"\$\{[^{}\r\n]*\}"),
+    re.compile(r"\$env:[A-Za-z_][A-Za-z0-9_]*", re.IGNORECASE),
+    re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*"),
+    re.compile(r"%[^%\r\n]+%"),
+    re.compile(r"![A-Za-z_][A-Za-z0-9_]*!"),
+    re.compile(r"\{[^{}\r\n]*(?:,|\.\.)[^{}\r\n]*\}"),
+)
+MANAGED_REFERENCE_PARTS = tuple(
+    component.casefold() for component in HOOK_DIRECTORY.parts
+)
+DOS_SHORT_NAME_COMPONENT = re.compile(r"^[^./\\\s]{1,6}~[0-9]+(?:\.[^./\\\s]{0,3})?$")
+POWERSHELL_CONSTANT_EXPRESSION = re.compile(
+    r"(?:[+&|;()]|::|(?:^|[\s,])-(?:(?:c|i)?replace|join|f)(?=$|[\s,])|"
+    r"\.[A-Za-z_][A-Za-z0-9_]*\s*\()",
+    re.IGNORECASE,
+)
 GITIGNORE = Path(".gitignore")
 REQUIRED_IGNORE_LINES = (
     ".claude/settings.local.json",
@@ -69,6 +109,209 @@ class HookLifecycleError(RuntimeError):
     """An iEvo hook lifecycle operation cannot complete safely."""
 
 
+FileIdentity = tuple[int, int, int, int, int]
+
+
+def file_identity(result: os.stat_result) -> FileIdentity:
+    return (
+        result.st_dev,
+        result.st_ino,
+        result.st_mode,
+        result.st_size,
+        result.st_mtime_ns,
+    )
+
+
+def stat_is_reparse_point(result: os.stat_result) -> bool:
+    attributes = getattr(result, "st_file_attributes", 0)
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(attributes & reparse_attribute)
+
+
+def ensure_lock_directory(path: Path) -> None:
+    try:
+        path_stat = path.lstat()
+    except OSError as error:
+        raise HookLifecycleError(
+            f"cannot inspect lifecycle lock directory {path}: {error}"
+        ) from error
+    if (
+        not stat.S_ISDIR(path_stat.st_mode)
+        or stat.S_ISLNK(path_stat.st_mode)
+        or stat_is_reparse_point(path_stat)
+    ):
+        raise HookLifecycleError(
+            f"lifecycle lock directory must be a regular non-link directory: {path}"
+        )
+
+
+def ensure_lock_directory_components(path: Path) -> None:
+    if not path.is_absolute():
+        raise HookLifecycleError(f"lifecycle lock directory must be absolute: {path}")
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        try:
+            current_stat = current.lstat()
+        except OSError as error:
+            raise HookLifecycleError(
+                f"cannot inspect lifecycle lock directory component {current}: {error}"
+            ) from error
+        if (
+            not stat.S_ISDIR(current_stat.st_mode)
+            or stat.S_ISLNK(current_stat.st_mode)
+            or stat_is_reparse_point(current_stat)
+        ):
+            raise HookLifecycleError(
+                "lifecycle lock directory path contains a non-directory, symlink, "
+                f"or reparse point: {current}"
+            )
+
+
+def lifecycle_lock_path(root: Path) -> Path:
+    marker = root / ".git"
+    try:
+        marker_stat = marker.lstat()
+    except FileNotFoundError:
+        ensure_lock_directory(root)
+        return root / ".pycc-ievo-hooks.lock"
+    except OSError as error:
+        raise HookLifecycleError(
+            f"cannot inspect repository metadata: {error}"
+        ) from error
+
+    if stat.S_ISLNK(marker_stat.st_mode) or stat_is_reparse_point(marker_stat):
+        raise HookLifecycleError(
+            "repository .git path must not be a symlink or reparse point"
+        )
+    if stat.S_ISDIR(marker_stat.st_mode):
+        # The marker itself was inspected without following links. Canonicalize
+        # only its already-trusted ancestors (for example macOS /var -> /private/var).
+        git_directory = marker.resolve()
+    elif stat.S_ISREG(marker_stat.st_mode):
+        try:
+            declaration = marker.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError) as error:
+            raise HookLifecycleError(
+                f"cannot read repository metadata: {error}"
+            ) from error
+        prefix = "gitdir: "
+        if not declaration.startswith(prefix):
+            raise HookLifecycleError(
+                "worktree .git file has an invalid gitdir declaration"
+            )
+        git_directory = Path(declaration[len(prefix) :])
+        if not git_directory.is_absolute():
+            git_directory = marker.parent.resolve() / git_directory
+    else:
+        raise HookLifecycleError("repository .git path must be a file or directory")
+    git_directory = Path(os.path.abspath(git_directory))
+    ensure_lock_directory_components(git_directory)
+    ensure_lock_directory(git_directory)
+    return git_directory / "pycc-ievo-hooks.lock"
+
+
+@contextmanager
+def lifecycle_lock(root: Path) -> Iterator[None]:
+    path = lifecycle_lock_path(root)
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        before = None
+    except OSError as error:
+        raise HookLifecycleError(
+            f"cannot inspect lifecycle lock {path}: {error}"
+        ) from error
+    if before is not None and (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or stat_is_reparse_point(before)
+    ):
+        raise HookLifecycleError(
+            f"lifecycle lock must be a regular non-link file: {path}"
+        )
+    try:
+        descriptor = os.open(
+            path,
+            os.O_CREAT
+            | os.O_RDWR
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as error:
+        raise HookLifecycleError(
+            f"cannot open lifecycle lock {path}: {error}"
+        ) from error
+
+    acquired = False
+    try:
+        descriptor_stat = os.fstat(descriptor)
+        try:
+            after = path.lstat()
+        except OSError as error:
+            raise HookLifecycleError(
+                f"cannot revalidate lifecycle lock {path}: {error}"
+            ) from error
+        if (
+            not stat.S_ISREG(descriptor_stat.st_mode)
+            or stat_is_reparse_point(descriptor_stat)
+            or not stat.S_ISREG(after.st_mode)
+            or stat.S_ISLNK(after.st_mode)
+            or stat_is_reparse_point(after)
+            or file_identity(descriptor_stat)[:3] != file_identity(after)[:3]
+            or (
+                before is not None
+                and file_identity(before)[:3] != file_identity(after)[:3]
+            )
+        ):
+            raise HookLifecycleError(
+                f"lifecycle lock changed or redirected while opening: {path}"
+            )
+        if os.name == "nt":
+            if descriptor_stat.st_size == 0:
+                os.write(descriptor, b"\0")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                raise HookLifecycleError(
+                    f"another iEvo hook lifecycle operation is active: {path}"
+                ) from error
+        else:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise HookLifecycleError(
+                    f"another iEvo hook lifecycle operation is active: {path}"
+                ) from error
+            except OSError as error:
+                raise HookLifecycleError(
+                    f"cannot acquire lifecycle lock {path}: {error}"
+                ) from error
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            if os.name == "nt":
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def serialized_lifecycle(
+    function: Callable[..., Any],
+) -> Callable[..., Any]:
+    @wraps(function)
+    def wrapper(root: Path, *args: object, **kwargs: object) -> Any:
+        with lifecycle_lock(root):
+            return function(root, *args, **kwargs)
+
+    return wrapper
+
+
 def read_json(root: Path, relative: Path, *, required: bool) -> dict[str, Any] | None:
     path = root / relative
     if not path.exists():
@@ -87,6 +330,44 @@ def read_json(root: Path, relative: Path, *, required: bool) -> dict[str, Any] |
     if hooks is not None and not isinstance(hooks, dict):
         raise HookLifecycleError(f"hooks must be a JSON object: {relative}")
     return value
+
+
+def read_json_snapshot(
+    root: Path,
+    relative: Path,
+    *,
+    required: bool,
+) -> tuple[dict[str, Any] | None, bytes | None]:
+    path = root / relative
+    try:
+        contents = path.read_bytes()
+    except FileNotFoundError:
+        if required:
+            raise HookLifecycleError(f"required configuration is missing: {relative}")
+        return None, None
+    except OSError as error:
+        raise HookLifecycleError(f"cannot read {relative}: {error}") from error
+    try:
+        value = json.loads(contents.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise HookLifecycleError(
+            f"cannot read valid JSON from {relative}: {error}"
+        ) from error
+    if not isinstance(value, dict):
+        raise HookLifecycleError(f"configuration must be a JSON object: {relative}")
+    hooks = value.get("hooks")
+    if hooks is not None and not isinstance(hooks, dict):
+        raise HookLifecycleError(f"hooks must be a JSON object: {relative}")
+    return value, contents
+
+
+def current_file_bytes(root: Path, relative: Path) -> bytes | None:
+    try:
+        return (root / relative).read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise HookLifecycleError(f"cannot re-read {relative}: {error}") from error
 
 
 def atomic_write_json(root: Path, relative: Path, value: dict[str, Any]) -> None:
@@ -170,12 +451,21 @@ def normalized_gitignore(root: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def ensure_machine_local_paths_ignored(root: Path) -> None:
+VendorSnapshot = dict[str, FileIdentity]
+
+
+def ensure_machine_local_paths_ignored(root: Path) -> VendorSnapshot:
+    vendor_snapshot = inspect_managed_vendor(root)
     paths = [
         *REQUIRED_IGNORE_LINES[:2],
         *(target.as_posix() for target in SCRIPT_TARGETS.values()),
         *(target.as_posix() for target in LOCAL_COMPANIONS),
         VENDOR_DIRECTORY.as_posix(),
+        *(
+            relative
+            for relative, identity in vendor_snapshot.items()
+            if stat.S_ISREG(identity[2])
+        ),
     ]
     not_ignored: list[str] = []
     for relative in paths:
@@ -191,6 +481,108 @@ def ensure_machine_local_paths_ignored(root: Path) -> None:
         raise HookLifecycleError(
             "machine-local iEvo paths are not ignored: " + ", ".join(not_ignored)
         )
+    return vendor_snapshot
+
+
+def inspect_managed_vendor(root: Path) -> VendorSnapshot:
+    vendor = root / VENDOR_DIRECTORY
+    try:
+        vendor_stat = vendor.lstat()
+    except FileNotFoundError:
+        return {}
+    except OSError as error:
+        raise HookLifecycleError(
+            f"cannot inspect managed vendor path {VENDOR_DIRECTORY}: {error}"
+        ) from error
+    if not stat.S_ISDIR(vendor_stat.st_mode) or stat_is_reparse_point(vendor_stat):
+        raise HookLifecycleError(
+            f"managed vendor path must be a regular directory: {VENDOR_DIRECTORY}"
+        )
+    try:
+        parent_stat = vendor.parent.lstat()
+    except OSError as error:
+        raise HookLifecycleError(
+            f"cannot inspect managed vendor parent: {error}"
+        ) from error
+    if (
+        not stat.S_ISDIR(parent_stat.st_mode)
+        or stat_is_reparse_point(parent_stat)
+        or vendor_stat.st_dev != parent_stat.st_dev
+        or os.path.ismount(vendor)
+    ):
+        raise HookLifecycleError(
+            f"managed vendor path crosses a mount boundary: {VENDOR_DIRECTORY}"
+        )
+
+    def raise_walk_error(error: OSError) -> None:
+        raise HookLifecycleError(
+            f"cannot inspect managed vendor tree: {error}"
+        ) from error
+
+    snapshot: VendorSnapshot = {VENDOR_DIRECTORY.as_posix(): file_identity(vendor_stat)}
+    vendor_device = vendor_stat.st_dev
+    for directory, directory_names, file_names in os.walk(
+        vendor,
+        topdown=True,
+        onerror=raise_walk_error,
+        followlinks=False,
+    ):
+        current = Path(directory)
+        try:
+            current_stat = current.lstat()
+        except OSError as error:
+            raise HookLifecycleError(
+                f"cannot inspect managed vendor tree: {error}"
+            ) from error
+        current_relative = current.relative_to(root).as_posix()
+        if (
+            not stat.S_ISDIR(current_stat.st_mode)
+            or stat_is_reparse_point(current_stat)
+            or current_stat.st_dev != vendor_device
+            or (current != vendor and os.path.ismount(current))
+        ):
+            raise HookLifecycleError(
+                f"managed vendor tree contains an unsafe directory: {current_relative}"
+            )
+        snapshot[current_relative] = file_identity(current_stat)
+        for name in directory_names:
+            path = current / name
+            try:
+                path_stat = path.lstat()
+            except OSError as error:
+                raise HookLifecycleError(
+                    f"cannot inspect managed vendor tree: {error}"
+                ) from error
+            relative = path.relative_to(root).as_posix()
+            if (
+                not stat.S_ISDIR(path_stat.st_mode)
+                or stat_is_reparse_point(path_stat)
+                or path_stat.st_dev != vendor_device
+                or os.path.ismount(path)
+            ):
+                raise HookLifecycleError(
+                    f"managed vendor tree contains an unsafe directory: {relative}"
+                )
+            snapshot[relative] = file_identity(path_stat)
+        for name in file_names:
+            path = current / name
+            try:
+                path_stat = path.lstat()
+            except OSError as error:
+                raise HookLifecycleError(
+                    f"cannot inspect managed vendor tree: {error}"
+                ) from error
+            relative = path.relative_to(root).as_posix()
+            if (
+                not stat.S_ISREG(path_stat.st_mode)
+                or stat_is_reparse_point(path_stat)
+                or path_stat.st_dev != vendor_device
+            ):
+                raise HookLifecycleError(
+                    f"managed vendor tree contains a non-regular file: {relative}"
+                )
+            snapshot[relative] = file_identity(path_stat)
+    return snapshot
 
 
 def hook_target(event: str, entry: object) -> Path | None:
@@ -272,27 +664,93 @@ def string_values(value: object) -> Iterable[str]:
             yield from string_values(nested)
 
 
-def references_managed_hook_path(value: str) -> bool:
-    # Hook commands are persisted as strings and can spell the same path with
-    # Windows separators, shell quote concatenation, repeated separators, or
-    # lexical aliases such as `.ievo/tmp/../hooks`. Normalize those static
-    # forms without resolving the path through the filesystem.
-    unquoted = value.replace('"', "").replace("'", "")
-    windows_form = unquoted.replace("\\", "/")
-    posix_form = re.sub(r"\\\r?\n", "", unquoted)
-    posix_form = re.sub(r"\\(.)", r"\1", posix_form, flags=re.DOTALL)
-    for text in dict.fromkeys((windows_form, posix_form)):
-        for match in re.finditer(r"\.ievo", text, flags=re.IGNORECASE | re.ASCII):
-            start = match.start()
-            end = start
-            while end < len(text):
-                character = text[end]
-                if character.isspace() or character in ";|&()<>":
-                    break
-                end += 1
-            candidate = posixpath.normpath(text[start:end]).casefold()
-            if candidate == HOOK_DIRECTORY.as_posix() or candidate.startswith(
-                f"{HOOK_DIRECTORY.as_posix()}/"
+def string_references_managed_target(candidate: str) -> bool:
+    collapsed = (
+        candidate.replace("\\\r\n", "")
+        .replace("\\\n", "")
+        .replace("`\r\n", "")
+        .replace("`\n", "")
+        .replace("^\r\n", "")
+        .replace("^\n", "")
+    )
+    tokens: list[str] = []
+    try:
+        tokens.extend(shlex.split(collapsed, posix=True))
+    except ValueError:
+        # The quote-stripped conservative pass below still catches path-like
+        # malformed shell strings; rejecting a possible alias is safer than
+        # deleting its target.
+        pass
+    unquoted = collapsed.replace('"', "").replace("'", "")
+    if POWERSHELL_CONSTANT_EXPRESSION.search(unquoted):
+        # PowerShell can assemble a path from constants without a variable or
+        # command substitution. Unmodeled expression syntax is ambiguous, so
+        # destructive cleanup must retain both configuration and targets.
+        return True
+    tokens.extend(REFERENCE_TOKEN_SPLIT.split(unquoted))
+
+    for token in tokens:
+        if not token:
+            continue
+        normalized = posixpath.normpath(token.replace("\\", "/")).casefold()
+        parts = tuple(component for component in normalized.split("/") if component)
+        if any(DOS_SHORT_NAME_COMPONENT.fullmatch(component) for component in parts):
+            # A DOS 8.3 alias does not retain enough spelling information to
+            # prove that it cannot resolve to the managed tree on Windows.
+            return True
+        width = len(MANAGED_REFERENCE_PARTS)
+        if any(
+            parts[index : index + width] == MANAGED_REFERENCE_PARTS
+            for index in range(len(parts) - width + 1)
+        ):
+            # Case-folding on every host is intentionally conservative: an alias
+            # that is distinct on one clone may name the managed tree on another.
+            return True
+    folded = unquoted.replace("\\", "/").casefold()
+    if ".ievo" in folded and "hooks" in folded:
+        return True
+
+    expansion_masked = collapsed
+    while True:
+        previous = expansion_masked
+        for pattern in SHELL_EXPANSIONS:
+            expansion_masked = pattern.sub(
+                SHELL_EXPANSION_MARKER,
+                expansion_masked,
+            )
+        if expansion_masked == previous:
+            break
+    if SHELL_EXPANSION_MARKER in expansion_masked:
+        # A substitution may emit separators and the complete managed path. Its
+        # value is unknowable during disable, so retaining config and targets is
+        # the only safe outcome even when no static component names `.ievo`.
+        return True
+    if any(sigil in expansion_masked for sigil in ("$", "%", "!", "`")):
+        # Malformed, legacy, or shell-specific substitutions are intentionally
+        # unsupported. A remaining sigil may still supply the complete path.
+        return True
+    if any(marker in unquoted for marker in ("[[:", "[[.", "[[=")):
+        # Python fnmatch intentionally does not implement the POSIX bracket
+        # class, collating-symbol, or equivalence-class forms supported by
+        # shells. Their locale-dependent result cannot be proven unrelated.
+        return True
+
+    shell_escape_normalized = unquoted.replace("^", "")
+    if shell_escape_normalized != unquoted:
+        # Cmd carets escape the following character. PowerShell backticks and
+        # POSIX backtick substitutions were handled fail-closed above.
+        return string_references_managed_target(shell_escape_normalized)
+
+    for token in GLOB_TOKEN_SPLIT.split(unquoted):
+        normalized = posixpath.normpath(token.replace("\\", "/")).casefold()
+        parts = tuple(component for component in normalized.split("/") if component)
+        if "**" in parts:
+            return True
+        for index in range(len(parts) - 1):
+            patterns = parts[index : index + 2]
+            if all(
+                fnmatchcase(expected, pattern)
+                for pattern, expected in zip(patterns, MANAGED_REFERENCE_PARTS)
             ):
                 return True
     return False
@@ -308,7 +766,7 @@ def managed_target_references(settings: dict[str, Any]) -> list[ManagedReference
         if not isinstance(event, str):
             continue
         if any(
-            references_managed_hook_path(candidate)
+            string_references_managed_target(candidate)
             for candidate in string_values(value)
         ):
             references.append((event, HOOK_DIRECTORY))
@@ -355,23 +813,46 @@ def add_records(
 def ensure_no_symlink_components(root: Path, relative: Path) -> None:
     if relative.is_absolute() or ".." in relative.parts:
         raise HookLifecycleError(f"managed path must stay relative: {relative}")
-    if root.is_symlink():
-        raise HookLifecycleError(f"managed path root must not be a symlink: {root}")
+    try:
+        root_stat = root.lstat()
+    except OSError as error:
+        raise HookLifecycleError(
+            f"cannot inspect managed path root {root}: {error}"
+        ) from error
+    if (
+        not stat.S_ISDIR(root_stat.st_mode)
+        or stat.S_ISLNK(root_stat.st_mode)
+        or stat_is_reparse_point(root_stat)
+    ):
+        raise HookLifecycleError(
+            f"managed path root must be a regular directory: {root}"
+        )
 
     current = root
     for index, component in enumerate(relative.parts):
         current /= component
-        if current.is_symlink():
+        try:
+            current_stat = current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
             raise HookLifecycleError(
-                "managed path contains a symlink component: "
+                f"cannot inspect managed path component {current}: {error}"
+            ) from error
+        if stat.S_ISLNK(current_stat.st_mode) or stat_is_reparse_point(current_stat):
+            raise HookLifecycleError(
+                "managed path contains a symlink component or reparse point: "
                 f"{current.relative_to(root)}"
             )
-        if current.exists() and index < len(relative.parts) - 1:
-            if not current.is_dir():
-                raise HookLifecycleError(
-                    "managed path ancestor must be a directory: "
-                    f"{current.relative_to(root)}"
-                )
+        if current_stat.st_dev != root_stat.st_dev or os.path.ismount(current):
+            raise HookLifecycleError(
+                f"managed path crosses a mount boundary: {current.relative_to(root)}"
+            )
+        if index < len(relative.parts) - 1 and not stat.S_ISDIR(current_stat.st_mode):
+            raise HookLifecycleError(
+                "managed path ancestor must be a directory: "
+                f"{current.relative_to(root)}"
+            )
 
 
 def ensure_safe_lifecycle_paths(root: Path, relatives: Iterable[Path]) -> None:
@@ -400,6 +881,7 @@ def existing_targets(root: Path, records: Iterable[HookRecord]) -> None:
         )
 
 
+@serialized_lifecycle
 def localize(root: Path) -> None:
     ensure_safe_lifecycle_paths(
         root,
@@ -429,8 +911,7 @@ def localize(root: Path) -> None:
             "no iEvo hook entries found; run the iEvo enable/refresh workflow first"
         )
     existing_targets(root, all_records)
-    if not flag_enabled(root):
-        raise HookLifecycleError(".ievo/evo-auto.flag does not state enabled: true")
+    ensure_corrections_only_intent(root)
     rewritten_local = add_records(stripped_local, claude_records)
     original_gitignore = (root / GITIGNORE).read_text(encoding="utf-8")
     rewritten_gitignore = normalized_gitignore(root)
@@ -444,15 +925,41 @@ def localize(root: Path) -> None:
         atomic_write_json(root, CLAUDE_SHARED, rewritten_shared)
 
 
-def flag_enabled(root: Path) -> bool:
+def intent_flag_values(root: Path) -> dict[str, str]:
     path = root / FLAG
     if not path.exists():
-        return False
-    for line in path.read_text(encoding="utf-8").splitlines():
+        raise HookLifecycleError(f"required configuration is missing: {FLAG}")
+    try:
+        contents = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise HookLifecycleError(f"cannot read {FLAG}: {error}") from error
+
+    values: dict[str, str] = {}
+    for line in contents.splitlines():
         key, separator, value = line.partition(":")
-        if separator and key.strip() == "enabled":
-            return value.strip() == "true"
-    return False
+        if not separator:
+            continue
+        key = key.strip()
+        value = value.strip()
+        if key in values and values[key] != value:
+            raise HookLifecycleError(
+                f"{FLAG} contains conflicting duplicate field: {key}"
+            )
+        values[key] = value
+    return values
+
+
+def ensure_corrections_only_intent(root: Path) -> None:
+    values = intent_flag_values(root)
+    mismatches = [
+        f"{key}: {expected}"
+        for key, expected in FLAG_REQUIREMENTS.items()
+        if values.get(key) != expected
+    ]
+    if mismatches:
+        raise HookLifecycleError(
+            f"{FLAG} must state the corrections-only intent: " + ", ".join(mismatches)
+        )
 
 
 def local_records(root: Path) -> list[HookRecord]:
@@ -467,6 +974,7 @@ def local_records(root: Path) -> list[HookRecord]:
     return records
 
 
+@serialized_lifecycle
 def check(root: Path, *, smoke: bool) -> None:
     ensure_safe_lifecycle_paths(
         root,
@@ -480,8 +988,7 @@ def check(root: Path, *, smoke: bool) -> None:
         raise HookLifecycleError(
             "iEvo hook entries remain in shared .claude/settings.json; run localize"
         )
-    if not flag_enabled(root):
-        raise HookLifecycleError(".ievo/evo-auto.flag does not state enabled: true")
+    ensure_corrections_only_intent(root)
 
     records = local_records(root)
     if not records:
@@ -509,42 +1016,167 @@ def check(root: Path, *, smoke: bool) -> None:
             )
 
 
-def remove_path(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
+def inspect_regular_removal_files(
+    root: Path,
+    targets: Iterable[Path],
+) -> dict[str, FileIdentity]:
+    snapshot: dict[str, FileIdentity] = {}
+    for target in targets:
+        path = root / target
+        try:
+            path_stat = path.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise HookLifecycleError(
+                f"cannot inspect generated removal target {target}: {error}"
+            ) from error
+        if not stat.S_ISREG(path_stat.st_mode):
+            raise HookLifecycleError(
+                f"generated removal target must be a regular file: {target}"
+            )
+        snapshot[target.as_posix()] = file_identity(path_stat)
+    return snapshot
+
+
+def ensure_snapshot_unchanged(
+    label: str,
+    expected: dict[str, FileIdentity],
+    actual: dict[str, FileIdentity],
+) -> None:
+    if actual != expected:
+        raise HookLifecycleError(f"{label} changed during the lifecycle operation")
+
+
+def remove_validated_files(
+    root: Path,
+    snapshot: dict[str, FileIdentity],
+) -> None:
+    for relative, expected in snapshot.items():
+        ensure_no_symlink_components(root, Path(relative))
+        path = root / relative
+        try:
+            actual = file_identity(path.lstat())
+        except OSError as error:
+            raise HookLifecycleError(
+                f"cannot revalidate generated removal target {relative}: {error}"
+            ) from error
+        if actual != expected:
+            raise HookLifecycleError(
+                f"generated removal target changed before unlink: {relative}"
+            )
         path.unlink()
-    elif path.is_dir():
-        shutil.rmtree(path)
 
 
+def remove_validated_vendor(root: Path, snapshot: VendorSnapshot) -> None:
+    file_entries = [
+        relative for relative, identity in snapshot.items() if stat.S_ISREG(identity[2])
+    ]
+    directory_entries = [
+        relative for relative, identity in snapshot.items() if stat.S_ISDIR(identity[2])
+    ]
+    for relative in sorted(
+        file_entries, key=lambda item: item.count("/"), reverse=True
+    ):
+        ensure_no_symlink_components(root, Path(relative))
+        path = root / relative
+        try:
+            actual = file_identity(path.lstat())
+        except OSError as error:
+            raise HookLifecycleError(
+                f"cannot revalidate managed vendor file {relative}: {error}"
+            ) from error
+        if actual != snapshot[relative]:
+            raise HookLifecycleError(
+                f"managed vendor file changed before unlink: {relative}"
+            )
+        path.unlink()
+    for relative in sorted(
+        directory_entries,
+        key=lambda item: item.count("/"),
+        reverse=True,
+    ):
+        ensure_no_symlink_components(root, Path(relative))
+        path = root / relative
+        try:
+            actual = file_identity(path.lstat())
+        except OSError as error:
+            raise HookLifecycleError(
+                f"cannot revalidate managed vendor directory {relative}: {error}"
+            ) from error
+        if actual[:3] != snapshot[relative][:3]:
+            raise HookLifecycleError(
+                f"managed vendor directory changed before removal: {relative}"
+            )
+        path.rmdir()
+
+
+@serialized_lifecycle
 def disable(root: Path) -> None:
-    ensure_safe_lifecycle_paths(root, (CLAUDE_SHARED, CLAUDE_LOCAL, CODEX_LOCAL))
-    removal_targets = [
+    ensure_safe_lifecycle_paths(
+        root,
+        (CLAUDE_SHARED, CLAUDE_LOCAL, CODEX_LOCAL, FLAG, GITIGNORE),
+    )
+    ensure_corrections_only_intent(root)
+    file_removal_targets = [
         *SCRIPT_TARGETS.values(),
         *LOCAL_COMPANIONS,
-        VENDOR_DIRECTORY,
     ]
+    removal_targets = [*file_removal_targets, VENDOR_DIRECTORY]
     for target in removal_targets:
         ensure_no_symlink_components(root, target)
+    file_snapshot = inspect_regular_removal_files(root, file_removal_targets)
 
-    configurations: list[tuple[Path, dict[str, Any]]] = []
+    configurations: list[tuple[Path, dict[str, Any] | None, bytes | None]] = []
     for relative in (CLAUDE_SHARED, CLAUDE_LOCAL, CODEX_LOCAL):
-        settings = read_json(root, relative, required=relative == CLAUDE_SHARED)
-        if settings is not None:
-            configurations.append((relative, settings))
+        settings, contents = read_json_snapshot(
+            root,
+            relative,
+            required=relative == CLAUDE_SHARED,
+        )
+        configurations.append((relative, settings, contents))
 
-    rewritten: list[tuple[Path, dict[str, Any], dict[str, Any]]] = []
-    for relative, settings in configurations:
+    rewritten: list[tuple[Path, dict[str, Any], bytes, dict[str, Any]]] = []
+    expected_configurations: dict[Path, dict[str, Any] | None] = {}
+    for relative, settings, contents in configurations:
+        if settings is None or contents is None:
+            expected_configurations[relative] = None
+            continue
         without_ievo, _ = strip_ievo_entries(settings)
         ensure_no_managed_target_references(relative, without_ievo)
-        rewritten.append((relative, settings, without_ievo))
-    for relative, original, updated in rewritten:
+        rewritten.append((relative, settings, contents, without_ievo))
+        expected_configurations[relative] = without_ievo
+    vendor_snapshot = ensure_machine_local_paths_ignored(root)
+    for relative, original, original_contents, updated in rewritten:
         if updated != original:
+            # The lifecycle lock serializes this helper, not arbitrary editors or
+            # upstream tools. This detects changes already visible at the latest
+            # portable pre-replacement check; it is not a filesystem-level CAS.
+            if current_file_bytes(root, relative) != original_contents:
+                raise HookLifecycleError(
+                    f"configuration changed during disable: {relative}"
+                )
             atomic_write_json(root, relative, updated)
 
-    for target in removal_targets:
-        path = root / target
-        if path.exists():
-            remove_path(path)
+    for relative, expected in expected_configurations.items():
+        current = read_json(root, relative, required=relative == CLAUDE_SHARED)
+        if current != expected:
+            raise HookLifecycleError(
+                f"configuration changed before target removal: {relative}"
+            )
+    ensure_snapshot_unchanged(
+        "generated removal targets",
+        file_snapshot,
+        inspect_regular_removal_files(root, file_removal_targets),
+    )
+    ensure_snapshot_unchanged(
+        "managed vendor tree",
+        vendor_snapshot,
+        ensure_machine_local_paths_ignored(root),
+    )
+    ensure_safe_lifecycle_paths(root, removal_targets)
+    remove_validated_files(root, file_snapshot)
+    remove_validated_vendor(root, vendor_snapshot)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
