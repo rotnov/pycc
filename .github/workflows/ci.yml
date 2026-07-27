@@ -40,7 +40,12 @@ jobs:
         run: rustup target add x86_64-apple-darwin
 
       # Hard merge invariant from D-014. These thresholds must never be
-      # lowered or bypassed to make a pull request pass.
+      # lowered or bypassed to make a pull request pass. tests/conformance.rs
+      # (PR-6, D-078) is excluded from this measurement automatically -- test
+      # code isn't part of the coverage denominator (docs/TESTING.md's "Code
+      # coverage" section) -- and its two tests are `#[ignore]`d by default,
+      # so this step needs no CPython oracle at all; see the oracle-setup
+      # steps and explicit `--include-ignored` run further down this job.
       - name: Hard coverage gate — 100% lines + regions (D-014)
         run: |
           set -euo pipefail
@@ -111,8 +116,45 @@ jobs:
           python3 scripts/run_alpha_skill_evals.py \
             --client claude --pycc-bin target/debug/pycc
 
-      - name: cargo test --workspace
-        run: cargo test --workspace
+      # tests/conformance.rs (PR-6, D-078) shells out to a hardcoded
+      # "python3.14" oracle binary. Deliberately set up here, after the
+      # coverage gate above rather than before it -- installing a
+      # network-fetched interpreter inside that gate's isolated `nobody`
+      # sandbox would expand a trust boundary that's reviewed and pinned
+      # (scripts/check_roadmap_evidence.rb's TRUSTED_COVERAGE_STEPS /
+      # COVERAGE_SCRIPT). Pinned to the exact same 3.14.6 the local oracle
+      # uses (docs/ROADMAP.md's "v1 stable oracle" row).
+      - name: Set up CPython 3.14.6 conformance oracle
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14.6"
+
+      - name: Verify oracle version
+        shell: bash
+        run: |
+          python3.14 --version | grep -qx "Python 3.14.6" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.6'"
+            python3.14 --version
+            exit 1
+          }
+
+      # Both conformance tests are `#[ignore]`d by default (see
+      # tests/conformance.rs) so the coverage gate above doesn't need the
+      # oracle; `--include-ignored` here is what actually runs and verifies
+      # them, now that the oracle is on PATH.
+      - name: cargo test --workspace (incl. ignored conformance tests, D-078)
+        run: cargo test --workspace -- --include-ignored
+
+      # Absolute wall-clock floor for `pycc check` (D-079), not a
+      # regression-vs-predecessor comparison like frontend-perf-gate.
+      # Placed after the cargo-test step above (not right after cargo
+      # build) so this measurement is never the first exec of the
+      # freshly-linked binary in this job -- an early first-exec can
+      # carry one-time cold-start/code-signature-validation overhead
+      # unrelated to pycc's own compute, which would make this check
+      # measure process-spawn noise instead of `pycc check`'s speed.
+      - name: Check pycc check throughput floor (<50ms/1000 LOC, D-084)
+        run: ruby scripts/check_frontend_throughput.rb target/debug/pycc tests/fixtures/pr6_1000_loc_bench.py 50
 
       - name: cargo clippy --workspace
         run: |
@@ -216,12 +258,52 @@ jobs:
           Copy-Item $xml2Lib.FullName "$libDir\xml2s.lib" -Force
           echo "LIB=$libDir;$env:LIB" >> $env:GITHUB_ENV
 
+      # tests/conformance.rs (PR-6, D-078) shells out to a hardcoded
+      # "python3.14" oracle binary via cargo test --workspace below, on every
+      # Tier-1 target alike -- pinned here to the exact same 3.14.6 the local
+      # oracle uses (docs/ROADMAP.md's "v1 stable oracle" row).
+      - name: Set up CPython 3.14.6 conformance oracle
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14.6"
+
+      # actions/setup-python only produces a plain "python.exe" on Windows --
+      # unlike its Unix installs, it never creates a version-suffixed
+      # "python3.14" binary. tests/conformance.rs's oracle lookup uses that
+      # one hardcoded name uniformly on every Tier-1 target (D-078), so this
+      # copies the just-installed interpreter under the name it expects
+      # rather than special-casing the Rust lookup itself for one platform.
+      # Resolved via $pythonLocation (the exact directory actions/setup-python
+      # itself exports and prepends to the real Windows PATH), not bash's own
+      # `command -v python` -- Git Bash's PATH view can be reordered relative
+      # to the real Windows PATH that later `pwsh`-run steps (and the Rust
+      # test binary's own Command::new PATH search) actually search, so a
+      # bash-resolved "python" is not guaranteed to be the same interpreter.
+      - name: Alias python3.14 (Windows lacks a version-suffixed python binary)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          PY_DIR="$(cygpath -u "$pythonLocation")"
+          cp "$PY_DIR/python.exe" "$PY_DIR/python3.14.exe"
+
+      - name: Verify oracle version
+        shell: bash
+        run: |
+          python3.14 --version | grep -qx "Python 3.14.6" || {
+            echo "::error::expected python3.14 --version to print exactly 'Python 3.14.6'"
+            python3.14 --version
+            exit 1
+          }
+
       - name: cargo build --workspace
         run: cargo build --workspace
 
+      # `--include-ignored` runs tests/conformance.rs's two `#[ignore]`d
+      # tests (D-078) alongside everything else, now that the oracle above
+      # is on PATH.
       - name: cargo test --workspace
         if: runner.os != 'Windows'
-        run: cargo test --workspace
+        run: cargo test --workspace -- --include-ignored
 
       # --test-threads=1: tests/slice0.rs spawns pycc.exe as a child process
       # per test; parallel runs interleave their stderr output at the OS
@@ -232,7 +314,7 @@ jobs:
       # needs repeating, the log is unambiguous; not needed on other OSes.
       - name: cargo test --workspace (single-threaded, see D-029)
         if: runner.os == 'Windows'
-        run: cargo test --workspace -- --test-threads=1
+        run: cargo test --workspace -- --test-threads=1 --include-ignored
 
       # No explicit `shell:` here (unlike this step used to have) -- on
       # Windows that forced Git Bash, whose own `PATH` startup rewriting

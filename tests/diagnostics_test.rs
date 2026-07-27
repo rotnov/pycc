@@ -114,3 +114,8 @@ fn d0023_incompatible_assignment() {
 fn d0024_return_outside_function() {
     assert_diagnostic_matches_fixture("d0024_return_outside_function");
 }
+
+#[test]
+fn cli_spec_example() {
+    assert_diagnostic_matches_fixture("cli_spec_example");
+}
