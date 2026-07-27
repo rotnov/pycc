@@ -33,7 +33,7 @@ remains work in flight.
 - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
 - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
 
-All five v0.1 acceptance criteria are green. [DELIVERY_PLAN.md](./DELIVERY_PLAN.md)'s PR-7 buffer slice closed this checklist; v0.1 is ready for its final acceptance pass.
+All five v0.1 acceptance criteria are green: per this document's own binary milestone definition above, v0.1 is complete. [DELIVERY_PLAN.md](./DELIVERY_PLAN.md)'s PR-7 buffer slice closed this checklist. The next delivery slices are v0.2's, defined below.
 
 ## CPython release alignment
 
