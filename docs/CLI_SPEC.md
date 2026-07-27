@@ -109,12 +109,17 @@ Human format (stable enough to screenshot, not to parse):
 
 ```
 error[T0021]: argument 1 of `fib` expects `int`, got `str`
- --> src/main.py:5:15
+ --> src/main.py:1:1
   |
-5 |     print(fib("35"))
-  |               ^^^^ expected `int`
-  = help: did you mean `int("35")`?
+1 | def fib(n: int) -> int:
+  | ^ argument 1 of `fib` expects `int`, got `str`
 ```
+
+Every `T0xxx` diagnostic's span is currently the `Span::new(0, 0)` placeholder
+(`line 1, column 1`, one-character caret) regardless of where the real error
+is, and the caret label always repeats the diagnostic's full message rather
+than an independent short label -- both are current, real behavior, not an
+aspirational target (D-043).
 
 JSON format versioned (`"format_version": 1`), one object per diagnostic: code, severity, spans[{file,line,col,len,label}], message, help[], fix{edits[]}?. `line` and `col` are 1-indexed Unicode-scalar positions; `len` counts Unicode scalar values from the span start, including normalized line separators in a multi-line span. Consumed by editors and the corpus bot (TESTING.md).
 
