@@ -73,7 +73,7 @@ evidence only and must not become recurring polling targets.
 including hard coverage and `ci-gate`, and received a clean user-requested
 GitHub Codex review with no inline comments or unresolved threads. Those checks
 do not authorize the integration head after `main` advanced. The integrated
-working tree passes all 296 Python discovery tests (four platform-only skips),
+repair passes all 296 Python discovery tests (four platform-only skips),
 including a warnings-as-errors run, both agent validators, Ruff, 100
 roadmap-policy tests with 434 assertions,
 roadmap evidence, `cargo fmt`, workspace build and all 581 Rust tests, clippy
@@ -107,9 +107,12 @@ Completed fenced and raw-HTML blocks clear stale lazy-container state.
 Reference-definition regressions cover escaped and multiline labels, the raw
 999-character limit, balanced destinations, multiline titles, and fail-closed
 invalidation or end-of-file state. Negative regressions cover every bypass class.
-Its integrated diff must pass pinned review before publication. On the resulting
-published exact head, request exactly one new `@codex review`; keep the PR draft
-until hard 100% coverage and every other required check pass, resolve all actionable
+The code-bearing repair commit `3d3c985d4050b32e210355c78c42778437acdfa5`
+was published only after pinned deep review returned zero findings across all 11
+points; its additional adversarial comparison covered 418 generated Markdown cases
+against cmark without a false acceptance. After publishing this handoff refresh,
+request exactly one new `@codex review` for its exact head; keep the PR draft until
+hard 100% coverage and every other required check pass, resolve all actionable
 threads, re-confirm fresh `main`, and merge only through branch protection.
 
 ## 2026-07-26 — Post-merge iEvo lifecycle hardening on current main
