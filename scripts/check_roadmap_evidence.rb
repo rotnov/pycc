@@ -42,17 +42,21 @@ D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
 # Historical audit-fixture digest. The public policy no longer accepts it.
 D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
   "a5135f7a8ebe2b0c0924ad026612ef9c90ade105c9a4fd484f803e10cf5b5c8d"
-# D-080: the conformance oracle's CI wiring (PR-6, Task 6) moved onto
-# build-test-coverage and native-build-test without touching the D-014
-# coverage gate's own trusted step prefix or script -- see D-080's text.
-# Staged onto main first as D62's coexisting sibling by #159 (a separate
-# stage PR, required by the pull_request_target audit's base-branch-only
-# checker trust boundary -- see D-080's "Staging note"); this activation
-# commit retires D62 now that the digest below is already authorized.
+# Historical audit-fixture digest. The public policy no longer accepts it.
 D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
   "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234"
+# D-084: PR-6, Task 7's `pycc check` absolute-throughput-floor CI step
+# (D-079) added to build-test-coverage, after the cargo-test step so it
+# is never the first exec of the freshly-linked binary in that job --
+# see D-084's text. Staged onto main first as D80's coexisting sibling
+# by a separate stage PR, required by the pull_request_target audit's
+# base-branch-only checker trust boundary (same mechanism D-080 already
+# needed -- see D-080's "Staging note"); this activation commit retires
+# D80 now that the digest below is already authorized.
+D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256 =
+  "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
+  D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -1160,7 +1164,7 @@ def validate_evidence(root, _evidence_ids)
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match the reviewed active D-080 performance CI workflow"
+          "#{workflow}: does not match the reviewed active D-084 performance CI workflow"
   end
   validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
 end

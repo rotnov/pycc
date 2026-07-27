@@ -560,9 +560,19 @@ Expected: `OK: pycc check took N.NNms (threshold 50.0ms)` with `N.NN` under `50`
 
 - [ ] **Step 6: Wire into CI as its own step**
 
-Add to `.github/workflows/ci.yml`'s `build-test-coverage` job (macos-14 — the one stable, single-runner job already responsible for "does everything" checks like the roadmap-evidence/ci-permissions scripts), after the existing `cargo build --workspace` step:
+> **Post-hoc correction (D-084):** the step below is placed after the
+> job's existing `cargo test --workspace (incl. ignored conformance
+> tests, D-078)` step, not immediately after `cargo build --workspace`
+> as originally written here. A Task-7 implementer subagent found the
+> exact measurement flaky on its dev host when run as the first exec of
+> a freshly-linked binary (multi-second cold-start/code-signature-
+> validation overhead unrelated to `pycc check`'s own ~15ms steady-state
+> speed). Placing it after `cargo test` — which already execs the same
+> binary via existing integration tests — avoids that risk in CI.
+
+Add to `.github/workflows/ci.yml`'s `build-test-coverage` job (macos-14 — the one stable, single-runner job already responsible for "does everything" checks like the roadmap-evidence/ci-permissions scripts), after the existing `cargo test --workspace (incl. ignored conformance tests, D-078)` step:
 ```yaml
-      - name: Check pycc check throughput floor (<50ms/1000 LOC, D-079)
+      - name: Check pycc check throughput floor (<50ms/1000 LOC, D-084)
         run: ruby scripts/check_frontend_throughput.rb target/debug/pycc tests/fixtures/pr6_1000_loc_bench.py 50
 ```
 Do not add this to `native-build-test`'s 4-leg matrix — a single stable runner is enough to enforce one absolute floor; running it on every OS would need per-OS-tuned thresholds (Windows/ARM runners are typically slower than the reference `macos-14` runner this floor is calibrated against) which is unnecessary scope for this PR's stated acceptance criterion.
