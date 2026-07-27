@@ -50,7 +50,7 @@
             "name": "Python AOT compilers compared — where pycc fits",
             "description": "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from official docs: language contract, output artifact, runtime model, and current positioning.",
             "inLanguage": "en",
-            "dateModified": "2026-07-26",
+            "dateModified": "2026-07-27",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -247,10 +247,11 @@
               standard Python syntax, a native executable without an embedded
               CPython interpreter, and a five-target portability gate. The
               repository now parses, type-checks, and compiles the implemented
-              v0.1 surface through MIR, LLVM, and its native runtime. Explicit
-              representation and lifetime gaps remain, the conformance and
-              final acceptance work is unfinished, and no production release
-              exists.
+              v0.1 surface through MIR, LLVM, and its native runtime, and
+              v0.1's own acceptance criteria are met on all five Tier-1
+              targets. Explicit representation and lifetime gaps remain, the
+              full multi-version conformance matrix is unfinished, and no
+              production release exists.
             </p>
             <div class="callout">
               <strong>Do not choose pycc for production today.</strong>

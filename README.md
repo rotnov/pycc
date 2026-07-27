@@ -14,8 +14,12 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > private-helper signatures, and rendering human or JSON diagnostics.
 > `pycc build` and `pycc run` compile that implemented v0.1 surface through
 > MIR, LLVM, the host linker, and the native runtime. The compiler remains
-> pre-alpha: documented representation and lifetime gaps, the conformance
-> testkit, named demos, and final v0.1 acceptance are still roadmap work.
+> pre-alpha: documented representation and lifetime gaps are still roadmap
+> work, but v0.1's own acceptance criteria are now met -- `fib` and
+> `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets,
+> `pycc check` clears its <50ms/1000 LOC throughput floor, and diagnostic
+> output matches [`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md)'s example; see
+> [`docs/ROADMAP.md`](./docs/ROADMAP.md).
 > The frontend performance measurement and isolated greater-than-2% regression
 > gate are required through `ci-gate` independently of that compiler sequence.
 > The source-aware paired gate measures the exact predecessor and candidate

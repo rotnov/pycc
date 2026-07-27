@@ -50,7 +50,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what remains planned for v0.1, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-07-26",
+            "dateModified": "2026-07-27",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -110,7 +110,7 @@
       </nav>
 
       <header class="page-hero">
-        <p class="eyebrow">Evidence page · Updated 2026-07-26</p>
+        <p class="eyebrow">Evidence page · Updated 2026-07-27</p>
         <h1>What pycc can do <span>today.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14.
@@ -118,8 +118,8 @@
           larger design contract. It is not a release announcement.
         </p>
         <div class="page-meta" aria-label="Status summary">
-          <span><strong>Milestone</strong> v0.1 in progress</span>
-          <span><strong>Acceptance</strong> 2 of 5 gates</span>
+          <span><strong>Milestone</strong> v0.1 acceptance criteria met</span>
+          <span><strong>Acceptance</strong> 5 of 5 gates</span>
           <span><strong>Readiness</strong> pre-alpha</span>
         </div>
       </header>
@@ -268,11 +268,16 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>Conformance and final v0.1 acceptance are next.</h2>
+            <h2>v0.1's acceptance criteria are met; the full conformance matrix is next.</h2>
             <p>
-              PR-5 implements the v0.1 frontend surface through MIR, LLVM, and
-              the native runtime. The conformance testkit, named demos, and
-              final acceptance pass are next. The required frontend measurement
+              All five v0.1 acceptance-checklist bullets are green:
+              <code>fib</code> and <code>mandelbrot-ascii</code> match pinned
+              CPython output on all five Tier-1 targets, <code>pycc check</code>
+              clears its &lt;50ms/1000 LOC throughput floor, and diagnostic
+              output matches the stable CLI specification's example. The full
+              multi-version conformance matrix, differential fuzzing, corpus
+              testing, and v0.2's collections and generics work remain planned.
+              The required frontend measurement
               and greater-than-2% regression gate remain required through
               <code>ci-gate</code>. This source-aware paired gate
               measures the exact predecessor and candidate sequentially on one
@@ -288,8 +293,10 @@
               predecessor-owned checker. Revision, benchmark-contract,
               executable-input identity, artifact-identity, exact file-set, and
               comparison drift fail closed.
-              These gates and the documented implementation gaps drive the
-              remaining v0.1 work.
+              These gates stay required while the full conformance matrix and
+              v0.2 work proceed; the documented implementation gaps above are
+              accepted v0.1 boundaries that this milestone's acceptance
+              criteria never required closing, not outstanding blockers.
             </p>
             <div class="page-links">
               <a href="../architecture/">

@@ -419,7 +419,8 @@ required_disclosures = (
     "No project code is handwritten by a human.",
     "pycc check now runs the v0.1 frontend",
     "v0.1 native backend with documented gaps",
-    "Conformance, named demos, and final v0.1 acceptance are next",
+    "v0.1 acceptance criteria met on all five Tier-1 targets",
+    "The full conformance matrix and v0.2 collections/generics are next",
 )
 for disclosure in required_disclosures:
     if disclosure not in visible_body_text:
@@ -445,7 +446,7 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-07-26",
+        "date_modified": "2026-07-27",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
@@ -458,8 +459,9 @@ PAGE_SPECS = {
             "Implemented v0.1 subset",
             "Validated frontend codes",
             "byte-exact CLI snapshots cover",
-            "Conformance and final v0.1 acceptance are next.",
-            "PR-5 implements the v0.1 frontend surface through MIR, LLVM, and the native runtime.",
+            "v0.1's acceptance criteria are met; the full conformance matrix is next.",
+            "All five v0.1 acceptance-checklist bullets are green",
+            "The full multi-version conformance matrix, differential fuzzing, corpus testing, and v0.2's collections and generics work remain planned.",
             "Unary operators are rejected earlier by HIR lowering with a spanned C0001 capability diagnostic, including under pycc check",
             "The required frontend measurement and greater-than-2% regression gate remain required through ci-gate",
             "This source-aware paired gate measures the exact predecessor and candidate sequentially on one hosted runner",
@@ -491,7 +493,7 @@ PAGE_SPECS = {
     },
     "python-aot-compilers": {
         "canonical": f"{ROOT}python-aot-compilers/",
-        "date_modified": "2026-07-26",
+        "date_modified": "2026-07-27",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
             "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "

@@ -4,12 +4,12 @@ Milestone = shippable + demo-able. Acceptance criteria are binary; a milestone i
 
 ## Current delivery status
 
-Last reviewed on 2026-07-26. This section describes the repository tree in the
+Last reviewed on 2026-07-27. This section describes the repository tree in the
 commit that contains it: behavior and evidence from that same commit count,
 while work that exists only in another open pull request or unmerged branch
 remains work in flight.
 
-**Current milestone: v0.1 — in progress.** The checked v0.1 surface now reaches a native executable through MIR, LLVM, and the runtime, but its documented gaps and final acceptance work keep it unshippable.
+**Current milestone: v0.1 — acceptance criteria met.** All five v0.1 acceptance-checklist bullets below are green: the checked v0.1 surface reaches a native executable through MIR, LLVM, and the runtime; `fib` and `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets; `pycc check` clears its <50ms/1000 LOC throughput floor; its diagnostic output matches CLI_SPEC.md's example; the five-target CI matrix and cross-host compilation are live; and the 100% line/region coverage gate is required and green. The Language surface row's documented gaps below are accepted boundaries this milestone's acceptance criteria never required closing, not blockers still outstanding.
 
 | Area | Status in this commit | Evidence and remaining gap |
 |---|---|---|
@@ -27,13 +27,13 @@ remains work in flight.
 
 ### v0.1 acceptance checklist
 
-- [ ] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets.
-- [ ] `pycc check` processes 1k LOC in under 50 ms.
-- [ ] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output.
+- [x] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
+- [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+- [x] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
 - [x] The five-target native CI matrix and one cross-host compilation path are live on `main`. <!-- roadmap-evidence: ci-tier1-cross-compile -->
 - [x] The 100% line and region coverage gate is required and green for the current slice. <!-- roadmap-evidence: ci-build-test-coverage-100 -->
 
-The next delivery slices remain the sequence defined in [DELIVERY_PLAN.md](./DELIVERY_PLAN.md): the conformance testkit and named demos, then the final v0.1 acceptance pass.
+All five v0.1 acceptance criteria are green. [DELIVERY_PLAN.md](./DELIVERY_PLAN.md)'s PR-7 buffer slice closed this checklist; v0.1 is ready for its final acceptance pass.
 
 ## CPython release alignment
 
