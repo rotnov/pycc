@@ -47,9 +47,17 @@ D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
 # ci.yml to this content lands and retires D62.
 D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
   "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234"
+# PR-6, Task 7/D-084's staged target: the pycc check throughput-floor CI
+# step added to build-test-coverage after D80's own content. Staged
+# alongside D62 and D80 (still the live, active workflow's own digest)
+# until the PR that actually flips ci.yml to this content lands and
+# retires both.
+D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256 =
+  "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
-  D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
+  D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256,
+  D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
