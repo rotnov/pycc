@@ -21,6 +21,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent / "tests/fixtures/d56-source-aware-ci.yml"
   D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d62-replicated-paired-ci.yml"
+  D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d80-conformance-oracle-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -709,9 +711,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d62
+  def test_tier1_workflow_authorization_contains_only_active_d62_and_staged_d80
     assert_equal(
-      [D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256],
+      [
+        D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+        D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
+      ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
@@ -906,6 +911,22 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
+  # Staged, not yet active: D80's fixture is the PR-6/Task 6 target content
+  # (conformance oracle setup moved after the D-014 coverage gate) that a
+  # later PR will flip the live ci.yml to. Unlike test_d62_..._is_active_and_reviewed
+  # above, this does not compare against ACTIVE_D62_REPLICATED_WORKFLOW --
+  # the live workflow is still D62's content at this point.
+  def test_d80_conformance_oracle_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.read,
+      D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
   def test_tier1_workflow_allowlist_retires_the_superseded_single_job_digest
     refute_equal(
       D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
@@ -949,7 +970,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_an_active_workflow_without_both_perf_jobs
@@ -965,7 +986,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_with_unchecked_tier1_claim
@@ -975,7 +996,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_without_a_tier1_claim
@@ -985,7 +1006,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_requires_active_digest_without_a_tier1_claim
@@ -998,7 +1019,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_the_retired_d56_workflow
@@ -1008,7 +1029,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_the_retired_d51_workflow
@@ -1018,7 +1039,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_public_cli_rejects_unreviewed_d56_workflow_drift
@@ -1030,7 +1051,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_paired_measurement_resolves_the_exact_pull_request_base
@@ -1685,7 +1706,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-062 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
   end
 
   def test_requires_the_hard_coverage_gate_while_its_roadmap_claim_is_unchecked
