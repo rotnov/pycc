@@ -30,11 +30,13 @@ never a merge gate.
 
 ## 2026-07-27 — Nearly designed a `roadmap-evidence` content check that would have permanently broken the `workflow-policy.yml` audit
 
-**What happened:** while closing PR-7's last two v0.1 acceptance-checklist
-items (`check-throughput-1k-loc-50ms`, `cli-spec-diagnostic-match`), an
-automated review correctly flagged that `scripts/check_roadmap_evidence.rb`'s
-new evidence IDs only prove CI *invokes* the right test/script paths, not
-that their *content* still asserts real behavior. The natural next step was
+**What happened:** while registering the three new `roadmap-evidence` IDs
+PR-7 needed to close v0.1's last three unchecked acceptance-checklist items
+(`conformance-fib-mandelbrot-tier1`, `check-throughput-1k-loc-50ms`,
+`cli-spec-diagnostic-match`), an automated review correctly flagged that
+`scripts/check_roadmap_evidence.rb`'s new evidence IDs only prove CI
+*invokes* the right test/script paths, not that their *content* still
+asserts real behavior. The natural next step was
 to add `validate_evidence` checks reading `scripts/check_frontend_throughput.rb`,
 `tests/conformance.rs`, and `docs/CLI_SPEC.md`/its fixture directly from
 `root` — mirroring how the existing `ci.yml` digest check already reads that

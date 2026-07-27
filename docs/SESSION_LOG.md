@@ -38,10 +38,11 @@ in a prior entry; this entry covers PR-7 only):**
   cites it in a checked box can never pass its own audit. `docs/TESTING.md`
   now documents this stage/activate split as a general rule for adding any
   new evidence identifier, not just a one-off for this PR. Two review
-  findings were fixed before merge: a genuine contradiction between two
-  adjacent `docs/TESTING.md` sentences, and (adjudicated rather than fixed --
-  see below) a gap where the ci.yml digest proves invocation but not the
-  content of the files it invokes.
+  findings were resolved before merge through two different outcomes: a
+  genuine contradiction between two adjacent `docs/TESTING.md` sentences was
+  fixed; a second finding -- a gap where the ci.yml digest proves invocation
+  but not the content of the files it invokes -- was adjudicated via a
+  reasoned review-thread reply rather than fixed with code (see below).
 - [PR #176](https://github.com/rotnov/pycc/pull/176) ("PR-7b", merged at
   `611c4a5`): checked the three remaining boxes citing those IDs, and swept
   every human- and LLM-readable project surface (`docs/ROADMAP.md`'s
