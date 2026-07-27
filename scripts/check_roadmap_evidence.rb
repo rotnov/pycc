@@ -45,6 +45,10 @@ D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
 # D-080: the conformance oracle's CI wiring (PR-6, Task 6) moved onto
 # build-test-coverage and native-build-test without touching the D-014
 # coverage gate's own trusted step prefix or script -- see D-080's text.
+# Staged onto main first as D62's coexisting sibling by #159 (a separate
+# stage PR, required by the pull_request_target audit's base-branch-only
+# checker trust boundary -- see D-080's "Staging note"); this activation
+# commit retires D62 now that the digest below is already authorized.
 D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
   "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
