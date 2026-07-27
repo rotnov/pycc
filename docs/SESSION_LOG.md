@@ -105,8 +105,9 @@ container-state regressions distinguish lazy list and blockquote paragraphs,
 indented paragraph continuations, and five-space list code from inline comments.
 Completed fenced and raw-HTML blocks clear stale lazy-container state.
 Reference-definition regressions cover escaped and multiline labels, the raw
-999-character limit, balanced destinations, multiline titles, and fail-closed
-invalidation or end-of-file state. Negative regressions cover every bypass class.
+999-character limit, balanced destinations through CommonMark's 32-level parenthesis
+limit, rejection at level 33, multiline titles, and fail-closed invalidation or
+end-of-file state. Negative regressions cover every bypass class.
 The code-bearing repair commit `3d3c985d4050b32e210355c78c42778437acdfa5`
 was published only after pinned deep review returned zero findings across all 11
 points; its additional adversarial comparison covered 418 generated Markdown cases

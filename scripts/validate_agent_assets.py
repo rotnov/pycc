@@ -2804,6 +2804,8 @@ def markdown_reference_destination_state(text: str) -> tuple[bool, str | None]:
                     continue
             elif character == "(":
                 depth += 1
+                if depth > 32:
+                    return False, None
             elif character == ")":
                 if depth == 0:
                     return False, None

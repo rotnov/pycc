@@ -784,6 +784,7 @@ class AgentAssetValidationTests(unittest.TestCase):
             (f"[{'x' * 1000}]: /url", "---"),
             ("[" + r"\*" * 500 + "]: /url", "---"),
             ("[foo]: foo)", "---"),
+            ("[foo]: " + "(" * 33 + "url" + ")" * 33, "---"),
             (r"[foo]: foo\ bar", "---"),
             ('[foo]: /url "title\n\nend"', "---"),
         ):
@@ -813,6 +814,7 @@ class AgentAssetValidationTests(unittest.TestCase):
             "[foo\n bar]: /url",
             '[foo]: /url\n  "title"',
             '[foo]: /url "multi\n  line"',
+            "[foo]: " + "(" * 32 + "url" + ")" * 32,
             "[" + r"\*" * 499 + "]: /url",
         ):
             with self.subTest(definition=definition):

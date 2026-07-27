@@ -163,8 +163,9 @@ The parser treats only CommonMark spaces and tabs as blank or fence-closing
 whitespace; Unicode whitespace cannot terminate a hidden block. ATX and Setext H1/H2
 headings both end the active monitoring section, while link-reference definitions
 followed by thematic breaks remain within it, including escaped and multiline labels,
-continued destinations, and valid multiline titles. Invalid empty, nested, oversized,
-or unbalanced definitions and titles containing blank lines remain paragraph text.
+continued destinations, destinations within CommonMark's 32-level parenthesis limit,
+and valid multiline titles. Invalid empty, nested, oversized, over-nested, or
+unbalanced definitions and titles containing blank lines remain paragraph text.
 Unterminated label, destination, or title state at end of file, or later invalidation
 after buffered lines, fails closed at the same reference start. Lazy list and
 blockquote paragraphs retain their container boundary, while indented lazy paragraph
