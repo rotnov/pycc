@@ -28,6 +28,55 @@ never a merge gate.
 
 ---
 
+## 2026-07-27 — Nearly designed a `roadmap-evidence` content check that would have permanently broken the `workflow-policy.yml` audit
+
+**What happened:** while registering the three new `roadmap-evidence` IDs
+PR-7 needed to close v0.1's last three unchecked acceptance-checklist items
+(`conformance-fib-mandelbrot-tier1`, `check-throughput-1k-loc-50ms`,
+`cli-spec-diagnostic-match`), an automated review correctly flagged that
+`scripts/check_roadmap_evidence.rb`'s new evidence IDs only prove CI
+*invokes* the right test/script paths, not that their *content* still
+asserts real behavior. The natural next step was
+to add `validate_evidence` checks reading `scripts/check_frontend_throughput.rb`,
+`tests/conformance.rs`, and `docs/CLI_SPEC.md`/its fixture directly from
+`root` — mirroring how the existing `ci.yml` digest check already reads that
+file from `root`. This was fully drafted before being caught.
+
+**Root cause:** `.github/workflows/workflow-policy.yml`'s `audit` job (the
+`pull_request_target` job that actually runs the checker against PR heads)
+does not check out the PR's full tree. It checks out the *base* branch's
+full tree, then downloads only `docs/ROADMAP.md` and `.github/workflows/*.yml`
+from the PR head via the GitHub API into an isolated `/tmp/pr-policy-input`
+directory, as inert data. Any `validate_evidence` check reading a file
+outside that exact set — `scripts/*`, `tests/*`, any other `docs/*` file —
+would hit `Errno::ENOENT` in that sandbox on *every* PR, not just the one
+introducing the check. Because the new evidence IDs weren't cited by any
+checked box yet, this defect wouldn't have surfaced in the PR that introduced
+it (its own audit would pass, since `evidence_ids` wouldn't include the new
+ID) — it would have surfaced only in the next PR that tried to check a box
+citing it, as a mysterious, permanent audit failure with no obvious
+connection to the real cause.
+
+**What fixed it:** reading `.github/workflows/workflow-policy.yml`'s `audit`
+job step-by-step (not just the two `ruby scripts/check_roadmap_evidence.rb`
+invocation lines already known from prior sessions) before implementing,
+which surfaced the `/tmp/pr-policy-input` provisioning boundary. The fix that
+survived is a documented, deliberate scope decision (reply-and-resolve the
+review thread, tracked as a follow-up task) rather than new code — the only
+sandbox-compatible way to content-verify a file is to embed a `shasum`/diff
+step *inside `ci.yml` itself* (the one file the audit's sandbox does
+provision), matching the pre-existing `PAIRED_PERF_CHECKER_SHA256` pattern.
+
+**Lesson:** before adding any check to `scripts/check_roadmap_evidence.rb`
+(or any script invoked by a `pull_request_target` audit job) that reads a
+file from its `root` argument, first read the calling workflow's *complete*
+file-provisioning step, not just its invocation line — a
+`pull_request_target` audit's sandbox is defined by what it provisions as
+data, and that provisioning is almost always narrower than "the whole repo,"
+even when the checker's own code makes it look like an ordinary filesystem
+read. A check that would break every future PR, not just the one adding it,
+is exactly the kind of defect that won't show up in that PR's own CI run.
+
 ## 2026-07-26 — Re-derived a parallel session's already-planned PR #132 reconciliation from git archaeology instead of reading `SESSION_LOG.md` first
 
 **What happened:** a push to `feat/v0-1-pr5-codegen-depth` was rejected as
