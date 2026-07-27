@@ -15,7 +15,7 @@
 - `cargo doc --workspace --no-deps` must stay clean after any public API change.
 - `--debug` profile only for every fixture/benchmark this PR adds — `--release`/LTO is a v0.2 item (`docs/ROADMAP.md`).
 - Do not touch `benches/check_bench.rs`, its `[[bench]]` entry in the root `Cargo.toml`, or any file the existing `frontend-perf-measure`/`frontend-perf-gate` "Verify exact benchmark revisions" step diffs (`benches`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `rust-toolchain`, `.cargo`, every `crates/**/Cargo.toml`/`build.rs`) unless a task explicitly says to and re-verifies that gate afterward.
-- Record any genuinely-undecided implementation-fork decision as a new `docs/DECISIONS.md` entry (re-check the current highest `D-0NN` ID before picking a number — D-074 was the highest when this plan was first drafted, but a concurrent PR merged to `main` before Task 2 ran and took D-075/D-076 for its own unrelated decisions; this plan was updated in place to D-078/D-079/D-080 after merging that PR into this branch. A second, unrelated concurrent `main` PR later claimed D-081 for an iEvo-lifecycle hardening decision while Task 6's CI fix was resolving a coverage-gate trust-boundary break and claimed D-080 for that fix's own decision; Task 8's originally-reserved D-080 slot is renumbered to D-082 as a result — this PR's actual decisions are D-078/D-079/D-080/D-082, and D-081 belongs to that other PR. Re-verify at execution time regardless and renumber every reference in this plan if the real repo state differs again, exactly like PR-5's own plan had to).
+- Record any genuinely-undecided implementation-fork decision as a new `docs/DECISIONS.md` entry (re-check the current highest `D-0NN` ID before picking a number — D-074 was the highest when this plan was first drafted, but a concurrent PR merged to `main` before Task 2 ran and took D-075/D-076 for its own unrelated decisions; this plan was updated in place to D-078/D-079/D-080 after merging that PR into this branch. A second, unrelated concurrent `main` PR later claimed D-081 for an iEvo-lifecycle hardening decision while Task 6's CI fix was resolving a coverage-gate trust-boundary break and claimed D-080 for that fix's own decision; fixing a real bug an adversarial review found in that same fix (CPython's Windows-only `\n`→`\r\n` stdio translation breaking the byte-for-byte comparison) then claimed D-082. Task 8's originally-reserved D-080 slot is therefore renumbered twice — first to D-082, then to D-083 — this PR's actual decisions are D-078/D-079/D-080/D-082/D-083, and D-081 belongs to that other PR. Re-verify at execution time regardless and renumber every reference in this plan if the real repo state differs again, exactly like PR-5's own plan had to).
 - Every out-of-scope construct still gets an explicit panic or documented gap, never a silently wrong result — this project's standing convention.
 - Follow the existing TDD-per-task discipline: write failing test, verify it fails, implement, verify it passes, full workspace test+clippy+coverage, commit, push, then a docs-only commit flipping that task's plan checkboxes.
 - Known, accepted v0.1 gaps documented in `docs/ROADMAP.md`'s "Language surface" row (bigint/float conversions, negative `int` exponent, float-power domains, `None`-typed parameters, the `bool`→`int` identity loss, `str` leaks) are not bugs — no task in this plan should "fix" them; the fib/mandelbrot fixtures must avoid exercising any of them.
@@ -342,9 +342,31 @@ git commit -m "test: add mandelbrot-ascii conformance fixture diffed against CPy
 **Interfaces:**
 - Consumes: `tests/conformance.rs` (Tasks 4-5) — this task only adds CI plumbing, no new Rust code.
 
+> **Note (post-hoc correction, D-080/D-082):** the steps below originally
+> instructed adding the oracle-setup steps to `build-test-coverage`
+> *before* its own coverage-running steps. That was tried first and is
+> **wrong** — `build-test-coverage` also runs the D-014 100%-coverage gate
+> under `scripts/check_roadmap_evidence.rb`'s security-reviewed
+> `coverage_gate_present?` validation, which checks the coverage job's step
+> prefix (`TRUSTED_COVERAGE_STEPS`) and the coverage step's own script
+> (`COVERAGE_SCRIPT`) byte-for-byte. Inserting new steps before the
+> coverage step, or editing that step's script to expose the oracle inside
+> the isolated `nobody` sandbox, breaks that structural check *and*
+> silently expands a reviewed trust boundary — confirmed the hard way (CI's
+> `Workflow policy` audit rejected it three pushes running). D-080 fixes
+> this by marking `tests/conformance.rs`'s two tests `#[ignore]` by default
+> (costing nothing against the coverage gate, since `tests/` files are
+> already excluded from its denominator per `docs/TESTING.md`'s "Code
+> coverage" section) and moving the oracle setup, plus an explicit
+> `cargo test --workspace -- --include-ignored` step, to *after* the
+> coverage step — a region `coverage_gate_present?` does not constrain,
+> since it only validates the step prefix through and including the
+> coverage step. Steps 1-3 below are corrected to describe that actual,
+> working shape; do not reintroduce the pre-coverage-step placement.
+
 - [ ] **Step 1: Confirm there is no single 5-target matrix to hook into**
 
-Read `.github/workflows/ci.yml`'s `native-build-test` job (the 4-leg matrix: `ubuntu-latest`/x86_64, `ubuntu-24.04-arm`/aarch64, `macos-15-intel`/x86_64, `windows-latest`) and the separate `build-test-coverage` job (`macos-14`/aarch64, the 5th target, which also carries the 100%-coverage gate). Confirm there is no build-artifact caching or reuse between jobs (no `actions/cache`, no cross-job Rust-build artifact upload for these two jobs) — every job installs its own LLVM and runs `cargo build`/`cargo test` from scratch. This means the conformance test must run as an *additional test target inside* each job's existing `cargo test --workspace` invocation (since `tests/conformance.rs` is picked up automatically by `--workspace`), not as a brand-new job (which would mean a 6th from-scratch LLVM install).
+Read `.github/workflows/ci.yml`'s `native-build-test` job (the 4-leg matrix: `ubuntu-latest`/x86_64, `ubuntu-24.04-arm`/aarch64, `macos-15-intel`/x86_64, `windows-latest`) and the separate `build-test-coverage` job (`macos-14`/aarch64, the 5th target, which also carries the D-014 100%-coverage gate under `scripts/check_roadmap_evidence.rb`'s security-reviewed structural validation — read that script's `coverage_gate_present?`, `TRUSTED_COVERAGE_STEPS`, and `COVERAGE_SCRIPT` before touching this job at all). Confirm there is no build-artifact caching or reuse between jobs (no `actions/cache`, no cross-job Rust-build artifact upload for these two jobs) — every job installs its own LLVM and runs `cargo build`/`cargo test` from scratch. This means the conformance test must run as an *additional test target inside* each job's existing `cargo test --workspace` invocation (since `tests/conformance.rs` is picked up automatically by `--workspace`), not as a brand-new job (which would mean a 6th from-scratch LLVM install).
 
 - [ ] **Step 2: Add `actions/setup-python` to `native-build-test`**
 
@@ -354,6 +376,12 @@ In `ci.yml`'s `native-build-test` job, add a step before the `cargo test --works
         uses: actions/setup-python@v5
         with:
           python-version: "3.14.6"
+      - name: Alias python3.14 (Windows lacks a version-suffixed python binary)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          PY_BIN="$(command -v python)"
+          cp "$PY_BIN" "$(dirname "$PY_BIN")/python3.14.exe"
       - name: Verify oracle version
         shell: bash
         run: |
@@ -363,11 +391,15 @@ In `ci.yml`'s `native-build-test` job, add a step before the `cargo test --works
             exit 1
           }
 ```
-Note: on Windows, `actions/setup-python` puts a `python.exe` (not `python3.14`) on `PATH` by default — verify this empirically once this step runs in CI (Step 5's actual CI run), and if `python3.14` isn't directly invokable on the Windows leg, add a small `PATH`/symlink shim step for Windows only (mirroring this file's own existing `if: runner.os == 'Windows'` conditional-step pattern used throughout the LLVM setup) rather than changing `tests/conformance.rs`'s own hardcoded `"python3.14"` lookup, which must stay identical across all 5 targets for the test to mean the same thing everywhere.
+`actions/setup-python` only puts a plain `python.exe` (not `python3.14`) on `PATH` on Windows — the `Alias python3.14` step above copies it to a `python3.14.exe` sibling so `tests/conformance.rs`'s one hardcoded `"python3.14"` lookup keeps working uniformly across all 5 targets, instead of special-casing the Rust lookup itself for one platform. This must run before `Verify oracle version`, since that step checks `python3.14` unconditionally on every OS. Then change the job's existing `cargo test --workspace` step(s) — both the non-Windows and the `--test-threads=1` Windows variant — to add `-- --include-ignored` (the Windows variant becomes `-- --test-threads=1 --include-ignored`), since `tests/conformance.rs`'s two tests are `#[ignore]`d by default and need that flag to actually execute.
 
-- [ ] **Step 3: Add the same steps to `build-test-coverage`**
+- [ ] **Step 3: Add oracle setup to `build-test-coverage`, strictly *after* its coverage step**
 
-Add the identical `actions/setup-python`+verification steps to the `build-test-coverage` job (macos-14), positioned before its own `cargo test`/coverage-running steps, matching Step 2's placement logic.
+In `build-test-coverage`, insert the same `actions/setup-python`+`Verify oracle version` steps (no Windows alias needed here — this job only runs on macos-14) *after* the "Hard coverage gate — 100% lines + regions (D-014)" step, not before it (see this task's leading note above for why). A convenient anchor point is right before the job's own existing `cargo test --workspace` step. Change that step to `cargo test --workspace -- --include-ignored` (rename it to something like "cargo test --workspace (incl. ignored conformance tests, D-078)" for clarity) so the two `#[ignore]`d conformance tests actually run there too, now that the oracle is on `PATH`. Do not touch anything at or before the coverage step itself — its prefix and script must stay byte-for-byte identical to `scripts/check_roadmap_evidence.rb`'s `TRUSTED_COVERAGE_STEPS`/`COVERAGE_SCRIPT`.
+
+- [ ] **Step 3a: Update `scripts/check_roadmap_evidence.rb`'s reviewed-workflow digest**
+
+Any edit to `ci.yml` invalidates `check_roadmap_evidence.rb`'s whole-file `REVIEWED_PERF_CI_WORKFLOW_SHA256S` SHA256 pin — this is unavoidable and expected, not a sign something is wrong. Compute the new digest (`shasum -a 256 .github/workflows/ci.yml`) only after Steps 2-3's edits are final, add it as a new named constant (following the existing `D51_.../D56_.../D62_...` naming convention — name it after whichever decision the change is anchored to), retire the previous constant the same way `D51`/`D56` were retired before it (a "Historical audit-fixture digest. The public policy no longer accepts it." comment, dropped from the active allowlist, kept as a named historical constant), and add a matching `tests/fixtures/<name>-ci.yml` snapshot (an exact copy of the corrected `ci.yml`). Update `scripts/test_check_roadmap_evidence.rb`'s constants and tests to match (renamed active-workflow tests, a new "old digest remains a reviewed audit fixture" test mirroring the `d51`/`d56` retired-fixture pattern, and any literal expected command string that changed, e.g. `"cargo test --workspace"` → `"cargo test --workspace -- --include-ignored"`). Run `ruby scripts/test_check_roadmap_evidence.rb` and `ruby scripts/check_roadmap_evidence.rb` locally before pushing — both must pass.
 
 - [ ] **Step 4: Verify Ruby/other jobs are untouched**
 
@@ -375,12 +407,12 @@ Confirm no other job in `ci.yml` (or any other workflow file) needs this change 
 
 - [ ] **Step 5: Push and watch CI**
 
-Push this branch and confirm via `gh pr checks`/`gh run watch` that both `native-build-test` (all 4 legs) and `build-test-coverage` pick up the new oracle-setup steps and that `tests/conformance.rs`'s two tests pass on every one of the 5 targets. Fix any per-OS oracle-invocation issue found (per Step 2's Windows note) via its own small, targeted diff before continuing.
+Push this branch and confirm via `gh pr checks`/`gh run watch` that both `native-build-test` (all 4 legs) and `build-test-coverage` pick up the new oracle-setup steps, that the `Workflow policy` / `audit` check passes (confirming the coverage gate's trust boundary is genuinely untouched), and that `tests/conformance.rs`'s two tests pass on every one of the 5 targets. Note: on Windows, CPython translates `\n` to `\r\n` in `print()` output even when piped (a stable CPython stdio-layer quirk, not a language-semantics difference) — `tests/conformance.rs::strip_windows_newline_translation` (D-082) already strips this from the oracle's captured stdout before comparing, so this should not need further fixing, but confirm the Windows leg's conformance tests genuinely pass rather than assuming it from the other 4 targets.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add .github/workflows/ci.yml
+git add .github/workflows/ci.yml scripts/check_roadmap_evidence.rb scripts/test_check_roadmap_evidence.rb tests/conformance.rs tests/fixtures/*-ci.yml
 git commit -m "ci: pin CPython 3.14.6 conformance oracle on all 5 Tier-1 targets"
 ```
 
@@ -547,7 +579,7 @@ git commit -m "ci: add pycc check <50ms/1000 LOC absolute throughput floor (D-07
 
 ---
 
-## Task 8: Record the diagnostic-conformance decision (D-082) and close the gap
+## Task 8: Record the diagnostic-conformance decision (D-083) and close the gap
 
 **Files:**
 - Modify: `docs/DECISIONS.md`
@@ -571,18 +603,18 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
 ```
 Note the two real divergences from `docs/CLI_SPEC.md`'s current prose example: (a) the caret label repeats the full message (no short, independent label like `expected \`int\``), and (b) there is no `= help: ...` line (D-043's documented, accepted gap — `render_human`'s own doc comment already says so).
 
-- [ ] **Step 2: Append the D-082 table row**
+- [ ] **Step 2: Append the D-083 table row**
 
 Add to `docs/DECISIONS.md`'s table (after D-079):
 ```markdown
-| D-082 | `docs/CLI_SPEC.md`'s diagnostics-output-contract example is corrected to match `render_human`'s real current output (full-message caret label, no `help:` line) instead of an aspirational format nothing implements yet; a checked-in fixture proves the corrected example byte-for-byte, closing DELIVERY_PLAN.md row 6's third acceptance bullet without growing new diagnostic-rendering scope | accepted |
+| D-083 | `docs/CLI_SPEC.md`'s diagnostics-output-contract example is corrected to match `render_human`'s real current output (full-message caret label, no `help:` line) instead of an aspirational format nothing implements yet; a checked-in fixture proves the corrected example byte-for-byte, closing DELIVERY_PLAN.md row 6's third acceptance bullet without growing new diagnostic-rendering scope | accepted |
 ```
 
-- [ ] **Step 3: Append the D-082 long-form section**
+- [ ] **Step 3: Append the D-083 long-form section**
 
 Insert after D-079's section:
 ```markdown
-## D-082: Correct CLI_SPEC.md's diagnostic example to match reality instead of building new rendering features
+## D-083: Correct CLI_SPEC.md's diagnostic example to match reality instead of building new rendering features
 
 - Status: accepted
 - Context: `docs/DELIVERY_PLAN.md` row 6's third acceptance bullet is "diagnostic output matches CLI_SPEC.md's example byte-for-byte." `docs/CLI_SPEC.md`'s current example shows a short, message-independent caret label (`expected \`int\``) and a populated `= help: did you mean \`int("35")\`?` line -- neither exists in `render_human` today. `crates/pycc_diag/src/lib.rs`'s own `render_human_matches_cli_spec_format` test (already passing) proves the *actual* current output: the caret label duplicates the full diagnostic message, and there is no help line at all, exactly matching D-043's already-accepted, already-documented gap ("`help:` suggestions are never populated"). No fixture anywhere in `tests/diagnostics/` currently proves CLI_SPEC.md's example byte-for-byte, because that example doesn't match anything the compiler actually emits.
@@ -642,7 +674,7 @@ Run: `cargo build --workspace && cargo test --workspace && cargo clippy --worksp
 
 ```bash
 git add docs/DECISIONS.md docs/CLI_SPEC.md tests/diagnostics/cli_spec_example.py tests/diagnostics/cli_spec_example.expected.txt tests/diagnostics_test.rs
-git commit -m "docs+test: correct CLI_SPEC.md's diagnostic example to match reality (D-082), enforce it"
+git commit -m "docs+test: correct CLI_SPEC.md's diagnostic example to match reality (D-083), enforce it"
 ```
 
 ---
@@ -670,7 +702,7 @@ A narrow two-fixture conformance check (fib, mandelbrot-ascii vs. pinned CPython
 
 - [ ] **Step 2: Check `docs/ROADMAP.md`'s "Language surface" row for any now-stale claim**
 
-Read it once more end-to-end; confirm nothing this PR changed (D-078/D-079/D-080/D-082 — D-081 belongs to an unrelated concurrent `main` PR, not this one — plus the corrected CLI_SPEC.md example) contradicts anything it currently says. It shouldn't — this PR added test/CI infrastructure and one docs correction, not new language-surface behavior.
+Read it once more end-to-end; confirm nothing this PR changed (D-078/D-079/D-080/D-082/D-083 — D-081 belongs to an unrelated concurrent `main` PR, not this one — plus the corrected CLI_SPEC.md example) contradicts anything it currently says. It shouldn't — this PR added test/CI infrastructure and one docs correction, not new language-surface behavior.
 
 - [ ] **Step 3: Grep for any other stale reference to this PR's changed state**
 

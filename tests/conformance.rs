@@ -22,6 +22,29 @@ fn oracle_python_bin() -> PathBuf {
     bin
 }
 
+/// CPython's own stdio layer translates `\n` to `\r\n` on Windows even when
+/// stdout is piped/redirected to a child-process capture like `Command::output()`
+/// uses here (`sys.stdout`'s `TextIOWrapper` opens with `newline=None` there;
+/// see CPython's bpo-11990 and bpo-13119, both intentional, stable behavior
+/// since 3.2.4/3.3). `pycc_rt`'s `println!`/`print!`-based `print()` never
+/// performs any such translation on any target. That translation is a
+/// platform-specific quirk of CPython's own C runtime, not part of the
+/// Python language's `print()` semantics, so it is stripped out of the
+/// oracle's output before comparing -- this keeps the assertion checking
+/// actual program-output content, not which OS's libc happened to run the
+/// oracle (D-082).
+fn strip_windows_newline_translation(bytes: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut iter = bytes.into_iter().peekable();
+    while let Some(byte) = iter.next() {
+        if byte == b'\r' && iter.peek() == Some(&b'\n') {
+            continue;
+        }
+        out.push(byte);
+    }
+    out
+}
+
 /// Builds `py_path` with `pycc build --debug` (the default profile), runs
 /// the resulting binary, separately runs the pinned CPython oracle on the
 /// identical source, and returns both stdouts for the caller to diff.
@@ -43,7 +66,22 @@ fn run_conformance_fixture(label: &str, py_path: &Path) -> (Vec<u8>, Vec<u8>) {
         .unwrap();
     assert!(cpython_output.status.success(), "CPython oracle exited non-zero for {label}");
 
-    (pycc_output.stdout, cpython_output.stdout)
+    (
+        pycc_output.stdout,
+        strip_windows_newline_translation(cpython_output.stdout),
+    )
+}
+
+#[test]
+fn strip_windows_newline_translation_removes_cr_before_lf_only() {
+    let input = b"line one\r\nline two\nline three\r\n".to_vec();
+    let expected = b"line one\nline two\nline three\n".to_vec();
+    assert_eq!(strip_windows_newline_translation(input), expected);
+
+    // A lone `\r` not immediately followed by `\n` is not CPython's Windows
+    // newline translation and must be left untouched.
+    let lone_cr = b"a\rb\n".to_vec();
+    assert_eq!(strip_windows_newline_translation(lone_cr.clone()), lone_cr);
 }
 
 // Ignored by default: this test shells out to a real "python3.14" oracle,
