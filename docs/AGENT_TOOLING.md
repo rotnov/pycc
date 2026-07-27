@@ -151,13 +151,14 @@ out-of-section copies are ignored or rejected so retired text cannot satisfy the
 gate. Fence recognition and state take precedence over comment-like literals,
 indentation uses CommonMark tab stops, leading HTML-comment blocks remain non-policy,
 and an invalid backtick info string cannot hide the active section. List-contained
-fences must open and close within the container's indentation range and end at any
-real peer or outer block boundary; list-indented code, escaped comment markers, and
-comment-like inline code cannot change parser state. Inline comment state cannot
+fences, including openers on list continuation lines, retain their complete nested
+container indentation and end at any real peer or outer block boundary; list-indented
+code, escaped comment markers, and comment-like inline code cannot change parser state.
+Inline comment state cannot
 cross a blank or interrupting block boundary. Type-7 HTML block detection
 distinguishes true CommonMark block boundaries from non-interrupting list-like
 paragraph lines, preserves comment-only list content for block classification, and
-recognizes list-contained block comments and tab-separated thematic breaks. The
+gives spaced or tabbed thematic breaks precedence over structural list tracking. The
 container/comment classifier applies recursively through nested lists and blockquotes.
 The parser treats only CommonMark spaces and tabs as blank or fence-closing
 whitespace; Unicode whitespace cannot terminate a hidden block. ATX and Setext H1/H2

@@ -73,7 +73,7 @@ evidence only and must not become recurring polling targets.
 including hard coverage and `ci-gate`, and received a clean user-requested
 GitHub Codex review with no inline comments or unresolved threads. Those checks
 do not authorize the integration head after `main` advanced. The integrated
-repair passes all 296 Python discovery tests (four platform-only skips),
+repair passes all 297 Python discovery tests (four platform-only skips),
 including a warnings-as-errors run, both agent validators, Ruff, 100
 roadmap-policy tests with 434 assertions,
 roadmap evidence, `cargo fmt`, workspace build and all 581 Rust tests, clippy
@@ -103,7 +103,9 @@ regressions as well; Setext and empty ATX H1/H2 headings terminate the active
 section without misclassifying link-reference definitions. The final
 container-state regressions distinguish lazy list and blockquote paragraphs,
 indented paragraph continuations, and five-space list code from inline comments.
-Completed fenced and raw-HTML blocks clear stale lazy-container state.
+Completed fenced and raw-HTML blocks clear stale lazy-container state, while fences
+opened on list continuation lines retain each active list indentation boundary.
+Thematic breaks take precedence over otherwise list-like marker sequences.
 Reference-definition regressions cover escaped and multiline labels, the raw
 999-character limit, balanced destinations through CommonMark's 32-level parenthesis
 limit, rejection at level 33, multiline titles, and fail-closed invalidation or

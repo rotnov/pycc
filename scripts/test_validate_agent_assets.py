@@ -986,6 +986,97 @@ class AgentAssetValidationTests(unittest.TestCase):
                     failures,
                 )
 
+    def test_list_continuation_fence_keeps_its_container_boundary(self) -> None:
+        bullets = "\n".join(
+            f"- {instruction}"
+            for instruction in validator.REQUIRED_LIVE_MONITORING_BULLETS
+        )
+        for prefix in (
+            "- item\n  ```text\n```\n",
+            "1. item\n   ```text\n```\n",
+            "- item\n\n  ```text\n```\n",
+            "- - item\n    ```text\n  ```\n```\n",
+            "-\n  ```text\n```\n",
+            "*\n  ```text\n```\n",
+            "+\n  ```text\n```\n",
+            "1.\n   ```text\n```\n",
+            "- \n  ```text\n```\n",
+            "- # heading\n  ```text\n```\n",
+            "- # heading\n\n  ```text\n```\n",
+            "- <!--x-->\n  ```text\n```\n",
+            "- <!--x-->\n\n  ```text\n```\n",
+            "- <div>\n\n  ```text\n```\n",
+            "-     code\n\n  ```text\n```\n",
+        ):
+            with self.subTest(prefix=prefix):
+                agents_text = (
+                    f"{validator.LIVE_MONITORING_HEADING}\n\n"
+                    f"{prefix}"
+                    f"{bullets}\n"
+                )
+                failures = self.instruction_parity_failures(
+                    "@AGENTS.md\n",
+                    agents_text=agents_text,
+                )
+                self.assertIn(
+                    "AGENTS.md: missing required live-monitoring instruction: "
+                    f"{validator.REQUIRED_LIVE_MONITORING_BULLETS[0]}",
+                    failures,
+                )
+
+        for prefix in (
+            "-\n\n  ```text\n```\n",
+            "- \n\n  ```text\n```\n",
+            "1.\n\n   ```text\n```\n",
+        ):
+            with self.subTest(empty_prefix=prefix):
+                agents_text = prefix + self.valid_agent_instructions()
+                self.assertEqual(
+                    self.instruction_parity_failures(
+                        "@AGENTS.md\n",
+                        agents_text=agents_text,
+                    ),
+                    [],
+                )
+
+        for thematic_break in (
+            "- - -",
+            "- --",
+            "- ---",
+            "* * *",
+            "* \t* \t*",
+            "  - - -",
+        ):
+            with self.subTest(thematic_break=repr(thematic_break)):
+                active = (
+                    f"{validator.LIVE_MONITORING_HEADING}\n"
+                    f"{thematic_break}\n"
+                    "  ```text\n"
+                    "```\n"
+                    f"{bullets}\n"
+                )
+                self.assertEqual(
+                    self.instruction_parity_failures(
+                        "@AGENTS.md\n",
+                        agents_text=active,
+                    ),
+                    [],
+                )
+                hidden = active.replace(
+                    "```\n" + bullets,
+                    "```\n```\n" + bullets,
+                    1,
+                )
+                failures = self.instruction_parity_failures(
+                    "@AGENTS.md\n",
+                    agents_text=hidden,
+                )
+                self.assertIn(
+                    "AGENTS.md: missing required live-monitoring instruction: "
+                    f"{validator.REQUIRED_LIVE_MONITORING_BULLETS[0]}",
+                    failures,
+                )
+
     def test_list_fence_ends_at_a_blank_container_boundary(self) -> None:
         for separator in ("", "\n"):
             with self.subTest(separator=repr(separator)):

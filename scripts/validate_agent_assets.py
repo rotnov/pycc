@@ -2416,8 +2416,16 @@ def markdown_list_item_starts_block(
     *,
     at_block_start: bool,
 ) -> bool:
+    compact = re.sub(r"[ \t]", "", content)
+    if (
+        len(compact) >= 3
+        and compact[0] in "*-_"
+        and set(compact) == {compact[0]}
+    ):
+        return False
     list_item = re.match(
-        r"(?P<marker>[-+*]|[0-9]{1,9}[.)])(?P<padding>[ \t]+)(?P<body>.*)",
+        r"(?P<marker>[-+*]|[0-9]{1,9}[.)])"
+        r"(?:(?P<padding>[ \t]+)(?P<body>.*)|$)",
         content,
     )
     if list_item is None:
@@ -2425,7 +2433,7 @@ def markdown_list_item_starts_block(
     if at_block_start:
         return True
     marker = list_item.group("marker")
-    body = list_item.group("body")
+    body = list_item.group("body") or ""
     return not markdown_blank(body) and (
         not marker[0].isdigit() or marker[:-1] == "1"
     )
@@ -2445,6 +2453,53 @@ def markdown_list_item_has_lazy_paragraph(content: str) -> bool:
     )
     body = list_item.group("body")
     return padding_columns <= 4 and markdown_container_body_has_lazy_paragraph(body)
+
+
+def markdown_list_item_structure(
+    line: str,
+) -> tuple[tuple[int, ...], int | None]:
+    columns, content_start = markdown_indent(line)
+    if columns > 3:
+        return (), None
+    content = line[content_start:]
+    compact = re.sub(r"[ \t]", "", content)
+    if (
+        len(compact) >= 3
+        and compact[0] in "*-_"
+        and set(compact) == {compact[0]}
+    ):
+        return (), None
+    list_item = re.match(
+        r"(?P<marker>[-+*]|[0-9]{1,9}[.)])"
+        r"(?:(?P<padding>[ \t]+)(?P<body>.*)|$)",
+        content,
+    )
+    if list_item is None:
+        return (), None
+    marker_end = list_item.end("marker")
+    padding = list_item.group("padding")
+    if padding is None:
+        item_indent = columns + markdown_columns(content[:marker_end]) + 1
+        body = ""
+    else:
+        body_start = list_item.start("body")
+        padding_columns = markdown_columns(content[:body_start]) - markdown_columns(
+            content[:marker_end]
+        )
+        if padding_columns > 4:
+            item_indent = columns + markdown_columns(content[:marker_end]) + 1
+            body = content[marker_end + 1 :]
+        else:
+            item_indent = columns + markdown_columns(content[:body_start])
+            body = list_item.group("body") or ""
+    nested, nested_empty_indent = markdown_list_item_structure(body)
+    indents = (item_indent,) + tuple(item_indent + indent for indent in nested)
+    empty_indent = (
+        item_indent + nested_empty_indent
+        if nested_empty_indent is not None
+        else item_indent if markdown_blank(body) else None
+    )
+    return indents, empty_indent
 
 
 def markdown_container_body_has_lazy_paragraph(body: str) -> bool:
@@ -2501,6 +2556,8 @@ def visible_markdown_lines(text: str) -> list[str]:
     at_block_start = True
     lazy_container_active = False
     lazy_container_saw_blank = False
+    lazy_list_indents: tuple[int, ...] = ()
+    empty_list_indent: int | None = None
 
     for raw_line in text.split("\n"):
         if fence_character is not None:
@@ -2511,12 +2568,17 @@ def visible_markdown_lines(text: str) -> list[str]:
                 and columns < fence_close_min_indent
             )
             if container_ended:
+                lazy_list_indents = tuple(
+                    indent for indent in lazy_list_indents if indent <= columns
+                )
                 fence_character = None
                 fence_length = 0
                 fence_close_min_indent = 0
                 fence_close_indent = 3
                 fence_is_list_nested = False
                 at_block_start = True
+                lazy_container_active = False
+                lazy_container_saw_blank = False
             else:
                 fence_closed = False
                 fence_match = markdown_fence(
@@ -2581,11 +2643,60 @@ def visible_markdown_lines(text: str) -> list[str]:
         if markdown_blank(raw_line):
             visible_lines.append("")
             at_block_start = True
+            if empty_list_indent is not None:
+                lazy_list_indents = tuple(
+                    indent
+                    for indent in lazy_list_indents
+                    if indent < empty_list_indent
+                )
+                empty_list_indent = None
             if lazy_container_active:
                 lazy_container_saw_blank = True
             continue
 
         columns, content_start = markdown_indent(raw_line)
+        if empty_list_indent is not None:
+            if columns < empty_list_indent:
+                lazy_list_indents = tuple(
+                    indent for indent in lazy_list_indents if indent <= columns
+                )
+            empty_list_indent = None
+        if (
+            lazy_list_indents
+            and (not lazy_container_active or lazy_container_saw_blank)
+            and columns < lazy_list_indents[0]
+        ):
+            lazy_list_indents = ()
+
+        continuation_fence_match: tuple[str, str, int] | None = None
+        continuation_fence_indent = 0
+        for indent in reversed(lazy_list_indents):
+            candidate = markdown_fence(
+                raw_line,
+                opening=True,
+                min_indent=indent,
+                max_indent=indent + 3,
+            )
+            if candidate is not None:
+                continuation_fence_match = candidate
+                continuation_fence_indent = indent
+                break
+        if continuation_fence_match is not None:
+            marker, _, _ = continuation_fence_match
+            fence_character = marker[0]
+            fence_length = len(marker)
+            fence_close_min_indent = continuation_fence_indent
+            fence_close_indent = continuation_fence_indent + 3
+            fence_is_list_nested = True
+            lazy_list_indents = tuple(
+                indent
+                for indent in lazy_list_indents
+                if indent <= continuation_fence_indent
+            )
+            at_block_start = False
+            lazy_container_active = False
+            lazy_container_saw_blank = False
+            continue
         if columns >= 4:
             continue
 
@@ -2600,6 +2711,7 @@ def visible_markdown_lines(text: str) -> list[str]:
             at_block_start = False
             lazy_container_active = False
             lazy_container_saw_blank = False
+            lazy_list_indents = ()
             continue
         list_fence_match = markdown_list_fence(
             raw_line,
@@ -2612,6 +2724,14 @@ def visible_markdown_lines(text: str) -> list[str]:
             fence_close_min_indent = marker_column
             fence_close_indent = marker_column + 3
             fence_is_list_nested = True
+            lazy_list_indents = (
+                *(
+                    indent
+                    for indent in lazy_list_indents
+                    if indent <= columns
+                ),
+                marker_column,
+            )
             at_block_start = False
             lazy_container_active = False
             lazy_container_saw_blank = False
@@ -2624,6 +2744,9 @@ def visible_markdown_lines(text: str) -> list[str]:
                 nested = nested[1:]
             lazy_container_active = markdown_container_body_has_lazy_paragraph(nested)
             lazy_container_saw_blank = False
+            lazy_list_indents = tuple(
+                indent for indent in lazy_list_indents if indent <= columns
+            )
             continue
         if content.startswith("<!--"):
             if "-->" not in raw_line[content_start + 4 :]:
@@ -2632,6 +2755,9 @@ def visible_markdown_lines(text: str) -> list[str]:
             at_block_start = True
             lazy_container_active = False
             lazy_container_saw_blank = False
+            lazy_list_indents = tuple(
+                indent for indent in lazy_list_indents if indent <= columns
+            )
             continue
         html_block = markdown_html_block_start(
             content,
@@ -2648,6 +2774,9 @@ def visible_markdown_lines(text: str) -> list[str]:
             at_block_start = not in_html_block
             lazy_container_active = False
             lazy_container_saw_blank = False
+            lazy_list_indents = tuple(
+                indent for indent in lazy_list_indents if indent <= columns
+            )
             continue
 
         visible_parts: list[str] = []
@@ -2697,11 +2826,25 @@ def visible_markdown_lines(text: str) -> list[str]:
         if line_started_list:
             lazy_container_active = markdown_list_item_has_lazy_paragraph(content)
             lazy_container_saw_blank = False
+            new_list_indents, empty_list_indent = markdown_list_item_structure(
+                raw_line
+            )
+            lazy_list_indents = (
+                *(
+                    indent
+                    for indent in lazy_list_indents
+                    if indent <= columns
+                ),
+                *new_list_indents,
+            )
         elif lazy_container_active and (
             lazy_container_saw_blank or line_ended_paragraph
         ):
             lazy_container_active = False
             lazy_container_saw_blank = False
+            lazy_list_indents = tuple(
+                indent for indent in lazy_list_indents if indent <= columns
+            )
         at_block_start = line_ended_paragraph
 
     return visible_lines
