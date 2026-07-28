@@ -51,7 +51,7 @@ directory once project mode exists.
 ## Key flags
 
 ```
---release           optimizations on (LTO, RC elision aggressive), asserts kept per config
+--release           LLVM's O3-equivalent whole-module optimization pipeline (D-090); no explicit flag or neighboring pycc.toml `opt = "release"` default builds debug (unoptimized). True cross-file LTO awaits v0.4's multi-file support (one module per compilation today); aggressive RC elision (v0.5's `pycc_own`) and per-config asserts are not implemented yet.
 --target TRIPLE     cross-compile: currently proven same-OS/cross-arch only (e.g. macOS x64⟷arm64, D-026); cross-OS targets not yet supported
 --emit mir|llvm-ir|obj|asm
 --int hybrid|native|bigint    int repr override (default hybrid, D-001) — native = documented CPython deviation

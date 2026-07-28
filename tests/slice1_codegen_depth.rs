@@ -29,7 +29,7 @@ fn build_and_run(label: &str, source: &str) -> std::process::Output {
 fn compile_mir(label: &str, mir: &MirModule) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("pycc_slice1_mir_{label}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    pycc_codegen::compile_to_object(mir, &dir.join(format!("{label}.o")), None)
+    pycc_codegen::compile_to_object(mir, &dir.join(format!("{label}.o")), None, false)
 }
 
 #[test]

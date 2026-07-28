@@ -11,7 +11,12 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Build { path, out, target } => match try_build(&path, &out, target.as_deref()) {
+        Command::Build {
+            path,
+            out,
+            target,
+            release,
+        } => match try_build(&path, &out, target.as_deref(), release) {
             Ok(()) => ExitCode::SUCCESS,
             Err(code) => code,
         },
@@ -83,14 +88,21 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
 /// passes this, since running a cross-compiled binary on this host makes
 /// no sense). `Some(triple)` cross-compiles -- see `find_pycc_rt_lib_dir`
 /// for what that requires to actually be available.
-fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode> {
+///
+/// `release`: the explicit `--release` CLI flag's value (`run` has no such
+/// flag yet -- CLI_SPEC.md doesn't document one for it -- so it always
+/// passes `false` here). An explicit `true` always wins;
+/// `resolve_release_flag` below is what lets a neighboring `pycc.toml`'s
+/// `[build] opt = "release"` still take effect when this is `false`.
+fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Result<(), ExitCode> {
     let path = Path::new(path);
+    let release = resolve_release_flag(release, path);
     let typed_hir = resolve_frontend(path)
         .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
     let mir = pycc_mir::build(&typed_hir);
 
     let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
-    pycc_codegen::compile_to_object(&mir, &obj_path, target).map_err(|e| {
+    pycc_codegen::compile_to_object(&mir, &obj_path, target, release).map_err(|e| {
         eprintln!("error: codegen failed: {e}");
         ExitCode::from(1)
     })?;
@@ -116,6 +128,38 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         Ok(())
     } else {
         Err(ExitCode::from(1))
+    }
+}
+
+/// Resolves `try_build`'s effective release/debug profile. An explicit
+/// `--release` (`explicit_release: true`) always wins outright -- this is
+/// not project-mode directory resolution (`docs/CLI_SPEC.md`'s deferred
+/// "PATH = ... project directory" case), just a narrow default-profile
+/// consumption point (this PR's plan, Task 3 Step 6a, moved here from
+/// Task 2's original Step 8 once this task's own `release` field existed
+/// for it to combine with).
+///
+/// Otherwise, this looks for a `pycc.toml` next to `source_path` and uses
+/// its `[build] opt == "release"` as the default. Every other outcome --
+/// no `pycc.toml` there, one that fails to parse (`project_config::parse`
+/// already rejects malformed TOML and any non-"3.14" `python`), or a
+/// `[build] opt` value other than `"release"` (including no `[build]`
+/// section at all, whose `opt` defaults to `None`) -- falls back to
+/// `false`. A malformed neighboring `pycc.toml` must not abort an
+/// otherwise-valid build over an optional default it doesn't even need.
+fn resolve_release_flag(explicit_release: bool, source_path: &Path) -> bool {
+    if explicit_release {
+        return true;
+    }
+    let Some(dir) = source_path.parent() else {
+        return false;
+    };
+    let Ok(contents) = std::fs::read_to_string(dir.join("pycc.toml")) else {
+        return false;
+    };
+    match project_config::parse(&contents) {
+        Ok(config) => config.build.opt.as_deref() == Some("release"),
+        Err(_) => false,
     }
 }
 
@@ -324,6 +368,7 @@ fn run(path: &str) -> ExitCode {
         path,
         out.to_str().expect("temp dir path should be valid UTF-8"),
         None,
+        false,
     ) {
         return code;
     }
@@ -512,5 +557,105 @@ mod init_tests {
 
         let err = init(Some("irrelevant"), &dir).unwrap_err();
         assert!(!err.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod release_flag_tests {
+    use super::*;
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pycc_main_release_flag_{label}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_explicit_release_flag_always_wins() {
+        // True regardless of the source path or any neighboring file --
+        // an explicit `--release` never needs a `pycc.toml` to exist at all.
+        assert!(resolve_release_flag(true, Path::new("/does/not/exist.py")));
+    }
+
+    #[test]
+    fn a_source_path_with_no_parent_falls_back_to_false() {
+        // `Path::new("").parent()` is documented to return `None` on every
+        // platform (an empty path has no components at all) -- the one
+        // input that reliably exercises this function's `None` branch
+        // without relying on any real filesystem root.
+        assert!(!resolve_release_flag(false, Path::new("")));
+    }
+
+    #[test]
+    fn no_neighboring_pycc_toml_falls_back_to_false() {
+        let dir = temp_dir("no_toml");
+        let source_path = dir.join("main.py");
+
+        assert!(!resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_malformed_neighboring_pycc_toml_falls_back_to_false_instead_of_aborting() {
+        // A build must not fail merely because an optional default it
+        // doesn't even need happens to be unreadable.
+        let dir = temp_dir("malformed_toml");
+        std::fs::write(dir.join("pycc.toml"), "this is not [valid toml").unwrap();
+        let source_path = dir.join("main.py");
+
+        assert!(!resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_neighboring_pycc_toml_with_a_non_release_opt_falls_back_to_false() {
+        let dir = temp_dir("debug_opt");
+        std::fs::write(
+            dir.join("pycc.toml"),
+            "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
+             [build]\nopt = \"debug\"\n",
+        )
+        .unwrap();
+        let source_path = dir.join("main.py");
+
+        assert!(!resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_neighboring_pycc_toml_with_no_build_section_falls_back_to_false() {
+        let dir = temp_dir("no_build_section");
+        std::fs::write(
+            dir.join("pycc.toml"),
+            "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n",
+        )
+        .unwrap();
+        let source_path = dir.join("main.py");
+
+        assert!(!resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_neighboring_pycc_toml_with_a_release_opt_becomes_the_default() {
+        let dir = temp_dir("release_opt");
+        std::fs::write(
+            dir.join("pycc.toml"),
+            "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
+             [build]\nopt = \"release\"\n",
+        )
+        .unwrap();
+        let source_path = dir.join("main.py");
+
+        assert!(resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

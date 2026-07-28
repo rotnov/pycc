@@ -28,6 +28,51 @@ never a merge gate.
 
 ---
 
+## 2026-07-28 — Linked-binary size is not a reliable "did O3 actually run" proxy at the CLI level
+
+**What happened:** while writing PR-8 Task 3's end-to-end test for the
+`pycc.toml` release-profile default (`tests/pycc_toml_release_default.rs`),
+the first draft compared the *final linked binary's* file size between a
+plain build and one driven by a neighboring `pycc.toml`'s
+`[build] opt = "release"`, mirroring `pycc_codegen`'s own
+`release_mode_actually_runs_llvm_optimization_passes` unit test (which
+correctly compares raw *object-file* bytes). A negative control (two plain
+builds of identical source, expected equal length) initially "passed," but
+so did the positive assertion even under a deliberately broken stub that
+ignored `pycc.toml` entirely — the proxy had no real signal in either
+direction.
+
+**Root cause:** two compounding effects, found by direct empirical
+bisection (equalizing string lengths, then explicit `--release` vs. plain
+debug in the same directory): (1) every scenario directory's name and
+`-o` output filename differed in *string length* across test scenarios,
+and some embedded-path mechanism in the linked Mach-O output (plausibly
+OSO/STAB debug-map entries or similar) shifts final file size by
+approximately that same character-count delta — a confound unrelated to
+optimization entirely; (2) once path lengths were held equal, `--release`
+and plain debug builds of the same tiny compute loop produced
+byte-identical linked output, because the statically-linked `pycc_rt`
+runtime (~1.6MB) dominates total size and Mach-O segments pad to fixed
+alignment boundaries that absorb a few-hundred-byte `.text` delta from
+unrolling a short loop.
+
+**What fixed it:** dropped the binary-size assertion from the CLI-level
+test entirely. The end-to-end test now asserts only functional success
+(exit 0, correct stdout) through the real relative-path/`current_dir`
+route, which is the part not already covered by unit tests. The
+optimization-actually-ran claim stays proven where the effect is real and
+measurable: `pycc_codegen`'s own unit test comparing raw object-file
+bytes for the identical MIR.
+
+**Lesson:** a linked executable's file size is not a trustworthy proxy for
+"did the optimizer run" once a large static runtime and OS-level segment
+alignment are in the picture — prove optimization effects at the
+smallest artifact where they're real (the object file, not the final
+binary), and never compare test-scenario file sizes across paths/names of
+different lengths without first confirming a negative control that
+actually can fail (a control that "passes" under a deliberately broken
+implementation is not a control).
+
 ## 2026-07-27 — Nearly designed a `roadmap-evidence` content check that would have permanently broken the `workflow-policy.yml` audit
 
 **What happened:** while registering the three new `roadmap-evidence` IDs
