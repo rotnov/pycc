@@ -17,7 +17,7 @@
 - Record any genuinely-undecided implementation-fork decision as a new `docs/DECISIONS.md` entry. Re-check the current highest `D-0NN` ID in the actual file before picking a number — at the time this plan was drafted, D-087 was the last *merged* decision, with D-088 and D-089 open as accepted-but-unmerged PRs (#184, #185); by the time Task 1 runs, verify via `git log`/`gh pr view` whether those have merged (and whether a concurrent `main` PR claimed a number in between, exactly like PR-5's and PR-6's own plans had to handle) before committing to "D-090" as this plan assumes.
 - Every out-of-scope construct still gets an explicit panic or documented gap, never a silently wrong result — this project's standing convention.
 - Follow the existing TDD-per-task discipline: write failing test, verify it fails, implement, verify it passes, full workspace test+clippy+coverage, commit, push, then a docs-only commit flipping that task's plan checkboxes.
-- `pycc.toml`'s full project-mode directory resolution (`docs/CLI_SPEC.md`: "PATH = file or project directory... once project mode exists") remains explicitly deferred — this PR gives `pycc.toml` real parsing, validation, `pycc init` scaffolding, and a narrow consumption point (Task 2's Step 8), not full directory-based project resolution.
+- `pycc.toml`'s full project-mode directory resolution (`docs/CLI_SPEC.md`: "PATH = file or project directory... once project mode exists") remains explicitly deferred — this PR gives `pycc.toml` real parsing, validation, `pycc init` scaffolding, and a narrow consumption point (Task 3's Step 6a — moved from an original Task 2 Step 8 that turned out to depend on Task 3's own `--release` flag; see Task 2's corrected text), not full directory-based project resolution.
 - Known, accepted v0.1 gaps documented in `docs/ROADMAP.md`'s "Language surface" row are not bugs — the nbody fixture (Task 5) must avoid exercising any of them (no bigint/float mixing, no negative exponents, stay within CPython's non-scientific float-formatting range).
 
 ---
@@ -282,9 +282,7 @@ Expected: all PASS (the four parse-related tests from Step 1, plus `scaffold_wri
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings` (expect clean) and `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` (expect pass — Step 1's `rejects_malformed_toml_syntax` test already covers the `toml::from_str` error branch, so `.map_err(...)` is not a dead line; double check no other branch in `parse`/`scaffold` is missed).
 
-- [ ] **Step 8: Give `pycc.toml` a narrow, real consumption point in `pycc build`**
-
-Write a failing test proving that `pycc build` without an explicit `--release` flag, given a source file whose containing directory also has a `pycc.toml` with `[build] opt = "release"`, still builds in the release profile (Task 3 must land first for `--release`'s actual effect to be observable — if this task is executed before Task 3, write the test now and mark it pending/ignored with a comment citing Task 3, then un-ignore it once Task 3's flag exists). The consumption logic in `try_build` (`src/main.rs`): after resolving `path`, check for a `pycc.toml` in the same directory; if present and parses successfully, and no explicit `--release` was passed, use its `build.opt` as the default. An explicit CLI flag always overrides the file. This is NOT full project-mode directory resolution (`docs/CLI_SPEC.md`'s deferred "PATH = ... project directory" case) — it only reads a neighboring file's default, and only for the optimization profile.
+**Step 8 moved to Task 3 (corrected after Task 2's actual execution — see below).** The plan originally placed "give `pycc.toml` a narrow, real consumption point in `pycc build`" here, with a contingency for running Task 2 before Task 3 ("write the test now and mark it pending/ignored... then un-ignore it once Task 3's flag exists"). That contingency is wrong: this repo's CI (`.github/workflows/ci.yml`) runs `cargo test --workspace -- --include-ignored` unconditionally in required jobs, with no test-name filter, so an `#[ignore]`d placeholder test for not-yet-existing `--release` behavior would execute and fail there, not skip. Separately, the consumption logic as originally worded ("if... no explicit `--release` was passed") presupposes the `release` CLI field Task 3 alone introduces — Task 2's own Interfaces section says cli.rs needs no signature change, which is incompatible with implementing this step's check. Both defects were only discoverable once Task 2 actually ran. The entire consumption point (reading a neighboring `pycc.toml`'s `build.opt`, falling back to it only when `--release` is absent) is now Task 3's Step 6a below, since Task 3 is what actually introduces the `release` field this logic depends on.
 
 - [ ] **Step 9: Commit**
 
@@ -299,13 +297,13 @@ git commit -m "Add pycc.toml parsing, pycc init scaffolding, and a narrow defaul
 
 **Files:**
 - Modify: `src/cli.rs` (`Command::Build` gains a `#[arg(long)] release: bool` field)
-- Modify: `src/main.rs` (thread `release` through `try_build` into `compile_to_object`)
+- Modify: `src/main.rs` (thread `release` through `try_build` into `compile_to_object`; Step 6a adds the `pycc.toml` consumption point using `project_config::parse`, already available from Task 2)
 - Modify: `crates/pycc_codegen/src/lib.rs` (`compile_to_object`'s signature and the hardcoded `OptimizationLevel::None`)
 - Modify: `crates/pycc_codegen/Cargo.toml` (none expected — `inkwell`'s `passes` module is already part of the existing `inkwell = { version = "0.9", ... }` dependency; confirm via `cargo doc -p inkwell --no-deps` before assuming no manifest change is needed)
 
 **Interfaces:**
 - Consumes: nothing from Task 2 directly (independent of `pycc.toml`'s existence — an explicit `--release` flag must work even with no `pycc.toml` present).
-- Produces: `pycc_codegen::compile_to_object(mir: &MirModule, output_path: &Path, target_triple: Option<&str>, release: bool) -> Result<(), String>` — Task 2 Step 8 and Task 5's benchmark harness both call this with `release: bool` from here on.
+- Produces: `pycc_codegen::compile_to_object(mir: &MirModule, output_path: &Path, target_triple: Option<&str>, release: bool) -> Result<(), String>` — this task's own new Step 6a (the `pycc.toml` consumption point, moved here from Task 2's original Step 8 — see Task 2's corrected text) and Task 5's benchmark harness both call this with `release: bool` from here on.
 
 - [ ] **Step 1: Re-verify the inkwell API this task depends on**
 
@@ -402,7 +400,11 @@ Build {
     release: bool,
 },
 ```
-In `src/main.rs`'s `main()` match arm and `try_build`'s signature, thread `release: bool` through to the `compile_to_object` call (combining with Task 2 Step 8's `pycc.toml`-derived default: explicit `--release` always wins; absent the flag, fall back to a neighboring `pycc.toml`'s `build.opt == "release"`; absent both, `false`).
+In `src/main.rs`'s `main()` match arm and `try_build`'s signature, thread `release: bool` through to the `compile_to_object` call. An explicit `--release` flag always wins; when absent, Step 6a below resolves the default.
+
+- [ ] **Step 6a: `pycc.toml` consumption point (moved here from Task 2's original Step 8)**
+
+Write a failing test proving that `pycc build` without an explicit `--release` flag, given a source file whose containing directory also has a `pycc.toml` with `[build] opt = "release"`, still builds in the release profile. The consumption logic in `try_build` (`src/main.rs`): after resolving `path` and before calling `compile_to_object`, check for a `pycc.toml` in the same directory as the source file; if present and it parses successfully via `project_config::parse`, and no explicit `--release` was passed, use its `build.opt == "release"` as the default (any other `build.opt` value, or a `pycc.toml` that fails to parse, or no `pycc.toml` at all, all fall back to `false` — a malformed neighboring `pycc.toml` must not abort an otherwise-valid build over an optional default it doesn't need). An explicit CLI flag always overrides the file. This is NOT full project-mode directory resolution (`docs/CLI_SPEC.md`'s deferred "PATH = ... project directory" case) — it only reads a neighboring file's default, and only for the optimization profile.
 
 - [ ] **Step 7: Run tests to verify they pass**
 
