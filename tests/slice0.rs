@@ -231,8 +231,14 @@ fn init_scaffolds_pycc_toml_and_main_py_in_the_current_directory() {
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("Created pycc.toml and src/main.py"));
 
+    // A substring check on the raw name (rather than an exact
+    // `name = "..."` slice) avoids coupling this end-to-end test to the
+    // `toml` crate's own quote-style/spacing choice for serialized output
+    // -- `src/project_config.rs`'s own unit tests instead round-trip
+    // through `parse`, which this integration-test binary can't reach
+    // directly (no `[lib]` target to link against).
     let toml_contents = std::fs::read_to_string(dir.join("pycc.toml")).unwrap();
-    assert!(toml_contents.contains("name = \"e2e_init_project\""));
+    assert!(toml_contents.contains("e2e_init_project"));
     assert!(std::fs::read_to_string(dir.join("src").join("main.py"))
         .unwrap()
         .contains("def main"));
