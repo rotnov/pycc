@@ -495,16 +495,22 @@ mod init_tests {
 
     #[test]
     fn reports_the_scaffold_error_when_the_target_directory_does_not_exist() {
-        // A path ending in ".." both has no `file_name()` (irrelevant here
-        // since `name` is explicit) and, more importantly, never exists on
-        // any platform -- `std::fs::write` inside `scaffold` fails with a
-        // portable `NotFound` regardless of the test runner's OS or
-        // privilege level, unlike a permission-based approach (e.g.
-        // targeting a filesystem root), which is not reliably unwritable
-        // across every Tier-1 target's CI runner (verified empirically:
-        // writing here returns `Os { code: 2, kind: NotFound, .. }`).
-        let dir = Path::new("/pycc-nonexistent-parent-for-init-test-xyz/..");
-        let err = init(Some("irrelevant"), dir).unwrap_err();
+        // `dir` simply never exists (and is never created), so
+        // `std::fs::write` inside `scaffold` fails because its immediate
+        // parent doesn't exist -- a plain `NotFound` on every Tier-1
+        // platform, independent of any `..`-lexical-resolution semantics
+        // (Windows resolves `..` before touching the filesystem, unlike
+        // POSIX, so a path built from a nonexistent segment plus a
+        // trailing ".." is not a reliable way to force a fresh `NotFound`
+        // there -- verified against `project_config.rs`'s equivalent test,
+        // which uses this same plain-nonexistent-directory approach).
+        let dir = std::env::temp_dir().join(format!(
+            "pycc_main_init_nonexistent_target_{}",
+            std::process::id()
+        ));
+        assert!(!dir.exists());
+
+        let err = init(Some("irrelevant"), &dir).unwrap_err();
         assert!(!err.is_empty());
     }
 }
