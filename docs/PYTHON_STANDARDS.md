@@ -177,7 +177,8 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [688](https://peps.python.org/pep-0688/) | `Buffer` type | typing | `py312/pep_0688_buffer.py` | ☐ |
 | [692](https://peps.python.org/pep-0692/) | `Unpack[TypedDict]` for `**kwargs` | typing | `py312/pep_0692_kwargs.py` | ☐ |
-| [695](https://peps.python.org/pep-0695/) | **`type` statement + generic syntax** `class C[T]` | typing | `py312/pep_0695_generics.py` | ☐ |
+| [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `py312/pep_0695_generics.py` | ☐ |
+| [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (needs v0.3's class model) | typing | `py312/pep_0695_generic_classes.py` | ☐ |
 | [698](https://peps.python.org/pep-0698/) | `@override` | typing | `py312/pep_0698_override.py` | ☐ |
 | [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
 | [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics | sem | `py312/pep_0709_comp_inline.py` | ☐ |
@@ -255,7 +256,7 @@ Nightly CI compiles pinned revisions of open-source projects and runs their own 
 
 | Tier | Projects | Gate |
 |---|---|---|
-| 1 — small, well-typed | `tomli`, `packaging`, `more-itertools` | must fully pass before v0.2 |
+| 1 — small, well-typed | `tomli`, `packaging`, `more-itertools` | milestone gate not yet assigned — empirically shown unreachable at v0.2 (these packages' non-test source needs stdlib modules scheduled through v0.8, plus several `STDLIB_PLAN.md` does not schedule at all; see D-088). v0.2 uses a hand-authored container/generics corpus instead (D-088). Re-verifying this tier's real milestone against actual import surfaces, the same way D-088 verified it for v0.2, is tracked in #183 |
 | 2 — medium | `black`, `isort`, `attrs`, `click` | tracked pass-rate |
 | 3 — large / typed | `mypy`, `httpx`, `rich` | tracked pass-rate |
 | 4 — stretch | `fastapi` + `pydantic` stack | aspirational |
