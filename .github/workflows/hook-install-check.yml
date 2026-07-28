@@ -113,11 +113,14 @@ jobs:
 
       # Installs the pycc-check hook exactly the way a consumer's own
       # .pre-commit-config.yaml (rev: <this commit>) would: pre-commit's
-      # `language: rust` runs its own installer against this exact
-      # checkout -- unmodified, so this measures the real default
-      # experience, not a tuned one -- then runs the resulting binary via
-      # `pycc check --` against both fixtures (checklist items 2-3;
-      # pre_commit_encoding.py carries a source-encoding declaration).
+      # `language: rust` runs its own installer against this exact,
+      # unmodified checkout. This proves the hook installs and runs given
+      # the toolchain prerequisites documented in DISTRIBUTION.md's
+      # "Current installation boundary" (the steps above) -- not that it
+      # installs on a bare host with no prerequisites -- then runs the
+      # resulting binary via `pycc check --` against both fixtures
+      # (checklist items 2-3; pre_commit_encoding.py carries a
+      # source-encoding declaration).
       - name: pre-commit try-repo (install pycc-check hook, run against fixtures)
         run: |
           pre-commit try-repo . --ref "$(git rev-parse HEAD)" --files tests/fixtures/pre_commit_valid.py tests/fixtures/pre_commit_encoding.py --verbose
