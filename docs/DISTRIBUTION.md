@@ -87,16 +87,33 @@ A revision advertised for hook use must satisfy all of the following:
 
 The checked-in integration tests enforce the manifest contents, execute the
 hook's valid-source fixtures through `pycc check`, and cover the CLI success,
-failure, aggregation, and precedence paths. Items 1-3 additionally need
-pre-commit's own installer exercised end-to-end on every Tier-1 target, which
-those integration tests do not drive.
-`.github/workflows/hook-install-check.yml` is the canonical way to gather that
-evidence: a `workflow_dispatch`-only job that reproduces `ci.yml`'s per-target
-toolchain setup above, then runs `pre-commit validate-manifest` and
-`pre-commit try-repo` against `tests/fixtures/pre_commit_valid.py` and
-`tests/fixtures/pre_commit_encoding.py` on all five Tier-1 targets. Dispatch
-it from the revision under consideration (`gh workflow run
-hook-install-check.yml --ref <revision>`) and record the per-target outcome
-here before advertising that revision for hook use. A release still needs
-this dated Tier-1 evidence; merging the manifest, or this workflow itself,
-does not by itself create or advertise a release tag.
+failure, aggregation, and precedence paths (item 4) via direct invocation of
+the built binary. Items 1-3 additionally need pre-commit's own installer
+exercised end-to-end on every Tier-1 target, which those integration tests do
+not drive. `.github/workflows/hook-install-check.yml` is the canonical way to
+gather that evidence: a `workflow_dispatch`-only job that reproduces
+`ci.yml`'s per-target toolchain setup above, then runs
+`pre-commit validate-manifest` and `pre-commit try-repo` against
+`tests/fixtures/pre_commit_valid.py` and `tests/fixtures/pre_commit_encoding.py`
+on all five Tier-1 targets. Dispatch it from the revision under consideration
+(`gh workflow run hook-install-check.yml --ref <revision>`) and record the
+per-target outcome here before advertising that revision for hook use. A
+release still needs this dated Tier-1 evidence; merging the manifest, or this
+workflow itself, does not by itself create or advertise a release tag.
+
+### Current Tier-1 installation evidence
+
+[`hook-install-check.yml` run 30344989280](https://github.com/rotnov/pycc/actions/runs/30344989280),
+dispatched against commit `2724c606ead99c4d49b4a5dc5a8ed9f1d0eaf1b9` (`main`,
+2026-07-28): `pre-commit validate-manifest` and `pre-commit try-repo` both
+succeeded, satisfying checklist items 1-3, on all five Tier-1 targets --
+Linux x64, Linux arm64, macOS x64, macOS arm64, and Windows x64. Item 4 is
+covered on all five targets by the repository's normal CI
+(`tests/diagnostics_test.rs`, `tests/slice0.rs`'s CLI success/failure/
+aggregation/precedence tests), and item 5 by `ci-gate`, both as a standing
+invariant of every merge to `main`, not tied to this one dispatch. This
+satisfies "Current installation boundary"'s tag-advertising constraint for
+commit `2724c606ead99c4d49b4a5dc5a8ed9f1d0eaf1b9`: a tag built from this
+revision may be described as verified on every Tier-1 target. A later
+revision needs its own dated run recorded here before the same claim applies
+to it.
