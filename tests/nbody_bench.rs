@@ -42,13 +42,24 @@ fn oracle_python_bin() -> PathBuf {
     let output = Command::new(&bin)
         .arg("--version")
         .output()
-        .unwrap_or_else(|e| panic!("conformance oracle `python3.14` not found on PATH: {e}"));
+        .unwrap_or_else(|e| panic!("nbody benchmark oracle `python3.14` not found on PATH: {e}"));
     let version = String::from_utf8_lossy(&output.stdout);
     assert!(
         version.trim() == "Python 3.14.6",
-        "conformance oracle must be exactly Python 3.14.6, found {version:?}"
+        "nbody benchmark oracle must be exactly Python 3.14.6, found {version:?}"
     );
     bin
+}
+
+#[test]
+fn median_returns_the_middle_of_five_sorted_values() {
+    assert_eq!(median(vec![3.0, 1.0, 2.0, 5.0, 4.0]), 3.0);
+}
+
+#[test]
+fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
+    assert_eq!(oracle_binary_name(true), "python3.14.exe");
+    assert_eq!(oracle_binary_name(false), "python3.14");
 }
 
 /// D-090's nbody measurement contract (design doc's own §1): same-machine
@@ -89,8 +100,18 @@ fn oracle_python_bin() -> PathBuf {
 /// threshold (design doc's §1) and stays at 20 here unmodified; lowering
 /// it to make this test pass would defeat the point of building the
 /// measurement in the first place.
+///
+/// Runs execute in two back-to-back blocks (all 5 pycc runs, then all 5
+/// CPython runs) rather than interleaved -- matching the design doc's own
+/// "both programs run K = 5 times; take the median of each" wording, which
+/// specifies K and the aggregation but not an interleaving requirement.
+/// Block ordering is slightly more exposed to monotonic drift (thermal
+/// throttling, background-process ramp-up) than interleaving would be,
+/// since drift penalizes whichever side runs second rather than being
+/// averaged across both; taking the median (not the mean) of 5 same-block
+/// runs already blunts most of that exposure.
 #[test]
-#[ignore] // slow: builds a --release binary and runs both programs 5 times each
+#[ignore = "slow: builds a --release binary and runs both programs 5 times each"]
 fn nbody_release_binary_is_at_least_20x_faster_than_cpython() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nbody.py");
 
@@ -106,12 +127,18 @@ fn nbody_release_binary_is_at_least_20x_faster_than_cpython() {
         .expect("pycc build must spawn");
     assert!(build_status.success(), "pycc --release build of nbody.py failed");
 
+    // Resolved once, not per run: `oracle_python_bin()` itself spawns a
+    // `--version` check, and re-running that inside the loop below would
+    // burn four redundant process spawns per test run for no benefit (the
+    // oracle binary and its version can't change mid-test).
+    let cpython_bin = oracle_python_bin();
+
     let pycc_times: Vec<f64> = (0..RUNS)
         .map(|_| time_command(Command::new(&bin_path)))
         .collect();
     let cpython_times: Vec<f64> = (0..RUNS)
         .map(|_| {
-            let mut cpython = Command::new(oracle_python_bin());
+            let mut cpython = Command::new(&cpython_bin);
             cpython.arg(&fixture);
             time_command(cpython)
         })
