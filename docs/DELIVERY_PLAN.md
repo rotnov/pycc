@@ -4,12 +4,12 @@ How the roadmap in [ROADMAP.md](./ROADMAP.md) actually gets built: milestone dec
 
 ## Program-level decomposition
 
-Every ROADMAP.md milestone is its own sub-project: its own brainstorm → plan → implementation cycle, entered only when the previous milestone's acceptance criteria are green. Only v0.1 is detailed below (see [Delivery mechanics](#delivery-mechanics) for why); v0.2+ get the same treatment when reached, since their design will be shaped by what v0.1–v0.4 teach us.
+Every ROADMAP.md milestone is its own sub-project: its own brainstorm → plan → implementation cycle, entered only when the previous milestone's acceptance criteria are green. v0.1 and v0.2 are detailed below (see [Delivery mechanics](#delivery-mechanics) for why); v0.3+ get the same treatment when reached, since their design will be shaped by what v0.1–v0.4 teach us.
 
 | Milestone | New crates / major additions | Depends on | Rough PR count |
 |---|---|---|---|
 | v0.1 hello, binary | `pycc`, `pycc_lexer`/`pycc_parser`/`pycc_ast` (vendored `ruff_python_parser`, D-003), `pycc_hir`, `pycc_types`, `pycc_mir`, `pycc_codegen`, `pycc_rt`, `pycc_diag`, `pycc_testkit`, CI matrix on 5 Tier-1 targets | — | ~7 (detailed below) |
-| v0.2 collections & generics | `pycc_std` created (`math`, `sys`), monomorphization in `pycc_types`/`pycc_mir`, `--release`/LTO profile, `pycc.toml` | v0.1 | ~5-6 |
+| v0.2 collections & generics | `pycc_std` created (`math`, `sys`), recursive `Ty` (D-089) + monomorphization in `pycc_types`/`pycc_mir`, `--release`/LTO profile, `pycc.toml` | v0.1 | ~7 (detailed below) |
 | v0.3 classes & pattern matching | class model, dataclasses, protocols, `match` w/ exhaustiveness, diagnostics registry grows | v0.2 | ~6 |
 | v0.4 projects & incremental | multi-file/import resolution in `pycc_hir`, salsa-style incremental cache, `os`/`pathlib`/`json`/`datetime` | v0.3 | ~6-7 |
 | v0.5 generators & ownership v1 | new crate `pycc_own` (escape analysis, move semantics, RC elision), generators as state machines | v0.4 | ~6-7 |
@@ -142,3 +142,28 @@ Cutting across all of these: the D-014 coverage gate (`cargo llvm-cov --fail-und
 ## Scope honesty
 
 v0.1 is realistically a multi-PR, multi-session effort — real Rust/LLVM compilation and 5-target CI have minutes-scale iteration loops, not seconds. Work proceeds PR by PR, autonomously, opening each PR as it's ready, without stopping for questions, for as long as a session productively runs.
+
+## v0.2 execution strategy: perf/tooling foundation, then the riskiest new capability, then breadth
+
+Full brainstorm output (dialogue conducted with the `advisor` tool per the standing autopilot goal, since the user is unavailable until v0.2 ships): [`docs/superpowers/specs/2026-07-28-v0-2-collections-generics-design.md`](./superpowers/specs/2026-07-28-v0-2-collections-generics-design.md). Acceptance criteria as corrected by [D-088](./DECISIONS.md#d-088-correct-v02s-acceptance-criteria-before-any-v02-pr-starts); the `Ty` representation change every later PR depends on is [D-089](./DECISIONS.md#d-089-ty-becomes-a-recursive-heap-boxed-enum-for-v02-generics).
+
+Same three-approach weighing as v0.1 (thin slice first, vs. parallel crate teams, vs. full upfront interface lock) applies again, with the same conclusion (A) for the same reasons: `pycc_types`/`pycc_mir`/`pycc_codegen`/`pycc_rt` have real sequential dependencies for monomorphization, and the biggest unknown (does compiling one real generic container end-to-end actually work) should be proven before building breadth on top of it.
+
+Two corrections to v0.1's ordering pattern, both from D-088's verification findings:
+
+1. **`--release`/LTO lands first, not last.** `nbody ≥ 20× CPython` (ROADMAP.md's own v0.2 accept bullet) is unreachable in a `--debug` build — v0.1's codegen never enabled LLVM optimization passes or RC-elision-adjacent tuning. The existing `frontend-perf-*` CI jobs measure `pycc check`'s own speed (parse+lower+check), not generated-code runtime speed — an nbody benchmark harness comparing the compiled binary against CPython is new infrastructure nobody has built. Landing this first means every later PR benefits from a working `--release` profile for its own tests, and the perf-critical acceptance bullet is instrumented from day one instead of discovered unmeasurable at the end.
+2. **The real per-PEP conformance harness lands before monomorphization, not as a closing buffer.** D-088 revised the target to ≥15 conformance-matrix rows; that number cannot be measured without fixtures under `tests/conformance/pyXY/` and a runner comparing them to the pinned CPython oracle (`PYTHON_STANDARDS.md`'s documented but never-built structure — D-018/D-085 deferred `pycc_testkit` specifically "until there's a PEP matrix to check against," which now exists). Building this early means every subsequent PR can add its own fixture and watch the count climb, rather than reaching PR-14 with no way to prove the milestone's gate.
+
+### Rough PR breakdown
+
+| PR | Content |
+|---|---|
+| 8 | `--release`/LTO profile (already specified in `docs/CLI_SPEC.md`) + `pycc.toml` (schema already specified there too) + the nbody benchmark harness (measurement contract in the design doc §1: hand-adapted 5-body simulation, same-machine paired median-of-5 wall-clock comparison, `--release` pycc vs. pinned CPython 3.14.6, ratio ≥ 20 gate). Lowest architectural risk of the milestone — CLI driver + `pycc_codegen`'s LLVM optimization-level wiring, no type-system changes — and unblocks the perf-critical acceptance bullet immediately |
+| 9 | Real per-PEP conformance harness (`tests/conformance/pyXY/pep_NNNN_slug.py` fixtures + oracle-diff runner) seeded with the 11 PR-9-owned PEPs from the design doc §2 (all already true of v0.1's shipped surface — this PR adds no new language feature, it only proves what v0.1 already does against the documented matrix). Whether this warrants finally building the `pycc_testkit` crate (D-018/D-037/D-085 deferred it "until there's a PEP matrix to check against," which now exists) or continuing to extend a plain `tests/*.rs` integration test is this PR's own architecture decision to record via ADR when it's reached |
+| 10 | `Ty` representation migration (D-089: recursive `Box`/`Vec`-based variants, `Copy` dropped for `Clone` across ~729 call sites) as its first task, then monomorphization foundation + `list[T]` end-to-end thin slice (literal, indexing, `len()`, iteration, `.append()`) + its own PEP-585 fixture. v0.2's "slice 0" — proves the whole monomorphization pipeline works before building breadth on it |
+| 11 | `dict[K, V]`, `set[T]`, `tuple[...]` — breadth, reusing PR-10's monomorphization machinery. `set[T]`'s own representation (design doc §3: swiss table without a value slot, non-guaranteed ordering matching CPython, unlike `dict`) is this PR's own ADR to record. Adds the dict-insertion-order fixture |
+| 12 | Comprehensions (list/dict/set) + slicing (`xs[a:b:c]`) + remaining container methods depth across all four types + the PEP-709 fixture |
+| 13 | PEP 695 generic functions (`def f[T](x: T) -> T`) and the `type` statement (D-088 scope: not generic classes — v0.3's class model doesn't exist) + legacy `TypeAlias` (design doc §2's 16th PEP, piggybacking on the same alias mechanism) + their fixtures. The generic-function type-parameter's own `Ty` representation (design doc §4) is this PR's (or PR-10's, whichever implements it first) own decision against the real constraint-solving code |
+| 14 | `pycc_std` crate creation (`math`, `sys`) + stdlib-intrinsic import binding (D-088 scope: `import math`/`from math import ...` resolved against `pycc_std`'s own registry, not general filesystem resolution) + the hand-authored container/generics corpus (D-088's replacement for the unreachable OSS-package criterion) + buffer closing whatever's left so all of v0.2's corrected ROADMAP.md acceptance bullets are simultaneously green |
+
+Each PR after PR-9 adds its own conformance fixture(s) to the PR-9 harness as its feature lands, so the ≥15-row count is verified incrementally rather than audited once at the end.
