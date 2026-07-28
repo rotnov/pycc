@@ -53,6 +53,24 @@ lightweight or toolchain-free installation while the package graph still
 builds codegen. Likewise, a tag must not be described as cross-platform until
 the hook installation and pass/fail behavior are green on every Tier-1 target.
 
+Building `pycc` from source needs more than an LLVM 22.1.1 install on `PATH`:
+
+- `LLVM_SYS_221_PREFIX` must point at that LLVM 22 install; `llvm-sys` does
+  not discover it on its own. `.github/workflows/ci.yml`'s per-platform setup
+  steps are the canonical, tested way to obtain and export it for each
+  Tier-1 target (Linux via `apt.llvm.org`, macOS via Homebrew, Windows via
+  LLVM's own prebuilt release archive).
+- On Windows, `pycc`'s own linker step shells out to `clang.exe` directly
+  (D-028), outside any Developer Command Prompt, so a plain `cargo install`
+  also needs that environment set up (`ilammy/msvc-dev-cmd` in CI). This
+  LLVM release's own `llvm-config` reports libxml2 as a system lib (D-027),
+  so `llvm-sys` additionally needs a real `xml2s.lib` on `LIB`; `ci.yml`
+  installs it via `vcpkg`.
+
+None of this is optional or hook-specific: it is what building `pycc` from
+source requires on each platform, whether via `cargo build`, `cargo install`,
+or pre-commit's own installer.
+
 ## Release and verification
 
 A revision advertised for hook use must satisfy all of the following:
@@ -68,7 +86,17 @@ A revision advertised for hook use must satisfy all of the following:
    policy, and 100% line/region coverage gates pass.
 
 The checked-in integration tests enforce the manifest contents, execute the
-hook's valid-source fixture through `pycc check`, and cover the CLI success,
-failure, aggregation, and precedence paths. A release still needs the
-clean-environment and Tier-1 installation evidence; merging the manifest alone
-does not create or advertise a release tag.
+hook's valid-source fixtures through `pycc check`, and cover the CLI success,
+failure, aggregation, and precedence paths. Items 1-3 additionally need
+pre-commit's own installer exercised end-to-end on every Tier-1 target, which
+those integration tests do not drive.
+`.github/workflows/hook-install-check.yml` is the canonical way to gather that
+evidence: a `workflow_dispatch`-only job that reproduces `ci.yml`'s per-target
+toolchain setup above, then runs `pre-commit validate-manifest` and
+`pre-commit try-repo` against `tests/fixtures/pre_commit_valid.py` and
+`tests/fixtures/pre_commit_encoding.py` on all five Tier-1 targets. Dispatch
+it from the revision under consideration (`gh workflow run
+hook-install-check.yml --ref <revision>`) and record the per-target outcome
+here before advertising that revision for hook use. A release still needs
+this dated Tier-1 evidence; merging the manifest, or this workflow itself,
+does not by itself create or advertise a release tag.
