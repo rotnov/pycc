@@ -131,6 +131,15 @@ was not recorded. Later snapshots record both returned rows and `Total`.
 | 2026-07-25T19:07:45Z | `AI-native compiler` | 48 | 0 | 50 | 94 |
 | 2026-07-25T19:07:45Z | `topic:aot-compiler` | 15 | 0 | 18 | 18 |
 | 2026-07-25T19:07:45Z | `topic:python-compiler` | 43 | 0 | 44 | 44 |
+| 2026-07-25T20:21:57Z | `pycc` | >50 | — | 50 | 363 |
+| 2026-07-25T20:21:57Z | `Python 3.14 compiler in:description` | 12 | 0 | 16 | 16 |
+| 2026-07-25T20:21:57Z | `ahead-of-time compiler python` | 8 | 0 | 11 | 11 |
+| 2026-07-25T20:21:57Z | `typed Python compiler` | >50 | — | 50 | 316 |
+| 2026-07-25T20:21:57Z | `python aot compiler` | 19 | 0 | 28 | 28 |
+| 2026-07-25T20:21:57Z | `compile python native binary` | 22 | 0 | 38 | 38 |
+| 2026-07-25T20:21:57Z | `AI-native compiler` | 48 | 0 | 50 | 95 |
+| 2026-07-25T20:21:57Z | `topic:aot-compiler` | 14 | +1 | 18 | 18 |
+| 2026-07-25T20:21:57Z | `topic:python-compiler` | 43 | 0 | 44 | 44 |
 
 ## GitHub traffic history
 
@@ -152,6 +161,7 @@ include CI, agents, and other automation and is not treated as human discovery.
 | 2026-07-25T16:52:38Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 | 2026-07-25T17:47:48Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 | 2026-07-25T19:08:00Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
+| 2026-07-25T20:23:25Z | 2026-07-24 | 74 / 1 | 1,444 / 349 | 0 / 1 / 0 | `github.com`: 5 / 1 unique; `rotnov.github.io`: 2 / 1 unique |
 
 ## Google Search Console history
 
@@ -182,13 +192,15 @@ later movement can be correlated without presenting correlation as causation.
 
 ## Current interpretation
 
-At 19:07 UTC, all nine measured GitHub Search positions and their result totals
-were unchanged from the 17:47 UTC snapshot. The repository remains rank 12 for
+At 20:21 UTC, `topic:aot-compiler` improved one position to rank 14. The other
+eight measured positions were unchanged: the repository remains rank 12 for
 the Python 3.14 description query, rank 8 for
-`ahead-of-time compiler python`, rank 19 for `python aot compiler`, rank 15 for
-`topic:aot-compiler`, and rank 43 for `topic:python-compiler`. The project
-remains outside the top 50 for the ambiguous exact name and broad typed-Python
-query. The absence of movement over this interval does not justify a content
+`ahead-of-time compiler python`, rank 19 for `python aot compiler`, rank 48 for
+`AI-native compiler`, and rank 43 for `topic:python-compiler`. The API-wide
+`AI-native compiler` result set grew from 94 to 95 while pycc's rank stayed
+fixed, which is a corpus-size change rather than a project ranking change. The
+project remains outside the top 50 for the ambiguous exact name and broad
+typed-Python query. This small topic movement alone does not justify a content
 or metadata change.
 All five canonical URLs now have positive URL Inspection evidence: the four
 pre-existing URLs were on Google at 10:29 UTC, and the live
