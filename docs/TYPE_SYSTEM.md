@@ -7,8 +7,9 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 1. Every public function/method: parameters and return type annotated, else `T0001`.
 2. Locals and private helpers: inferred (Hindley-Milner-flavored local inference; annotations always win).
 3. `Any` does not exist in pure pycc code — it is a compile error (`T0002`) except at declared interop boundaries (see RUNTIME.md § interop).
-4. No implicit `Optional`, no implicit numeric narrowing, no untyped containers (`x = []` requires inferable or annotated element type).
+4. No implicit `Optional`, no implicit numeric narrowing **or widening** (D-086 — includes `int` at a `float`-annotated boundary; write `float(x)`), no untyped containers (`x = []` requires inferable or annotated element type).
 5. Unreachable code after exhaustive `match` / `Never` is verified (`assert_never` pattern supported).
+6. `==`/`!=` require the same operand-type compatibility as every other typed operation, matching `mypy --strict`'s own `comparison-overlap` check (D-086) — heterogeneous equality (`1 == "1"`) is `T0021`, not `bool`. Ordering operators (`<`/`>`/`<=`/`>=`) are separately, always type-sensitive: they reject any pair CPython itself would raise `TypeError` for at runtime, independent of this rule.
 
 ### v0.1 local inference
 
