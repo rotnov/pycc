@@ -1,0 +1,123 @@
+name: Hook install check
+
+# Verifies docs/DISTRIBUTION.md's "Release and verification" checklist
+# items 1-3 for the pycc-check pre-commit hook: the manifest validates,
+# and pre-commit's own `language: rust` installer can build and run it
+# from this exact revision, on every Tier-1 target. Manual only
+# (workflow_dispatch) -- this replays ci.yml's full per-platform
+# toolchain setup on top of a real `pip install pre-commit` install, so
+# it is deliberately not part of the routine per-PR gate.
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+env:
+  # Same pin as .github/workflows/ci.yml (D-015); a hook-install check
+  # against a different LLVM version would not be evidence for this one.
+  LLVM_VERSION: "22.1.1"
+
+jobs:
+  pycc-check-hook-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            tier1_label: "Linux x64"
+          - os: ubuntu-24.04-arm
+            tier1_label: "Linux arm64"
+          - os: macos-15-intel
+            tier1_label: "macOS x64"
+          - os: macos-14
+            tier1_label: "macOS arm64"
+          - os: windows-latest
+            tier1_label: "Windows x64"
+    runs-on: ${{ matrix.os }}
+    name: pycc-check hook install (${{ matrix.tier1_label }})
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Show pinned toolchain
+        run: rustup show
+
+      # pre-commit's `language: rust` hook installer runs a real `cargo
+      # install`, which drives pycc's own build the same way
+      # .github/workflows/ci.yml's native-build-test job does -- including
+      # the linker_command() step that shells out to clang.exe directly
+      # (D-028), outside any Developer Command Prompt. Its bundled
+      # lld-link.exe can't find libcmt.lib/oldnames.lib without this.
+      - name: Set up MSVC Developer Command Prompt (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install LLVM 22 (Linux, via apt.llvm.org)
+        if: runner.os == 'Linux'
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          # llvm.sh's own packages don't pull in Polly's static lib;
+          # llvm-sys links it explicitly, so it must be installed
+          # separately here (same as ci.yml).
+          sudo apt-get install -y libpolly-22-dev
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+
+      - name: Install LLVM 22 (macOS, via Homebrew)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@22
+          echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
+
+      # Downloaded directly from LLVM's own GitHub release, same as ci.yml --
+      # no Windows package manager reliably carries LLVM 22 yet.
+      - name: Install LLVM 22 (Windows, official prebuilt release)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -L --fail -o llvm.tar.xz "https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/clang+llvm-${LLVM_VERSION}-x86_64-pc-windows-msvc.tar.xz"
+          mkdir -p llvm-extract
+          tar -xf llvm.tar.xz -C llvm-extract --strip-components=1
+          echo "LLVM_SYS_221_PREFIX=$(cygpath -w "$(pwd)/llvm-extract")" >> "$GITHUB_ENV"
+
+      # This LLVM release's own llvm-config reports libxml2 as a system lib
+      # (D-027), so llvm-sys requires a real xml2s.lib to link -- same
+      # vcpkg step as ci.yml.
+      - name: Install libxml2 (Windows, via vcpkg, for llvm-sys's system-libs)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libxml2:x64-windows-static-md
+          $libDir = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib"
+          $xml2Lib = Get-ChildItem -Path $libDir -Filter "*xml2*.lib" | Select-Object -First 1
+          if (-not $xml2Lib) {
+            Write-Error "no libxml2 .lib found under $libDir"
+            exit 1
+          }
+          Copy-Item $xml2Lib.FullName "$libDir\xml2s.lib" -Force
+          echo "LIB=$libDir;$env:LIB" >> $env:GITHUB_ENV
+
+      - name: Set up Python for pre-commit
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit
+        run: pip install "pre-commit==4.6.1"
+
+      - name: pre-commit validate-manifest (checklist item 1)
+        run: pre-commit validate-manifest .pre-commit-hooks.yaml
+
+      # Installs the pycc-check hook exactly the way a consumer's own
+      # .pre-commit-config.yaml (rev: <this commit>) would: pre-commit's
+      # `language: rust` runs its own installer against this exact
+      # checkout -- unmodified, so this measures the real default
+      # experience, not a tuned one -- then runs the resulting binary via
+      # `pycc check --` against both fixtures (checklist items 2-3;
+      # pre_commit_encoding.py carries a source-encoding declaration).
+      - name: pre-commit try-repo (install pycc-check hook, run against fixtures)
+        run: |
+          pre-commit try-repo . --ref "$(git rev-parse HEAD)" --files tests/fixtures/pre_commit_valid.py tests/fixtures/pre_commit_encoding.py --verbose
