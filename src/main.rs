@@ -1,4 +1,5 @@
 mod cli;
+mod project_config;
 mod source;
 
 use clap::Parser;
@@ -23,11 +24,34 @@ fn main() -> ExitCode {
             paths,
             error_format,
         } => check_paths(&paths, error_format),
-        Command::Test | Command::Explain { .. } | Command::Init { .. } | Command::Clean => {
+        Command::Init { name } => {
+            let cwd = std::env::current_dir().expect("current directory must be readable");
+            match init(name.as_deref(), &cwd) {
+                Ok(()) => {
+                    println!("Created pycc.toml and src/main.py");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: pycc init failed: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        Command::Test | Command::Explain { .. } | Command::Clean => {
             eprintln!("pycc: this subcommand is not yet implemented");
             ExitCode::from(2)
         }
     }
+}
+
+/// `pycc init [NAME]`: testable core of the `Command::Init` arm. Takes
+/// `dir` as a parameter instead of calling `std::env::current_dir()`
+/// internally -- matching `find_pycc_rt_lib_dir`/`find_pycc_rt_lib_dir_in`'s
+/// existing dependency-injection split below -- so a test can exercise
+/// `project_config::scaffold`'s error path (an unwritable target directory)
+/// without mutating this test process's real, shared working directory.
+fn init(name: Option<&str>, dir: &Path) -> Result<(), String> {
+    project_config::scaffold(name, dir).map_err(|e| e.to_string())
 }
 
 /// `pycc check`: parse + HIR-lowering + type-checking only, no codegen --
@@ -450,5 +474,37 @@ mod linker_tests {
             pycc_rt_lib_filename(Some("x86_64-unknown-linux-gnu")),
             "libpycc_rt.a"
         );
+    }
+}
+
+#[cfg(test)]
+mod init_tests {
+    use super::*;
+
+    #[test]
+    fn succeeds_and_scaffolds_a_project_in_a_writable_directory() {
+        let dir = std::env::temp_dir().join(format!("pycc_main_init_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(init(Some("initdirect"), &dir), Ok(()));
+        assert!(dir.join("pycc.toml").exists());
+        assert!(dir.join("src").join("main.py").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reports_the_scaffold_error_when_the_target_directory_does_not_exist() {
+        // A path ending in ".." both has no `file_name()` (irrelevant here
+        // since `name` is explicit) and, more importantly, never exists on
+        // any platform -- `std::fs::write` inside `scaffold` fails with a
+        // portable `NotFound` regardless of the test runner's OS or
+        // privilege level, unlike a permission-based approach (e.g.
+        // targeting a filesystem root), which is not reliably unwritable
+        // across every Tier-1 target's CI runner (verified empirically:
+        // writing here returns `Os { code: 2, kind: NotFound, .. }`).
+        let dir = Path::new("/pycc-nonexistent-parent-for-init-test-xyz/..");
+        let err = init(Some("irrelevant"), dir).unwrap_err();
+        assert!(!err.is_empty());
     }
 }
