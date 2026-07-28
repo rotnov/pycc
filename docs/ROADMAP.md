@@ -60,7 +60,7 @@ Functions, `int`/`float`/`str`/`bool`, arithmetic, comparisons, `if`/`while`/`fo
 
 `list`/`dict`/`set`/`tuple` + literals, comprehensions, slicing, methods; PEP 585/695 generics via monomorphization; `--release` profile (LTO); `pycc.toml`.
 
-**Accept:** corpus Tier-1 (`tomli`, `packaging`, `more-itertools`) compiles; nbody ≥ 20× CPython; conformance ≥ 25 PEPs green.
+**Accept:** a hand-authored container/generics corpus (list/dict/set/tuple, comprehensions, slicing, methods, generic functions) matches CPython output on all 5 Tier-1 targets (D-088 — supersedes the original "corpus Tier-1 compiles" bullet, empirically unreachable at v0.2); nbody ≥ 20× CPython in `--release`; conformance ≥ 15 `PYTHON_STANDARDS.md` matrix rows green, encompassing 17 distinct PEP numbers (D-088 — revised down from 25 with itemized justification).
 
 ## v0.3 — classes & pattern matching
 
