@@ -256,7 +256,7 @@ Nightly CI compiles pinned revisions of open-source projects and runs their own 
 
 | Tier | Projects | Gate |
 |---|---|---|
-| 1 — small, well-typed | `tomli`, `packaging`, `more-itertools` | must fully pass before v0.2 |
+| 1 — small, well-typed | `tomli`, `packaging`, `more-itertools` | milestone gate not yet assigned — empirically shown unreachable at v0.2 (these packages' non-test source needs stdlib modules scheduled through v0.8, plus several `STDLIB_PLAN.md` does not schedule at all; see D-088). v0.2 uses a hand-authored container/generics corpus instead (D-088). Re-verifying this tier's real milestone against actual import surfaces, the same way D-088 verified it for v0.2, is tracked in #183 |
 | 2 — medium | `black`, `isort`, `attrs`, `click` | tracked pass-rate |
 | 3 — large / typed | `mypy`, `httpx`, `rich` | tracked pass-rate |
 | 4 — stretch | `fastapi` + `pydantic` stack | aspirational |
