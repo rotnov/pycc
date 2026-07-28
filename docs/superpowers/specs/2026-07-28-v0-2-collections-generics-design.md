@@ -7,7 +7,7 @@
 > user for is instead recorded here with its rationale, the way this
 > repository's own ADRs already work — this doc **is** the audit trail.
 
-**Goal:** Ship v0.2 ("collections & generics") per `docs/ROADMAP.md`: `list`/`dict`/`set`/`tuple` with literals, comprehensions, slicing, and methods; PEP 585/695 generics via monomorphization; a `--release`/LTO profile; `pycc.toml`. Acceptance criteria as corrected by [D-088](../DECISIONS.md#d-088-correct-v02s-acceptance-criteria-before-any-v02-pr-starts).
+**Goal:** Ship v0.2 ("collections & generics") per `docs/ROADMAP.md`: `list`/`dict`/`set`/`tuple` with literals, comprehensions, slicing, and methods; PEP 585/695 generics via monomorphization; a `--release`/LTO profile; `pycc.toml`. Acceptance criteria as corrected by [D-088](../../DECISIONS.md#d-088-correct-v02s-acceptance-criteria-before-any-v02-pr-starts) (this file lives under `docs/superpowers/specs/`, two directories below `docs/` — not one).
 
 **Architecture:** Same "thin slice first, then breadth" strategy v0.1 used (`docs/DELIVERY_PLAN.md`'s "v0.1 execution strategy"), reordered per two corrections D-088's verification surfaced: the performance-critical acceptance bullet and the conformance-count acceptance bullet both need new measurement infrastructure that doesn't exist yet, so that infrastructure lands before the features it will measure, not after.
 
@@ -37,35 +37,35 @@
 
 `nbody` doesn't exist in this repository. The canonical reference is `pyperformance`'s `bm_nbody` (Computer Language Benchmarks Game N-body simulation, 5 solar-system bodies, `DEFAULT_ITERATIONS = 20000`) — verified by downloading `pyperformance` 1.14.0 and reading `benchmarks/bm_nbody/run_benchmark.py` directly. Its literal source uses nested tuple/list destructuring in `for` loops (`for (([x1,y1,z1], v1, m1), ([x2,y2,z2], v2, m2)) in pairs:`) that pycc's v0.1+v0.2 grammar doesn't confidently support (extended unpacking, PEP 3132, is not in v0.2's scope per D-088's PEP itemization) — so the fixture is a **hand-adapted rewrite**, not the literal upstream script, matching D-088's own "hand-authored corpus" precedent:
 
-- Same physics, same 5 bodies (sun/jupiter/saturn/uranus/neptune) and constants, same `advance`/`report_energy` structure, rewritten using only pycc's implemented grammar (indexed/named-variable access instead of nested destructuring; a fixed-size representation for each body's position/velocity/mass suited to whatever `list`/`tuple` PR-10/PR-11 actually ship, decided by that PR's implementer against the real container API rather than guessed here).
+- Same physics, same 5 bodies (sun/jupiter/saturn/uranus/neptune) and constants, same `advance`/`report_energy` structure, rewritten using only pycc's implemented grammar. **This fixture must not depend on containers**: PR-8 (which builds this benchmark) runs before PR-10/PR-11 give pycc any `list`/`tuple`/`dict`/`set` at all, so each body's 7 scalars (position × 3, velocity × 3, mass) are separate named `float` variables, and the 10 pairwise gravitational updates for 5 bodies are fully unrolled rather than iterated — verbose, but a real, valid Python program CPython also runs unchanged for the differential comparison. (An earlier draft of this contract deferred the data-representation choice to "whatever list/tuple PR-10/11 ship" — wrong, since that would make PR-8 depend on work sequenced two PRs later; corrected here.)
 - **Method:** same-machine paired comparison (not the cross-runner D-051/D-053/D-056/D-062 regression-gate machinery — this compares two different programs on one machine at one time, not one program's speed across two commits). Both programs run `K = 5` times; take the median of each; ratio = median(CPython wall-clock) ÷ median(pycc `--release` binary wall-clock).
 - **Profile:** pycc side built `--release` (LTO on); CPython side is the pinned oracle (`python3.14` → 3.14.6) with no special flags.
 - **Gate:** ratio ≥ 20. This is PR-8's own benchmark harness to build (new script, e.g. `scripts/check_nbody_speedup.rb` alongside the existing `check_frontend_throughput.rb`, or a `tests/nbody_bench.rs` — PR-8's implementer picks the shape and records it as an ADR, the same way D-079 picked `tests/conformance.rs`'s shape for v0.1).
 
 ### 2. The 16 named PEPs backing the ≥15 conformance target
 
-D-088 itemized ~15 PEPs reachable from v0.1+v0.2's surface without added grammar scope, but didn't assign each to an owning PR or a fixture path. Doing that now (one extra PEP folded in for margin — legacy `TypeAlias` piggybacks on PR-13's `type`-statement work at near-zero marginal cost):
+D-088 itemized the PEPs reachable from v0.1+v0.2's surface without added grammar scope, but didn't assign each to an owning PR or a fixture path. Doing that now — and correcting two rows a review caught: D-088's first draft claimed PEP 526 and PEP 594 were "already true" without empirically testing either; both were wrong (see the Fixture/Owning PR columns below for what's actually needed):
 
 | PEP | Feature | Fixture | Owning PR | Why reachable there |
 |---|---|---|---|---|
 | 238 | True division | `py30/pep_0238_division.py` | PR-9 | Already true of v0.1 |
 | 3105 | `print()` as function | `py30/pep_3105_print.py` | PR-9 | Already true of v0.1 |
 | 3107 | Function annotations | `py30/pep_3107_annotations.py` | PR-9 | v0.1's whole typing model requires it |
-| 3131 | Non-ASCII identifiers | `py30/pep_3131_unicode_ids.py` | PR-9 | Parser-level (vendored `ruff_python_parser`), no pycc work |
+| 3131 | Non-ASCII identifiers | `py30/pep_3131_unicode_ids.py` | PR-9 | Verified via a plain (non-annotated) assignment |
 | 414 | `u''` literals | `py33/pep_0414_u_literal.py` | PR-9 | `str` literals already exist |
 | 484 | Type hints | `py35/pep_0484_type_hints.py` | PR-9 | pycc's cornerstone, already true |
 | 498 | f-strings | `py36/pep_0498_fstrings.py` | PR-9 | v0.1 already has basic f-strings |
 | 515 | Numeric underscores | `py36/pep_0515_underscores.py` | PR-9 | Parser-level, no pycc work |
-| 526 | Variable annotations | `py36/pep_0526_var_annotations.py` | PR-9 | v0.1's local-inference model requires it |
-| 594 | Dead-battery removals | `py313/pep_0594_removals.py` | PR-9 | Cheap negative test (these modules simply don't exist) |
 | 649/749 | Deferred annotations | `py314/pep_0649_deferred_ann.py` | PR-9 | Already true of v0.1's static-evaluation behavior |
+| 526 | Variable annotations `x: int = 1` | `py36/pep_0526_var_annotations.py` | PR-9 | **Not free** — verified `pycc_hir` has no `Stmt::AnnAssign` case (only `Stmt::Assign`); `x: int = 1` hits `C0001` today. Small, bounded new frontend work, real PR-9 scope, not a free row |
 | 585 | Builtin generics `list[int]` | `py39/pep_0585_builtin_generics.py` | PR-10 | v0.2's own headline feature |
 | — | `dict` insertion order | `py37/dict_order.py` | PR-11 | Needs `dict[K,V]` to exist at all |
 | 709 | Comprehension inlining semantics | `py312/pep_0709_comp_inline.py` | PR-12 | v0.2's own comprehensions work |
 | 695 | `type` statement + generic functions | `py312/pep_0695_generics.py` | PR-13 | Scoped per D-088: functions + `type` stmt only, not generic classes |
 | 613 | `TypeAlias` (legacy syntax) | `py310/pep_0613_typealias.py` | PR-13 | Same underlying alias mechanism as 695's `type` statement |
+| 594 | Dead-battery removals | `py313/pep_0594_removals.py` | PR-14 | **Not testable earlier** — verified `import cgi` today produces the identical generic `C0001` every import produces (no resolution exists yet to distinguish "module removed" from "imports unsupported"). Only PR-14's stdlib-intrinsic import support makes this row meaningful |
 
-16 fixtures ≥ 15 target, one item of margin. PR-9 owns 11 of them and adds **no new language feature** — it only proves what v0.1 already does against the documented matrix, which is why it's sequenced right after the perf harness and before any container work.
+16 fixtures ≥ 15 target, one item of margin. PR-9 owns 9 rows that need no new language feature (proving what v0.1 already does) plus PEP 526's own small bounded addition — it is not purely harness-only, but its new scope is narrow and well-defined, which is why it's still sequenced right after the perf harness and before any container work.
 
 ### 3. `set[T]`'s representation (flagged, not resolved)
 
@@ -79,13 +79,13 @@ D-089 decided `Ty`'s container variants but explicitly left the generic-function
 
 (Full rationale — including why `--release` and the conformance harness are resequenced ahead of the v0.1 pattern's "thin slice first" — lives in `docs/DELIVERY_PLAN.md`'s new v0.2 section, committed alongside this doc.)
 
-1. **PR-8**: `--release`/LTO profile + `pycc.toml` + nbody benchmark harness (contract above).
-2. **PR-9**: Real per-PEP conformance harness (`tests/conformance/pyXY/`) seeded with the 11 PR-9-owned PEPs above. Whether this warrants finally building the `pycc_testkit` crate (D-018/D-037/D-085 deferred it "until there's a PEP matrix to check against" — one now exists) is this PR's own ADR to record.
+1. **PR-8**: `--release`/LTO profile + `pycc.toml` + nbody benchmark harness (contract above — hand-unrolled, scalar-only fixture, no container dependency).
+2. **PR-9**: Real per-PEP conformance harness (`tests/conformance/pyXY/`) seeded with the 9 no-new-work PEPs above, plus PEP 526's own small bounded `Stmt::AnnAssign` addition. Whether this warrants finally building the `pycc_testkit` crate (D-018/D-037/D-085 deferred it "until there's a PEP matrix to check against" — one now exists) is this PR's own ADR to record.
 3. **PR-10**: `Ty` representation migration (D-089) + monomorphization foundation + `list[T]` end-to-end thin slice (literal, indexing, `len()`, iteration, `.append()`) + its own PEP-585 fixture.
 4. **PR-11**: `dict[K,V]`, `set[T]` (representation decision above), `tuple[...]` + the dict-insertion-order fixture.
 5. **PR-12**: Comprehensions + slicing + remaining container methods depth, across all four types + the PEP-709 fixture.
 6. **PR-13**: PEP 695 generic functions + `type` statement (scope per D-088) + legacy `TypeAlias` + their fixtures.
-7. **PR-14**: `pycc_std` crate (`math`, `sys`) + stdlib-intrinsic import binding (scope per D-088) + the hand-authored container/generics corpus (D-088's OSS-package replacement) + buffer closing whatever's left on v0.2's corrected acceptance bullets.
+7. **PR-14**: `pycc_std` crate (`math`, `sys`) + stdlib-intrinsic import binding (scope per D-088, which also makes the PEP-594 dead-battery-removal fixture meaningful for the first time) + the hand-authored container/generics corpus (D-088's OSS-package replacement) + buffer closing whatever's left on v0.2's corrected acceptance bullets.
 
 ## Testing
 
