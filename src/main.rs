@@ -16,10 +16,21 @@ fn main() -> ExitCode {
             out,
             target,
             release,
-        } => match try_build(&path, &out, target.as_deref(), release) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(code) => code,
-        },
+        } => {
+            // Resolved here, not inside `try_build`: this consumption point
+            // (a neighboring `pycc.toml`'s `[build] opt = "release"` as a
+            // default profile) is scoped to `pycc build` specifically --
+            // CLI_SPEC.md/ROADMAP.md both document it that way, and `run`
+            // has no `--release` flag of its own to override it with if a
+            // user doesn't want that default applied. Resolving it here,
+            // before `try_build` ever runs, is what keeps `run`'s own
+            // hardcoded `false` (below) actually final.
+            let release = resolve_release_flag(release, Path::new(&path));
+            match try_build(&path, &out, target.as_deref(), release) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(code) => code,
+            }
+        }
         Command::Run { path } => run(&path),
         Command::Version { .. } => {
             println!("pycc 0.1.0 (rustc 1.97.1, LLVM 22.1.1)");
@@ -89,14 +100,17 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
 /// no sense). `Some(triple)` cross-compiles -- see `find_pycc_rt_lib_dir`
 /// for what that requires to actually be available.
 ///
-/// `release`: the explicit `--release` CLI flag's value (`run` has no such
-/// flag yet -- CLI_SPEC.md doesn't document one for it -- so it always
-/// passes `false` here). An explicit `true` always wins;
-/// `resolve_release_flag` below is what lets a neighboring `pycc.toml`'s
-/// `[build] opt = "release"` still take effect when this is `false`.
+/// `release`: the final, already-resolved profile -- `true` runs LLVM's
+/// `"default<O3>"` pipeline, `false` skips it. This function does *not*
+/// consult a neighboring `pycc.toml` itself: that consumption point
+/// (`resolve_release_flag` below) is scoped to `Command::Build`'s own match
+/// arm in `main()`, resolved *before* `try_build` is ever called, precisely
+/// so that `run`'s hardcoded `false` here stays final and unconditional --
+/// `run` has no `--release` flag yet (CLI_SPEC.md doesn't document one for
+/// it), so a neighboring release-profile `pycc.toml` must not silently
+/// change what `pycc run` does with no way for the user to override it.
 fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Result<(), ExitCode> {
     let path = Path::new(path);
-    let release = resolve_release_flag(release, path);
     let typed_hir = resolve_frontend(path)
         .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
     let mir = pycc_mir::build(&typed_hir);
@@ -131,13 +145,16 @@ fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Resu
     }
 }
 
-/// Resolves `try_build`'s effective release/debug profile. An explicit
-/// `--release` (`explicit_release: true`) always wins outright -- this is
-/// not project-mode directory resolution (`docs/CLI_SPEC.md`'s deferred
-/// "PATH = ... project directory" case), just a narrow default-profile
-/// consumption point (this PR's plan, Task 3 Step 6a, moved here from
-/// Task 2's original Step 8 once this task's own `release` field existed
-/// for it to combine with).
+/// Resolves `pycc build`'s effective release/debug profile -- called only
+/// from `main()`'s `Command::Build` arm, before `try_build` runs (`run` has
+/// no `--release` flag and never calls this, so it's never subject to a
+/// neighboring `pycc.toml`'s default; see `try_build`'s own doc comment).
+/// An explicit `--release` (`explicit_release: true`) always wins outright
+/// -- this is not project-mode directory resolution (`docs/CLI_SPEC.md`'s
+/// deferred "PATH = ... project directory" case), just a narrow
+/// default-profile consumption point (this PR's plan, Task 3 Step 6a,
+/// moved here from Task 2's original Step 8 once this task's own `release`
+/// field existed for it to combine with).
 ///
 /// Otherwise, this looks for a `pycc.toml` next to `source_path` and uses
 /// its `[build] opt == "release"` as the default. Every other outcome --
@@ -362,6 +379,12 @@ fn add_linux_system_libs(cmd: &mut std::process::Command) {
 #[cfg(not(target_os = "linux"))]
 fn add_linux_system_libs(_cmd: &mut std::process::Command) {}
 
+/// `pycc run` has no `--release` flag (undocumented in CLI_SPEC.md) and
+/// always builds in the debug profile: the hardcoded `false` below reaches
+/// `try_build` directly, which -- unlike `main()`'s `Command::Build` arm --
+/// never consults a neighboring `pycc.toml`'s `[build] opt = "release"`
+/// default, so this stays unconditional regardless of what any nearby
+/// `pycc.toml` names.
 fn run(path: &str) -> ExitCode {
     let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
     if let Err(code) = try_build(
@@ -655,6 +678,78 @@ mod release_flag_tests {
         let source_path = dir.join("main.py");
 
         assert!(resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod try_build_release_isolation_tests {
+    use super::*;
+
+    /// Regression test for a bug caught in review: `try_build` used to call
+    /// `resolve_release_flag` internally, so `run`'s hardcoded `false` (see
+    /// `run`'s own doc comment) still got silently upgraded to `true` by a
+    /// neighboring release-profile `pycc.toml`, with no `--release` flag on
+    /// `run` to override it. Proves the object `try_build` actually emits
+    /// for `release: false` is identical regardless of a neighboring
+    /// `pycc.toml` naming `opt = "release"`, by comparing it against the
+    /// same source's MIR compiled directly through `pycc_codegen` with
+    /// `release: false` -- the same object-file-bytes technique
+    /// `pycc_codegen`'s own `release_mode_actually_runs_llvm_optimization_
+    /// passes` test uses to prove the *opposite* claim (that release *does*
+    /// change the emitted object). Deliberately not a final-linked-binary-
+    /// size comparison: `docs/AGENT_RETROSPECTIVE.md`'s 2026-07-28 entry
+    /// found that proxy has no signal at that level (a large statically-
+    /// linked runtime plus OS segment-alignment padding absorbs the
+    /// relevant code-size delta, and embedded path-string lengths
+    /// independently perturb it). Calling `try_build` directly (rather than
+    /// spawning `pycc` as a subprocess) is what makes this reliable:
+    /// `try_build`'s own `std::process::id()`-keyed temp object path is
+    /// this same test process's id, not an unpredictable child's, so it's
+    /// locatable here without reaching into any uncontracted external
+    /// path -- and safe from cross-test races since no other test in this
+    /// crate writes to that same path.
+    #[test]
+    fn try_build_ignores_a_neighboring_release_pycc_toml_when_given_release_false() {
+        let dir =
+            std::env::temp_dir().join(format!("pycc_release_isolation_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("main.py");
+        std::fs::write(&src, "def main() -> None:\n    print(42)\n\nmain()\n").unwrap();
+        std::fs::write(
+            dir.join("pycc.toml"),
+            "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
+             [build]\nopt = \"release\"\n",
+        )
+        .unwrap();
+        let out = dir.join("out");
+
+        // Exactly what `run()` does: `release: false` straight through.
+        try_build(src.to_str().unwrap(), out.to_str().unwrap(), None, false)
+            .expect("try_build should succeed");
+
+        let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
+        let obj_bytes = std::fs::read(&obj_path).expect("try_build's temp object should exist");
+
+        // Independently compiled reference: the same source's MIR, built
+        // through the exact same frontend pipeline try_build itself uses,
+        // compiled directly with release=false.
+        let typed_hir = resolve_frontend(&src)
+            .ok()
+            .expect("fixture source should type-check");
+        let mir = pycc_mir::build(&typed_hir);
+        let ref_obj_path = dir.join("reference.o");
+        pycc_codegen::compile_to_object(&mir, &ref_obj_path, None, false)
+            .expect("reference codegen should succeed");
+        let ref_obj_bytes = std::fs::read(&ref_obj_path).unwrap();
+
+        assert_eq!(
+            obj_bytes, ref_obj_bytes,
+            "try_build(release: false) must ignore a neighboring pycc.toml's \
+             `opt = \"release\"` entirely -- only main()'s Command::Build arm may \
+             consult it, before try_build is ever called"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

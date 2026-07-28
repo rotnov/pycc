@@ -6,7 +6,7 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 
 | Command | Does |
 |---|---|
-| `pycc build [PATH] -o OUT` | compile to native binary (default `--debug`) |
+| `pycc build [PATH] -o OUT` | compile to native binary; debug by default, unless `--release` or a neighboring `pycc.toml`'s `opt = "release"` says otherwise (see `--release` below) |
 | `pycc run [PATH] [-- args]` | build + execute |
 | `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; no codegen |
 | `pycc test` | run project tests compiled (pytest-style discovery, subset) |
