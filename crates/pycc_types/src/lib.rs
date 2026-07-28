@@ -2909,6 +2909,25 @@ mod tests {
     }
 
     #[test]
+    fn an_int_argument_for_a_float_parameter_is_a_clean_error() {
+        // D-086: pycc requires an explicit `float(...)` conversion at typed
+        // boundaries (parameters, returns, assignments) rather than
+        // following the Python typing spec's numeric-tower rule that `int`
+        // is accepted wherever `float` is annotated. This is a deliberate
+        // deviation from `mypy --strict` (which accepts this call), not an
+        // oversight -- see D-086's rationale in docs/DECISIONS.md.
+        let mut env = Environment::new();
+        env.bind_function("identity".to_string(), vec![Ty::Float], Ty::Float);
+        let expr = HirExpr::Call {
+            callee: "identity".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("argument 1 of `identity` expects `float`, got `int`"));
+    }
+
+    #[test]
     fn calling_a_function_with_a_wrong_typed_argument_is_a_clean_error() {
         let mut env = Environment::new();
         env.bind_function("add".to_string(), vec![Ty::Int, Ty::Int], Ty::Int);
