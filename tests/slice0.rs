@@ -12,6 +12,10 @@ fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::
     path
 }
 
+fn rendered_diagnostic_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 #[test]
 fn a_missing_input_file_is_a_clean_error_not_a_panic() {
     // Regression test (found in PR review): an earlier version used
@@ -92,6 +96,33 @@ fn defining_main_without_calling_it_produces_no_output() {
 }
 
 #[test]
+fn build_and_run_a_function_reading_a_module_level_global_it_does_not_assign() {
+    // `x = 5` ; `def f() -> int:\n    return x` ; `print(f())` -- through
+    // the real `check`/`build`/codegen pipeline (not hand-crafted MIR):
+    // proves `pycc_types` (D-055), `pycc_mir` (local-shadowing
+    // classification), and `pycc_codegen` (module globals as real LLVM
+    // globals, reachable from any function) all agree end to end that a
+    // function may read a module-level global it does not itself assign.
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_module_global_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "reads_global.py",
+        "x = 5\n\ndef f() -> int:\n    return x\n\nprint(f())\n",
+    );
+    let out = dir.join("reads_global");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"5\n");
+}
+
+#[test]
 fn build_and_run_top_level_print_with_no_main() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_toplevel_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -123,6 +154,20 @@ fn run_subcommand_builds_and_executes_in_one_step() {
 }
 
 #[test]
+fn run_subcommand_normalizes_a_generated_runtime_failure_to_101() {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_e2e_run_runtime_fail_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "runtime_fail.py", "print(1.0 / 0.0)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(101));
+}
+
+#[test]
 fn run_subcommand_propagates_a_build_failure() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_run_fail_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -134,6 +179,27 @@ fn run_subcommand_propagates_a_build_failure() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("L0001"));
+}
+
+#[cfg(unix)]
+#[test]
+fn run_subcommand_maps_a_signal_terminated_compiled_program_to_exit_code_101() {
+    // A `pycc_rt` panic crosses a plain (non-unwinding) `extern "C"`
+    // boundary and aborts the child process via `SIGABRT` (see pycc_rt's
+    // own panic-across-FFI convention), so on Unix `Command::status()`'s
+    // `.code()` is `None` (the child was killed by a signal, not a normal
+    // exit) -- `run`'s previous `.unwrap_or(1)` silently mapped that to
+    // exit code 1 instead of the `101` CLI_SPEC.md promises for "compiled
+    // program panicked/uncaught exception".
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_run_signal_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "div_zero_run.py", "print(1.0 / 0.0)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(101));
 }
 
 #[test]
@@ -712,8 +778,8 @@ fn check_subcommand_reports_a_type_error() {
     // Distinct from the T0001/T0002 cases above -- those are raised during
     // pycc_hir::lower_checked itself. `x = undefined` parses and lowers
     // cleanly; the undefined-name error only surfaces from
-    // pycc_types::check's own inference pass, exercising try_check's third
-    // (and otherwise untested) diagnostic-producing stage.
+    // pycc_types::check's own inference pass, exercising check_frontend's
+    // third (and otherwise untested) diagnostic-producing stage.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_check_typeerr_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let src = write_fixture(&dir, "bad.py", "x = undefined\n");
@@ -764,4 +830,429 @@ fn a_bad_output_path_is_a_link_error_exit_code_1() {
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(1));
+}
+
+#[test]
+fn a_bad_temporary_directory_is_a_codegen_error_exit_code_1() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_badtmp_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "hello_badtmp.py", "print(42)\n");
+    let out = dir.join("hello");
+    let missing_tmp = dir.join("does_not_exist");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .env("TMPDIR", &missing_tmp)
+        .env("TMP", &missing_tmp)
+        .env("TEMP", &missing_tmp)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("codegen failed"));
+}
+
+#[test]
+fn check_accepts_every_staged_file_in_one_invocation() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_many_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = write_fixture(&dir, "first.py", "print(1)\n");
+    let second = write_fixture(&dir, "second.py", "def helper() -> None:\n    print(2)\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&first)
+        .arg(&second)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_reports_capability_errors_and_continues_the_batch() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_capability_batch_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let unsupported = write_fixture(&dir, "unsupported.py", "if True:\n    pass\n");
+    let syntax_error = write_fixture(&dir, "syntax_error.py", "$\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&unsupported)
+        .arg(&syntax_error)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout.contains("error[C0001]"));
+    assert!(stdout.contains(&format!("{}:2:5", rendered_diagnostic_path(&unsupported))));
+    assert!(stdout.contains("2 |     pass"));
+    assert!(stdout.contains("error[L0001]"));
+    assert!(stdout.contains(&rendered_diagnostic_path(&syntax_error)));
+    assert!(!stderr.contains("panicked"));
+}
+
+#[test]
+fn check_accepts_a_pep_263_latin_1_source_file() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_latin1_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("latin1.py");
+    std::fs::write(
+        &src,
+        b"# -*- coding: latin-1 -*- # Andr\xe9\n# caf\xe9\nprint(42)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_accepts_python_normalized_encoding_separators() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_encoding_name_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let utf8 = dir.join("utf8.py");
+    std::fs::write(&utf8, b"# coding: utf--8\nprint(1)\n").unwrap();
+    let latin1 = dir.join("latin1.py");
+    std::fs::write(&latin1, b"# coding: latin__1\n# caf\xe9\nprint(2)\n").unwrap();
+    let dotted_ascii = dir.join("dotted_ascii.py");
+    std::fs::write(&dotted_ascii, b"# coding: us.ascii\nprint(3)\n").unwrap();
+    let dotted_latin1 = dir.join("dotted_latin1.py");
+    std::fs::write(
+        &dotted_latin1,
+        b"# coding: iso.8859.1\n# caf\xe9\nprint(4)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&utf8)
+        .arg(&latin1)
+        .arg(&dotted_ascii)
+        .arg(&dotted_latin1)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_rejects_collapsed_utf8_separators_when_a_bom_is_present() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_bom_encoding_name_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("bom_conflict.py");
+    std::fs::write(&src, b"\xef\xbb\xbf# coding: utf--8\nprint(1)\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr.contains("UTF-8 BOM conflicts with the declared source encoding"));
+}
+
+#[test]
+fn check_normalizes_python_universal_newlines_before_rendering_diagnostics() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_newlines_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (name, source) in [
+        ("cr.py", b"print(1)\r$\r".as_slice()),
+        ("crlf.py", b"print(1)\r\n$\r\n".as_slice()),
+    ] {
+        let src = dir.join(name);
+        std::fs::write(&src, source).unwrap();
+        let output = Command::new(pycc_bin())
+            .arg("check")
+            .arg(&src)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stdout.contains(&format!("{}:2:1", rendered_diagnostic_path(&src))));
+        assert!(stdout.contains("2 | $\n"));
+        assert!(!stdout.contains("$\r"));
+    }
+}
+
+#[test]
+fn check_reports_a_malformed_encoded_source_as_an_input_error() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_bad_encoding_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("invalid_utf8.py");
+    std::fs::write(&src, b"print(42)\n# \xff\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr.contains("could not read"));
+    assert!(stderr.contains("source is not valid utf-8"));
+}
+
+#[test]
+fn check_rejects_a_codec_without_python_compatible_mappings() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_gbk_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("invalid_gbk.py");
+    std::fs::write(&src, b"# coding: gbk\n# \x80\nprint(42)\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr.contains("unknown source encoding `gbk`"));
+}
+
+#[test]
+fn check_accepts_a_staged_filename_that_starts_with_a_hyphen() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_hyphen_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_fixture(&dir, "--staged.py", "print(1)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["check", "--", "--staged.py"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn check_help_flags_show_help_instead_of_becoming_filenames() {
+    for flag in ["--help", "-h"] {
+        let output = Command::new(pycc_bin())
+            .args(["check", flag])
+            .output()
+            .unwrap();
+
+        assert!(output.status.success(), "flag: {flag}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("Usage:"),
+            "flag: {flag}"
+        );
+        assert!(output.stderr.is_empty(), "flag: {flag}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn check_accepts_a_non_utf8_staged_path_losslessly() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_non_utf8_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let filename = std::ffi::OsString::from_vec(b"invalid_\xff.py".to_vec());
+    let src = dir.join(filename);
+    std::fs::write(&src, b"$\n").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout.contains("error[L0001]"));
+    assert!(stdout.contains("invalid_\u{fffd}.py"));
+}
+
+#[test]
+fn check_reports_every_failure_and_io_errors_take_exit_code_precedence() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_errors_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let invalid = write_fixture(&dir, "invalid.py", "print(1)\n$\n");
+    let missing = dir.join("missing.py");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&invalid)
+        .arg(&missing)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout.contains(&rendered_diagnostic_path(&invalid)));
+    assert!(stdout.contains("L0001"));
+    assert!(stdout.contains(&format!("{}:2:1", rendered_diagnostic_path(&invalid))));
+    assert!(stdout.contains("2 | $"));
+    assert!(stdout.contains("  | ^"));
+    assert!(stderr.contains(&rendered_diagnostic_path(&missing)));
+    assert!(stderr.contains("could not read"));
+}
+
+#[test]
+fn check_aligns_a_diagnostic_caret_after_tab_indentation() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_tab_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "tab.py", "def main() -> None:\n\t$\n");
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout.contains(&format!("{}:2:2", rendered_diagnostic_path(&src))));
+    assert!(stdout.contains("2 | \t$"));
+    assert!(stdout.contains("  | \t^"));
+}
+
+#[test]
+fn check_uses_unicode_display_width_for_diagnostic_carets() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_unicode_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for (filename, source, expected) in [
+        (
+            "wide.py",
+            "\u{53d8}\u{91cf}$\n",
+            "1 | \u{53d8}\u{91cf}$\n  |     ^",
+        ),
+        ("combining.py", "e\u{301}$\n", "1 | e\u{301}$\n  |  ^"),
+    ] {
+        let src = write_fixture(&dir, filename, source);
+        let output = Command::new(pycc_bin())
+            .arg("check")
+            .arg(&src)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(stdout.contains(expected), "stdout: {stdout}");
+    }
+}
+
+#[test]
+fn check_sizes_the_diagnostic_gutter_for_three_digit_line_numbers() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_check_gutter_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut source = "print(1)\n".repeat(99);
+    source.push_str("$\n");
+    let src = write_fixture(&dir, "line_100.py", &source);
+
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(&src)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout.contains(&format!("{}:100:1", rendered_diagnostic_path(&src))));
+    assert!(stdout.contains("100 | $"));
+    assert!(stdout.contains("    | ^"));
+}
+
+#[test]
+fn check_without_files_is_a_clean_invocation_error() {
+    let output = Command::new(pycc_bin()).arg("check").output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("at least one Python file"));
+}
+
+#[test]
+fn repository_publishes_the_pycc_check_pre_commit_hook() {
+    let manifest_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".pre-commit-hooks.yaml");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("\r\n", "\n");
+
+    assert_eq!(
+        manifest,
+        "\
+- id: pycc-check
+  name: pycc check
+  description: Check typed Python files with the pycc frontend
+  entry: pycc check --
+  language: rust
+  types: [python]
+  require_serial: true
+"
+    );
+
+    let fixture = manifest_path
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/pre_commit_valid.py");
+    let output = Command::new(pycc_bin())
+        .arg("check")
+        .arg(fixture)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn native_windows_agent_lifecycle_and_policy_parsers_pass() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let python = std::env::var_os("PYTHON").unwrap_or_else(|| "python".into());
+    for pattern in [
+        "test_manage_ievo_hooks.py",
+        "test_validate_agent_policies.py",
+    ] {
+        let output = Command::new(&python)
+            .args([
+                "-B", "-m", "unittest", "discover", "-s", "scripts", "-p", pattern,
+            ])
+            .current_dir(repository)
+            .output()
+            .expect("the Tier-1 Windows runner must provide Python");
+        assert!(
+            output.status.success(),
+            "{pattern} failed under native Windows Python:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
 }

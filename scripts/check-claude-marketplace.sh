@@ -50,6 +50,41 @@ PY
 env CLAUDE_CONFIG_DIR="$test_claude_config" \
   claude plugin validate --strict "$marketplace_root"
 
+env CLAUDE_CONFIG_DIR="$test_claude_config" \
+  claude plugin marketplace add "$marketplace_root" --scope user
+(
+  cd "$repo_root"
+  env CLAUDE_CONFIG_DIR="$test_claude_config" \
+    claude plugin install ievo@ievo-skills --scope user
+)
+set -- "$test_claude_config"/plugins/cache/ievo-skills/ievo/*/agents/deep-reviewer.md
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+  echo "error: expected one pinned Claude deep-reviewer artifact" >&2
+  exit 1
+fi
+reviewer_manifest=$1
+set -- "$test_claude_config"/plugins/cache/ievo-skills/ievo/*/skills/deep-review/SKILL.md
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+  echo "error: expected one pinned Claude deep-review entrypoint" >&2
+  exit 1
+fi
+review_skill=$1
+python3 - "$review_skill" "$reviewer_manifest" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+expected = {
+    "SKILL.md": "ec8805e22fff7db49cfe49c2a7cd49f340a618bf58da6acaf4253e875279670d",
+    "deep-reviewer.md": "b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2",
+}
+for raw_path in sys.argv[1:]:
+    path = pathlib.Path(raw_path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == expected[path.name], f"{path.name} digest drifted"
+print("Claude pinned deep-review entrypoint and agent: valid")
+PY
+
 skill_debug="$test_claude_config/skill-discovery.log"
 known_skill_output="$test_claude_config/known-skill.out"
 unknown_skill_output="$test_claude_config/unknown-skill.out"

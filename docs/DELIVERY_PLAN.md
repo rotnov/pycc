@@ -27,16 +27,11 @@ Verified empirically on the primary dev host (macOS, aarch64-apple-darwin) befor
 |---|---|---|
 | Rust | `rustc 1.97.1` (stable, updated via `rustup update stable`; matches README's "1.97+" exactly) | Toolchain pinned via `rust-toolchain.toml` inside the repo — **not** a global `rustup default` change, since this machine has other toolchains (incl. a `solana` one) that must stay untouched |
 | LLVM | `22.1.1` (single Homebrew keg; the `llvm@17`..`llvm@22` opt-paths are stale symlinks to the same keg, not distinct installs) | `inkwell = "0.9"` with feature `llvm22-1` — clean match, no version fudging needed |
-| CPython oracle | `python3.14` → `3.14.3` at `/opt/homebrew/bin/python3.14` | Matches the v1 language line but is behind the current 3.14.6 patch target; upgrade before PR-6. |
+| CPython oracle | `python3.14` → `3.14.6` at `/opt/homebrew/bin/python3.14` | Matches the v1 language line and the current 3.14.6 patch target. |
 | Local linker | Apple clang 21 / Xcode CLT `ld64` | Sufficient for the first vertical slice on native host; PR-3's `--target` work (D-026/D-028/D-031) routes through each host's own driver -- system `cc` (Apple clang) on macOS, bundled clang on Windows/Linux when `--target` is given -- not a universally bundled `lld` binary, which none of the three LLVM distributions this project installs actually ships |
 | crates.io | Reachable (a bare `curl -I` 403s on crates.io's anti-bot filter — mundane, not a sandbox restriction; a real UA gets 200) | `cargo build` can fetch `ruff_python_parser`, `inkwell`, `rayon`, `mimalloc` |
 | `gh` CLI | Authenticated, `repo`+`workflow` scopes | Can open PRs and push `.github/workflows` |
 | `cargo-llvm-cov` | **Not** part of the rustup `llvm-tools` component — it is a separately distributed binary (own crate/release) that *uses* `llvm-tools-preview`'s `llvm-cov`/`llvm-profdata` at runtime. An earlier version of this plan conflated the two (caught by repo audit, issue #13); a spec that just says "install llvm-tools" fails in CI with "no such command: llvm-cov" | PR-1's CI skeleton installs both, explicitly and pinned: `rustup component add llvm-tools-preview` **and** a pinned `cargo-llvm-cov` install — never a bare "latest," per D-014's own no-unreviewed-drift spirit. CI smoke-checks the direct binary, then invokes it with the explicit `llvm-cov` subcommand under a clean unprivileged `nobody` environment whose workspace and trusted executables are read-only. A repository alias, `PATH` mutation, build script, or procedural macro therefore cannot replace the gate executable. |
-
-Release review on 2026-07-24 found upstream Python 3.14.6 while the verified
-local oracle above remains 3.14.3. The table records the actual host state, not
-the desired PR-6 pin. Before PR-6, install and pin 3.14.6 locally and in CI,
-re-verify the executable path/version, and re-record all differential outputs.
 
 Only macOS is locally verifiable. Linux x64/arm64 and Windows MSVC exist only via CI — so CI must be wired right after the first local slice works, not as a v0.1 finishing touch (see PR-3 below).
 
@@ -68,7 +63,7 @@ Three approaches were weighed: (A) thin end-to-end slice first, then grow featur
 | 3 | CI matrix live on all 5 Tier-1 targets for slice 0, **plus one cross-compiled build**: `pycc build --target x86_64-apple-darwin` from the `macos-14` (arm64) runner, executed and verified on `macos-15-intel` (x64) — same-OS/cross-arch, per D-026, since true cross-OS needs a target sysroot this project doesn't bundle yet (verified empirically, not assumed). Cross-compilation is a v0.1 requirement from D-011/README/ARCHITECTURE/CLI_SPEC, not a nice-to-have — it does not get to hide behind "CI matrix live" meaning same-host-per-target builds only |
 | 4 | Frontend depth: full v0.1 grammar, real T0001 + local inference, first diagnostic codes with snapshot tests. First per-PR frontend benchmark baseline recorded here (see Performance gate below) since this is the first PR with a non-trivial frontend to measure |
 | 5 | Codegen depth: full v0.1 feature set (int/float/str/bool, arithmetic, control flow, recursion, f-strings); runtime fleshed out (overflow→bigint per D-001, small-string opt per D-007). `--debug` profile only — `--release`/LTO is a v0.2 item (see Testing scope below), not built here |
-| 6 | `pycc_testkit`: fib + mandelbrot-ascii vs. pinned CPython 3.14.6 on all 5 targets, `--debug` profile; `pycc check` benchmark <50ms/1k LOC; diagnostic output matches CLI_SPEC.md's example byte-for-byte |
+| 6 | Conformance + benchmark gate: fib + mandelbrot-ascii vs. pinned CPython 3.14.6 on all 5 targets, `--debug` profile, as a plain `tests/conformance.rs` integration test rather than a new `pycc_testkit` crate (D-085); `pycc check` benchmark <50ms/1k LOC; diagnostic output matches CLI_SPEC.md's example byte-for-byte |
 | 7 | Buffer: close whatever's left so all v0.1 ROADMAP.md acceptance bullets are simultaneously green |
 
 Each row above absorbs one gap an automated repo audit found in the original version of this plan (tracked as GitHub issues #9–#13): the cross-compilation gap (#9, → PR-3), the debug/release conformance contradiction (#10, → PR-5/PR-6 and Testing scope below), the missing module-level-execution case (#11, → PR-2), the missing early performance gate (#12, → PR-4 and Performance gate below), and the `cargo-llvm-cov` installation error (#13, → PR-1 and Environment baseline below). Issue #14 (measure platform-specific code per-platform rather than exempting it) is deferred — there is no platform-specific code yet for the question to apply to; it rides along whenever D-014 next gets touched.
@@ -104,23 +99,24 @@ upload steps, flattens each single-ID download into its own exact destination,
 and requires any contract drift to use its own reviewed transition. D-056 keeps
 this transport, threshold, required `ci-gate` fan-in, and benchmark unchanged.
 
-D-056 is active for residual same-runner order variance. Main
-run 30198852753 failed at `+3.14%` even though `src/`, `crates/`, and every
+D-056 introduced the executable-input identity rule for residual same-runner
+order variance. Main run 30198852753 failed at `+3.14%` even though `src/`,
+`crates/`, and every
 already-bound benchmark/build input were unchanged; run 30199477003 later
 passed the same unchanged-input class at `+0.86%`. The active workflow
 therefore retains both timings as telemetry but makes them non-blocking only
 when a pre-execution trusted comparison proves the complete executable inputs
 identical. Any `src/` or `crates/` difference still enters the unchanged
-greater-than-2% median comparison. The live workflow is byte-identical to the
-reviewed D-056 fixture. D-062 responds to the later identical-source-pair
+greater-than-2% median comparison. The historical D-056 workflow first
+activated that rule. D-062 responds to the later identical-source-pair
 `+0.10%`/`+3.66%` contradiction that D-056's changed-input path intentionally
-does not remove. It stages a source-aware five-replicate successor:
+does not remove. The active source-aware five-replicate successor uses:
 median-of-five per revision when inputs changed, D-056's non-blocking telemetry
 when they are identical, all ten JSON files retained, predecessor samples
 sealed before candidate execution, and no result-dependent retries. The
-checker temporarily authorizes only active D-056 and the exact inert D-062
-fixture; a fresh byte-exact activation PR must make the latter live and retire
-the former. The 2% threshold, `ci-gate` fan-in, benchmark contract, artifact-ID
+checker authorizes only the exact active D-062 workflow, which is byte-identical
+to its reviewed fixture; D-056 remains historical audit evidence but its digest
+is retired. The 2% threshold, `ci-gate` fan-in, benchmark contract, artifact-ID
 binding, and isolated predecessor-owned comparison boundary remain unchanged.
 
 ## Autonomy policy ("no questions" mechanics)

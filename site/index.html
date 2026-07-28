@@ -59,7 +59,7 @@
             "name": "pycc — AOT compiler for typed Python to native binaries",
             "description": "pycc is a fully AI-created, human-managed pre-alpha project building an ahead-of-time compiler for typed Python 3.14 with Rust and LLVM.",
             "inLanguage": "en",
-            "dateModified": "2026-07-25",
+            "dateModified": "2026-07-27",
             "mainEntity": {
               "@id": "https://rotnov.github.io/pycc/#project"
             }
@@ -352,20 +352,21 @@
         <div class="status-card">
           <div>
             <p class="eyebrow">04 · Honest status</p>
-            <h2 id="status-title">The v0.1 frontend exists. The compiler is not ready for production.</h2>
+            <h2 id="status-title">The v0.1 frontend and native backend exist. The compiler is not ready for production.</h2>
           </div>
           <div class="status-copy">
             <p>
-              <code>pycc check</code> now runs the broadened v0.1 frontend:
+              <code>pycc check</code> now runs the v0.1 frontend:
               parsing, HIR lowering, strict type checking, private-helper
-              inference, and stable human or JSON diagnostics. The native
-              <code>build</code>/<code>run</code> path remains limited to the
-              original executable slice.
+              inference, and stable human or JSON diagnostics. Native
+              <code>build</code>/<code>run</code> lower that implemented surface
+              through MIR, LLVM, the host linker, and the runtime.
             </p>
             <ul>
               <li><span aria-hidden="true">✓</span> Strict v0.1 frontend and diagnostic snapshots</li>
-              <li><span aria-hidden="true">✓</span> End-to-end native-code slice</li>
-              <li><span aria-hidden="true">→</span> Full code generation and runtime breadth are next</li>
+              <li><span aria-hidden="true">✓</span> v0.1 native backend with documented gaps</li>
+              <li><span aria-hidden="true">✓</span> v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)</li>
+              <li><span aria-hidden="true">→</span> The full conformance matrix and v0.2 collections/generics are next</li>
             </ul>
           </div>
         </div>

@@ -13,7 +13,7 @@ require_relative "check_roadmap_evidence"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
-  ACTIVE_D56_SOURCE_AWARE_WORKFLOW =
+  ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW =
     Pathname(__dir__).parent / ".github/workflows/ci.yml"
   RETIRED_D51_PAIRED_WORKFLOW =
     Pathname(__dir__).parent / "tests/fixtures/d51-paired-ci.yml"
@@ -21,6 +21,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent / "tests/fixtures/d56-source-aware-ci.yml"
   D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d62-replicated-paired-ci.yml"
+  D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d80-conformance-oracle-ci.yml"
+  D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d84-throughput-floor-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -561,7 +565,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     hidden_items.each do |hidden_item|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{hidden_item}",
-        workflow: ACTIVE_D56_SOURCE_AWARE_WORKFLOW.read
+        workflow: ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
       )
 
       assert status.success?, stderr
@@ -580,7 +584,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: ACTIVE_D56_SOURCE_AWARE_WORKFLOW.read
+      workflow: ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
     )
 
     assert status.success?, stderr
@@ -600,7 +604,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: ACTIVE_D56_SOURCE_AWARE_WORKFLOW.read
+      workflow: ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
     )
 
     assert status.success?, stderr
@@ -611,7 +615,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     ["    - [x] Root code example.\n", ">     - [x] Quoted code example.\n"].each do |example|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{example}",
-        workflow: ACTIVE_D56_SOURCE_AWARE_WORKFLOW.read
+        workflow: ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
       )
 
       assert status.success?, stderr
@@ -700,43 +704,206 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stdout, "Roadmap evidence policy passed."
   end
 
-  def test_tier1_workflow_authorization_is_the_active_d56_digest
+  def test_accepts_conformance_tier1_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_conformance_tier1_evidence_with_the_wrong_claim
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `fib` and `mandelbrot-ascii` compile on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not prove this roadmap claim"
+  end
+
+  def test_rejects_conformance_tier1_evidence_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
+
+      - [x] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
+  def test_accepts_throughput_floor_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_throughput_floor_evidence_with_the_wrong_claim
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] `pycc check` processes 1k LOC in under 5 seconds. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not prove this roadmap claim"
+  end
+
+  def test_rejects_throughput_floor_evidence_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
+
+      - [x] `pycc check` processes 1k LOC in under 50 ms. <!-- roadmap-evidence: check-throughput-1k-loc-50ms -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
+  def test_accepts_cli_spec_diagnostic_evidence
+    repository_root = Pathname(__dir__).parent
+    workflow = (repository_root / ".github/workflows/ci.yml").read
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
+    MARKDOWN
+
+    stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_rejects_cli_spec_diagnostic_evidence_with_the_wrong_claim
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## Current delivery status
+
+      ### v0.1 acceptance checklist
+
+      - [x] The error demonstration matches CLI_SPEC.md. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "does not prove this roadmap claim"
+  end
+
+  def test_rejects_cli_spec_diagnostic_evidence_outside_the_v0_1_checklist
+    roadmap = <<~MARKDOWN
+      # pycc Roadmap
+
+      ## v1.0 — spec freeze
+
+      ### v0.1 acceptance checklist
+
+      - [x] The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output. <!-- roadmap-evidence: cli-spec-diagnostic-match -->
+    MARKDOWN
+
+    _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: coverage_workflow)
+
+    refute status.success?
+    assert_includes stderr, "must appear under the expected roadmap section"
+  end
+
+  def test_tier1_workflow_authorization_is_the_active_d84_digest
     assert_equal(
-      D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+      D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d56_and_staged_d62
+  def test_tier1_workflow_authorization_contains_only_active_d84
     assert_equal(
-      [
-        D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
-        D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
-      ],
+      [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
 
   def test_tier1_workflow_allowlist_retires_the_pre_alpha_eval_digest
     refute_equal(
-      D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+      D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256,
       "58e2d5026b59e7c921b57c882d24b6507c95dd8f99e390c0a68af217e5e038c8"
     )
   end
 
-  def test_tier1_workflow_allowlist_retains_the_active_d56_digest
+  def test_tier1_workflow_allowlist_retains_the_active_d80_digest
     assert_equal(
-      "c696da18f4f8b876d4398c43f94fe574e870579badd84cf579fbe91fbd9d7b4b",
-      D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
+      "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234",
+      D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
     )
   end
 
   def test_tier1_workflow_allowlist_retires_the_d48_steady_digest
     refute_equal(
-      D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+      D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256,
       "940b342845a9fc600d72195a0a382ce9437f3cb123cc62f8805b8cb82ae35f56"
+    )
+  end
+
+  def test_tier1_workflow_allowlist_retires_the_d62_replicated_digest
+    refute_equal(
+      D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256,
+      D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256
     )
   end
 
@@ -751,23 +918,15 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d56_source_aware_workflow_is_active_and_reviewed
+  def test_d56_source_aware_workflow_remains_reviewed_audit_evidence
     assert D56_SOURCE_AWARE_WORKFLOW_FIXTURE.file?
     assert_equal(
       D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(D56_SOURCE_AWARE_WORKFLOW_FIXTURE).hexdigest
     )
-    assert_equal(
-      D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(ACTIVE_D56_SOURCE_AWARE_WORKFLOW).hexdigest
-    )
-    assert_equal(
-      D56_SOURCE_AWARE_WORKFLOW_FIXTURE.read,
-      ACTIVE_D56_SOURCE_AWARE_WORKFLOW.read
-    )
     assert validate_source_aware_perf_gate_lifecycle(
-      ACTIVE_D56_SOURCE_AWARE_WORKFLOW.read,
-      ACTIVE_D56_SOURCE_AWARE_WORKFLOW.to_s
+      D56_SOURCE_AWARE_WORKFLOW_FIXTURE.read,
+      D56_SOURCE_AWARE_WORKFLOW_FIXTURE.to_s
     )
     refute_equal(
       D51_PAIRED_PERF_CI_WORKFLOW_SHA256,
@@ -884,10 +1043,29 @@ class RoadmapEvidenceCliTest < Minitest::Test
     end
   end
 
-  def test_d62_replicated_workflow_digest_matches_the_reviewed_fixture
+  def test_d62_replicated_workflow_remains_a_reviewed_audit_fixture
     assert_equal(
       D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.read,
+      D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_d84_throughput_floor_workflow_is_active_and_reviewed
+    assert_equal(
+      D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_equal(
+      D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW).hexdigest
+    )
+    assert_equal(
+      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read,
+      ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
     )
     assert_equal(
       REPLICATED_PERF_CHECKER_SHA256,
@@ -904,14 +1082,25 @@ class RoadmapEvidenceCliTest < Minitest::Test
       ).hexdigest
     )
     assert validate_source_aware_perf_gate_lifecycle(
-      D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.read,
-      D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.to_s
+      ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read,
+      ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.to_s
+    )
+  end
+
+  def test_d80_conformance_oracle_workflow_remains_a_reviewed_audit_fixture
+    assert_equal(
+      D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.read,
+      D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.to_s
     )
   end
 
   def test_tier1_workflow_allowlist_retires_the_superseded_single_job_digest
     refute_equal(
-      D56_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
+      D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256,
       "0079c33c46c085277c4a84996a69a6c2d1777b34de9daf2e5d5e8f1923ceb27c"
     )
   end
@@ -930,18 +1119,18 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_public_cli_accepts_the_staged_d62_workflow
+  def test_public_cli_accepts_the_active_d84_workflow
     stdout, stderr, status = run_checker(
       roadmap: roadmap_with_tier1_claim(:absent),
-      workflow: D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.read
+      workflow: D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read
     )
 
     assert status.success?, stderr
     assert_includes stdout, "Roadmap evidence policy passed."
   end
 
-  def test_public_cli_rejects_drift_in_the_staged_d62_workflow
-    workflow = D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.read.sub(
+  def test_public_cli_rejects_drift_in_the_active_d84_workflow
+    workflow = D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read.sub(
       "for round in 1 2 3 4 5; do",
       "for round in 1 2 3; do"
     )
@@ -952,12 +1141,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
   def test_public_cli_rejects_an_active_workflow_without_both_perf_jobs
     workflow = without_workflow_jobs(
-      D56_SOURCE_AWARE_WORKFLOW_FIXTURE.read,
+      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read,
       "frontend-perf-measure",
       "frontend-perf-gate"
     )
@@ -968,7 +1157,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_with_unchecked_tier1_claim
@@ -978,7 +1167,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_without_a_tier1_claim
@@ -988,12 +1177,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
   def test_public_cli_requires_active_digest_without_a_tier1_claim
     workflow =
-      D56_SOURCE_AWARE_WORKFLOW_FIXTURE.read + "\n# unreviewed drift\n"
+      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read + "\n# unreviewed drift\n"
 
     _stdout, stderr, status = run_checker(
       roadmap: roadmap_with_tier1_claim(:absent),
@@ -1001,16 +1190,17 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
-  def test_public_cli_accepts_the_reviewed_d56_activation_workflow
+  def test_public_cli_rejects_the_retired_d56_workflow
     _stdout, stderr, status = run_checker(
       roadmap: roadmap_with_tier1_claim(:absent),
       workflow: D56_SOURCE_AWARE_WORKFLOW_FIXTURE.read
     )
 
-    assert status.success?, stderr
+    refute status.success?
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
   def test_public_cli_rejects_the_retired_d51_workflow
@@ -1020,7 +1210,27 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+  end
+
+  def test_public_cli_rejects_the_retired_d62_workflow
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: D62_REPLICATED_PAIRED_WORKFLOW_FIXTURE.read
+    )
+
+    refute status.success?
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+  end
+
+  def test_public_cli_rejects_the_retired_d80_workflow
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.read
+    )
+
+    refute status.success?
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
   def test_public_cli_rejects_unreviewed_d56_workflow_drift
@@ -1032,7 +1242,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
   def test_paired_measurement_resolves_the_exact_pull_request_base
@@ -1687,7 +1897,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
-    assert_includes stderr, "does not match a reviewed active or staged performance CI workflow"
+    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
   end
 
   def test_requires_the_hard_coverage_gate_while_its_roadmap_claim_is_unchecked
@@ -1945,6 +2155,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
                     "--target x86_64-apple-darwin -p pycc_rt"
     assert_operator commands.index("cargo build --workspace"),
                     :<,
-                    commands.index("cargo test --workspace")
+                    commands.index("cargo test --workspace -- --include-ignored")
   end
 end

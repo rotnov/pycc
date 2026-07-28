@@ -24,13 +24,11 @@ enforce the normal delivery path.
   artifacts by distinct numeric IDs, flattens each into an exact destination,
   verifies the predecessor-owned source-aware comparator, and fails closed on
   revision, benchmark-contract, executable-input identity, artifact-identity,
-  file-set, or comparison drift. D-062 records the residual changed-source
-  single-observation variance in open issue #109. During its two-phase
-  transition, reviewed D-056 remains active and the exact D-062 source-aware
-  five-replicate digest is pre-authorized only as an inert prospective fixture;
-  no live control changes until a fresh activation pull request replaces the
-  workflow byte-for-byte and retires D-056's active digest. The standalone
-  `agent-policy` job provides faster
+  file-set, or comparison drift. D-062 addresses the residual changed-source
+  single-observation variance tracked in open issue #109 with five fixed runs
+  per revision and a median-of-five aggregate. Only its exact reviewed workflow
+  digest is authorized; the D-056 digest is historical audit evidence. The
+  standalone `agent-policy` job provides faster
   feedback until its exact context has run successfully on `main` and is
   added to branch protection.
 - Zero approving reviews are required while this is a solo-maintainer repository.
@@ -64,7 +62,7 @@ D-048 authorization remain absent.
 D-048 and D-050 preserve the historical activation lifecycle and the reason it
 was bounded; they no longer describe live performance transport.
 
-### Active source-aware paired-runner gate (D-051/D-053/D-056)
+### Active fixed-replicate source-aware paired-runner gate (D-051/D-053/D-056/D-062)
 
 Three complete CI attempts for PR #107 measured a documentation-and-test-only
 candidate at `+80.82%`, `+12.82%`, and `+7.30%` against the same exact
@@ -85,7 +83,7 @@ download is flattened into its own exact comparison directory, so the pinned
 action cannot add an artifact-name path component. Its isolated gate
 keeps the 2% threshold and hash-verified review boundary while using an
 exact-predecessor median comparator that is robust to isolated high outliers
-and accepts exactly two regular-file estimates. D-056 retains this entire
+and accepts exactly two regular-file estimates. D-056 retained this entire
 boundary and addresses the residual false-positive class demonstrated by main
 run 30198852753: a `+3.14%` delta with identical executable inputs. Before
 candidate execution, the active measurement job classifies the complete `src/`
@@ -93,30 +91,62 @@ and `crates/` trees while the existing contract independently binds every
 benchmark and build input. The gate accepts only an exact boolean identity,
 always downloads and validates both timing artifacts, and treats the delta as
 non-blocking environment telemetry only when all executable inputs are proven
-identical. Changed source keeps the existing `>2%` block.
+identical. D-062 retains that classifier and the existing `>2%` block for
+changed source, but fixes the sample plan at five complete runs per revision.
 
 The active `.github/workflows/ci.yml` is byte-identical to the reviewed
-[`d56-source-aware-ci.yml`](../tests/fixtures/d56-source-aware-ci.yml), and the
-allowlist contains its digest plus only D-062's inert, byte-exact prospective
-source-aware five-replicate successor. The D-051 fixture and comparators remain
-historical audit evidence, but the active policy rejects that older workflow
-digest; D-048 remains absent. Every pull request and `main` push still measures
-both exact revisions inside its own run, so no successful external baseline
-artifact or administrative bootstrap state is required.
+[`d62-replicated-paired-ci.yml`](../tests/fixtures/d62-replicated-paired-ci.yml),
+and the allowlist contains only its digest. The D-051 and D-056 fixtures and
+comparators remain historical audit evidence, but the active policy rejects
+their workflow digests; D-048 remains absent. Every pull request and `main`
+push still measures both exact revisions inside its own run, so no successful
+external baseline artifact or administrative bootstrap state is required.
 
 PR #131 and its post-merge main run later gave contradictory `+0.10%` and
 `+3.66%` outcomes for byte-identical Git trees, proving that one paired median
-still permits within-run/order variance to decide a changed-source gate. D-062's
-staged successor fixes the sample count at five per revision and compares the
+still permits within-run/order variance to decide a changed-source gate. D-062
+fixes the sample count at five per revision and compares the
 median of those five medians when D-056's classifier reports `false`; exact
 `true` keeps D-056's non-blocking telemetry result. Predecessor-first sealing
-and the unchanged greater-than-2% block remain. It is not active merely because
-its digest and fixture are reviewed; activation must arrive through a separate
-up-to-date PR whose workflow bytes exactly equal that fixture.
+and the unchanged greater-than-2% block remain. Every one of the exact ten JSON
+files is retained for 90 days; missing, extra, malformed, or symlinked evidence
+fails closed. Activation does not close #109 until repeated changed-source PR
+and post-merge runs validate the blocking path without result selection.
 
 When a new check is introduced, first merge and observe it successfully on `main`,
 then add its exact reported context to branch protection. Never require a guessed or
 not-yet-emitted context, because that creates an unfulfillable merge gate.
+
+## Live monitoring scope
+
+Every external monitoring cycle starts by fetching the remote, resolving its
+default branch, and recording that branch's exact commit. For every open pull
+request, the checkpoint records its number, state, draft status, and exact head;
+for every task-active pull request it also records mergeability, unresolved
+review threads, and required checks. Subsequent work is event-driven from that
+checkpoint: a new default-branch commit; a newly opened or reopened pull
+request; a state, draft-status, or head change relative to an inventoried pull
+request's baseline; or a mergeability, review-thread, or required-check change
+on a task-active pull request is live work. An `updated_at` change caused only
+by comments, reactions, labels, or activity outside those fields is not a live
+event. Once an eligible new state has been evaluated and recorded, it becomes
+the next checkpoint rather than an event to rediscover on every poll.
+
+Links in this specification, an ADR, the roadmap, a retrospective, or a session
+log do not enter the live monitoring set by citation alone. Closed incidents,
+closed issues, and closed or merged pull requests remain historical evidence.
+A task-active pull request's post-checkpoint close or merge is evaluated once
+and then removed from the live set. Issues are not part of general repository
+polling and are inspected only when the active task names one for a bounded
+audit. In particular, D-054's incident #125 and staging PR #119 remain evidence
+for the completed one-shot emergency path, not recurring poll targets.
+
+Before waiting for CI, the monitor verifies the pull request's current state,
+draft state, mergeability, exact head, and unresolved review threads. A merge,
+closure, conflict, or head change ends the old wait immediately. For a newly
+observed `main` merge, the monitor evaluates the introduced commit range and
+verifies the expected post-merge workflows against that exact merge commit
+before advancing the checkpoint.
 
 ## Direct-commit audit
 

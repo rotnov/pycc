@@ -57,11 +57,13 @@
 - Do not report expected behavior, ordinary project failures, or unverified suspicions. Gather enough evidence to make the report actionable and avoid automated issue spam.
 - Link the upstream issue in the task summary and in the local PR when the reported bug affects the change being delivered.
 
-## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution), [D-025](docs/DECISIONS.md#d-025-registered-contracts-for-shared-hook-targets))
+## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution), [D-025](docs/DECISIONS.md#d-025-registered-contracts-for-shared-hook-targets), [D-077](docs/DECISIONS.md#d-077-project-local-ievo-hook-lifecycle-is-symmetric), [D-081](docs/DECISIONS.md#d-081-harden-the-project-local-ievo-lifecycle-boundary))
 
 - Shared `.claude/settings.json` entries must not invoke scripts or other targets that are absent from a clean checkout. A hook whose target is gitignored is a clean-clone defect even when the hook failure is non-blocking.
-- iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Wire them only from the gitignored `.claude/settings.local.json`; never commit those hook entries or the generated scripts.
-- After cloning the repository, enable or refresh iEvo locally, then verify the generated hook entries live in `.claude/settings.local.json`. If the current iEvo version writes them to shared settings, relocate the complete `hooks` object to local settings before committing any repository change.
+- iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Claude hook wiring belongs only in gitignored `.claude/settings.local.json`; Codex hook wiring belongs only in gitignored `.codex/hooks.json`. Never commit those entries or generated scripts.
+- After enabling or refreshing iEvo, run `python3 scripts/manage_ievo_hooks.py localize` and then `python3 scripts/manage_ievo_hooks.py check --smoke`. The helper removes only the exact iEvo entries from shared Claude settings, preserves unrelated hooks, restores the repository's ignore policy if newer iEvo releases propose tracked shims, and validates both client surfaces.
+- To disable auto-evolution in this clone, run `python3 scripts/manage_ievo_hooks.py disable`, not the generic iEvo disable workflow by itself. The project helper removes the exact iEvo entries from shared and local Claude settings plus Codex hooks before deleting their local targets, preserves the tracked project-wide intent flag, and is safe to repeat.
+- Do not edit or regenerate hook configuration, or relocate `.claude`, `.codex`, `.ievo`, or their managed ancestors, while `localize`, `check`, or `disable` is running. The helper lock serializes its own invocations only; arbitrary editors and upstream tools do not participate, and portable path replacement/removal is not an atomic compare-and-swap.
 - Shared hooks must not hide executable targets behind shell control separators, including literal line breaks, or in inline/stdin interpreter forms such as `sh -c`, `bash -s`, `python -c`, or `node --eval`.
 - Interpreter options are fail-closed unless the validator explicitly models their operands; an option operand must never be mistaken for the executable hook target.
 - Before changing shared hook configuration, test the tracked-file view of the repository. Every referenced filesystem target must be tracked and registered in `FAIL_SILENT_WRAPPER_CONTRACTS` with a tracked `scripts/test_*.py` contract that runs in required CI.
@@ -74,6 +76,14 @@
 - Administrators and automation credentials do not bypass the rule for ordinary work. The emergency procedure, audit expectations, and recovery steps live in [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md).
 - A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
 - The push audit executes the pre-push `main` revision of `scripts/check_main_history.py`, with an immutable reviewed bootstrap fallback when that parent predates the checker; it never executes the revision being audited. Its workflow definition is still supplied by the pushed revision, so treat the job as defense-in-depth: the external repository monitor must verify the workflow content and expected run independently.
+
+## Monitor only live repository events ([D-078](docs/DECISIONS.md#d-078-external-repository-monitoring-is-checkpointed-and-event-driven))
+
+- Establish an explicit monitoring checkpoint from the refreshed remote default-branch commit. For every open pull request, record its number, state, draft status, and head commit; for every task-active pull request, also record mergeability, unresolved review threads, and required checks. Report the default-branch commit when monitoring starts or resumes.
+- After the checkpoint, monitor only a newly observed default-branch commit; a newly opened or reopened pull request; a state, draft-status, or head change relative to the recorded baseline for an inventoried open pull request; or a mergeability, review-thread, or required-check change on a pull request already active in the current task. Ignore `updated_at` changes caused only by comments, reactions, labels, or other activity outside those fields.
+- A pull request or issue cited only by documentation, an ADR, a retrospective, or a session log is historical evidence, not a live target. Do not poll a closed or merged pull request or a closed issue. Evaluate a task-active pull request's post-checkpoint close or merge once, then remove it from the live set; inspect an issue only when the active task explicitly names it.
+- Before waiting on CI, query the pull request's current state, draft status, mergeability, head commit, and unresolved review threads. Stop waiting and re-evaluate when it closes, merges, becomes conflicting, or its head changes; never keep polling checks for a superseded head.
+- When a new default-branch merge appears, inspect the introduced commit range and the exact post-merge workflows for that merge commit. Advance the checkpoint only after recording the new authoritative state, so the next cycle cannot rediscover the same event as new work.
 
 ## Testing and hard coverage gate
 
@@ -99,30 +109,44 @@
 - This repository currently has one maintainer. Do not require an approving pull-request review in branch protection: GitHub does not count an author's approval of their own pull request, so that setting deadlocks solo-maintainer work.
 - Keep required status checks, including the 100% coverage gate, and required conversation resolution enabled. Revisit the approving-review requirement when a second human maintainer is available.
 
-### GitHub Codex review loop
+### Local pinned review loop ([D-068](docs/DECISIONS.md#d-068-use-a-pinned-local-reviewer-as-the-required-review-loop))
 
-- After opening a pull request, request a GitHub Codex review with the exact comment `@codex review`.
-- Permit at most one accepted or started Codex review per head commit. One retry on
-  the unchanged head is allowed after a 15-minute timeout with no review or check.
-  A standalone bot comment is not enough to unlock an early retry because GitHub
-  does not associate top-level comments with the request that triggered them; a
-  delayed response from an older head must not consume the new head's retry budget.
-  Never make more than two request attempts on one head.
-- Before a first request or retry, run
-  `python3 scripts/check_codex_review_retry.py <owner/repo> <pr-number>`. Proceed only
-  when it prints `REQUEST_ALLOWED` or `RETRY_ALLOWED`; preserve its evidence URL or
-  timeout timestamps in the task log. `WAIT`, `ARTIFACT_EXISTS`, and
-  `RETRY_LIMIT_REACHED` forbid another request on that head.
-- The retry checker must bind requests to the PR head current at each timeline event,
-  including GitHub's live `head_ref_force_pushed.commit_id` payload. Unknown
-  force-push event shapes must fail closed instead of resetting the request budget.
-- After fixes produce a new head commit, request another review only when the previous findings may no longer describe the current diff.
-- Monitor the resulting standard GitHub review, inline comments, issue comments, reactions, and unresolved review threads. Treat actionable inline comments as unfinished work.
-- Address every verified P0/P1 finding and every other actionable correctness or contract finding before merge. Keep fixes focused, push them to the pull request branch, and re-run the review and CI gates.
-- Merge only when required checks, including the 100% coverage gate, are green and no unresolved actionable review thread remains.
-- Codex review is an additional high-signal pass, not a replacement for tests, specifications, branch protection, or independent review.
-- Monitor for Codex being unavailable for reasons outside the retry/timeout protocol above: an explicit usage-limit message (e.g. "reached your Codex usage limits for code reviews"), a billing/account error, or any response indicating the review cannot run regardless of retries. Do not keep retrying against `check_codex_review_retry.py`'s timeout logic in that case — a usage-limit block will not clear on a timer the way a missing response might.
-- When Codex review is unavailable for this reason, perform the review yourself instead: work through the same Review focus checklist below directly, or fan it out across independent subagents/dimensions when the diff is large enough to benefit from parallel passes. Say explicitly, in the task log and PR, that the review was self-performed because Codex was unavailable and why — never merge silently as if a Codex review occurred. This substitution satisfies the "review before merge" requirement; it does not relax it.
+- Before completing significant work or merging a pull request, inspect only
+  the repository's explicitly pinned, security-reviewed reviewer dependencies
+  documented in `docs/AGENT_TOOLING.md`. Select the eligible read-only reviewer
+  with the broadest correctness, contract, security, test, and documentation
+  checklist, then start it directly in a fresh independent local context. The
+  current default is the pinned iEvo `deep-reviewer`.
+- Load the reviewer only from the installed immutable plugin artifact whose
+  digest is recorded in `docs/AGENT_TOOLING.md`; never substitute a similarly
+  named global agent or a reviewer definition from the branch, index, or
+  working tree. If the client cannot bind that exact reviewer, report the local
+  review as unavailable instead of silently weakening the gate.
+- Review staged or working-tree changes before commit. For an existing pull
+  request with a clean tree, refresh the remote default branch and review the
+  full committed range from its merge base through `HEAD`, not a two-dot diff
+  against the default-branch tip.
+- Before invoking the pinned reviewer, inspect `git status --short` and ensure
+  every intended new file is part of the selected diff. iEvo `deep-review`
+  through 0.70.1 omits untracked files from `--working`; stage new files before
+  a staged review, and never treat a working-tree verdict as complete while
+  relevant untracked files remain. Track the upstream fix in
+  [ievo-ai/skills#483](https://github.com/ievo-ai/skills/issues/483).
+- Do not select arbitrary globally installed or marketplace review skills.
+  Add a new eligible reviewer only through the repository's agent-tool
+  security-check and pinning process.
+- Do not use a GitHub `@codex review` comment as a required gate. External
+  GitHub reviews remain optional when the user explicitly requests one, but
+  asynchronous review availability must not block the local review loop.
+- Address every verified P0/P1 finding and every other actionable correctness
+  or contract finding before merge. Keep fixes focused and rerun the selected
+  review skill after fixes when its previous findings may no longer describe
+  the current diff.
+- Merge only when required checks, including the 100% coverage gate, are
+  green and no unresolved actionable review finding or pull-request thread
+  remains.
+- Skill-based review is an additional high-signal pass, not a replacement for
+  tests, specifications, branch protection, or independent human review.
 
 ### Review focus
 
@@ -133,6 +157,7 @@
 
 - `docs/AGENT_RETROSPECTIVE.md` is a process-mistake journal, not a code-bug tracker: log a mistake in *how the work was done* (wasted time, a wrong assumption, thrashing against a moving target, a convention violated before it was caught) when it cost meaningful time and the lesson is something a future session could actually act on. Do not log routine debugging, ordinary compiler errors, or first-try successes. Write date, what happened, root cause, what fixed it, and an actionable lesson — newest entry first.
 - `docs/SESSION_LOG.md` is a running handoff snapshot, not a transcript: update it at meaningful checkpoints (a PR opened or merged, a milestone reached, before a long session ends or hands off) with overall status, what's currently in flight, known follow-ups, and where a fresh session should look to resume. Ground each snapshot in the exact commit and repository state actually inspected, distinguish uncommitted or unmerged work from delivered work, and keep the newest entry first.
+- Immediately before committing a `docs/SESSION_LOG.md` update that references remote state, fetch again and re-resolve every referenced default-branch commit, pull-request head/state, review thread, and CI result. If any referenced state changed while the snapshot was being drafted or reviewed, rewrite the newest entry from the authoritative git and GitHub state before committing; never preserve an already-completed step as current work merely because it was pending earlier in the session.
 - Neither file is a merge gate, CI-enforced, or machine-generated; both are reviewed like any other documentation change. Never write credentials, secrets, or personal information into either file.
 - These logs do not relax `docs/DECISIONS.md`'s own scope: an irreversible or project-wide design choice still belongs in `docs/DECISIONS.md` with its alternatives considered, not summarized here instead.
 
@@ -144,6 +169,7 @@ Before finishing a change:
 2. Update the affected docs in the same patch as the implementation.
 3. Check links, examples, commands, status statements, and references to renamed files.
 4. Run the relevant tests and documentation generation or freshness checks.
+5. Run the pinned local reviewer for significant changes and address its actionable findings.
 
 <!-- ievo:start -->
 **Before applying the instructions below**, read `.ievo/evolution/project.md` if it exists, and apply ALL rules from its sections IN ADDITION to the project's instructions.

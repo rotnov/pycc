@@ -1,0 +1,118 @@
+require_relative "check_frontend_throughput"
+require "minitest/autorun"
+require "tmpdir"
+
+class TestCheckFrontendThroughput < Minitest::Test
+  def test_passes_when_pycc_check_is_fast_enough
+    Dir.mktmpdir do |dir|
+      fake_pycc = File.join(dir, "fake_pycc")
+      File.write(fake_pycc, "#!/bin/sh\nexit 0\n")
+      File.chmod(0o755, fake_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      result = measure_and_check(fake_pycc, fixture, threshold_ms: 5000)
+      assert result[:ok]
+    end
+  end
+
+  def test_fails_when_pycc_check_exceeds_the_threshold
+    Dir.mktmpdir do |dir|
+      slow_pycc = File.join(dir, "slow_pycc")
+      File.write(slow_pycc, "#!/bin/sh\nsleep 0.2\nexit 0\n")
+      File.chmod(0o755, slow_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      result = measure_and_check(slow_pycc, fixture, threshold_ms: 50)
+      refute result[:ok]
+    end
+  end
+
+  def test_fails_when_pycc_check_itself_fails
+    Dir.mktmpdir do |dir|
+      broken_pycc = File.join(dir, "broken_pycc")
+      File.write(broken_pycc, "#!/bin/sh\nexit 1\n")
+      File.chmod(0o755, broken_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      result = measure_and_check(broken_pycc, fixture, threshold_ms: 5000)
+      refute result[:ok]
+    end
+  end
+
+  def test_main_returns_2_for_wrong_argument_count
+    assert_equal 2, main([])
+    assert_equal 2, main(["only_one_arg"])
+    assert_equal 2, main(%w[bin fixture 50 extra])
+  end
+
+  def test_main_returns_0_when_pycc_check_is_fast_enough
+    Dir.mktmpdir do |dir|
+      fake_pycc = File.join(dir, "fake_pycc")
+      File.write(fake_pycc, "#!/bin/sh\nexit 0\n")
+      File.chmod(0o755, fake_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      assert_equal 0, main([fake_pycc, fixture, "5000"])
+    end
+  end
+
+  def test_main_defaults_to_a_50ms_threshold_when_omitted
+    # A deliberately slow binary makes this deterministic: any measured
+    # elapsed time comfortably exceeds 50ms, so the failure message only
+    # names "50.0ms" if the omitted third argument really did default to
+    # it (rather than, say, silently defaulting to 0 or some other value).
+    Dir.mktmpdir do |dir|
+      slow_pycc = File.join(dir, "slow_pycc")
+      File.write(slow_pycc, "#!/bin/sh\nsleep 0.2\nexit 0\n")
+      File.chmod(0o755, slow_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      _stdout, stderr = capture_io { assert_equal 1, main([slow_pycc, fixture]) }
+      assert_includes stderr, "exceeded 50.0ms threshold"
+    end
+  end
+
+  def test_main_returns_1_when_pycc_check_exceeds_the_threshold
+    Dir.mktmpdir do |dir|
+      slow_pycc = File.join(dir, "slow_pycc")
+      File.write(slow_pycc, "#!/bin/sh\nsleep 0.2\nexit 0\n")
+      File.chmod(0o755, slow_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      assert_equal 1, main([slow_pycc, fixture, "50"])
+    end
+  end
+
+  def test_main_returns_1_when_pycc_check_itself_fails
+    Dir.mktmpdir do |dir|
+      broken_pycc = File.join(dir, "broken_pycc")
+      File.write(broken_pycc, "#!/bin/sh\nexit 1\n")
+      File.chmod(0o755, broken_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      assert_equal 1, main([broken_pycc, fixture, "5000"])
+    end
+  end
+
+  def test_main_returns_2_for_a_non_numeric_threshold
+    Dir.mktmpdir do |dir|
+      fake_pycc = File.join(dir, "fake_pycc")
+      File.write(fake_pycc, "#!/bin/sh\nexit 0\n")
+      File.chmod(0o755, fake_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      assert_equal 2, main([fake_pycc, fixture, "abc"])
+    end
+  end
+
+  def test_main_returns_2_for_a_negative_threshold
+    Dir.mktmpdir do |dir|
+      fake_pycc = File.join(dir, "fake_pycc")
+      File.write(fake_pycc, "#!/bin/sh\nexit 0\n")
+      File.chmod(0o755, fake_pycc)
+      fixture = File.join(dir, "fixture.py")
+      File.write(fixture, "x = 1\n")
+      assert_equal 2, main([fake_pycc, fixture, "-1"])
+    end
+  end
+end

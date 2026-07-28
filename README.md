@@ -12,8 +12,14 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > Status: pre-alpha. `pycc check` now parses and type-checks the v0.1
 > frontend surface, enforcing public annotations, rejecting `Any`, inferring
 > private-helper signatures, and rendering human or JSON diagnostics.
-> `pycc build` and `pycc run` still compile only the original narrow native
-> slice; code-generation and runtime breadth are the next delivery step.
+> `pycc build` and `pycc run` compile that implemented v0.1 surface through
+> MIR, LLVM, the host linker, and the native runtime. The compiler remains
+> pre-alpha: documented representation and lifetime gaps are still roadmap
+> work, but v0.1's own acceptance criteria are now met -- `fib` and
+> `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets,
+> `pycc check` clears its <50ms/1000 LOC throughput floor, and diagnostic
+> output matches [`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md)'s example; see
+> [`docs/ROADMAP.md`](./docs/ROADMAP.md).
 > The frontend performance measurement and isolated greater-than-2% regression
 > gate are required through `ci-gate` independently of that compiler sequence.
 > The source-aware paired gate measures the exact predecessor and candidate
@@ -21,8 +27,10 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > candidate code runs. It classifies all repository-owned executable inputs
 > before that execution: identical inputs keep the observed timing as
 > non-blocking environment telemetry, while changed `src/` or `crates/` inputs
-> retain the hard greater-than-2% regression block. Revision, benchmark-contract,
-> executable-input identity, artifact-identity, and comparison drift fail closed.
+> use exactly five complete runs per revision, compare the median of their
+> per-run medians, and retain the hard greater-than-2% regression block. All ten
+> timing files are retained. Revision, benchmark-contract, executable-input
+> identity, artifact-identity, exact file-set, and comparison drift fail closed.
 > See the [current status](https://rotnov.github.io/pycc/status/) and
 > [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md).
 
@@ -87,6 +95,30 @@ error[T0021]: argument 1 of `fib` expects `int`, got `str`
   = help: did you mean `int("35")`?
 ```
 
+## Pre-commit (experimental)
+
+The repository publishes a `pycc-check` hook for the
+[pre-commit](https://pre-commit.com/) framework. Pin it to a pycc release tag
+or commit:
+
+```yaml
+repos:
+  - repo: https://github.com/rotnov/pycc
+    rev: <release-tag-or-commit>
+    hooks:
+      - id: pycc-check
+```
+
+The hook passes staged Python files to serial frontend-only `pycc check`
+batches and never modifies them. At most one hook process runs at a time;
+pre-commit may split a large path set to respect platform command-line limits.
+This is currently a pre-alpha integration:
+`pycc check` recognizes only the implemented v0.1 language slice, and
+pre-commit's first `language: rust` installation builds the existing complete
+`pycc` package, so LLVM 22.1.1 is still required even though checking does not
+run code generation. See [`docs/DISTRIBUTION.md`](./docs/DISTRIBUTION.md) for
+the exact contract and limitations.
+
 ## How it works
 
 ```
@@ -139,7 +171,8 @@ Cross-platform is not a roadmap item — Linux, macOS and Windows (x64 + arm64) 
 
 ## Building from source
 
-Requires Rust 1.97+ (`rustup update stable`) and LLVM. `cargo build --release`. That's it — the compiler has no Python dependency.
+Requires Rust 1.97+ (`rustup update stable`) and LLVM 22.1.1.
+`cargo build --release`. The compiler itself has no Python dependency.
 
 ## License
 

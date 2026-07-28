@@ -75,6 +75,11 @@ fn assert_json_diagnostic_matches_fixture(fixture_stem: &str) {
 }
 
 #[test]
+fn c0001_unsupported_valid_python() {
+    assert_diagnostic_matches_fixture("c0001_unsupported_valid_python");
+}
+
+#[test]
 fn d0001_missing_public_annotation() {
     assert_diagnostic_matches_fixture("d0001_missing_public_annotation");
 }
@@ -108,4 +113,9 @@ fn d0023_incompatible_assignment() {
 #[test]
 fn d0024_return_outside_function() {
     assert_diagnostic_matches_fixture("d0024_return_outside_function");
+}
+
+#[test]
+fn cli_spec_example() {
+    assert_diagnostic_matches_fixture("cli_spec_example");
 }

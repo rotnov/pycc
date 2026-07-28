@@ -417,8 +417,10 @@ required_disclosures = (
     "Built entirely by AI.",
     "Managed by a human.",
     "No project code is handwritten by a human.",
-    "pycc check now runs the broadened v0.1 frontend",
-    "Full code generation and runtime breadth are next",
+    "pycc check now runs the v0.1 frontend",
+    "v0.1 native backend with documented gaps",
+    "v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)",
+    "The full conformance matrix and v0.2 collections/generics are next",
 )
 for disclosure in required_disclosures:
     if disclosure not in visible_body_text:
@@ -444,31 +446,37 @@ ROBOTS = (
 PAGE_SPECS = {
     "status": {
         "canonical": f"{ROOT}status/",
-        "date_modified": "2026-07-26",
+        "date_modified": "2026-07-27",
         "title": "pycc status — what the Python AOT compiler can do today",
         "description": (
             "See what pycc, the AI-created AOT compiler for typed Python, "
-            "implements today, what remains planned for v0.1, and the CI "
-            "evidence behind each claim."
+            "implements today, what's complete for v0.1 and what's planned "
+            "next, and the CI evidence behind each claim."
         ),
         "required_visible_text": (
-            "pycc check runs the broadened parser → HIR → strict type checker",
+            "pycc check runs the parser → HIR → strict type checker",
             "Strict checking and inference",
+            "Implemented v0.1 subset",
             "Validated frontend codes",
             "byte-exact CLI snapshots cover",
-            "Code generation and runtime breadth are next.",
-            "The required frontend measurement and greater-than-2% regression gate run independently of that compiler sequence through ci-gate",
+            "v0.1's acceptance criteria are met; the full conformance matrix is next.",
+            "All five v0.1 acceptance-checklist bullets are green",
+            "The full multi-version conformance matrix, differential fuzzing, corpus testing, and v0.2's collections and generics work remain planned.",
+            "Unary operators are rejected earlier by HIR lowering with a spanned C0001 capability diagnostic, including under pycc check",
+            "The required frontend measurement and greater-than-2% regression gate remain required through ci-gate",
             "This source-aware paired gate measures the exact predecessor and candidate sequentially on one hosted runner",
             "seals the predecessor timing before candidate code runs",
             "Before candidate code runs, it classifies the complete src/ and crates/ trees",
             "Identical executable inputs keep the timing delta as visible, non-blocking environment telemetry.",
-            "Changed source keeps the hard greater-than-2% median regression block.",
+            "Changed source uses exactly five complete runs per revision, compares the median of their per-run medians, and keeps the hard greater-than-2% regression block.",
+            "All ten timing files are retained.",
             "The gate compares through a hash-verified predecessor-owned checker.",
-            "Revision, benchmark-contract, executable-input identity, artifact-identity, and comparison drift fail closed.",
+            "Revision, benchmark-contract, executable-input identity, artifact-identity, exact file-set, and comparison drift fail closed.",
         ),
     },
     "architecture": {
         "canonical": f"{ROOT}architecture/",
+        "date_modified": "2026-07-26",
         "title": "pycc architecture — typed Python to LLVM native binaries",
         "description": (
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
@@ -479,12 +487,13 @@ PAGE_SPECS = {
             "Frontend v0.1 checked",
             "Resolve and type-check",
             "pycc_types::check_and_resolve",
-            "MIR and code generation remain slice-only",
+            "MIR and code generation cover the implemented v0.1 surface",
             "Strict checking and inference",
         ),
     },
     "python-aot-compilers": {
         "canonical": f"{ROOT}python-aot-compilers/",
+        "date_modified": "2026-07-27",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
             "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "
@@ -510,8 +519,8 @@ PAGE_SPECS = {
             "Tools six projects",
             "Alpha; focused on numerical and array-oriented typed Python",
             (
-                "frontend checker implemented for the v0.1 subset, while "
-                "native code generation remains slice-only"
+                "v0.1 frontend and native backend implemented with "
+                "documented gaps; not production-ready"
             ),
             "Do not choose pycc for production today.",
             "Benchmarks none claimed",
@@ -913,6 +922,11 @@ current_status = "`pycc check` now parses and type-checks the v0.1"
 if current_status not in llms or current_status not in markdown:
     raise SystemExit(
         "LLM-readable files are missing the current frontend status"
+    )
+backend_status = "`pycc build` and `pycc run` compile that implemented surface"
+if backend_status not in llms or backend_status not in markdown:
+    raise SystemExit(
+        "LLM-readable files are missing the current backend status"
     )
 for evidence_link in (
     f"[Current implementation status]({canonical}status/)",

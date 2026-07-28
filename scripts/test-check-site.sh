@@ -479,9 +479,21 @@ checker = repo_root / "scripts" / "check-site.sh"
 mutations = (
     (
         site_dir / "index.html",
-        "<code>pycc check</code> now runs the broadened v0.1 frontend",
+        "<code>pycc check</code> now runs the v0.1 frontend",
         "<code>pycc check</code> is not implemented",
         "landing page without the current frontend status",
+    ),
+    (
+        site_dir / "index.html",
+        "v0.1 native backend with documented gaps",
+        "narrow native backend only",
+        "landing page with a superseded backend status",
+    ),
+    (
+        site_dir / "index.html",
+        "v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)",
+        "v0.1 acceptance criteria remain unmet",
+        "landing page with a superseded acceptance status",
     ),
     (
         site_dir / "status" / "index.html",
@@ -491,13 +503,41 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
+        "<strong>Implemented v0.1 subset</strong>",
+        "<strong>Full v0.1 grammar</strong>",
+        "status page that overclaims complete grammar coverage",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "All five v0.1 acceptance-checklist bullets are green",
+        "Most v0.1 acceptance-checklist bullets are green",
+        "status page that understates v0.1 acceptance-checklist completion",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        (
+            "The full\n              multi-version conformance matrix, "
+            "differential fuzzing, corpus\n              testing, and "
+            "v0.2's collections and generics work remain planned."
+        ),
+        "The full multi-version conformance matrix is already complete.",
+        "status page that overclaims conformance-matrix completion",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "Unary operators are rejected earlier by\n              HIR lowering with a spanned <code>C0001</code> capability diagnostic,\n              including under <code>pycc check</code>.",
+        "Unary operators are rejected only by the backend.",
+        "status page that misattributes the unary-expression boundary",
+    ),
+    (
+        site_dir / "status" / "index.html",
         "Parser failures use <code>L0001</code>; byte-exact CLI",
         "Parser failures use <code>L0001</code>; output checks only",
         "status page that overstates diagnostic snapshot coverage",
     ),
     (
         site_dir / "status" / "index.html",
-        "greater-than-2% regression gate run independently",
+        "greater-than-2% regression gate remain required",
         "The frontend performance gate follows the compiler work",
         "status page with stale performance-gate sequencing",
     ),
@@ -533,13 +573,25 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "Changed source keeps the hard greater-than-2%",
-        "Changed source disables the greater-than-2%",
+        "Changed source uses exactly five complete",
+        "Changed source uses one convenient",
+        "status page without fixed changed-source replicates",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "keeps the hard greater-than-2%",
+        "disables the greater-than-2%",
         "status page without the changed-source hard threshold",
     ),
     (
         site_dir / "status" / "index.html",
-        "Revision, benchmark-contract,\n              executable-input identity, artifact-identity, and",
+        "All ten timing\n              files are retained.",
+        "Only the favorable timing file is retained.",
+        "status page without complete fixed-sample evidence",
+    ),
+    (
+        site_dir / "status" / "index.html",
+        "Revision, benchmark-contract,\n              executable-input identity, artifact-identity, exact file-set, and",
         "Revision and comparison differences are tolerated, and",
         "status page without fail-closed source-aware paired evidence",
     ),
@@ -550,10 +602,16 @@ mutations = (
         "architecture page without the implemented checker stage",
     ),
     (
+        site_dir / "architecture" / "index.html",
+        "MIR and code generation cover the implemented v0.1",
+        "MIR and code generation remain slice-only",
+        "architecture page with a superseded backend boundary",
+    ),
+    (
         site_dir / "python-aot-compilers" / "index.html",
         (
-            "frontend checker implemented for the v0.1 subset, while "
-            "native code generation remains slice-only"
+            "v0.1 frontend and native backend implemented with documented "
+            "gaps; not production-ready"
         ),
         "type checker is a stub and the backend status is unknown",
         "comparison page with superseded pycc positioning",
@@ -565,10 +623,22 @@ mutations = (
         "llms.txt without the current frontend status",
     ),
     (
+        site_dir / "llms.txt",
+        "`pycc build` and `pycc run` compile that implemented surface",
+        "`pycc build` and `pycc run` compile only a narrow slice",
+        "llms.txt with a superseded backend status",
+    ),
+    (
         site_dir / "index.html.md",
         "`pycc check` now parses and type-checks the v0.1",
         "`pycc check` is not implemented for the v0.1",
         "Markdown landing page without the current frontend status",
+    ),
+    (
+        site_dir / "index.html.md",
+        "`pycc build` and `pycc run` compile that implemented surface",
+        "`pycc build` and `pycc run` compile only a narrow slice",
+        "Markdown landing page with a superseded backend status",
     ),
 )
 environment = dict(os.environ)

@@ -117,13 +117,16 @@ pub struct HirModule {
     pub items: Vec<HirItem>,
 }
 
+/// Lowers a parsed module into the HIR subset implemented by this pycc
+/// version. Syntactically valid Python outside that subset returns `C0001`
+/// with the unsupported node's source span instead of panicking.
 pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let items = module
         .body
         .iter()
         .map(|stmt| match stmt {
             Stmt::FunctionDef(def) => lower_function(def),
-            other => Ok(HirItem::TopLevelStmt(lower_stmt(other))),
+            other => lower_stmt(other).map(HirItem::TopLevelStmt),
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(HirModule { items })
@@ -131,18 +134,27 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
 
 fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic> {
     if def.is_async {
-        panic!("pycc_hir: async functions are not supported yet");
+        return Err(unsupported(
+            "async functions are not supported yet",
+            def.range,
+        ));
     }
     if !def.decorator_list.is_empty() {
-        panic!("pycc_hir: function decorators are not supported yet");
+        return Err(unsupported(
+            "function decorators are not supported yet",
+            def.range,
+        ));
     }
     if def.type_params.is_some() {
-        panic!("pycc_hir: generic function type parameters are not supported yet");
+        return Err(unsupported(
+            "generic function type parameters are not supported yet",
+            def.range,
+        ));
     }
     let is_public = !def.name.as_str().starts_with('_'); // D-038
     let params = lower_params(&def.parameters, is_public, def.name.as_str())?;
     let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, def.name.as_str())?;
-    let body = def.body.iter().map(lower_stmt).collect();
+    let body = lower_body(&def.body)?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
         params,
@@ -161,26 +173,41 @@ fn lower_params(
     // of this function only ever iterated `.args` and never checked for any
     // of these, so a function using them got a wrong signature built from
     // whatever plain positional args happened to exist, instead of the
-    // explicit "not supported yet" panic every other out-of-scope construct
-    // in this file produces (self-review finding, pre-merge).
+    // explicit capability diagnostic every other out-of-scope construct in
+    // this file produces (self-review finding, pre-merge).
     if !parameters.posonlyargs.is_empty() {
-        panic!("pycc_hir: positional-only parameters (`/`) are not supported yet");
+        return Err(unsupported(
+            "positional-only parameters (`/`) are not supported yet",
+            parameters.range,
+        ));
     }
     if parameters.vararg.is_some() {
-        panic!("pycc_hir: `*args` is not supported yet");
+        return Err(unsupported(
+            "`*args` is not supported yet",
+            parameters.range,
+        ));
     }
     if !parameters.kwonlyargs.is_empty() {
-        panic!("pycc_hir: keyword-only parameters are not supported yet");
+        return Err(unsupported(
+            "keyword-only parameters are not supported yet",
+            parameters.range,
+        ));
     }
     if parameters.kwarg.is_some() {
-        panic!("pycc_hir: `**kwargs` is not supported yet");
+        return Err(unsupported(
+            "`**kwargs` is not supported yet",
+            parameters.range,
+        ));
     }
     parameters
         .args
         .iter()
         .map(|param| {
             if param.default.is_some() {
-                panic!("pycc_hir: default parameter values are not supported yet");
+                return Err(unsupported(
+                    "default parameter values are not supported yet",
+                    param.range,
+                ));
             }
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
@@ -228,120 +255,163 @@ fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
                     .to_string(),
                 Span::new(0, 0),
             )),
-            other => panic!("pycc_hir: type annotation `{other}` is not supported yet"),
+            other => Err(unsupported(
+                format!("type annotation `{other}` is not supported yet"),
+                pycc_ast::expr_range(annotation),
+            )),
         },
-        other => {
-            panic!("pycc_hir: only a bare name type annotation is supported so far: {other:?}")
-        }
+        other => Err(unsupported(
+            format!("only a bare name type annotation is supported so far: {other:?}"),
+            pycc_ast::expr_range(other),
+        )),
     }
 }
 
-fn lower_stmt(stmt: &Stmt) -> HirStmt {
-    match stmt {
-        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)),
+fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
+    let lowered = match stmt {
+        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)?),
         Stmt::Assign(assign) => {
             let [target] = assign.targets.as_slice() else {
-                panic!(
-                    "pycc_hir: only a single assignment target is supported so far: {:?}",
-                    assign.targets
-                );
+                return Err(unsupported(
+                    format!(
+                        "only a single assignment target is supported so far: {:?}",
+                        assign.targets
+                    ),
+                    assign.range,
+                ));
             };
             let Expr::Name(name) = target else {
-                panic!("pycc_hir: only assigning to a bare name is supported so far: {target:?}");
+                return Err(unsupported(
+                    format!("only assigning to a bare name is supported so far: {target:?}"),
+                    pycc_ast::expr_range(target),
+                ));
             };
             HirStmt::Assign {
                 target: name.id.as_str().to_string(),
-                value: lower_expr(&assign.value),
+                value: lower_expr(&assign.value)?,
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {
-            test: lower_expr(&if_stmt.test),
-            body: lower_body(&if_stmt.body),
-            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses),
+            test: lower_expr(&if_stmt.test)?,
+            body: lower_body(&if_stmt.body)?,
+            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses)?,
         },
         Stmt::While(while_stmt) => {
             if !while_stmt.orelse.is_empty() {
-                panic!("pycc_hir: while/else is not supported yet");
+                return Err(unsupported(
+                    "while/else is not supported yet",
+                    while_stmt.range,
+                ));
             }
             HirStmt::While {
-                test: lower_expr(&while_stmt.test),
-                body: lower_body(&while_stmt.body),
+                test: lower_expr(&while_stmt.test)?,
+                body: lower_body(&while_stmt.body)?,
             }
         }
         Stmt::For(for_stmt) => {
             if for_stmt.is_async {
-                panic!("pycc_hir: async for is not supported yet");
+                return Err(unsupported(
+                    "async for is not supported yet",
+                    for_stmt.range,
+                ));
             }
             if !for_stmt.orelse.is_empty() {
-                panic!("pycc_hir: for/else is not supported yet");
+                return Err(unsupported("for/else is not supported yet", for_stmt.range));
             }
             let Expr::Name(var) = for_stmt.target.as_ref() else {
-                panic!(
-                    "pycc_hir: only a bare name for-target is supported so far: {:?}",
-                    for_stmt.target
-                );
+                return Err(unsupported(
+                    format!(
+                        "only a bare name for-target is supported so far: {:?}",
+                        for_stmt.target
+                    ),
+                    pycc_ast::expr_range(&for_stmt.target),
+                ));
             };
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
-                panic!(
-                    "pycc_hir: only `for x in range(...)` is supported so far: {:?}",
-                    for_stmt.iter
-                );
+                return Err(unsupported(
+                    format!(
+                        "only `for x in range(...)` is supported so far: {:?}",
+                        for_stmt.iter
+                    ),
+                    pycc_ast::expr_range(&for_stmt.iter),
+                ));
             };
             let Expr::Name(callee) = call.func.as_ref() else {
-                panic!(
-                    "pycc_hir: only `for x in range(...)` is supported so far: {:?}",
-                    call.func
-                );
+                return Err(unsupported(
+                    format!(
+                        "only `for x in range(...)` is supported so far: {:?}",
+                        call.func
+                    ),
+                    pycc_ast::expr_range(&call.func),
+                ));
             };
             if callee.id.as_str() != "range" {
-                panic!(
-                    "pycc_hir: only iterating over `range(...)` is supported so far, got `{}`",
-                    callee.id
-                );
+                return Err(unsupported(
+                    format!(
+                        "only iterating over `range(...)` is supported so far, got `{}`",
+                        callee.id
+                    ),
+                    call.range,
+                ));
             }
             if !call.arguments.keywords.is_empty() {
-                panic!("pycc_hir: keyword arguments to range() are not supported yet");
+                return Err(unsupported(
+                    "keyword arguments to range() are not supported yet",
+                    call.range,
+                ));
             }
             let (start, stop, step) = match &*call.arguments.args {
                 [stop] => (
                     HirExpr::IntLiteral(0),
-                    lower_expr(stop),
+                    lower_expr(stop)?,
                     HirExpr::IntLiteral(1),
                 ),
-                [start, stop] => (lower_expr(start), lower_expr(stop), HirExpr::IntLiteral(1)),
-                [start, stop, step] => (lower_expr(start), lower_expr(stop), lower_expr(step)),
-                other => panic!(
-                    "pycc_hir: range() with {} arguments is not supported",
-                    other.len()
+                [start, stop] => (
+                    lower_expr(start)?,
+                    lower_expr(stop)?,
+                    HirExpr::IntLiteral(1),
                 ),
+                [start, stop, step] => (lower_expr(start)?, lower_expr(stop)?, lower_expr(step)?),
+                other => {
+                    return Err(unsupported(
+                        format!("range() with {} arguments is not supported", other.len()),
+                        call.range,
+                    ));
+                }
             };
             HirStmt::ForRange {
                 var: var.id.to_string(),
                 start,
                 stop,
                 step,
-                body: lower_body(&for_stmt.body),
+                body: lower_body(&for_stmt.body)?,
             }
         }
-        Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr)),
-        other => panic!("pycc_hir: statement kind not supported yet: {other:?}"),
-    }
+        Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr).transpose()?),
+        other => {
+            return Err(unsupported(
+                "statement kind not supported yet",
+                pycc_ast::stmt_range(other),
+            ));
+        }
+    };
+    Ok(lowered)
 }
 
-fn lower_body(body: &[Stmt]) -> Vec<HirStmt> {
+fn lower_body(body: &[Stmt]) -> Result<Vec<HirStmt>, Diagnostic> {
     body.iter().map(lower_stmt).collect()
 }
 
-fn lower_elif_else_clauses(clauses: &[ElifElseClause]) -> Vec<HirStmt> {
+fn lower_elif_else_clauses(clauses: &[ElifElseClause]) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
-        return vec![];
+        return Ok(vec![]);
     };
     match &first.test {
-        Some(test) => vec![HirStmt::If {
-            test: lower_expr(test),
-            body: lower_body(&first.body),
-            orelse: lower_elif_else_clauses(rest),
-        }],
+        Some(test) => Ok(vec![HirStmt::If {
+            test: lower_expr(test)?,
+            body: lower_body(&first.body)?,
+            orelse: lower_elif_else_clauses(rest)?,
+        }]),
         None => {
             assert!(
                 rest.is_empty(),
@@ -352,29 +422,49 @@ fn lower_elif_else_clauses(clauses: &[ElifElseClause]) -> Vec<HirStmt> {
     }
 }
 
-fn lower_expr(expr: &Expr) -> HirExpr {
-    match expr {
-        Expr::NumberLiteral(lit) => {
-            match &lit.value {
-                Number::Int(i) => HirExpr::IntLiteral(i.as_i64().unwrap_or_else(|| {
-                    panic!("pycc_hir: integer literal does not fit in i64: {i:?}")
-                })),
-                Number::Float(f) => HirExpr::FloatLiteral(*f),
-                other => panic!("pycc_hir: numeric literal kind not supported yet: {other:?}"),
+fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
+    let lowered = match expr {
+        Expr::NumberLiteral(lit) => match &lit.value {
+            Number::Int(i) => {
+                let Some(value) = i.as_i64() else {
+                    return Err(unsupported(
+                        format!("integer literal does not fit in i64: {i:?}"),
+                        lit.range,
+                    ));
+                };
+                HirExpr::IntLiteral(value)
             }
-        }
+            Number::Float(f) => HirExpr::FloatLiteral(*f),
+            other => {
+                return Err(unsupported(
+                    format!("numeric literal kind not supported yet: {other:?}"),
+                    lit.range,
+                ));
+            }
+        },
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
         Expr::Call(call) => {
             if !call.arguments.keywords.is_empty() {
-                panic!("pycc_hir: keyword call arguments are not supported yet");
+                return Err(unsupported(
+                    "keyword call arguments are not supported yet",
+                    call.range,
+                ));
             }
             let Expr::Name(callee) = call.func.as_ref() else {
-                panic!(
-                    "pycc_hir: only calling a bare name is supported so far: {:?}",
-                    call.func
-                );
+                return Err(unsupported(
+                    format!(
+                        "only calling a bare name is supported so far: {:?}",
+                        call.func
+                    ),
+                    pycc_ast::expr_range(&call.func),
+                ));
             };
-            let args = call.arguments.args.iter().map(lower_expr).collect();
+            let args = call
+                .arguments
+                .args
+                .iter()
+                .map(lower_expr)
+                .collect::<Result<Vec<_>, _>>()?;
             HirExpr::Call {
                 callee: callee.id.as_str().to_string(),
                 args,
@@ -389,12 +479,17 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                 Operator::FloorDiv => BinOpKind::FloorDiv,
                 Operator::Mod => BinOpKind::Mod,
                 Operator::Pow => BinOpKind::Pow,
-                other => panic!("pycc_hir: binary operator not supported yet: {other:?}"),
+                other => {
+                    return Err(unsupported(
+                        format!("binary operator not supported yet: {other:?}"),
+                        bin_op.range,
+                    ));
+                }
             };
             HirExpr::BinOp {
                 op,
-                left: Box::new(lower_expr(&bin_op.left)),
-                right: Box::new(lower_expr(&bin_op.right)),
+                left: Box::new(lower_expr(&bin_op.left)?),
+                right: Box::new(lower_expr(&bin_op.right)?),
             }
         }
         Expr::BooleanLiteral(lit) => HirExpr::BoolLiteral(lit.value),
@@ -403,29 +498,37 @@ fn lower_expr(expr: &Expr) -> HirExpr {
             let parts = fstring
                 .value
                 .elements()
-                .map(|element| match element {
-                    pycc_ast::InterpolatedStringElement::Literal(lit) => {
-                        FStringPart::Literal(lit.value.to_string())
-                    }
-                    pycc_ast::InterpolatedStringElement::Interpolation(interp) => {
-                        if interp.conversion != pycc_ast::ConversionFlag::None {
-                            panic!("pycc_hir: f-string conversion flags (!r/!s/!a) are not supported yet");
+                .map(|element| -> Result<FStringPart, Diagnostic> {
+                    Ok(match element {
+                        pycc_ast::InterpolatedStringElement::Literal(lit) => {
+                            FStringPart::Literal(lit.value.to_string())
                         }
-                        if interp.format_spec.is_some() {
-                            panic!("pycc_hir: f-string format spec ({{x:...}}) is not supported yet");
+                        pycc_ast::InterpolatedStringElement::Interpolation(interp) => {
+                            if interp.conversion != pycc_ast::ConversionFlag::None {
+                                return Err(unsupported(
+                                    "f-string conversion flags (!r/!s/!a) are not supported yet",
+                                    interp.range,
+                                ));
+                            }
+                            if interp.format_spec.is_some() {
+                                return Err(unsupported(
+                                    "f-string format spec ({x:...}) is not supported yet",
+                                    interp.range,
+                                ));
+                            }
+                            FStringPart::Interpolation(Box::new(lower_expr(&interp.expression)?))
                         }
-                        FStringPart::Interpolation(Box::new(lower_expr(&interp.expression)))
-                    }
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
             HirExpr::FString(parts)
         }
         Expr::Compare(cmp) => {
             if cmp.ops.len() != 1 {
-                panic!(
-                    "pycc_hir: chained comparisons are not supported yet: {:?}",
-                    cmp.ops
-                );
+                return Err(unsupported(
+                    format!("chained comparisons are not supported yet: {:?}", cmp.ops),
+                    cmp.range,
+                ));
             }
             let op = match cmp.ops[0] {
                 CmpOp::Eq => CmpOpKind::Eq,
@@ -434,21 +537,58 @@ fn lower_expr(expr: &Expr) -> HirExpr {
                 CmpOp::LtE => CmpOpKind::LtE,
                 CmpOp::Gt => CmpOpKind::Gt,
                 CmpOp::GtE => CmpOpKind::GtE,
-                other => panic!("pycc_hir: comparison operator not supported yet: {other:?}"),
+                other => {
+                    return Err(unsupported(
+                        format!("comparison operator not supported yet: {other:?}"),
+                        cmp.range,
+                    ));
+                }
             };
             HirExpr::Compare {
                 op,
-                left: Box::new(lower_expr(&cmp.left)),
-                right: Box::new(lower_expr(&cmp.comparators[0])),
+                left: Box::new(lower_expr(&cmp.left)?),
+                right: Box::new(lower_expr(&cmp.comparators[0])?),
             }
         }
-        other => panic!("pycc_hir: expression kind not supported yet: {other:?}"),
-    }
+        other => {
+            return Err(unsupported(
+                "expression kind not supported yet",
+                pycc_ast::expr_range(other),
+            ));
+        }
+    };
+    Ok(lowered)
+}
+
+fn unsupported<R>(message: impl Into<String>, range: R) -> Diagnostic
+where
+    std::ops::Range<u32>: From<R>,
+{
+    let range = std::ops::Range::<u32>::from(range);
+    Diagnostic::error("C0001", message, Span::new(range.start, range.end))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_capability_error(source: &str, expected_message: &str, expected_span: Span) {
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(diagnostic.message.contains(expected_message));
+        assert_eq!(diagnostic.span, Some(expected_span));
+    }
+
+    fn assert_capability_error_message(source: &str, expected_message: &str) {
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(diagnostic.message.contains(expected_message));
+        assert!(diagnostic.span.is_some());
+    }
 
     #[test]
     fn ty_name_returns_the_python_spelling_of_every_variant() {
@@ -458,6 +598,91 @@ mod tests {
         assert_eq!(Ty::Str.name(), "str");
         assert_eq!(Ty::None.name(), "None");
         assert_eq!(Ty::Infer.name(), "<inferred>");
+    }
+
+    #[test]
+    fn unsupported_statement_and_expression_return_spanned_capability_diagnostics() {
+        assert_capability_error(
+            "if True:\n    pass\n",
+            "statement kind not supported yet",
+            Span::new(13, 17),
+        );
+        assert_capability_error(
+            "x = [1]\n",
+            "expression kind not supported yet",
+            Span::new(4, 7),
+        );
+    }
+
+    #[test]
+    fn capability_errors_propagate_through_every_supported_container() {
+        let cases = [
+            ("function body", "def _f():\n    pass\n"),
+            ("if test", "if []:\n    print(1)\n"),
+            ("if else body", "if True:\n    print(1)\nelse:\n    pass\n"),
+            ("while test", "while []:\n    print(1)\n"),
+            ("while body", "while True:\n    pass\n"),
+            (
+                "one-argument range stop",
+                "for i in range([]):\n    print(i)\n",
+            ),
+            (
+                "two-argument range start",
+                "for i in range([], 1):\n    print(i)\n",
+            ),
+            (
+                "two-argument range stop",
+                "for i in range(0, []):\n    print(i)\n",
+            ),
+            (
+                "three-argument range start",
+                "for i in range([], 1, 1):\n    print(i)\n",
+            ),
+            (
+                "three-argument range stop",
+                "for i in range(0, [], 1):\n    print(i)\n",
+            ),
+            (
+                "three-argument range step",
+                "for i in range(0, 1, []):\n    print(i)\n",
+            ),
+            ("for body", "for i in range(1):\n    pass\n"),
+            ("return value", "def _f():\n    return []\n"),
+            (
+                "elif test",
+                "if True:\n    print(1)\nelif []:\n    print(2)\n",
+            ),
+            (
+                "elif body",
+                "if True:\n    print(1)\nelif True:\n    pass\n",
+            ),
+            (
+                "nested else body",
+                "if True:\n    print(1)\nelif True:\n    print(2)\nelse:\n    pass\n",
+            ),
+            ("binary left operand", "x = [] + 1\n"),
+            ("binary right operand", "x = 1 + []\n"),
+            ("f-string interpolation", "x = f\"{[]}\"\n"),
+            ("comparison left operand", "x = [] == 1\n"),
+            ("comparison right operand", "x = 1 == []\n"),
+        ];
+
+        for (container, source) in cases {
+            let module = pycc_parser_test_helper::parse(source);
+            let diagnostic = lower_checked(&module).unwrap_err();
+            assert_eq!(diagnostic.code, "C0001", "wrong diagnostic for {container}");
+            assert!(
+                diagnostic
+                    .message
+                    .contains("expression kind not supported yet")
+                    || diagnostic
+                        .message
+                        .contains("statement kind not supported yet"),
+                "wrong message for {container}: {}",
+                diagnostic.message
+            );
+            assert!(diagnostic.span.is_some(), "missing span for {container}");
+        }
     }
 
     #[test]
@@ -632,35 +857,33 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "only a single assignment target is supported so far")]
     fn a_multi_target_assignment_is_unsupported() {
-        let module = pycc_parser_test_helper::parse("x = y = 1\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message(
+            "x = y = 1\n",
+            "only a single assignment target is supported so far",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "only assigning to a bare name is supported so far")]
     fn assigning_to_a_non_name_target_is_unsupported() {
-        let module = pycc_parser_test_helper::parse("x.attr = 1\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message(
+            "x.attr = 1\n",
+            "only assigning to a bare name is supported so far",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "binary operator not supported yet")]
     fn matrix_multiplication_is_unsupported() {
-        let module = pycc_parser_test_helper::parse("x = a @ b\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("x = a @ b\n", "binary operator not supported yet");
     }
 
     #[test]
-    #[should_panic(expected = "statement kind not supported yet")]
     fn a_pass_statement_is_unsupported() {
         // `if` itself is supported (Task 8); `pass` inside it is not -- no
         // v0.1 grammar construct needs it (empty bodies aren't reachable
         // through anything pycc lowers) and it exercises the same catch-all
         // as `a_list_literal_expression_is_unsupported` does for expressions.
-        let module = pycc_parser_test_helper::parse("if True:\n    pass\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("if True:\n    pass\n", "statement kind not supported yet");
     }
 
     #[test]
@@ -681,10 +904,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "only calling a bare name")]
     fn non_name_callee_is_unsupported() {
-        let module = pycc_parser_test_helper::parse("foo.bar()\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("foo.bar()\n", "only calling a bare name");
     }
 
     #[test]
@@ -749,20 +970,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "does not fit in i64")]
     fn print_with_an_integer_too_large_for_i64_is_unsupported() {
-        let module = pycc_parser_test_helper::parse("print(99999999999999999999999999999999)\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message(
+            "print(99999999999999999999999999999999)\n",
+            "does not fit in i64",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "numeric literal kind not supported yet")]
     fn a_complex_number_literal_is_unsupported() {
         // Complex isn't in v0.1's type-representation table (int/float/bool/str/None
         // per TYPE_SYSTEM.md) -- unlike float/bool, this isn't deferred to a later
         // PR-4 task, it's simply out of scope for pycc entirely.
-        let module = pycc_parser_test_helper::parse("x = 3j\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("x = 3j\n", "numeric literal kind not supported yet");
     }
 
     #[test]
@@ -824,28 +1044,22 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "chained comparisons")]
     fn a_chained_comparison_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("x = 1 < 2 < 3\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("x = 1 < 2 < 3\n", "chained comparisons");
     }
 
     #[test]
-    #[should_panic(expected = "comparison operator not supported yet")]
     fn an_is_comparison_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("x = 1 is 2\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("x = 1 is 2\n", "comparison operator not supported yet");
     }
 
     #[test]
-    #[should_panic(expected = "expression kind not supported yet")]
     fn a_list_literal_expression_is_unsupported() {
         // No v0.1 grammar node reaches this catch-all today (every kind
         // handled so far -- numbers, names, calls, binops, bools,
-        // comparisons -- has its own dedicated arm/panic); a list literal is
+        // comparisons -- has its own dedicated arm); a list literal is
         // genuinely unhandled at every level and exercises the final arm.
-        let module = pycc_parser_test_helper::parse("x = [1]\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("x = [1]\n", "expression kind not supported yet");
     }
 
     #[test]
@@ -932,11 +1146,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "while/else is not supported yet")]
     fn a_while_else_is_not_supported_yet() {
-        let module =
-            pycc_parser_test_helper::parse("while True:\n    print(1)\nelse:\n    print(2)\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message(
+            "while True:\n    print(1)\nelse:\n    print(2)\n",
+            "while/else is not supported yet",
+        );
     }
 
     #[test]
@@ -997,68 +1211,72 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "only `for x in range(...)` is supported so far")]
     fn iterating_a_non_call_expression_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("for i in [1, 2, 3]:\n    print(i)\n");
-        lower_checked(&module).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "only iterating over `range(...)` is supported so far")]
-    fn calling_something_other_than_range_in_a_for_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("for i in items(3):\n    print(i)\n");
-        lower_checked(&module).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "only `for x in range(...)` is supported so far")]
-    fn calling_via_an_attribute_in_a_for_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("for i in a.b(3):\n    print(i)\n");
-        lower_checked(&module).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "range() with 4 arguments is not supported")]
-    fn range_with_too_many_arguments_is_not_supported() {
-        let module = pycc_parser_test_helper::parse("for i in range(1, 2, 3, 4):\n    print(i)\n");
-        lower_checked(&module).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "only a bare name for-target is supported so far")]
-    fn a_tuple_for_target_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("for i, j in range(3):\n    print(i)\n");
-        lower_checked(&module).unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "for/else is not supported yet")]
-    fn a_for_else_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse(
-            "for i in range(3):\n    print(i)\nelse:\n    print(0)\n",
+        assert_capability_error_message(
+            "for i in [1, 2, 3]:\n    print(i)\n",
+            "only `for x in range(...)` is supported so far",
         );
-        lower_checked(&module).unwrap();
     }
 
     #[test]
-    #[should_panic(expected = "async functions are not supported yet")]
+    fn calling_something_other_than_range_in_a_for_is_not_supported_yet() {
+        assert_capability_error_message(
+            "for i in items(3):\n    print(i)\n",
+            "only iterating over `range(...)` is supported so far",
+        );
+    }
+
+    #[test]
+    fn calling_via_an_attribute_in_a_for_is_not_supported_yet() {
+        assert_capability_error_message(
+            "for i in a.b(3):\n    print(i)\n",
+            "only `for x in range(...)` is supported so far",
+        );
+    }
+
+    #[test]
+    fn range_with_too_many_arguments_is_not_supported() {
+        assert_capability_error_message(
+            "for i in range(1, 2, 3, 4):\n    print(i)\n",
+            "range() with 4 arguments is not supported",
+        );
+    }
+
+    #[test]
+    fn a_tuple_for_target_is_not_supported_yet() {
+        assert_capability_error_message(
+            "for i, j in range(3):\n    print(i)\n",
+            "only a bare name for-target is supported so far",
+        );
+    }
+
+    #[test]
+    fn a_for_else_is_not_supported_yet() {
+        assert_capability_error_message(
+            "for i in range(3):\n    print(i)\nelse:\n    print(0)\n",
+            "for/else is not supported yet",
+        );
+    }
+
+    #[test]
     fn an_async_for_inside_an_async_function_is_not_supported_yet() {
         // `async for` is only valid Python syntax inside an `async def` body,
         // so this now hits the (newer, more general) async-function rejection
         // in lower_function before lower_stmt's own `for_stmt.is_async` check
         // is ever reached -- the fixture still exercises real, valid Python
         // that must be rejected, just via the outer boundary now.
-        let module = pycc_parser_test_helper::parse(
+        assert_capability_error_message(
             "async def f() -> None:\n    async for i in range(3):\n        print(i)\n",
+            "async functions are not supported yet",
         );
-        lower_checked(&module).unwrap();
     }
 
     #[test]
-    #[should_panic(expected = "async for is not supported yet")]
     fn a_top_level_async_for_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("async for i in range(3):\n    print(i)\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message(
+            "async for i in range(3):\n    print(i)\n",
+            "async for is not supported yet",
+        );
     }
 
     #[test]
@@ -1157,95 +1375,103 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "type annotation `list` is not supported yet")]
-    fn an_unsupported_annotation_type_panics() {
-        let module = pycc_parser_test_helper::parse("def f(x: list) -> None:\n    return\n");
-        lower_checked(&module).unwrap();
+    fn an_unsupported_annotation_type_returns_a_capability_error() {
+        assert_capability_error_message(
+            "def f(x: list) -> None:\n    return\n",
+            "type annotation `list` is not supported yet",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "only a bare name type annotation is supported so far")]
-    fn a_non_bare_name_annotation_panics() {
-        let module = pycc_parser_test_helper::parse("def f(x: a.b) -> None:\n    return\n");
-        lower_checked(&module).unwrap();
+    fn a_non_bare_name_annotation_returns_a_capability_error() {
+        assert_capability_error_message(
+            "def f(x: a.b) -> None:\n    return\n",
+            "only a bare name type annotation is supported so far",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "default parameter values are not supported yet")]
-    fn a_default_parameter_value_panics() {
+    fn a_default_parameter_value_returns_a_capability_error() {
         // Regression test (self-review finding, pre-merge): lower_params
         // used to only read `.parameter`, silently ignoring `.default` --
         // producing a wrong signature (as if `b` had no default at all)
-        // instead of this explicit panic.
-        let module =
-            pycc_parser_test_helper::parse("def f(a: int, b: int = 2) -> int:\n    return a + b\n");
-        lower_checked(&module).unwrap();
+        // instead of an explicit capability diagnostic.
+        assert_capability_error_message(
+            "def f(a: int, b: int = 2) -> int:\n    return a + b\n",
+            "default parameter values are not supported yet",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "positional-only parameters")]
-    fn a_positional_only_parameter_panics() {
-        let module =
-            pycc_parser_test_helper::parse("def f(a: int, /, b: int) -> int:\n    return a + b\n");
-        lower_checked(&module).unwrap();
+    fn a_positional_only_parameter_returns_a_capability_error() {
+        assert_capability_error_message(
+            "def f(a: int, /, b: int) -> int:\n    return a + b\n",
+            "positional-only parameters",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "keyword-only parameters")]
-    fn a_keyword_only_parameter_panics() {
-        let module =
-            pycc_parser_test_helper::parse("def f(a: int, *, b: int) -> int:\n    return a + b\n");
-        lower_checked(&module).unwrap();
+    fn a_keyword_only_parameter_returns_a_capability_error() {
+        assert_capability_error_message(
+            "def f(a: int, *, b: int) -> int:\n    return a + b\n",
+            "keyword-only parameters",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "*args` is not supported yet")]
-    fn a_vararg_parameter_panics() {
-        let module = pycc_parser_test_helper::parse("def f(*args: int) -> None:\n    return\n");
-        lower_checked(&module).unwrap();
+    fn a_vararg_parameter_returns_a_capability_error() {
+        assert_capability_error_message(
+            "def f(*args: int) -> None:\n    return\n",
+            "*args` is not supported yet",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "**kwargs` is not supported yet")]
-    fn a_kwarg_parameter_panics() {
-        let module = pycc_parser_test_helper::parse("def f(**kwargs: int) -> None:\n    return\n");
-        lower_checked(&module).unwrap();
+    fn a_kwarg_parameter_returns_a_capability_error() {
+        assert_capability_error_message(
+            "def f(**kwargs: int) -> None:\n    return\n",
+            "**kwargs` is not supported yet",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "async functions are not supported yet")]
-    fn an_async_function_panics_instead_of_losing_async_semantics() {
-        let module = pycc_parser_test_helper::parse("async def f() -> None:\n    return\n");
-        lower_checked(&module).unwrap();
+    fn an_async_function_is_rejected_without_losing_async_semantics() {
+        assert_capability_error_message(
+            "async def f() -> None:\n    return\n",
+            "async functions are not supported yet",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "function decorators are not supported yet")]
-    fn a_decorated_function_panics_instead_of_losing_the_decorator() {
-        let module = pycc_parser_test_helper::parse("@decorator\ndef f() -> None:\n    return\n");
-        lower_checked(&module).unwrap();
+    fn a_decorated_function_is_rejected_without_losing_the_decorator() {
+        assert_capability_error_message(
+            "@decorator\ndef f() -> None:\n    return\n",
+            "function decorators are not supported yet",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "generic function type parameters are not supported yet")]
-    fn a_generic_function_panics_instead_of_losing_its_type_parameters() {
-        let module = pycc_parser_test_helper::parse("def f[T]() -> None:\n    return\n");
-        lower_checked(&module).unwrap();
+    fn a_generic_function_is_rejected_without_losing_its_type_parameters() {
+        assert_capability_error_message(
+            "def f[T]() -> None:\n    return\n",
+            "generic function type parameters are not supported yet",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "keyword call arguments are not supported yet")]
-    fn a_keyword_call_argument_panics_instead_of_being_erased() {
-        let module =
-            pycc_parser_test_helper::parse("def f() -> None:\n    return\n\nf(extra=undefined)\n");
-        lower_checked(&module).unwrap();
+    fn a_keyword_call_argument_is_rejected_instead_of_being_erased() {
+        assert_capability_error_message(
+            "def f() -> None:\n    return\n\nf(extra=undefined)\n",
+            "keyword call arguments are not supported yet",
+        );
     }
 
     #[test]
-    #[should_panic(expected = "keyword arguments to range() are not supported yet")]
-    fn a_keyword_range_argument_panics_instead_of_being_erased() {
-        let module = pycc_parser_test_helper::parse("for i in range(stop=3):\n    i\n");
-        lower_checked(&module).unwrap();
+    fn a_keyword_range_argument_is_rejected_instead_of_being_erased() {
+        assert_capability_error_message(
+            "for i in range(stop=3):\n    i\n",
+            "keyword arguments to range() are not supported yet",
+        );
     }
 
     #[test]
@@ -1305,17 +1531,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "format spec")]
     fn an_f_string_with_a_format_spec_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("x = 1.5\ny = f\"{x:.2f}\"\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("x = 1.5\ny = f\"{x:.2f}\"\n", "format spec");
     }
 
     #[test]
-    #[should_panic(expected = "conversion")]
     fn an_f_string_with_a_conversion_flag_is_not_supported_yet() {
-        let module = pycc_parser_test_helper::parse("x = 1\ny = f\"{x!r}\"\n");
-        lower_checked(&module).unwrap();
+        assert_capability_error_message("x = 1\ny = f\"{x!r}\"\n", "conversion");
     }
 }
 

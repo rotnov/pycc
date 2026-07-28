@@ -110,6 +110,7 @@ class IHaveAnIssueHelperTests(unittest.TestCase):
             },
             io.BytesIO(b'{"message":"API rate limit exceeded"}'),
         )
+        self.addCleanup(error.close)
         with mock.patch.object(
             search_github.urllib.request,
             "urlopen",
