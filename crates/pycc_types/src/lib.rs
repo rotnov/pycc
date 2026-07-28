@@ -2924,11 +2924,7 @@ mod tests {
         };
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
-        assert!(
-            err.message.contains("argument 1")
-                && err.message.contains("float")
-                && err.message.contains("int")
-        );
+        assert!(err.message.contains("argument 1 of `identity` expects `float`, got `int`"));
     }
 
     #[test]

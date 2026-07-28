@@ -9,7 +9,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 3. `Any` does not exist in pure pycc code — it is a compile error (`T0002`) except at declared interop boundaries (see RUNTIME.md § interop).
 4. No implicit `Optional`, no implicit numeric narrowing **or widening** (D-086 — includes `int` at a `float`-annotated boundary; write `float(x)`), no untyped containers (`x = []` requires inferable or annotated element type).
 5. Unreachable code after exhaustive `match` / `Never` is verified (`assert_never` pattern supported).
-6. `==`/`!=` require the same operand-type compatibility as every other typed operation, matching `mypy --strict`'s own `comparison-overlap` check (D-086) — heterogeneous equality (`1 == "1"`) is `T0021`, not `bool`. Ordering operators (`<`/`>`/`<=`/`>=`) are separately, always type-sensitive: they reject any pair CPython itself would raise `TypeError` for at runtime, independent of this rule.
+6. `==`/`!=` require operands to be comparable under the same numeric-like-or-`str` grouping ordering operators use (`int`/`float`/`bool` interchangeably, or `str`/`str`) — looser than the exact-type rule assignment/parameter/return boundaries enforce (rule 4), but still strict enough to reject genuinely incompatible pairs. Heterogeneous equality across categories (`1 == "1"`) is `T0021`, not `bool`, matching `mypy --strict`'s own `comparison-overlap` check (D-086). Ordering operators (`<`/`>`/`<=`/`>=`) use this identical grouping but are always rejected across it when CPython itself would raise `TypeError` at runtime for the pair.
 
 ### v0.1 local inference
 
