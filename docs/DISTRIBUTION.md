@@ -110,10 +110,11 @@ succeeded, satisfying checklist items 1-3, on all five Tier-1 targets --
 Linux x64, Linux arm64, macOS x64, macOS arm64, and Windows x64. Item 4 is
 covered on all five targets by the repository's normal CI
 (`tests/diagnostics_test.rs`, `tests/slice0.rs`'s CLI success/failure/
-aggregation/precedence tests), and item 5 by `ci-gate`, both as a standing
-invariant of every merge to `main`, not tied to this one dispatch. This
-satisfies "Current installation boundary"'s tag-advertising constraint for
-commit `2724c606ead99c4d49b4a5dc5a8ed9f1d0eaf1b9`: a tag built from this
-revision may be described as verified on every Tier-1 target. A later
+aggregation/precedence tests), and item 5 by the required `ci-gate` and
+`Workflow policy` checks, both as standing invariants of every merge to
+`main`, not tied to this one dispatch. This satisfies "Current installation
+boundary"'s tag-advertising constraint for commit
+`2724c606ead99c4d49b4a5dc5a8ed9f1d0eaf1b9`: a tag built from this revision
+may be described as verified on every Tier-1 target for hook use. A later
 revision needs its own dated run recorded here before the same claim applies
 to it.
