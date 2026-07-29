@@ -76,18 +76,61 @@ D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
 # the digest below is already authorized.
 D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256 =
   "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
-# D-090: PR-8, Task 5's release-mode `pycc_rt` build step, added to
-# `build-test-coverage` and every `native-build-test` leg so
-# `tests/nbody_bench.rs`'s `pycc build --release` benchmark can actually
-# link an optimized `pycc_rt` instead of always falling back to the debug
-# build regardless of `--release` -- see D-090's text. Staged alongside
-# D84 (still the live, active workflow's own digest) until the PR that
-# actually flips `ci.yml` to this content lands and retires D84.
+# D-090: superseded before activation, never live. This digest covered
+# only PR-8, Task 5's release-mode `pycc_rt` build step, added to
+# `build-test-coverage` and every `native-build-test` leg. Caught before
+# any activation PR shipped it: that content was missing the coverage
+# sandbox's own release build (see D-091), so `build-test-coverage`'s
+# isolated `nobody` run would have failed `tests/pycc_toml_release_
+# default.rs` the moment this digest went live. Historical audit-fixture
+# digest only -- the public policy no longer accepts it.
 D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
   "67c04c8b2dcf8c93fff9f68535a712b942c7b559451b9f0745c12baa9d38ae48"
+# D-091: composed correction/extension of D-090's own staged-but-never-
+# activated content, discovered while opening PR-8's real pull request
+# against `main`. Two independent fixes, bundled into one digest since
+# both must land before PR-8's `ci.yml` can activate correctly:
+#
+# 1. `frontend-perf-measure`'s "Verify exact benchmark revisions" step
+#    previously hard-required root Cargo.toml/Cargo.lock (and, via a
+#    separate digest, every crate's own Cargo.toml/build.rs) to be
+#    byte-identical between the predecessor and candidate commits,
+#    aborting the job on any diff. That conflated two different
+#    guarantees: the benchmark corpus and toolchain (`benches`,
+#    `rust-toolchain*`, `.cargo`) measure genuinely incomparable work if
+#    they differ, so those stay a hard abort -- but a dependency-manifest
+#    change is just another kind of "did the code that produces the
+#    benchmarked binary change," already handled correctly by the
+#    existing `executable_inputs_equal` classification and its real 2%
+#    regression threshold for src/crates changes. A dependency `pycc
+#    check` never invokes at runtime cannot confound the comparison, and
+#    if a manifest change did somehow shift timing, the same strict
+#    threshold already applied to any other executable-input change
+#    would still catch it -- so this does not weaken the gate's power to
+#    catch real regressions, it only stops aborting before attempting the
+#    comparison at all. Moves Cargo.toml/Cargo.lock into that
+#    classification instead.
+# 2. `build-test-coverage`'s "Hard coverage gate" step builds `pycc_rt`
+#    for its cross-compile target and in debug profile inside its
+#    isolated `nobody` sandbox, but never in release profile -- D-090's
+#    own release-profile build step ran only later, outside that
+#    sandbox, after coverage measurement. `tests/pycc_toml_release_
+#    default.rs`'s non-ignored test needs a release-built `pycc_rt` to
+#    exist, so it would fail every time coverage runs. Fix: build
+#    `pycc_rt --release` inside the same isolated sandbox, before
+#    `llvm-cov` runs -- landing at `$ISOLATED_ROOT/target/release`, which
+#    `$GITHUB_WORKSPACE/target`'s own symlink already exposes at exactly
+#    the `env!("CARGO_MANIFEST_DIR")`-relative path
+#    `find_pycc_rt_lib_dir` looks up.
+#
+# Staged alongside D84 (still the live, active workflow's own digest)
+# until the PR that actually edits `ci.yml` to this content lands and
+# retires D84.
+D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
+  "6e52b64d38c78e2cac04166c017a0af638e7f420785cbc68ca35ee90b72f6e8a"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-  D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256
+  D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -343,6 +386,48 @@ REPLICATED_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
     target/criterion/pycc_check_frontend_fixture/current \
     target/criterion/pycc_check_frontend_fixture/previous \
     "$EXECUTABLE_INPUTS_EQUAL"
+SHELL
+# D-091: root Cargo.toml/Cargo.lock dropped from the hard-abort contract --
+# see D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT below, which now classifies them
+# instead.
+D91_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  test "$(git -C previous rev-parse HEAD)" = "$EXPECTED_PREDECESSOR_SHA"
+  test "$(git -C current rev-parse HEAD)" = "$EXPECTED_CURRENT_SHA"
+  contract_paths=(
+    benches
+    rust-toolchain.toml
+    rust-toolchain
+    .cargo
+  )
+  for contract_path in "${contract_paths[@]}"; do
+    previous_path="previous/$contract_path"
+    current_path="current/$contract_path"
+    if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+       [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+      continue
+    fi
+    git diff --no-index --exit-code -- "$previous_path" "$current_path"
+  done
+SHELL
+D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  executable_inputs_equal=true
+  for executable_path in src crates Cargo.toml Cargo.lock; do
+    if git diff --no-index --no-ext-diff --no-textconv --quiet -- \
+      "previous/$executable_path" "current/$executable_path"; then
+      continue
+    else
+      diff_status="$?"
+      if [ "$diff_status" -ne 1 ]; then
+        echo "could not compare executable benchmark input $executable_path" >&2
+        exit "$diff_status"
+      fi
+      executable_inputs_equal=false
+    fi
+  done
+  printf 'executable_inputs_equal=%s\n' \
+    "$executable_inputs_equal" >> "$GITHUB_OUTPUT"
 SHELL
 PAIRED_PERF_MEASURE_STEPS = [
   {
@@ -623,6 +708,17 @@ REPLICATED_PERF_MEASURE_JOB = D56_SOURCE_AWARE_PERF_MEASURE_JOB.merge(
 ).freeze
 REPLICATED_PERF_GATE_JOB = D56_SOURCE_AWARE_PERF_GATE_JOB.merge(
   "steps" => REPLICATED_PERF_GATE_STEPS
+).freeze
+D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_STEPS =
+  Marshal.load(Marshal.dump(REPLICATED_PERF_MEASURE_STEPS)).tap do |steps|
+    verify = steps.find { |step| step["name"] == "Verify exact benchmark revisions" }
+    verify["run"] = D91_VERIFY_REVISIONS_SCRIPT
+    classify =
+      steps.find { |step| step["name"] == "Classify executable benchmark inputs" }
+    classify["run"] = D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT
+  end.freeze
+D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB = D56_SOURCE_AWARE_PERF_MEASURE_JOB.merge(
+  "steps" => D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_STEPS
 ).freeze
 PAIRED_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
@@ -938,6 +1034,8 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
     if measure_job == D56_SOURCE_AWARE_PERF_MEASURE_JOB
       D56_SOURCE_AWARE_PERF_GATE_JOB
     elsif measure_job == REPLICATED_PERF_MEASURE_JOB
+      REPLICATED_PERF_GATE_JOB
+    elsif measure_job == D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB
       REPLICATED_PERF_GATE_JOB
     end
   unless expected_perf_job

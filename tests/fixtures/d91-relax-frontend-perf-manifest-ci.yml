@@ -82,6 +82,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
           run_isolated "$TRUSTED_CARGO" build --workspace
+          run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
           run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
           rm "$GITHUB_WORKSPACE/target"
           printf 'LLVM_SYS_221_PREFIX=%s\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
@@ -489,8 +490,6 @@ jobs:
           test "$(git -C current rev-parse HEAD)" = "$EXPECTED_CURRENT_SHA"
           contract_paths=(
             benches
-            Cargo.toml
-            Cargo.lock
             rust-toolchain.toml
             rust-toolchain
             .cargo
@@ -504,29 +503,25 @@ jobs:
             fi
             git diff --no-index --exit-code -- "$previous_path" "$current_path"
           done
-          local_contract_digest() {
-            checkout="$1"
-            (
-              cd "$checkout"
-              git ls-files -z -- \
-                ':(glob)crates/**/Cargo.toml' \
-                ':(glob)**/build.rs' |
-                while IFS= read -r -d '' relative_path; do
-                  file_digest="$(/usr/bin/shasum -a 256 "$relative_path" |
-                    /usr/bin/awk '{print $1}')"
-                  printf '%s\0%s\0' "$relative_path" "$file_digest"
-                done
-            ) | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
-          }
-          test "$(local_contract_digest previous)" = \
-            "$(local_contract_digest current)"
 
+      # D-091: the dependency manifest (root Cargo.toml/Cargo.lock, and each
+      # crate's own Cargo.toml/build.rs -- already covered by the plain
+      # `crates` diff below) is just another kind of "did the code that
+      # produces the benchmarked binary change," exactly like src/crates.
+      # It is classified here, not hard-required identical above: a
+      # dependency `pycc check` never invokes at runtime cannot confound
+      # the comparison, and if a manifest change somehow did shift timing,
+      # the same strict threshold applied to any other executable-input
+      # change below would still catch it. Only `benches` (the corpus
+      # itself) and the toolchain/`.cargo` above measure genuinely
+      # incomparable work if they differ -- no numeric threshold fixes that,
+      # which is why those stay a hard, unconditional abort.
       - name: Classify executable benchmark inputs
         id: benchmark_contract
         run: |
           set -euo pipefail
           executable_inputs_equal=true
-          for executable_path in src crates; do
+          for executable_path in src crates Cargo.toml Cargo.lock; do
             if git diff --no-index --no-ext-diff --no-textconv --quiet -- \
               "previous/$executable_path" "current/$executable_path"; then
               continue

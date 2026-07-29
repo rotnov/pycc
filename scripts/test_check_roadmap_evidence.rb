@@ -25,8 +25,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent / "tests/fixtures/d80-conformance-oracle-ci.yml"
   D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d84-throughput-floor-ci.yml"
-  D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE =
-    Pathname(__dir__).parent / "tests/fixtures/d90-release-pycc-rt-ci.yml"
+  D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -874,27 +875,36 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d84_and_staged_d90
+  def test_tier1_workflow_authorization_contains_only_active_d84_and_staged_d91
     assert_equal(
-      [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256, D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256],
+      [
+        D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
+        D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
+      ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
 
-  # Staged, not yet active: D90's fixture is the PR-8/Task 5 target content
-  # (D84's own content plus the release-mode `pycc_rt` build step) that a
-  # later PR will flip the live `ci.yml` to. Unlike
-  # test_tier1_workflow_authorization_is_the_active_d84_digest above, this
-  # does not compare against the live `ci.yml` -- the live workflow is
-  # still D84's content at this point.
-  def test_d90_release_pycc_rt_workflow_digest_matches_the_reviewed_fixture
+  # D-090's own fixture is gone: it was staged but never activated, and
+  # was found (while opening PR-8's own pull request) to be missing the
+  # coverage-sandbox release build D-091 adds -- see D-091's comment in
+  # check_roadmap_evidence.rb for the full correction. Its digest constant
+  # remains only as a historical record that it was once reviewed and
+  # staged, matching D51/D56/D62/D80's own "no longer accepted" pattern.
+
+  # Staged, not yet active: D91's fixture is D84's own live content (the
+  # current, unmodified `ci.yml`) plus D-090's originally-intended
+  # release-mode `pycc_rt` build step, the coverage-sandbox release build
+  # that step's own staged fixture was missing, and the relaxed manifest
+  # contract -- the actual composed content PR-8's activation needs.
+  def test_d91_relax_frontend_perf_manifest_workflow_digest_matches_the_reviewed_fixture
     assert_equal(
-      D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE).hexdigest
+      D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE).hexdigest
     )
     assert validate_source_aware_perf_gate_lifecycle(
-      D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE.read,
-      D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE.to_s
+      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read,
+      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.to_s
     )
   end
 
