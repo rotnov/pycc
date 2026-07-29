@@ -863,14 +863,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
-  def test_tier1_workflow_authorization_is_the_active_d84_digest
-    assert_equal(
-      D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-      Digest::SHA256.hexdigest(
-        (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
-      )
-    )
-  end
 
   # D-091 appended its own prospective digest alongside D84's (not
   # replacing it) as the stage half of a two-phase rollout the
@@ -1060,18 +1052,31 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d84_throughput_floor_workflow_is_active_and_reviewed
+  # D-091 superseded D84 as the digest the *live* `ci.yml` matches (see
+  # `test_d91_release_pycc_rt_workflow_is_active_and_reviewed` below), but
+  # D84's own digest stays in the active allowlist and its frozen fixture
+  # stays a self-consistent, reviewed audit artifact -- matching the
+  # `remains_a_reviewed_audit_fixture` shape D62/D80 already use below for
+  # exactly this "no longer live, still reviewed" state.
+  def test_d84_throughput_floor_workflow_remains_a_reviewed_audit_fixture
     assert_equal(
       D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE).hexdigest
     )
-    assert_equal(
-      D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW).hexdigest
-    )
-    assert_equal(
+    assert validate_source_aware_perf_gate_lifecycle(
       D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read,
-      ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
+      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  # D-091's activation half: `ci.yml` now carries the release-mode
+  # `pycc_rt` build steps (see that step's own comment in `ci.yml`), so the
+  # live file matches D91, not D84. Mirrors the exact shape the old D84
+  # test used for the live file before this change.
+  def test_d91_release_pycc_rt_workflow_is_active_and_reviewed
+    assert_equal(
+      D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW).hexdigest
     )
     assert_equal(
       REPLICATED_PERF_CHECKER_SHA256,

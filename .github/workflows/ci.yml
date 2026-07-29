@@ -109,6 +109,16 @@ jobs:
       - name: cargo build --workspace
         run: cargo build --workspace
 
+      # tests/nbody_bench.rs's `#[ignore]`d benchmark builds its fixture with
+      # `pycc build --release` (no `--target`), which links whatever
+      # `pycc_rt` build lives in this host's own `target/release/` --
+      # previously nothing built one here, so that lookup always silently
+      # fell through to the debug-profile error path before D-091's fix to
+      # `src/main.rs::find_pycc_rt_lib_dir`. `--include-ignored` below is
+      # what actually exercises this.
+      - name: Build pycc_rt (release, for tests/nbody_bench.rs's --release build)
+        run: cargo build --release -p pycc_rt
+
       - name: Run offline alpha skill contract evals
         run: |
           python3 scripts/run_alpha_skill_evals.py \
@@ -297,6 +307,13 @@ jobs:
 
       - name: cargo build --workspace
         run: cargo build --workspace
+
+      # Same D-091 need as build-test-coverage's own identically-named step
+      # above: tests/nbody_bench.rs's `pycc build --release` (no `--target`)
+      # links this host's own `target/release/pycc_rt`, which nothing built
+      # on this leg before this step existed.
+      - name: Build pycc_rt (release, for tests/nbody_bench.rs's --release build)
+        run: cargo build --release -p pycc_rt
 
       # `--include-ignored` runs tests/conformance.rs's two `#[ignore]`d
       # tests (D-078) alongside everything else, now that the oracle above
