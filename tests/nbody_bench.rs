@@ -62,7 +62,7 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
     assert_eq!(oracle_binary_name(false), "python3.14");
 }
 
-/// D-092's nbody measurement contract (design doc's own §1): same-machine
+/// D-094's nbody measurement contract (design doc's own §1): same-machine
 /// paired comparison, `K = 5` runs each, ratio of medians, `--release` pycc
 /// vs. the pinned CPython 3.14.6 oracle, gate at ratio >= 20. `#[ignore]`d
 /// like `tests/conformance.rs`'s two fixtures -- genuinely slow (a full
@@ -70,24 +70,24 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// explicitly via `--include-ignored`, already passed workspace-wide in
 /// both `build-test-coverage` and every `native-build-test` matrix leg
 /// (`.github/workflows/ci.yml`), so no further CI test-wiring change was
-/// needed beyond D-091's own release-`pycc_rt`-build step addition there.
+/// needed beyond D-092's own release-`pycc_rt`-build step addition there.
 ///
 /// As of this commit this test still fails, but for a narrower, better
 /// understood reason than the ~10-11x this benchmark first measured
-/// (D-091): that first measurement conflated a real methodology gap with
+/// (D-093): that first measurement conflated a real methodology gap with
 /// what turned out to be a real, separate implementation bug, both now
 /// addressed:
 /// 1. `src/main.rs::find_pycc_rt_lib_dir_in` used to always link
 ///    `target/debug/libpycc_rt.a` regardless of `--release` (the flag only
 ///    optimized the compiled module's own LLVM IR, never selected an
-///    optimized `pycc_rt` to link) -- fixed (D-091): it now takes a
+///    optimized `pycc_rt` to link) -- fixed (D-092): it now takes a
 ///    `release: bool` and links `target/release` when the caller's already-
 ///    resolved `--release` state says to.
 /// 2. At `DEFAULT_ITERATIONS = 20000` (pyperformance's own upstream
 ///    constant), pycc's own ~3ms fixed process-spawn overhead was ~45-50%
 ///    of its ~6ms total nbody runtime, mechanically compressing the
 ///    measured ratio far below the actual compute-only speedup -- fixed
-///    (D-091): `tests/fixtures/nbody.py`'s iteration count is raised to
+///    (D-093): `tests/fixtures/nbody.py`'s iteration count is raised to
 ///    `525000`, keeping both sides' own fixed-overhead fraction in the
 ///    single digits (pycc ~4.3%, CPython ~1.6%) without changing any
 ///    physics, constant, or update-order fidelity to the reference
@@ -95,21 +95,21 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 ///    per iteration now total 5,250,000 over a full run, not 200,000.
 ///
 /// With both fixes in place, the measured ratio is a stable, reproducible
-/// ~18.0-18.24x (see D-091 for five consecutive runs' worth of numbers) --
+/// ~18.0-18.24x (see D-093 for five consecutive runs' worth of numbers) --
 /// still short of the 20x gate, but now a genuine, well-bounded compute
 /// ceiling rather than a measurement artifact: real timing at 300k/400k/
 /// 525k/800k/1M iterations shows the ratio is not still climbing (17.34x/
 /// 17.72x/17.78x/18.03x/18.14x), so raising the iteration count further
 /// would not close this gap. `pycc_rt_float_pow` remains an opaque
 /// `extern "C"` call from the compiled module's own LLVM IR (v0.2 has no
-/// cross-module LTO, D-092), so LLVM can never inline it into the hot loop
+/// cross-module LTO, D-094), so LLVM can never inline it into the hot loop
 /// regardless of which `pycc_rt` build is linked -- closing the remaining
 /// ~2x gap would need real cross-module optimization work, out of this
 /// test's own scope. The gate itself is a design-doc-mandated threshold
 /// (design doc's §1) and stays at 20 here unmodified; lowering it, or
 /// rewriting this fixture's computation to dodge `pycc_rt_float_pow` calls,
 /// would defeat the point of building this measurement in the first place.
-/// See D-091 for the full investigation and the task dispatcher's own
+/// See D-093 for the full investigation and the task dispatcher's own
 /// decision on how to proceed.
 ///
 /// Runs execute in two back-to-back blocks (all 5 pycc runs, then all 5

@@ -31,11 +31,11 @@ never a merge gate.
 ## 2026-07-29 — Whole-process wall-clock timing has no signal once the workload is a few milliseconds
 
 **What happened:** PR-8 Task 5's first pass at `tests/nbody_bench.rs`
-(D-092's same-machine paired nbody benchmark, `pyperformance`'s own
+(D-094's same-machine paired nbody benchmark, `pyperformance`'s own
 `DEFAULT_ITERATIONS = 20000`) measured a ~10-11x pycc-vs-CPython speedup
 ratio, reported as a genuine, investigated shortfall against the design
 spec's ≥20x gate (the task's own untracked working notes -- not a repo
-file, see `docs/DECISIONS.md`'s D-091 for the tracked, full write-up). A
+file, see `docs/DECISIONS.md`'s D-093 for the tracked, full write-up). A
 second-reviewer pass re-derived the real cause from that report's own
 numbers: CPython's nbody total (68.2ms) minus its own bare-interpreter
 baseline (20.3ms) gives ~47.9ms of actual compute; pycc's nbody total
@@ -62,7 +62,7 @@ measurement showed compute cost does not scale as cleanly as expected) so
 both sides' fixed overhead is a single-digit percentage of their own total.
 This dropped the noise band from a ~1.3x-wide swing across runs (10.23x-
 11.32x at 20000 iterations) to a tight, reproducible ~0.2x band (18.04x-
-18.24x at 525000) -- full details in D-091.
+18.24x at 525000) -- full details in D-093.
 
 **Lesson:** this is the second time in this one PR a benchmark used a proxy
 measurement with near-zero signal for what it was meant to measure -- see
