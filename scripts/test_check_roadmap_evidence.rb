@@ -872,12 +872,13 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # D-091 appended its own prospective digest alongside D84's (not
-  # replacing it) as the stage half of a two-phase rollout the
-  # `pull_request_target` audit's base-branch-only checker trust boundary
-  # requires (same mechanism D84 itself used to retire D80) -- so this
-  # array holds both entries until a later activation change actually
-  # updates `ci.yml` to match D91 and retires D84.
+  # Stages a new prospective digest alongside D84's (not replacing it) as
+  # the stage half of a two-phase rollout the `pull_request_target` audit's
+  # base-branch-only checker trust boundary requires (same mechanism D84
+  # itself used to retire D80) -- so this array holds both entries until a
+  # later activation change actually updates `ci.yml` to match the new
+  # digest and retires D84. That later change records this digest's own
+  # `docs/DECISIONS.md` entry (D-091) once it exists on `main`.
   def test_tier1_workflow_authorization_contains_the_active_digests
     assert_equal(
       [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256, D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256],
