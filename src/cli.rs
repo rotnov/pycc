@@ -28,7 +28,7 @@ pub enum Command {
         /// Enable LLVM optimization (O3-equivalent whole-module pipeline).
         /// True cross-file LTO has no effect yet -- pycc compiles exactly
         /// one module per invocation until v0.4's multi-file support lands
-        /// (D-090). Omit to use `pycc.toml`'s neighboring `[build] opt =
+        /// (D-092). Omit to use `pycc.toml`'s neighboring `[build] opt =
         /// "release"` default when one is present, or plain debug output
         /// otherwise.
         #[arg(long)]

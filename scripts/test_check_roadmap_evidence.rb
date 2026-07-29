@@ -25,6 +25,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent / "tests/fixtures/d80-conformance-oracle-ci.yml"
   D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d84-throughput-floor-ci.yml"
+  D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d90-release-pycc-rt-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -864,16 +866,21 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
 
-  # D-091 appended its own prospective digest alongside D84's (not
-  # replacing it) as the stage half of a two-phase rollout the
-  # `pull_request_target` audit's base-branch-only checker trust boundary
-  # requires (same mechanism D84 itself used to retire D80) -- so this
-  # array holds both entries until a later activation change actually
-  # updates `ci.yml` to match D91 and retires D84.
-  def test_tier1_workflow_authorization_contains_the_active_digests
+  def test_tier1_workflow_authorization_contains_only_the_active_d90_digest
     assert_equal(
-      [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256, D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256],
+      [D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
+    )
+  end
+
+  def test_d90_release_pycc_rt_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE.read,
+      D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE.to_s
     )
   end
 
@@ -1052,10 +1059,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # D-091 superseded D84 as the digest the *live* `ci.yml` matches (see
-  # `test_d91_release_pycc_rt_workflow_is_active_and_reviewed` below), but
-  # D84's own digest stays in the active allowlist and its frozen fixture
-  # stays a self-consistent, reviewed audit artifact -- matching the
+  # D-090 superseded D84 as the digest the *live* `ci.yml` matches (see
+  # `test_d90_release_pycc_rt_workflow_is_active_and_reviewed` below). D84's
+  # own digest is retired from the active allowlist (removed from
+  # REVIEWED_PERF_CI_WORKFLOW_SHA256S), but its frozen fixture stays a
+  # self-consistent, reviewed audit artifact -- matching the
   # `remains_a_reviewed_audit_fixture` shape D62/D80 already use below for
   # exactly this "no longer live, still reviewed" state.
   def test_d84_throughput_floor_workflow_remains_a_reviewed_audit_fixture
@@ -1069,13 +1077,13 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # D-091's activation half: `ci.yml` now carries the release-mode
+  # D-090's activation half: `ci.yml` now carries the release-mode
   # `pycc_rt` build steps (see that step's own comment in `ci.yml`), so the
-  # live file matches D91, not D84. Mirrors the exact shape the old D84
+  # live file matches D90, not D84. Mirrors the exact shape the old D84
   # test used for the live file before this change.
-  def test_d91_release_pycc_rt_workflow_is_active_and_reviewed
+  def test_d90_release_pycc_rt_workflow_is_active_and_reviewed
     assert_equal(
-      D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256,
+      D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(LIVE_CI_WORKFLOW).hexdigest
     )
     assert_equal(
@@ -1130,37 +1138,23 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_public_cli_accepts_the_active_d84_workflow
-    stdout, stderr, status = run_checker(
-      roadmap: roadmap_with_tier1_claim(:absent),
-      workflow: D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read
-    )
-
-    assert status.success?, stderr
-    assert_includes stdout, "Roadmap evidence policy passed."
-  end
-
-  def test_public_cli_rejects_drift_in_the_active_d84_workflow
-    workflow = D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read.sub(
-      "for round in 1 2 3 4 5; do",
-      "for round in 1 2 3; do"
-    )
-
+  # D84 is retired from the active allowlist by D-090's activation -- unlike
+  # D80 (which still had a coexisting active sibling, D62, at the point it
+  # was retired), D84's fixture is no longer accepted at all here, matching
+  # test_public_cli_rejects_the_retired_d80_workflow's own shape below.
+  def test_public_cli_rejects_the_retired_d84_workflow
     _stdout, stderr, status = run_checker(
       roadmap: roadmap_with_tier1_claim(:absent),
-      workflow: workflow
+      workflow: D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read
     )
 
     refute status.success?
     assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
-  # D-091 activated a *second* live digest (D91) in addition to D84's own
-  # still-accepted, now-historical fixture -- the two tests above only ever
-  # exercised the frozen D84 fixture through the public CLI, so nothing
-  # proved the checker's own drift rejection actually holds against the
-  # file that's live today. These two do, mirroring the D84 pair's exact
-  # shape against `LIVE_CI_WORKFLOW` instead of the frozen fixture.
+  # The public CLI's actual acceptance/drift-rejection behavior against
+  # today's live `ci.yml` (D90's activated content), not just the frozen
+  # fixture the digest-matching tests above already cover.
   def test_public_cli_accepts_the_live_workflow
     stdout, stderr, status = run_checker(
       roadmap: roadmap_with_tier1_claim(:absent),

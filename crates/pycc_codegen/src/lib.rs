@@ -1418,7 +1418,7 @@ fn declare_module_globals<'ctx>(
 /// LLVM's optimizer entirely -- today's only behavior. `true` selects
 /// `OptimizationLevel::Aggressive` and additionally runs the `"default<O3>"`
 /// whole-module pass pipeline via `Module::run_passes` before the object is
-/// written (D-090). True cross-translation-unit LTO has no effect yet:
+/// written (D-092). True cross-translation-unit LTO has no effect yet:
 /// pycc emits exactly one LLVM module per compilation (single-file only
 /// until v0.4's multi-file support), so this is "maximum whole-module
 /// optimization," not literal cross-file link-time optimization.
@@ -1729,7 +1729,7 @@ pub fn compile_to_object(
             "creating a target machine with generic CPU/features should never fail for a \
              triple Target::from_triple has already accepted",
         );
-    // `--release`'s whole-module optimization pipeline (D-090). This is
+    // `--release`'s whole-module optimization pipeline (D-092). This is
     // "maximum whole-module optimization," not literal cross-translation-
     // unit LTO: pycc emits exactly one LLVM module per compilation today
     // (single-file only until v0.4's multi-file support), so there is only

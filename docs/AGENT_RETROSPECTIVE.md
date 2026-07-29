@@ -31,7 +31,7 @@ never a merge gate.
 ## 2026-07-29 — Whole-process wall-clock timing has no signal once the workload is a few milliseconds
 
 **What happened:** PR-8 Task 5's first pass at `tests/nbody_bench.rs`
-(D-090's same-machine paired nbody benchmark, `pyperformance`'s own
+(D-092's same-machine paired nbody benchmark, `pyperformance`'s own
 `DEFAULT_ITERATIONS = 20000`) measured a ~10-11x pycc-vs-CPython speedup
 ratio, reported as a genuine, investigated shortfall against the design
 spec's ≥20x gate (the task's own untracked working notes -- not a repo

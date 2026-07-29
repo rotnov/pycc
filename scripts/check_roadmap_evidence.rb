@@ -66,33 +66,22 @@ D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
 # Historical audit-fixture digest. The public policy no longer accepts it.
 D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
   "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234"
-# D-084: PR-6, Task 7's `pycc check` absolute-throughput-floor CI step
-# added to build-test-coverage, after the cargo-test step so it is never
-# the first exec of the freshly-linked binary in that job -- see D-084's
-# text. Staged onto main first as D80's coexisting sibling by a separate
-# stage PR, required by the pull_request_target audit's base-branch-only
-# checker trust boundary (same mechanism D-080 already needed -- see
-# D-080's "Staging note"); this activation commit retires D80 now that
-# the digest below is already authorized.
+# Historical audit-fixture digest. The public policy no longer accepts it.
 D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256 =
   "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
-# D-091: PR-8, Task 5's release-mode `pycc_rt` build step, added to
+# D-090: PR-8, Task 5's release-mode `pycc_rt` build step, added to
 # `build-test-coverage` and every `native-build-test` leg so
 # `tests/nbody_bench.rs`'s `pycc build --release` benchmark can actually
 # link an optimized `pycc_rt` instead of always falling back to the debug
-# build regardless of `--release` (see D-091's own text). Appended here
-# *alongside* D84, not replacing it -- this is the stage half of the same
-# two-phase rollout D84 itself used to retire D80: this digest-only change
-# is mergeable to `main` on its own (it changes no workflow behavior, since
-# `ci.yml` doesn't match it yet), which is what the `pull_request_target`
-# audit's base-branch-only checker trust boundary requires before a later
-# activation change can actually update `ci.yml` to match. D84 is retired
-# from this active array only in that later activation change, not here.
-D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
+# build regardless of `--release` -- see D-090's text. Staged onto main
+# first as D84's coexisting sibling by a separate stage PR (#187, mirroring
+# D-080/D-084's own precedent), required by the pull_request_target audit's
+# base-branch-only checker trust boundary; this activation commit retires
+# D84 now that the digest below is already authorized.
+D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
   "67c04c8b2dcf8c93fff9f68535a712b942c7b559451b9f0745c12baa9d38ae48"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-  D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256
+  D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"

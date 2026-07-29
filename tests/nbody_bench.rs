@@ -62,7 +62,7 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
     assert_eq!(oracle_binary_name(false), "python3.14");
 }
 
-/// D-090's nbody measurement contract (design doc's own §1): same-machine
+/// D-092's nbody measurement contract (design doc's own §1): same-machine
 /// paired comparison, `K = 5` runs each, ratio of medians, `--release` pycc
 /// vs. the pinned CPython 3.14.6 oracle, gate at ratio >= 20. `#[ignore]`d
 /// like `tests/conformance.rs`'s two fixtures -- genuinely slow (a full
@@ -102,7 +102,7 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// 17.72x/17.78x/18.03x/18.14x), so raising the iteration count further
 /// would not close this gap. `pycc_rt_float_pow` remains an opaque
 /// `extern "C"` call from the compiled module's own LLVM IR (v0.2 has no
-/// cross-module LTO, D-090), so LLVM can never inline it into the hot loop
+/// cross-module LTO, D-092), so LLVM can never inline it into the hot loop
 /// regardless of which `pycc_rt` build is linked -- closing the remaining
 /// ~2x gap would need real cross-module optimization work, out of this
 /// test's own scope. The gate itself is a design-doc-mandated threshold
