@@ -76,26 +76,18 @@ D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
 # the digest below is already authorized.
 D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256 =
   "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
-# Stage half of PR-8, Task 5's release-mode `pycc_rt` build step, added to
+# D-090: PR-8, Task 5's release-mode `pycc_rt` build step, added to
 # `build-test-coverage` and every `native-build-test` leg so
 # `tests/nbody_bench.rs`'s `pycc build --release` benchmark can actually
 # link an optimized `pycc_rt` instead of always falling back to the debug
-# build regardless of `--release`. This digest is authorized here *ahead*
-# of its own `docs/DECISIONS.md` entry (recorded as D-091 by the separate
-# activation commit that actually changes `ci.yml` to match it, once this
-# stage commit has merged to `main`) -- the same two-phase rollout D84
-# itself used to retire D80: appended here *alongside* D84, not replacing
-# it, since this digest-only change is mergeable to `main` on its own (it
-# changes no workflow behavior, as `ci.yml` doesn't match it yet), which is
-# what the `pull_request_target` audit's base-branch-only checker trust
-# boundary requires before a later activation change can actually update
-# `ci.yml` to match. D84 is retired from this active array only in that
-# later activation change, not here.
-D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
+# build regardless of `--release` -- see D-090's text. Staged alongside
+# D84 (still the live, active workflow's own digest) until the PR that
+# actually flips `ci.yml` to this content lands and retires D84.
+D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
   "67c04c8b2dcf8c93fff9f68535a712b942c7b559451b9f0745c12baa9d38ae48"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-  D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256
+  D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"

@@ -25,6 +25,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent / "tests/fixtures/d80-conformance-oracle-ci.yml"
   D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d84-throughput-floor-ci.yml"
+  D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d90-release-pycc-rt-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -872,17 +874,27 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # Stages a new prospective digest alongside D84's (not replacing it) as
-  # the stage half of a two-phase rollout the `pull_request_target` audit's
-  # base-branch-only checker trust boundary requires (same mechanism D84
-  # itself used to retire D80) -- so this array holds both entries until a
-  # later activation change actually updates `ci.yml` to match the new
-  # digest and retires D84. That later change records this digest's own
-  # `docs/DECISIONS.md` entry (D-091) once it exists on `main`.
-  def test_tier1_workflow_authorization_contains_the_active_digests
+  def test_tier1_workflow_authorization_contains_only_active_d84_and_staged_d90
     assert_equal(
-      [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256, D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256],
+      [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256, D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
+    )
+  end
+
+  # Staged, not yet active: D90's fixture is the PR-8/Task 5 target content
+  # (D84's own content plus the release-mode `pycc_rt` build step) that a
+  # later PR will flip the live `ci.yml` to. Unlike
+  # test_tier1_workflow_authorization_is_the_active_d84_digest above, this
+  # does not compare against the live `ci.yml` -- the live workflow is
+  # still D84's content at this point.
+  def test_d90_release_pycc_rt_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE.read,
+      D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE.to_s
     )
   end
 
