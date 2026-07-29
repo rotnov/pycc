@@ -798,6 +798,56 @@ COVERAGE_SCRIPT = <<~SHELL.strip
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
+# D-091: `build-test-coverage`'s own isolated sandbox additionally builds a
+# release-profile `pycc_rt` before `llvm-cov` runs (see D-091's text) --
+# `coverage_gate_present?`/`workflow-policy.yml`'s `pull_request_target`
+# audit reaches this exact step body under the identical base-branch-only
+# trust boundary `REVIEWED_PERF_CI_WORKFLOW_SHA256S` exists for, so this
+# needs the same coexist-then-retire treatment: both the pre-D91 shape
+# (`COVERAGE_SCRIPT`, still the live workflow's own content) and this one
+# are accepted below until a later activation commit flips `ci.yml` and
+# this becomes the sole accepted shape.
+D91_COVERAGE_SCRIPT = <<~SHELL.strip
+  set -euo pipefail
+  LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
+  TRUSTED_CARGO="$(rustup which cargo)"
+  TRUSTED_RUSTC="$(rustup which rustc)"
+  TRUSTED_RUSTDOC="$(rustup which rustdoc)"
+  TRUSTED_COV="/Users/runner/.cargo/bin/cargo-llvm-cov"
+  TRUSTED_TOOLCHAIN="$(dirname "$(dirname "$TRUSTED_CARGO")")"
+  cd "$RUNNER_TEMP"
+  RUSTC="$TRUSTED_RUSTC" RUSTDOC="$TRUSTED_RUSTDOC" "$TRUSTED_CARGO" install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+  "$TRUSTED_COV" llvm-cov --version
+  sudo chmod o+x /Users/runner /Users/runner/.cargo /Users/runner/.cargo/bin /Users/runner/.rustup /Users/runner/.rustup/toolchains
+  sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"
+  sudo chmod o+rx "$TRUSTED_COV"
+  ISOLATED_ROOT="$RUNNER_TEMP/pycc-coverage"
+  mkdir -p "$ISOLATED_ROOT/home" "$ISOLATED_ROOT/tmp" "$ISOLATED_ROOT/cargo-home" "$ISOLATED_ROOT/target"
+  sudo chown -R nobody:nobody "$ISOLATED_ROOT"
+  ISOLATED_ENV=(
+    "HOME=$ISOLATED_ROOT/home"
+    "TMPDIR=$ISOLATED_ROOT/tmp/"
+    "CARGO_HOME=$ISOLATED_ROOT/cargo-home"
+    "CARGO_TARGET_DIR=$ISOLATED_ROOT/target"
+    "CARGO=$TRUSTED_CARGO"
+    "RUSTC=$TRUSTED_RUSTC"
+    "RUSTDOC=$TRUSTED_RUSTDOC"
+    "LLVM_SYS_221_PREFIX=$LLVM_SYS_221_PREFIX_VALUE"
+    "PATH=$(dirname "$TRUSTED_CARGO"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+  )
+  run_isolated() {
+    sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
+  }
+  ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
+  cd "$GITHUB_WORKSPACE"
+  run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
+  run_isolated "$TRUSTED_CARGO" build --workspace
+  run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
+  #{COVERAGE_COMMAND}
+  rm "$GITHUB_WORKSPACE/target"
+  printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
+SHELL
+REVIEWED_COVERAGE_SCRIPTS = [COVERAGE_SCRIPT, D91_COVERAGE_SCRIPT].freeze
 TRUSTED_COVERAGE_ENV = {
   "CARGO_LLVM_COV_VERSION" => "0.8.7",
   "LLVM_VERSION" => "22.1.1"
@@ -828,6 +878,15 @@ TRUSTED_COVERAGE_STEPS = [
     "run" => COVERAGE_SCRIPT
   }
 ].freeze
+D91_TRUSTED_COVERAGE_STEPS =
+  TRUSTED_COVERAGE_STEPS[0..-2] + [
+    {
+      "name" => COVERAGE_STEP,
+      "run" => D91_COVERAGE_SCRIPT
+    }
+  ]
+REVIEWED_TRUSTED_COVERAGE_STEPS =
+  [TRUSTED_COVERAGE_STEPS, D91_TRUSTED_COVERAGE_STEPS].freeze
 
 def yaml_mapping(node, context)
   raise RoadmapEvidenceError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)
@@ -943,7 +1002,9 @@ def coverage_gate_present?(workflow_text, source)
     next unless step["name"] && step["run"]
 
     next unless yaml_scalar(step["name"], "#{source} step name") == COVERAGE_STEP
-    next unless yaml_scalar(step["run"], "#{source} step run").strip == COVERAGE_SCRIPT
+    next unless REVIEWED_COVERAGE_SCRIPTS.include?(
+      yaml_scalar(step["run"], "#{source} step run").strip
+    )
 
     if step.key?("shell")
       raise RoadmapEvidenceError, "#{source}: coverage step must use the default shell"
@@ -967,7 +1028,7 @@ def coverage_gate_present?(workflow_text, source)
     step.delete("continue-on-error") if step["continue-on-error"] == "false"
     step
   end
-  unless actual_prefix == TRUSTED_COVERAGE_STEPS
+  unless REVIEWED_TRUSTED_COVERAGE_STEPS.include?(actual_prefix)
     raise RoadmapEvidenceError,
           "#{source}: coverage setup steps do not match the trusted sequence"
   end

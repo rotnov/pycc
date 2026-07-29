@@ -908,6 +908,20 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
+  # `coverage_gate_present?`/`COVERAGE_SCRIPT` DO model part of
+  # build-test-coverage (the exact body of its "Hard coverage gate" step),
+  # unlike the frontend-perf-measure job the lifecycle validator above
+  # checks. D-091's own release-profile build line inside that step (see
+  # check_roadmap_evidence.rb's COVERAGE_SCRIPT) must keep matching this
+  # fixture's actual content, or the activation commit that copies this
+  # fixture into ci.yml would fail its own "Check roadmap evidence" step.
+  def test_d91_relax_frontend_perf_manifest_workflow_still_has_a_recognized_coverage_gate
+    assert coverage_gate_present?(
+      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read,
+      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
   def test_tier1_workflow_allowlist_retires_the_pre_alpha_eval_digest
     refute_equal(
       D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256,
