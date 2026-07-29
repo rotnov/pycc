@@ -76,18 +76,88 @@ D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
 # the digest below is already authorized.
 D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256 =
   "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
-# D-090: PR-8, Task 5's release-mode `pycc_rt` build step, added to
-# `build-test-coverage` and every `native-build-test` leg so
-# `tests/nbody_bench.rs`'s `pycc build --release` benchmark can actually
-# link an optimized `pycc_rt` instead of always falling back to the debug
-# build regardless of `--release` -- see D-090's text. Staged alongside
-# D84 (still the live, active workflow's own digest) until the PR that
-# actually flips `ci.yml` to this content lands and retires D84.
+# D-090: superseded before activation, never live. This digest covered
+# only PR-8, Task 5's release-mode `pycc_rt` build step, added to
+# `build-test-coverage` and every `native-build-test` leg. Caught before
+# any activation PR shipped it: that content was missing the coverage
+# sandbox's own release build (see D-091), so `build-test-coverage`'s
+# isolated `nobody` run would have failed `tests/pycc_toml_release_
+# default.rs` the moment this digest went live. Historical audit-fixture
+# digest only -- the public policy no longer accepts it.
 D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
   "67c04c8b2dcf8c93fff9f68535a712b942c7b559451b9f0745c12baa9d38ae48"
+# D-091: composed correction/extension of D-090's own staged-but-never-
+# activated content, discovered while opening PR-8's real pull request
+# against `main`. Independent fixes, bundled into one digest since all
+# must land before PR-8's `ci.yml` can activate correctly:
+#
+# 1. `frontend-perf-measure`'s "Verify exact benchmark revisions" step
+#    previously hard-required root Cargo.toml/Cargo.lock (and, via a
+#    separate digest, every crate's own Cargo.toml/build.rs) to be
+#    byte-identical between the predecessor and candidate commits,
+#    aborting the job on any diff. That conflated two different
+#    guarantees: the benchmark corpus and toolchain (`benches`,
+#    `rust-toolchain*`, `.cargo`) measure genuinely incomparable work if
+#    they differ, so those stay a hard abort -- but a dependency-manifest
+#    change is just another kind of "did the code that produces the
+#    benchmarked binary change," already handled correctly by the
+#    existing `executable_inputs_equal` classification and its real 2%
+#    regression threshold for src/crates changes. A dependency `pycc
+#    check` never invokes at runtime cannot confound the comparison, and
+#    if a manifest change did somehow shift timing, the same strict
+#    threshold already applied to any other executable-input change
+#    would still catch it -- so this does not weaken the gate's power to
+#    catch real regressions, it only stops aborting before attempting the
+#    comparison at all. Moves Cargo.toml/Cargo.lock into that
+#    classification instead.
+# 2. A separate, standalone check (not part of `contract_paths` above,
+#    and not removed by (1)) keeps root Cargo.toml's bench-defining tail
+#    ([dev-dependencies] onward, i.e. [dev-dependencies] plus [[bench]]
+#    today) a hard abort: nothing in that region reaches the benchmarked
+#    binary, so relaxing it would let a bumped `criterion` or rewritten
+#    `[[bench]]` target pass as a faster compiler rather than a faster
+#    measuring apparatus. Two invariants are asserted so a future
+#    manifest reorder cannot silently widen or narrow the pinned region:
+#    every section after [dev-dependencies] must be [[bench]] (else
+#    something unrelated could be swallowed into the softer
+#    classification), and every [[bench]] in the file must be inside
+#    that tail (else moving [[bench]] above [dev-dependencies] could
+#    move it out of the pinned region). `Cargo.lock`'s own bench-tooling
+#    entries are not isolated by this check and remain in the soft
+#    classification -- an accepted, documented residual, not an
+#    oversight.
+# 3. Root-level `build.rs` (not present today, but previously covered by
+#    the removed `**/build.rs` digest for any crate) is added to the
+#    `executable_inputs_equal` classification loop, guarded the same way
+#    `contract_paths` already guards nonexistent paths, so Cargo silently
+#    picking up a future root build script cannot go unclassified.
+#    Per-crate `build.rs` stays covered by the existing whole-directory
+#    `crates` diff.
+# 4. `build-test-coverage`'s "Hard coverage gate" step builds `pycc_rt`
+#    for its cross-compile target and in debug profile inside its
+#    isolated `nobody` sandbox, but never in release profile -- D-090's
+#    own release-profile build step ran only later, outside that
+#    sandbox, after coverage measurement. `tests/pycc_toml_release_
+#    default.rs`'s non-ignored test needs a release-built `pycc_rt` to
+#    exist, so it would fail every time coverage runs. Fix: build
+#    `pycc_rt --release` inside the same isolated sandbox, before
+#    `llvm-cov` runs -- landing at `$ISOLATED_ROOT/target/release`, which
+#    `$GITHUB_WORKSPACE/target`'s own symlink already exposes at exactly
+#    the `env!("CARGO_MANIFEST_DIR")`-relative path
+#    `find_pycc_rt_lib_dir` looks up.
+#
+# Items 2 (bench-manifest tail) and 3 (build.rs) were flagged by GitHub's
+# automated review (`chatgpt-codex-connector`) on PR #189 before merge and
+# folded into this same digest rather than filed as follow-ups.
+#
+# Staged alongside D84 (still the live, active workflow's own digest)
+# until the PR that actually edits `ci.yml` to this content lands and
+# retires D84.
+D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
+  "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-  D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256
+  D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -343,6 +413,97 @@ REPLICATED_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
     target/criterion/pycc_check_frontend_fixture/current \
     target/criterion/pycc_check_frontend_fixture/previous \
     "$EXECUTABLE_INPUTS_EQUAL"
+SHELL
+# D-091: root Cargo.toml/Cargo.lock dropped from the hard-abort contract,
+# except for the bench-defining tail ([dev-dependencies] onward) fingerprinted
+# below -- see D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT below, which classifies
+# everything else instead.
+D91_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  test "$(git -C previous rev-parse HEAD)" = "$EXPECTED_PREDECESSOR_SHA"
+  test "$(git -C current rev-parse HEAD)" = "$EXPECTED_CURRENT_SHA"
+  contract_paths=(
+    benches
+    rust-toolchain.toml
+    rust-toolchain
+    .cargo
+  )
+  for contract_path in "${contract_paths[@]}"; do
+    previous_path="previous/$contract_path"
+    current_path="current/$contract_path"
+    if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+       [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+      continue
+    fi
+    git diff --no-index --exit-code -- "$previous_path" "$current_path"
+  done
+  # D-091: root Cargo.toml's bench-defining tail ([dev-dependencies]
+  # onward, which today is exactly [dev-dependencies] plus [[bench]])
+  # stays part of this hard contract even though the rest of the
+  # manifest is reclassified below -- see "Classify executable
+  # benchmark inputs"' own comment. Nothing below [dev-dependencies]
+  # reaches the built pycc binary the benchmark times, so relaxing
+  # it would let a faster measuring apparatus (a bumped criterion, a
+  # rewritten [[bench]] target) pass as a faster compiler. This is a
+  # standalone check, not an addition to contract_paths above: it
+  # extracts and diffs a sub-region of one file rather than
+  # requiring a whole path byte-identical. Two invariants are
+  # asserted, not assumed, so a future manifest edit cannot widen
+  # or narrow the pinned region without a loud abort: (1)
+  # [dev-dependencies] exists and only [[bench]] follows it, so an
+  # unrelated section landing after [dev-dependencies] cannot be
+  # silently swallowed into the pinned tail; (2) every [[bench]]
+  # section in the file is inside that tail, so reordering
+  # [[bench]] above [dev-dependencies] cannot silently move it out
+  # of the pinned region and into the softer reclassification below.
+  for repo_dir in previous current; do
+    manifest="$repo_dir/Cargo.toml"
+    if ! grep -q '^\[dev-dependencies\]$' "$manifest"; then
+      echo "$manifest has no [dev-dependencies] section; bench-manifest fingerprint invariant violated" >&2
+      exit 1
+    fi
+    extra_headers="$(awk '
+      /^\[dev-dependencies\]$/ { found = 1 }
+      found && /^\[/ && !/^\[dev-dependencies\]$/ && !/^\[\[bench\]\]$/ { print }
+    ' "$manifest")"
+    if [ -n "$extra_headers" ]; then
+      echo "$manifest has unexpected section(s) after [dev-dependencies]: $extra_headers" >&2
+      exit 1
+    fi
+    whole_bench_count="$(grep -c '^\[\[bench\]\]$' "$manifest" || true)"
+    tail_bench_count="$(awk '/^\[dev-dependencies\]$/,0' "$manifest" | grep -c '^\[\[bench\]\]$' || true)"
+    if [ "$whole_bench_count" != "$tail_bench_count" ]; then
+      echo "$manifest has a [[bench]] section outside its [dev-dependencies]-onward tail; bench-manifest fingerprint invariant violated" >&2
+      exit 1
+    fi
+  done
+  diff <(awk '/^\[dev-dependencies\]$/,0' previous/Cargo.toml) \
+       <(awk '/^\[dev-dependencies\]$/,0' current/Cargo.toml)
+SHELL
+D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT = <<~'SHELL'.strip
+  set -euo pipefail
+  executable_inputs_equal=true
+  for executable_path in src crates Cargo.toml Cargo.lock build.rs; do
+    previous_path="previous/$executable_path"
+    current_path="current/$executable_path"
+    if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+       [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+      continue
+    fi
+    if git diff --no-index --no-ext-diff --no-textconv --quiet -- \
+      "$previous_path" "$current_path"; then
+      continue
+    else
+      diff_status="$?"
+      if [ "$diff_status" -ne 1 ]; then
+        echo "could not compare executable benchmark input $executable_path" >&2
+        exit "$diff_status"
+      fi
+      executable_inputs_equal=false
+    fi
+  done
+  printf 'executable_inputs_equal=%s\n' \
+    "$executable_inputs_equal" >> "$GITHUB_OUTPUT"
 SHELL
 PAIRED_PERF_MEASURE_STEPS = [
   {
@@ -624,6 +785,17 @@ REPLICATED_PERF_MEASURE_JOB = D56_SOURCE_AWARE_PERF_MEASURE_JOB.merge(
 REPLICATED_PERF_GATE_JOB = D56_SOURCE_AWARE_PERF_GATE_JOB.merge(
   "steps" => REPLICATED_PERF_GATE_STEPS
 ).freeze
+D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_STEPS =
+  Marshal.load(Marshal.dump(REPLICATED_PERF_MEASURE_STEPS)).tap do |steps|
+    verify = steps.find { |step| step["name"] == "Verify exact benchmark revisions" }
+    verify["run"] = D91_VERIFY_REVISIONS_SCRIPT
+    classify =
+      steps.find { |step| step["name"] == "Classify executable benchmark inputs" }
+    classify["run"] = D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT
+  end.freeze
+D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB = D56_SOURCE_AWARE_PERF_MEASURE_JOB.merge(
+  "steps" => D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_STEPS
+).freeze
 PAIRED_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
   "native-build-test",
@@ -702,6 +874,56 @@ COVERAGE_SCRIPT = <<~SHELL.strip
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
+# D-091: `build-test-coverage`'s own isolated sandbox additionally builds a
+# release-profile `pycc_rt` before `llvm-cov` runs (see D-091's text) --
+# `coverage_gate_present?`/`workflow-policy.yml`'s `pull_request_target`
+# audit reaches this exact step body under the identical base-branch-only
+# trust boundary `REVIEWED_PERF_CI_WORKFLOW_SHA256S` exists for, so this
+# needs the same coexist-then-retire treatment: both the pre-D91 shape
+# (`COVERAGE_SCRIPT`, still the live workflow's own content) and this one
+# are accepted below until a later activation commit flips `ci.yml` and
+# this becomes the sole accepted shape.
+D91_COVERAGE_SCRIPT = <<~SHELL.strip
+  set -euo pipefail
+  LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
+  TRUSTED_CARGO="$(rustup which cargo)"
+  TRUSTED_RUSTC="$(rustup which rustc)"
+  TRUSTED_RUSTDOC="$(rustup which rustdoc)"
+  TRUSTED_COV="/Users/runner/.cargo/bin/cargo-llvm-cov"
+  TRUSTED_TOOLCHAIN="$(dirname "$(dirname "$TRUSTED_CARGO")")"
+  cd "$RUNNER_TEMP"
+  RUSTC="$TRUSTED_RUSTC" RUSTDOC="$TRUSTED_RUSTDOC" "$TRUSTED_CARGO" install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+  "$TRUSTED_COV" llvm-cov --version
+  sudo chmod o+x /Users/runner /Users/runner/.cargo /Users/runner/.cargo/bin /Users/runner/.rustup /Users/runner/.rustup/toolchains
+  sudo chmod -R o+rX "$TRUSTED_TOOLCHAIN"
+  sudo chmod o+rx "$TRUSTED_COV"
+  ISOLATED_ROOT="$RUNNER_TEMP/pycc-coverage"
+  mkdir -p "$ISOLATED_ROOT/home" "$ISOLATED_ROOT/tmp" "$ISOLATED_ROOT/cargo-home" "$ISOLATED_ROOT/target"
+  sudo chown -R nobody:nobody "$ISOLATED_ROOT"
+  ISOLATED_ENV=(
+    "HOME=$ISOLATED_ROOT/home"
+    "TMPDIR=$ISOLATED_ROOT/tmp/"
+    "CARGO_HOME=$ISOLATED_ROOT/cargo-home"
+    "CARGO_TARGET_DIR=$ISOLATED_ROOT/target"
+    "CARGO=$TRUSTED_CARGO"
+    "RUSTC=$TRUSTED_RUSTC"
+    "RUSTDOC=$TRUSTED_RUSTDOC"
+    "LLVM_SYS_221_PREFIX=$LLVM_SYS_221_PREFIX_VALUE"
+    "PATH=$(dirname "$TRUSTED_CARGO"):/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"
+  )
+  run_isolated() {
+    sudo -u nobody env -i "${ISOLATED_ENV[@]}" "$@"
+  }
+  ln -s "$ISOLATED_ROOT/target" "$GITHUB_WORKSPACE/target"
+  cd "$GITHUB_WORKSPACE"
+  run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
+  run_isolated "$TRUSTED_CARGO" build --workspace
+  run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
+  #{COVERAGE_COMMAND}
+  rm "$GITHUB_WORKSPACE/target"
+  printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
+SHELL
+REVIEWED_COVERAGE_SCRIPTS = [COVERAGE_SCRIPT, D91_COVERAGE_SCRIPT].freeze
 TRUSTED_COVERAGE_ENV = {
   "CARGO_LLVM_COV_VERSION" => "0.8.7",
   "LLVM_VERSION" => "22.1.1"
@@ -732,6 +954,15 @@ TRUSTED_COVERAGE_STEPS = [
     "run" => COVERAGE_SCRIPT
   }
 ].freeze
+D91_TRUSTED_COVERAGE_STEPS =
+  (TRUSTED_COVERAGE_STEPS[0..-2] + [
+    {
+      "name" => COVERAGE_STEP,
+      "run" => D91_COVERAGE_SCRIPT
+    }
+  ]).freeze
+REVIEWED_TRUSTED_COVERAGE_STEPS =
+  [TRUSTED_COVERAGE_STEPS, D91_TRUSTED_COVERAGE_STEPS].freeze
 
 def yaml_mapping(node, context)
   raise RoadmapEvidenceError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)
@@ -847,7 +1078,9 @@ def coverage_gate_present?(workflow_text, source)
     next unless step["name"] && step["run"]
 
     next unless yaml_scalar(step["name"], "#{source} step name") == COVERAGE_STEP
-    next unless yaml_scalar(step["run"], "#{source} step run").strip == COVERAGE_SCRIPT
+    next unless REVIEWED_COVERAGE_SCRIPTS.include?(
+      yaml_scalar(step["run"], "#{source} step run").strip
+    )
 
     if step.key?("shell")
       raise RoadmapEvidenceError, "#{source}: coverage step must use the default shell"
@@ -871,7 +1104,7 @@ def coverage_gate_present?(workflow_text, source)
     step.delete("continue-on-error") if step["continue-on-error"] == "false"
     step
   end
-  unless actual_prefix == TRUSTED_COVERAGE_STEPS
+  unless REVIEWED_TRUSTED_COVERAGE_STEPS.include?(actual_prefix)
     raise RoadmapEvidenceError,
           "#{source}: coverage setup steps do not match the trusted sequence"
   end
@@ -938,6 +1171,8 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
     if measure_job == D56_SOURCE_AWARE_PERF_MEASURE_JOB
       D56_SOURCE_AWARE_PERF_GATE_JOB
     elsif measure_job == REPLICATED_PERF_MEASURE_JOB
+      REPLICATED_PERF_GATE_JOB
+    elsif measure_job == D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB
       REPLICATED_PERF_GATE_JOB
     end
   unless expected_perf_job

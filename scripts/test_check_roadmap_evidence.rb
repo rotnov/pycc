@@ -25,8 +25,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent / "tests/fixtures/d80-conformance-oracle-ci.yml"
   D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d84-throughput-floor-ci.yml"
-  D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE =
-    Pathname(__dir__).parent / "tests/fixtures/d90-release-pycc-rt-ci.yml"
+  D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -286,6 +287,95 @@ class RoadmapEvidenceCliTest < Minitest::Test
       )
       return [stdout, stderr, status, output.read]
     end
+  end
+
+  # D-091: same shape as run_executable_input_classifier, but exercises the
+  # actual D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT (which adds Cargo.toml,
+  # Cargo.lock, and build.rs to the classified path list) instead of D56's
+  # src/crates-only predecessor.
+  def run_d91_executable_input_classifier
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      %w[previous current].each do |revision|
+        FileUtils.mkdir_p(root / revision / "src")
+        FileUtils.mkdir_p(root / revision / "crates")
+      end
+      yield root
+      output = root / "github-output"
+      output.write("")
+      stdout, stderr, status = Open3.capture3(
+        { "GITHUB_OUTPUT" => output.to_s },
+        "bash",
+        "-s",
+        stdin_data: D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT,
+        chdir: root.to_s
+      )
+      return [stdout, stderr, status, output.read]
+    end
+  end
+
+  # D-091: exercises the real D91_VERIFY_REVISIONS_SCRIPT end to end,
+  # including its `git -C previous/current rev-parse HEAD` preamble, against
+  # real (throwaway) git repositories -- not just a substring check of the
+  # constant's text -- so a change that silently breaks the bench-manifest
+  # fingerprint's awk/grep logic actually fails a test, per the same
+  # measurement-integrity finding this fingerprint was added to fix.
+  def run_d91_verify_revisions
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      %w[previous current].each do |revision|
+        FileUtils.mkdir_p(root / revision)
+      end
+      yield root
+      shas = {}
+      %w[previous current].each do |revision|
+        repo = (root / revision).to_s
+        Open3.capture2("git", "-C", repo, "init", "-q")
+        Open3.capture2("git", "-C", repo, "config", "user.email", "test@example.invalid")
+        Open3.capture2("git", "-C", repo, "config", "user.name", "Test")
+        Open3.capture2("git", "-C", repo, "add", "-A")
+        _out, commit_err, commit_status =
+          Open3.capture3("git", "-C", repo, "commit", "-q", "-m", "content")
+        raise commit_err unless commit_status.success?
+
+        sha, = Open3.capture2("git", "-C", repo, "rev-parse", "HEAD")
+        shas[revision] = sha.strip
+      end
+      env = {
+        "EXPECTED_PREDECESSOR_SHA" => shas.fetch("previous"),
+        "EXPECTED_CURRENT_SHA" => shas.fetch("current")
+      }
+      return Open3.capture3(
+        env,
+        "bash",
+        "-s",
+        stdin_data: D91_VERIFY_REVISIONS_SCRIPT,
+        chdir: root.to_s
+      )
+    end
+  end
+
+  D91_BENCH_MANIFEST_TAIL = <<~TOML
+    [dev-dependencies]
+    serde_json = "1"
+    criterion = { version = "0.8.2", features = ["html_reports"] }
+
+    [[bench]]
+    name = "check_bench"
+    harness = false
+  TOML
+
+  def d91_cargo_toml(dependencies_extra: "", bench_manifest_tail: D91_BENCH_MANIFEST_TAIL)
+    <<~TOML
+      [package]
+      name = "pycc"
+      version = "0.1.0"
+
+      [dependencies]
+      clap = { version = "4", features = ["derive"] }
+      #{dependencies_extra}
+      #{bench_manifest_tail}
+    TOML
   end
 
   def run_executable_input_identity_requirement(value)
@@ -874,28 +964,166 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d84_and_staged_d90
+  def test_tier1_workflow_authorization_contains_only_active_d84_and_staged_d91
     assert_equal(
-      [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256, D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256],
+      [
+        D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
+        D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
+      ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
 
-  # Staged, not yet active: D90's fixture is the PR-8/Task 5 target content
-  # (D84's own content plus the release-mode `pycc_rt` build step) that a
-  # later PR will flip the live `ci.yml` to. Unlike
-  # test_tier1_workflow_authorization_is_the_active_d84_digest above, this
-  # does not compare against the live `ci.yml` -- the live workflow is
-  # still D84's content at this point.
-  def test_d90_release_pycc_rt_workflow_digest_matches_the_reviewed_fixture
+  # D-090's own fixture is gone: it was staged but never activated, and
+  # was found (while opening PR-8's own pull request) to be missing the
+  # coverage-sandbox release build D-091 adds -- see D-091's comment in
+  # check_roadmap_evidence.rb for the full correction. Its digest constant
+  # remains only as a historical record that it was once reviewed and
+  # staged, matching D51/D56/D62/D80's own "no longer accepted" pattern.
+
+  # Staged, not yet active: D91's fixture is D84's own live content (the
+  # current, unmodified `ci.yml`) plus D-090's originally-intended
+  # release-mode `pycc_rt` build step, the coverage-sandbox release build
+  # that step's own staged fixture was missing, and the relaxed manifest
+  # contract -- the actual composed content PR-8's activation needs.
+  def test_d91_relax_frontend_perf_manifest_workflow_digest_matches_the_reviewed_fixture
     assert_equal(
-      D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE).hexdigest
+      D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE).hexdigest
     )
     assert validate_source_aware_perf_gate_lifecycle(
-      D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE.read,
-      D90_RELEASE_PYCC_RT_WORKFLOW_FIXTURE.to_s
+      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read,
+      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.to_s
     )
+  end
+
+  # `coverage_gate_present?`/`COVERAGE_SCRIPT` DO model part of
+  # build-test-coverage (the exact body of its "Hard coverage gate" step),
+  # unlike the frontend-perf-measure job the lifecycle validator above
+  # checks. D-091's own release-profile build line inside that step (see
+  # check_roadmap_evidence.rb's COVERAGE_SCRIPT) must keep matching this
+  # fixture's actual content, or the activation commit that copies this
+  # fixture into ci.yml would fail its own "Check roadmap evidence" step.
+  def test_d91_relax_frontend_perf_manifest_workflow_still_has_a_recognized_coverage_gate
+    assert coverage_gate_present?(
+      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read,
+      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  # D-091: the bench-manifest fingerprint (`[dev-dependencies]` onward) must
+  # hard-abort on a change to the bench-defining tail itself -- otherwise a
+  # PR that only speeds up `criterion`/`[[bench]]` could pass the perf gate
+  # as though it sped up the compiler. Confirmed by executing the real
+  # script, not by reading its source.
+  def test_d91_bench_manifest_fingerprint_hard_aborts_on_bench_tooling_change
+    _stdout, stderr, status = run_d91_verify_revisions do |root|
+      (root / "previous/Cargo.toml").write(d91_cargo_toml)
+      (root / "current/Cargo.toml").write(
+        d91_cargo_toml(
+          bench_manifest_tail: D91_BENCH_MANIFEST_TAIL.sub("0.8.2", "0.9.0")
+        )
+      )
+    end
+    refute status.success?, "expected a criterion version bump to hard-abort, got: #{stderr}"
+  end
+
+  # D-091: an ordinary product dependency addition (PR-8's own toml/serde
+  # shape) must NOT trip the bench-manifest fingerprint -- only the
+  # `[dev-dependencies]`-onward tail is hard-required identical.
+  def test_d91_bench_manifest_fingerprint_allows_product_dependency_only_change
+    _stdout, stderr, status = run_d91_verify_revisions do |root|
+      (root / "previous/Cargo.toml").write(d91_cargo_toml)
+      (root / "current/Cargo.toml").write(
+        d91_cargo_toml(dependencies_extra: %(toml = "0.8"\nserde = "1"))
+      )
+    end
+    assert status.success?, stderr
+  end
+
+  # D-091: the fingerprint's own invariant guard must fail loudly, not
+  # silently mis-scope, if a manifest is missing `[dev-dependencies]`
+  # entirely.
+  def test_d91_bench_manifest_fingerprint_hard_aborts_when_dev_dependencies_is_missing
+    _stdout, stderr, status = run_d91_verify_revisions do |root|
+      (root / "previous/Cargo.toml").write(d91_cargo_toml)
+      (root / "current/Cargo.toml").write(<<~TOML)
+        [package]
+        name = "pycc"
+        version = "0.1.0"
+
+        [dependencies]
+        clap = { version = "4", features = ["derive"] }
+      TOML
+    end
+    refute status.success?
+    assert_includes stderr, "bench-manifest fingerprint invariant violated"
+  end
+
+  # D-091: the guard must also fail loudly if a future manifest reorders
+  # sections so something other than `[[bench]]` follows
+  # `[dev-dependencies]`, rather than silently widening the hard-required
+  # region to swallow an otherwise-reclassifiable dependency.
+  def test_d91_bench_manifest_fingerprint_hard_aborts_on_unexpected_trailing_section
+    _stdout, stderr, status = run_d91_verify_revisions do |root|
+      (root / "previous/Cargo.toml").write(d91_cargo_toml)
+      (root / "current/Cargo.toml").write(
+        d91_cargo_toml(bench_manifest_tail: "#{D91_BENCH_MANIFEST_TAIL}\n[extra]\nfoo = 1\n")
+      )
+    end
+    refute status.success?
+    assert_includes stderr, "unexpected section"
+  end
+
+  # D-091: the guard must also fail loudly if `[[bench]]` is reordered to
+  # appear ABOVE `[dev-dependencies]` instead of after it -- otherwise the
+  # `[dev-dependencies]`-onward extraction would no longer include
+  # `[[bench]]` at all, silently moving it out of the hard-pinned tail and
+  # into the softer reclassification, reopening the exact P1 hole this
+  # fingerprint exists to close.
+  def test_d91_bench_manifest_fingerprint_hard_aborts_when_bench_precedes_dev_dependencies
+    reordered = <<~TOML
+      [package]
+      name = "pycc"
+      version = "0.1.0"
+
+      [dependencies]
+      clap = { version = "4", features = ["derive"] }
+
+      [[bench]]
+      name = "check_bench"
+      harness = false
+
+      [dev-dependencies]
+      serde_json = "1"
+      criterion = { version = "0.8.2", features = ["html_reports"] }
+    TOML
+    _stdout, stderr, status = run_d91_verify_revisions do |root|
+      (root / "previous/Cargo.toml").write(d91_cargo_toml)
+      (root / "current/Cargo.toml").write(reordered)
+    end
+    refute status.success?
+    assert_includes stderr, "outside its [dev-dependencies]-onward tail"
+  end
+
+  # D-091: root-level build.rs must be classified (Cargo would silently use
+  # it without any Cargo.toml change), while an unrelated identical src/
+  # tree still reports executable_inputs_equal=true.
+  def test_d91_classifier_reports_identical_and_added_build_rs
+    _stdout, stderr, status, output = run_d91_executable_input_classifier do |root|
+      (root / "previous/src/lib.rs").write("same\n")
+      (root / "current/src/lib.rs").write("same\n")
+    end
+    assert status.success?, stderr
+    assert_equal "executable_inputs_equal=true\n", output
+
+    _stdout, stderr, status, output = run_d91_executable_input_classifier do |root|
+      (root / "previous/src/lib.rs").write("same\n")
+      (root / "current/src/lib.rs").write("same\n")
+      (root / "current/build.rs").write("fn main() {}\n")
+    end
+    assert status.success?, stderr
+    assert_equal "executable_inputs_equal=false\n", output
   end
 
   def test_tier1_workflow_allowlist_retires_the_pre_alpha_eval_digest
