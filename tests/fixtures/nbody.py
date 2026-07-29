@@ -18,7 +18,13 @@ def main() -> None:
     # mandelbrot fixture in tests/slice1_codegen_depth.rs. `0.0 - x` is
     # bit-for-bit identical to `-x` in IEEE-754 (subtracting an exact
     # value from 0.0 only flips the sign bit), so this is exactly
-    # semantically equivalent to the original, not an approximation.
+    # semantically equivalent to the original, not an approximation. At
+    # several sites (e.g. `jupiter_vz`, `sun_vx`/`vy`/`vz`) the value being
+    # negated is itself a product or a sum of products rather than a bare
+    # literal; that is still exact, because IEEE-754 multiplication's sign
+    # is the XOR of its operands' signs, so negating one factor negates the
+    # product with no rounding difference (`(-a) * b == -(a * b)` exactly),
+    # and negating a sum is the sum of the negated terms.
     #
     # Also deviation from the plan brief: every local variable below
     # dropped its `: float`/`: int` annotation. Verified empirically that
