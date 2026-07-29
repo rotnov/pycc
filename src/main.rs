@@ -121,7 +121,7 @@ fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Resu
         ExitCode::from(1)
     })?;
 
-    let rt_lib_dir = find_pycc_rt_lib_dir(target).map_err(|e| {
+    let rt_lib_dir = find_pycc_rt_lib_dir(target, release).map_err(|e| {
         eprintln!("error: {e}");
         ExitCode::from(2)
     })?;
@@ -407,22 +407,39 @@ fn run(path: &str) -> ExitCode {
 }
 
 /// `target: None` (the common case) returns this workspace's ordinary
-/// `target/debug/` -- always populated once `pycc_rt` has been built
-/// (see that crate's own doc comment on the build-order requirement).
+/// `target/debug/` or `target/release/` -- always populated once `pycc_rt`
+/// has been built for the requested profile (see that crate's own doc
+/// comment on the build-order requirement).
 ///
-/// `target: Some(triple)` looks in `target/<triple>/debug/` -- where
-/// `cargo build --target <triple> -p pycc_rt` (after `rustup target add
-/// <triple>` if needed) puts it. Cross-compiling `pycc_rt` itself for the
-/// requested target is not done automatically here: unlike the ordinary
-/// case, there's no single always-correct way to trigger it that doesn't
-/// either require duplicating `rustup`/`cargo`'s own target-management
-/// logic or risk the same build-lock deadlock documented on `pycc_rt`
-/// (see that crate's own doc comment). Failing with a clear, actionable
-/// message is better than a confusing linker error about a missing
-/// `-lpycc_rt`.
-fn find_pycc_rt_lib_dir(target: Option<&str>) -> Result<std::path::PathBuf, String> {
+/// `target: Some(triple)` looks in `target/<triple>/debug/` or
+/// `target/<triple>/release/` -- where `cargo build [--release] --target
+/// <triple> -p pycc_rt` (after `rustup target add <triple>` if needed) puts
+/// it. Cross-compiling `pycc_rt` itself for the requested target is not
+/// done automatically here: unlike the ordinary case, there's no single
+/// always-correct way to trigger it that doesn't either require
+/// duplicating `rustup`/`cargo`'s own target-management logic or risk the
+/// same build-lock deadlock documented on `pycc_rt` (see that crate's own
+/// doc comment). Failing with a clear, actionable message is better than a
+/// confusing linker error about a missing `-lpycc_rt`.
+///
+/// `release`: selects which of `pycc_rt`'s own two builds to link against.
+/// Before this parameter existed, this function unconditionally linked the
+/// debug build regardless of `pycc build --release` -- a real, unambiguous
+/// bug (not a design choice) caught while investigating why a `--release`
+/// nbody benchmark's speedup ratio fell far short of expectations
+/// (`tests/nbody_bench.rs`): `--release` was optimizing the compiled
+/// module's own LLVM IR but every runtime call (`pycc_rt_float_pow`, string
+/// helpers, etc.) still ran through an unoptimized debug `pycc_rt`. Callers
+/// pass `try_build`'s own already-resolved `release` bool through here
+/// unchanged, so an optimized build is linked exactly when `--release`
+/// (explicit or via a neighboring `pycc.toml` default) is actually in
+/// effect.
+fn find_pycc_rt_lib_dir(
+    target: Option<&str>,
+    release: bool,
+) -> Result<std::path::PathBuf, String> {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    find_pycc_rt_lib_dir_in(workspace_root, target, std::path::Path::exists)
+    find_pycc_rt_lib_dir_in(workspace_root, target, release, std::path::Path::exists)
 }
 
 /// Rust's `staticlib` output naming is platform-specific: `lib<name>.a` on
@@ -465,23 +482,26 @@ fn pycc_rt_lib_filename(target: Option<&str>) -> &'static str {
 fn find_pycc_rt_lib_dir_in(
     workspace_root: &std::path::Path,
     target: Option<&str>,
+    release: bool,
     exists: fn(&std::path::Path) -> bool,
 ) -> Result<std::path::PathBuf, String> {
+    let profile = if release { "release" } else { "debug" };
+    let release_flag = if release { " --release" } else { "" };
     let dir = match target {
-        Some(triple) => workspace_root.join("target").join(triple).join("debug"),
-        None => workspace_root.join("target/debug"),
+        Some(triple) => workspace_root.join("target").join(triple).join(profile),
+        None => workspace_root.join("target").join(profile),
     };
     if exists(&dir.join(pycc_rt_lib_filename(target))) {
         Ok(dir)
     } else if let Some(triple) = target {
         Err(format!(
             "no pycc_rt build found for target `{triple}` (expected {}). \
-             Run `rustup target add {triple}` then `cargo build --target {triple} -p pycc_rt` first.",
+             Run `rustup target add {triple}` then `cargo build{release_flag} --target {triple} -p pycc_rt` first.",
             dir.display()
         ))
     } else {
         Err(format!(
-            "no pycc_rt build found (expected {}). Run `cargo build -p pycc_rt` first.",
+            "no pycc_rt build found (expected {}). Run `cargo build{release_flag} -p pycc_rt` first.",
             dir.display()
         ))
     }
@@ -494,21 +514,24 @@ mod linker_tests {
     #[test]
     fn finds_the_native_lib_dir_when_it_exists() {
         let root = std::path::Path::new("/workspace");
-        let result = find_pycc_rt_lib_dir_in(root, None, |_| true);
+        let result = find_pycc_rt_lib_dir_in(root, None, false, |_| true);
         assert_eq!(result, Ok(root.join("target/debug")));
     }
 
     #[test]
     fn reports_a_clean_error_when_the_native_build_is_missing() {
         let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, None, |_| false).unwrap_err();
+        let err = find_pycc_rt_lib_dir_in(root, None, false, |_| false).unwrap_err();
         assert!(err.contains("cargo build -p pycc_rt"));
+        // Must not suggest --release for a debug-profile lookup.
+        assert!(!err.contains("--release"));
     }
 
     #[test]
     fn finds_the_target_specific_lib_dir_when_it_exists() {
         let root = std::path::Path::new("/workspace");
-        let result = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), |_| true);
+        let result =
+            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), false, |_| true);
         assert_eq!(
             result,
             Ok(root.join("target/x86_64-unknown-linux-gnu/debug"))
@@ -518,10 +541,50 @@ mod linker_tests {
     #[test]
     fn reports_a_clean_error_naming_the_target_when_its_build_is_missing() {
         let root = std::path::Path::new("/workspace");
-        let err =
-            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), |_| false).unwrap_err();
+        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), false, |_| {
+            false
+        })
+        .unwrap_err();
         assert!(err.contains("x86_64-unknown-linux-gnu"));
         assert!(err.contains("rustup target add"));
+    }
+
+    #[test]
+    fn finds_the_native_release_lib_dir_when_it_exists() {
+        let root = std::path::Path::new("/workspace");
+        let result = find_pycc_rt_lib_dir_in(root, None, true, |_| true);
+        assert_eq!(result, Ok(root.join("target/release")));
+    }
+
+    #[test]
+    fn reports_a_clean_error_naming_release_when_the_native_release_build_is_missing() {
+        let root = std::path::Path::new("/workspace");
+        let err = find_pycc_rt_lib_dir_in(root, None, true, |_| false).unwrap_err();
+        assert!(err.contains("cargo build --release -p pycc_rt"));
+        assert!(err.contains("target/release"));
+    }
+
+    #[test]
+    fn finds_the_target_specific_release_lib_dir_when_it_exists() {
+        let root = std::path::Path::new("/workspace");
+        let result =
+            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), true, |_| true);
+        assert_eq!(
+            result,
+            Ok(root.join("target/x86_64-unknown-linux-gnu/release"))
+        );
+    }
+
+    #[test]
+    fn reports_a_clean_error_naming_the_target_and_release_when_its_build_is_missing() {
+        let root = std::path::Path::new("/workspace");
+        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), true, |_| {
+            false
+        })
+        .unwrap_err();
+        assert!(err.contains("x86_64-unknown-linux-gnu"));
+        assert!(err.contains("rustup target add"));
+        assert!(err.contains("cargo build --release --target x86_64-unknown-linux-gnu -p pycc_rt"));
     }
 
     #[test]
