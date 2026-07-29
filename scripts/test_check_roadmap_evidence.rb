@@ -872,9 +872,15 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d84
+  # D-091 appended its own prospective digest alongside D84's (not
+  # replacing it) as the stage half of a two-phase rollout the
+  # `pull_request_target` audit's base-branch-only checker trust boundary
+  # requires (same mechanism D84 itself used to retire D80) -- so this
+  # array holds both entries until a later activation change actually
+  # updates `ci.yml` to match D91 and retires D84.
+  def test_tier1_workflow_authorization_contains_the_active_digests
     assert_equal(
-      [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256],
+      [D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256, D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
