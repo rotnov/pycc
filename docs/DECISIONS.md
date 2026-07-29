@@ -15,7 +15,7 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-009 | Stdlib written in typed Python, compiled by pycc itself; Rust intrinsics only at the syscall/math floor | proposed |
 | D-010 | Diagnostics: codes stable forever, JSON format versioned, `explain` registry mandatory per code | proposed |
 | D-011 | Cross-platform is Tier-1 from v0.1: Windows/MSVC is CI-gated day one, bundled lld, no system toolchain required | proposed |
-| D-012 | Language level: exactly CPython 3.14 in v1.0 (`python = "3.14"` in pycc.toml). No per-version grammar switches before v1.x; a later standard Python level requires a superseding ADR plus a machine-checked support/cumulative-fixture/oracle mapping. pycc-specific syntax remains forbidden | proposed |
+| D-012 | Language level: exactly CPython 3.14 in v1.0 (`python = "3.14"` in pycc.toml). No per-version grammar switches before v1.x; a later standard Python level requires a superseding ADR plus a machine-checked support/cumulative-fixture/oracle mapping. pycc-specific syntax remains forbidden | accepted |
 | D-013 | Development model: AI-first — the compiler is written by AI agents; these specs are the executable contract. Every spec claim must be mechanically checkable (test, benchmark gate, or CI rule), because "the spec" is what agents optimize against | proposed |
 | D-014 | Testing: 100% line+region coverage (`cargo llvm-cov`), CI-gated on every PR from v0.1 on. Exemptions are whole-file only (`--ignore-filename-regex`), each entry justified in TESTING.md — no function-level opt-out exists on stable Rust | accepted |
 | D-015 | Codegen toolchain pin: LLVM 22.1.1 (Homebrew, single keg — the `llvm@17`..`llvm@22` opt-paths on the dev host are stale symlinks to it, not distinct installs) + `inkwell = "0.9"` with feature `llvm22-1` | accepted |
@@ -107,6 +107,14 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 ```
 
 Entries D-001…D-013 get their long-form sections as they graduate to `accepted` (first PR that depends on the decision must include it).
+
+## D-012: Pin v1.0 to exactly the CPython 3.14 language level
+
+- Status: accepted (v0.2 PR-8 adds the `pycc.toml` enforcement and tests)
+- Context: pycc needs one unambiguous language contract for v1.0. Silently accepting another version in `pycc.toml`, switching grammar behavior per project before v1.x, or adding pycc-only syntax would make conformance results incomparable and let the implemented language drift away from standard Python.
+- Decision: v1.0 accepts exactly `python = "3.14"`; it has no per-version grammar switches, and pycc-specific syntax remains forbidden. `src/project_config.rs::parse` enforces the configuration boundary with an explicit `config.project.python != "3.14"` check. Its `parses_a_minimal_valid_pycc_toml` test proves that `"3.14"` is accepted, while `rejects_an_unsupported_python_version` proves that `"3.15"` is rejected with an error naming `"3.14"` as the supported level. Admitting a later standard Python language level requires a superseding ADR and a machine-checked mapping among the supported version, cumulative fixture set, and differential oracle.
+- Alternatives: track the newest CPython language level automatically (rejected because releases could change the accepted language without a reviewed compiler decision); support multiple selectable grammar versions before v1.x (rejected because it multiplies parser, diagnostic, and conformance states before the first stable language contract exists); add pycc-only syntax for static compilation concerns (rejected because pycc compiles standard Python rather than defining a dialect).
+- Consequences: a `pycc.toml` naming any language level other than `"3.14"` fails validation instead of being silently accepted. The compiler and its conformance evidence have one v1.0 language target; moving that target requires explicit, mechanically checked migration evidence rather than a configuration-only change.
 
 ## D-014: 100% test coverage requirement
 
