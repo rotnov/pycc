@@ -28,6 +28,54 @@ never a merge gate.
 
 ---
 
+## 2026-07-29 — Whole-process wall-clock timing has no signal once the workload is a few milliseconds
+
+**What happened:** PR-8 Task 5's first pass at `tests/nbody_bench.rs`
+(D-090's same-machine paired nbody benchmark, `pyperformance`'s own
+`DEFAULT_ITERATIONS = 20000`) measured a ~10-11x pycc-vs-CPython speedup
+ratio, reported as a genuine, investigated shortfall against the design
+spec's ≥20x gate (docs/superpowers/sdd task-5-report.md, first draft). A
+second-reviewer pass re-derived the real cause from the same report's own
+numbers: CPython's nbody total (68.2ms) minus its own bare-interpreter
+baseline (20.3ms) gives ~47.9ms of actual compute; pycc's nbody total
+(6.1ms) minus its own trivial-binary baseline (3.0ms) gives ~3.1ms --
+already a ~15.5x compute-only ratio, nowhere near the measured 11.2x. The
+gap was fixed per-process overhead (~3ms, essentially this machine's own
+OS-level process-spawn/codesign-verification floor, not anything pycc-
+specific) consuming ~45-50% of pycc's own ~6ms total versus only ~29% of
+CPython's ~68ms total -- a 6ms workload cannot support whole-process
+wall-clock timing as a clean compute proxy, no matter how carefully the
+timing loop itself is written.
+
+**Root cause:** `pyperformance`'s upstream `DEFAULT_ITERATIONS = 20000` was
+copied verbatim into the fixture without recognizing that constant is only
+meaningful *inside a harness that loops and amortizes startup* (as
+`pyperformance` itself does) -- this benchmark instead spawns one fresh
+process per measured run, so the iteration count needed to be chosen for
+*this* harness's own overhead profile, not inherited from a different
+measurement method's constant.
+
+**What fixed it:** raised the fixture's iteration count (525000, chosen by
+directly timing several candidates, not by linear extrapolation -- real
+measurement showed compute cost does not scale as cleanly as expected) so
+both sides' fixed overhead is a single-digit percentage of their own total.
+This dropped the noise band from a ~1.3x-wide swing across runs (10.23x-
+11.32x at 20000 iterations) to a tight, reproducible ~0.2x band (18.04x-
+18.24x at 525000) -- full details in D-091.
+
+**Lesson:** this is the second time in this one PR a benchmark used a proxy
+measurement with near-zero signal for what it was meant to measure -- see
+the very next entry below (linked-binary size as an "optimizer ran" proxy,
+Task 3). Both share the same shape: an artifact whose value is dominated by
+something *other* than the thing being measured (fixed process overhead
+here; static-runtime size and segment-alignment padding there). Before
+trusting a wall-clock measurement of a program that completes in low
+single-digit milliseconds, compute (don't assume) what fraction of that
+total is fixed per-process overhead by timing a trivial baseline program
+the same way -- if that fraction is not comfortably single-digit, the
+measurement is measuring the harness, not the workload, regardless of how
+many repetitions or median-taking are applied on top.
+
 ## 2026-07-28 — Linked-binary size is not a reliable "did O3 actually run" proxy at the CLI level
 
 **What happened:** while writing PR-8 Task 3's end-to-end test for the
