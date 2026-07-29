@@ -503,6 +503,35 @@ jobs:
             fi
             git diff --no-index --exit-code -- "$previous_path" "$current_path"
           done
+          # D-091: root Cargo.toml's bench-defining tail ([dev-dependencies]
+          # onward, which today is exactly [dev-dependencies] plus [[bench]])
+          # stays part of this hard contract even though the rest of the
+          # manifest is reclassified below -- see "Classify executable
+          # benchmark inputs"' own comment. Nothing below [dev-dependencies]
+          # reaches the built pycc binary the benchmark times, so relaxing
+          # it would let a faster measuring apparatus (a bumped criterion, a
+          # rewritten [[bench]] target) pass as a faster compiler. The
+          # extraction asserts its own invariant instead of assuming it: if a
+          # future manifest reorders sections so something other than
+          # [[bench]] follows [dev-dependencies], abort loudly rather than
+          # silently over- or under-pinning.
+          for repo_dir in previous current; do
+            manifest="$repo_dir/Cargo.toml"
+            if ! grep -q '^\[dev-dependencies\]$' "$manifest"; then
+              echo "$manifest has no [dev-dependencies] section; bench-manifest fingerprint invariant violated" >&2
+              exit 1
+            fi
+            extra_headers="$(awk '
+              /^\[dev-dependencies\]$/ { found = 1 }
+              found && /^\[/ && !/^\[dev-dependencies\]$/ && !/^\[\[bench\]\]$/ { print }
+            ' "$manifest")"
+            if [ -n "$extra_headers" ]; then
+              echo "$manifest has unexpected section(s) after [dev-dependencies]: $extra_headers" >&2
+              exit 1
+            fi
+          done
+          diff <(awk '/^\[dev-dependencies\]$/,0' previous/Cargo.toml) \
+               <(awk '/^\[dev-dependencies\]$/,0' current/Cargo.toml)
 
       # D-091: the dependency manifest (root Cargo.toml/Cargo.lock, and each
       # crate's own Cargo.toml/build.rs -- already covered by the plain
@@ -513,17 +542,28 @@ jobs:
       # the comparison, and if a manifest change somehow did shift timing,
       # the same strict threshold applied to any other executable-input
       # change below would still catch it. Only `benches` (the corpus
-      # itself) and the toolchain/`.cargo` above measure genuinely
-      # incomparable work if they differ -- no numeric threshold fixes that,
-      # which is why those stay a hard, unconditional abort.
+      # itself), the toolchain/`.cargo`, and root Cargo.toml's own
+      # bench-defining tail (see "Verify exact benchmark revisions" above)
+      # measure genuinely incomparable work if they differ -- no numeric
+      # threshold fixes that, which is why those stay a hard, unconditional
+      # abort. Root-level build.rs is classified here (not hashed
+      # separately) since Cargo would silently use it without any
+      # Cargo.toml change; per-crate build.rs stays covered by the `crates`
+      # path below.
       - name: Classify executable benchmark inputs
         id: benchmark_contract
         run: |
           set -euo pipefail
           executable_inputs_equal=true
-          for executable_path in src crates Cargo.toml Cargo.lock; do
+          for executable_path in src crates Cargo.toml Cargo.lock build.rs; do
+            previous_path="previous/$executable_path"
+            current_path="current/$executable_path"
+            if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+               [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+              continue
+            fi
             if git diff --no-index --no-ext-diff --no-textconv --quiet -- \
-              "previous/$executable_path" "current/$executable_path"; then
+              "$previous_path" "$current_path"; then
               continue
             else
               diff_status="$?"

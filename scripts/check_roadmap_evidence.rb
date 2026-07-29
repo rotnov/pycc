@@ -88,8 +88,8 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
   "67c04c8b2dcf8c93fff9f68535a712b942c7b559451b9f0745c12baa9d38ae48"
 # D-091: composed correction/extension of D-090's own staged-but-never-
 # activated content, discovered while opening PR-8's real pull request
-# against `main`. Two independent fixes, bundled into one digest since
-# both must land before PR-8's `ci.yml` can activate correctly:
+# against `main`. Independent fixes, bundled into one digest since all
+# must land before PR-8's `ci.yml` can activate correctly:
 #
 # 1. `frontend-perf-measure`'s "Verify exact benchmark revisions" step
 #    previously hard-required root Cargo.toml/Cargo.lock (and, via a
@@ -109,8 +109,23 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 #    would still catch it -- so this does not weaken the gate's power to
 #    catch real regressions, it only stops aborting before attempting the
 #    comparison at all. Moves Cargo.toml/Cargo.lock into that
-#    classification instead.
-# 2. `build-test-coverage`'s "Hard coverage gate" step builds `pycc_rt`
+#    classification instead -- except root Cargo.toml's bench-defining
+#    tail ([dev-dependencies] onward, i.e. [dev-dependencies] plus
+#    [[bench]] today), which stays a hard abort: nothing in that region
+#    reaches the benchmarked binary, so relaxing it would let a bumped
+#    `criterion` or rewritten `[[bench]]` target pass as a faster
+#    compiler rather than a faster measuring apparatus. `Cargo.lock`'s own
+#    bench-tooling entries are not isolated by this check and remain in
+#    the soft classification -- an accepted, documented residual, not an
+#    oversight.
+# 2. Root-level `build.rs` (not present today, but previously covered by
+#    the removed `**/build.rs` digest for any crate) is added to the
+#    `executable_inputs_equal` classification loop, guarded the same way
+#    `contract_paths` already guards nonexistent paths, so Cargo silently
+#    picking up a future root build script cannot go unclassified.
+#    Per-crate `build.rs` stays covered by the existing whole-directory
+#    `crates` diff.
+# 3. `build-test-coverage`'s "Hard coverage gate" step builds `pycc_rt`
 #    for its cross-compile target and in debug profile inside its
 #    isolated `nobody` sandbox, but never in release profile -- D-090's
 #    own release-profile build step ran only later, outside that
@@ -123,11 +138,15 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 #    the `env!("CARGO_MANIFEST_DIR")`-relative path
 #    `find_pycc_rt_lib_dir` looks up.
 #
+# Items 1's bench-manifest-tail carve-out and 2 (build.rs) were flagged by
+# GitHub's automated review (`chatgpt-codex-connector`) on PR #189 before
+# merge and folded into this same digest rather than filed as follow-ups.
+#
 # Staged alongside D84 (still the live, active workflow's own digest)
 # until the PR that actually edits `ci.yml` to this content lands and
 # retires D84.
 D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
-  "6e52b64d38c78e2cac04166c017a0af638e7f420785cbc68ca35ee90b72f6e8a"
+  "dd6116c2f7bbb5449496003df72528e5ab841b524da9ae90eec7f2c07fa801e5"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
   D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
@@ -387,9 +406,10 @@ REPLICATED_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
     target/criterion/pycc_check_frontend_fixture/previous \
     "$EXECUTABLE_INPUTS_EQUAL"
 SHELL
-# D-091: root Cargo.toml/Cargo.lock dropped from the hard-abort contract --
-# see D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT below, which now classifies them
-# instead.
+# D-091: root Cargo.toml/Cargo.lock dropped from the hard-abort contract,
+# except for the bench-defining tail ([dev-dependencies] onward) fingerprinted
+# below -- see D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT below, which classifies
+# everything else instead.
 D91_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
   set -euo pipefail
   test "$(git -C previous rev-parse HEAD)" = "$EXPECTED_PREDECESSOR_SHA"
@@ -409,13 +429,48 @@ D91_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
     fi
     git diff --no-index --exit-code -- "$previous_path" "$current_path"
   done
+  # D-091: root Cargo.toml's bench-defining tail ([dev-dependencies]
+  # onward, which today is exactly [dev-dependencies] plus [[bench]])
+  # stays part of this hard contract even though the rest of the
+  # manifest is reclassified below -- see "Classify executable
+  # benchmark inputs"' own comment. Nothing below [dev-dependencies]
+  # reaches the built pycc binary the benchmark times, so relaxing
+  # it would let a faster measuring apparatus (a bumped criterion, a
+  # rewritten [[bench]] target) pass as a faster compiler. The
+  # extraction asserts its own invariant instead of assuming it: if a
+  # future manifest reorders sections so something other than
+  # [[bench]] follows [dev-dependencies], abort loudly rather than
+  # silently over- or under-pinning.
+  for repo_dir in previous current; do
+    manifest="$repo_dir/Cargo.toml"
+    if ! grep -q '^\[dev-dependencies\]$' "$manifest"; then
+      echo "$manifest has no [dev-dependencies] section; bench-manifest fingerprint invariant violated" >&2
+      exit 1
+    fi
+    extra_headers="$(awk '
+      /^\[dev-dependencies\]$/ { found = 1 }
+      found && /^\[/ && !/^\[dev-dependencies\]$/ && !/^\[\[bench\]\]$/ { print }
+    ' "$manifest")"
+    if [ -n "$extra_headers" ]; then
+      echo "$manifest has unexpected section(s) after [dev-dependencies]: $extra_headers" >&2
+      exit 1
+    fi
+  done
+  diff <(awk '/^\[dev-dependencies\]$/,0' previous/Cargo.toml) \
+       <(awk '/^\[dev-dependencies\]$/,0' current/Cargo.toml)
 SHELL
 D91_EXECUTABLE_INPUT_IDENTITY_SCRIPT = <<~'SHELL'.strip
   set -euo pipefail
   executable_inputs_equal=true
-  for executable_path in src crates Cargo.toml Cargo.lock; do
+  for executable_path in src crates Cargo.toml Cargo.lock build.rs; do
+    previous_path="previous/$executable_path"
+    current_path="current/$executable_path"
+    if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+       [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+      continue
+    fi
     if git diff --no-index --no-ext-diff --no-textconv --quiet -- \
-      "previous/$executable_path" "current/$executable_path"; then
+      "$previous_path" "$current_path"; then
       continue
     else
       diff_status="$?"
