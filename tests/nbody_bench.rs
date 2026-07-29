@@ -69,37 +69,48 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// `--release` LLVM build plus ten total program executions) -- and run
 /// explicitly via `--include-ignored`, already passed workspace-wide in
 /// both `build-test-coverage` and every `native-build-test` matrix leg
-/// (`.github/workflows/ci.yml`), so no CI change was needed to wire this in.
+/// (`.github/workflows/ci.yml`), so no further CI test-wiring change was
+/// needed beyond D-091's own release-`pycc_rt`-build step addition there.
 ///
-/// As of this commit this test fails: measured ratio is ~10-11x, not >= 20x.
-/// This is not a case of `--release` "not taking effect" in the trivial
-/// sense -- `pycc_codegen`'s `release_mode_actually_runs_llvm_optimization_
-/// passes` unit test still passes, confirming the O3 pipeline measurably
-/// changes the emitted object code for the compiled module itself. Two
-/// compounding, real causes, verified empirically (see this PR's Task 5
-/// report for the full measurements):
-/// 1. `src/main.rs::find_pycc_rt_lib_dir_in` always links
-///    `target/debug/libpycc_rt.a` (or the `--target`-qualified equivalent),
-///    regardless of `--release` -- the flag only optimizes the compiled
-///    module's own LLVM IR, never selects an optimized `pycc_rt` build.
-///    Every `pycc_rt_float_pow` call this fixture's ten unrolled pairwise
-///    updates make per iteration (200,000 total) therefore runs through an
-///    unoptimized runtime. Linking a `--release`-built `pycc_rt` instead
-///    (verified locally by temporarily hand-editing the lookup path, not
-///    committed) drops the fixture's own median from ~6.5ms to ~5.5ms --
-///    a real but insufficient-alone improvement.
-/// 2. v0.2 has no cross-module LTO (D-090): `pycc_rt_float_pow` is an
-///    opaque `extern "C"` call from the compiled module's perspective, so
-///    LLVM can never inline the domain-check-then-`powf` body into the
-///    hot loop no matter which `pycc_rt` build is linked.
+/// As of this commit this test still fails, but for a narrower, better
+/// understood reason than the ~10-11x this benchmark first measured
+/// (D-091): that first measurement conflated a real methodology gap with
+/// what turned out to be a real, separate implementation bug, both now
+/// addressed:
+/// 1. `src/main.rs::find_pycc_rt_lib_dir_in` used to always link
+///    `target/debug/libpycc_rt.a` regardless of `--release` (the flag only
+///    optimized the compiled module's own LLVM IR, never selected an
+///    optimized `pycc_rt` to link) -- fixed (D-091): it now takes a
+///    `release: bool` and links `target/release` when the caller's already-
+///    resolved `--release` state says to.
+/// 2. At `DEFAULT_ITERATIONS = 20000` (pyperformance's own upstream
+///    constant), pycc's own ~3ms fixed process-spawn overhead was ~45-50%
+///    of its ~6ms total nbody runtime, mechanically compressing the
+///    measured ratio far below the actual compute-only speedup -- fixed
+///    (D-091): `tests/fixtures/nbody.py`'s iteration count is raised to
+///    `525000`, keeping both sides' own fixed-overhead fraction in the
+///    single digits (pycc ~4.3%, CPython ~1.6%) without changing any
+///    physics, constant, or update-order fidelity to the reference
+///    benchmark. This fixture's own 10 pairwise `pycc_rt_float_pow` calls
+///    per iteration now total 5,250,000 over a full run, not 200,000.
 ///
-/// Both are real, structural, out of this test's own scope to fix --
-/// changing `--release`'s runtime-library selection or pursuing real
-/// cross-module optimization are follow-up implementation work, not a
-/// benchmark-harness change. The gate itself is a design-doc-mandated
-/// threshold (design doc's §1) and stays at 20 here unmodified; lowering
-/// it to make this test pass would defeat the point of building the
-/// measurement in the first place.
+/// With both fixes in place, the measured ratio is a stable, reproducible
+/// ~18.0-18.24x (see D-091 for five consecutive runs' worth of numbers) --
+/// still short of the 20x gate, but now a genuine, well-bounded compute
+/// ceiling rather than a measurement artifact: real timing at 300k/400k/
+/// 525k/800k/1M iterations shows the ratio is not still climbing (17.34x/
+/// 17.72x/17.78x/18.03x/18.14x), so raising the iteration count further
+/// would not close this gap. `pycc_rt_float_pow` remains an opaque
+/// `extern "C"` call from the compiled module's own LLVM IR (v0.2 has no
+/// cross-module LTO, D-090), so LLVM can never inline it into the hot loop
+/// regardless of which `pycc_rt` build is linked -- closing the remaining
+/// ~2x gap would need real cross-module optimization work, out of this
+/// test's own scope. The gate itself is a design-doc-mandated threshold
+/// (design doc's §1) and stays at 20 here unmodified; lowering it, or
+/// rewriting this fixture's computation to dodge `pycc_rt_float_pow` calls,
+/// would defeat the point of building this measurement in the first place.
+/// See D-091 for the full investigation and the task dispatcher's own
+/// decision on how to proceed.
 ///
 /// Runs execute in two back-to-back blocks (all 5 pycc runs, then all 5
 /// CPython runs) rather than interleaved -- matching the design doc's own

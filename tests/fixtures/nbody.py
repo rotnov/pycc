@@ -89,7 +89,15 @@ def main() -> None:
     ) / solar_mass
 
     dt = 0.01
-    iterations = 20000
+    # D-091: raised from upstream pyperformance's own `DEFAULT_ITERATIONS =
+    # 20000` to amortize the same-machine paired benchmark's fixed
+    # per-process overhead (`tests/nbody_bench.rs`) -- at 20000, that fixed
+    # cost was a large enough fraction of each side's own tiny total runtime
+    # to mechanically compress the measured wall-clock ratio well below the
+    # actual compute-only speedup. Physics, constants, and update order are
+    # completely unaffected by this loop's own trip count -- see D-091 for
+    # the full measurement.
+    iterations = 525000
     step = 0
     while step < iterations:
         # Pairwise gravitational update -- 10 pairs for 5 bodies, unrolled
