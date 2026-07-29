@@ -1075,6 +1075,37 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "unexpected section"
   end
 
+  # D-091: the guard must also fail loudly if `[[bench]]` is reordered to
+  # appear ABOVE `[dev-dependencies]` instead of after it -- otherwise the
+  # `[dev-dependencies]`-onward extraction would no longer include
+  # `[[bench]]` at all, silently moving it out of the hard-pinned tail and
+  # into the softer reclassification, reopening the exact P1 hole this
+  # fingerprint exists to close.
+  def test_d91_bench_manifest_fingerprint_hard_aborts_when_bench_precedes_dev_dependencies
+    reordered = <<~TOML
+      [package]
+      name = "pycc"
+      version = "0.1.0"
+
+      [dependencies]
+      clap = { version = "4", features = ["derive"] }
+
+      [[bench]]
+      name = "check_bench"
+      harness = false
+
+      [dev-dependencies]
+      serde_json = "1"
+      criterion = { version = "0.8.2", features = ["html_reports"] }
+    TOML
+    _stdout, stderr, status = run_d91_verify_revisions do |root|
+      (root / "previous/Cargo.toml").write(d91_cargo_toml)
+      (root / "current/Cargo.toml").write(reordered)
+    end
+    refute status.success?
+    assert_includes stderr, "outside its [dev-dependencies]-onward tail"
+  end
+
   # D-091: root-level build.rs must be classified (Cargo would silently use
   # it without any Cargo.toml change), while an unrelated identical src/
   # tree still reports executable_inputs_equal=true.

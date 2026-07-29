@@ -510,11 +510,18 @@ jobs:
           # benchmark inputs"' own comment. Nothing below [dev-dependencies]
           # reaches the built pycc binary the benchmark times, so relaxing
           # it would let a faster measuring apparatus (a bumped criterion, a
-          # rewritten [[bench]] target) pass as a faster compiler. The
-          # extraction asserts its own invariant instead of assuming it: if a
-          # future manifest reorders sections so something other than
-          # [[bench]] follows [dev-dependencies], abort loudly rather than
-          # silently over- or under-pinning.
+          # rewritten [[bench]] target) pass as a faster compiler. This is a
+          # standalone check, not an addition to contract_paths above: it
+          # extracts and diffs a sub-region of one file rather than
+          # requiring a whole path byte-identical. Two invariants are
+          # asserted, not assumed, so a future manifest edit cannot widen
+          # or narrow the pinned region without a loud abort: (1)
+          # [dev-dependencies] exists and only [[bench]] follows it, so an
+          # unrelated section landing after [dev-dependencies] cannot be
+          # silently swallowed into the pinned tail; (2) every [[bench]]
+          # section in the file is inside that tail, so reordering
+          # [[bench]] above [dev-dependencies] cannot silently move it out
+          # of the pinned region and into the softer reclassification below.
           for repo_dir in previous current; do
             manifest="$repo_dir/Cargo.toml"
             if ! grep -q '^\[dev-dependencies\]$' "$manifest"; then
@@ -527,6 +534,12 @@ jobs:
             ' "$manifest")"
             if [ -n "$extra_headers" ]; then
               echo "$manifest has unexpected section(s) after [dev-dependencies]: $extra_headers" >&2
+              exit 1
+            fi
+            whole_bench_count="$(grep -c '^\[\[bench\]\]$' "$manifest" || true)"
+            tail_bench_count="$(awk '/^\[dev-dependencies\]$/,0' "$manifest" | grep -c '^\[\[bench\]\]$' || true)"
+            if [ "$whole_bench_count" != "$tail_bench_count" ]; then
+              echo "$manifest has a [[bench]] section outside its [dev-dependencies]-onward tail; bench-manifest fingerprint invariant violated" >&2
               exit 1
             fi
           done

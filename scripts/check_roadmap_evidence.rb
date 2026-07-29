@@ -109,23 +109,31 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 #    would still catch it -- so this does not weaken the gate's power to
 #    catch real regressions, it only stops aborting before attempting the
 #    comparison at all. Moves Cargo.toml/Cargo.lock into that
-#    classification instead -- except root Cargo.toml's bench-defining
-#    tail ([dev-dependencies] onward, i.e. [dev-dependencies] plus
-#    [[bench]] today), which stays a hard abort: nothing in that region
-#    reaches the benchmarked binary, so relaxing it would let a bumped
-#    `criterion` or rewritten `[[bench]]` target pass as a faster
-#    compiler rather than a faster measuring apparatus. `Cargo.lock`'s own
-#    bench-tooling entries are not isolated by this check and remain in
-#    the soft classification -- an accepted, documented residual, not an
+#    classification instead.
+# 2. A separate, standalone check (not part of `contract_paths` above,
+#    and not removed by (1)) keeps root Cargo.toml's bench-defining tail
+#    ([dev-dependencies] onward, i.e. [dev-dependencies] plus [[bench]]
+#    today) a hard abort: nothing in that region reaches the benchmarked
+#    binary, so relaxing it would let a bumped `criterion` or rewritten
+#    `[[bench]]` target pass as a faster compiler rather than a faster
+#    measuring apparatus. Two invariants are asserted so a future
+#    manifest reorder cannot silently widen or narrow the pinned region:
+#    every section after [dev-dependencies] must be [[bench]] (else
+#    something unrelated could be swallowed into the softer
+#    classification), and every [[bench]] in the file must be inside
+#    that tail (else moving [[bench]] above [dev-dependencies] could
+#    move it out of the pinned region). `Cargo.lock`'s own bench-tooling
+#    entries are not isolated by this check and remain in the soft
+#    classification -- an accepted, documented residual, not an
 #    oversight.
-# 2. Root-level `build.rs` (not present today, but previously covered by
+# 3. Root-level `build.rs` (not present today, but previously covered by
 #    the removed `**/build.rs` digest for any crate) is added to the
 #    `executable_inputs_equal` classification loop, guarded the same way
 #    `contract_paths` already guards nonexistent paths, so Cargo silently
 #    picking up a future root build script cannot go unclassified.
 #    Per-crate `build.rs` stays covered by the existing whole-directory
 #    `crates` diff.
-# 3. `build-test-coverage`'s "Hard coverage gate" step builds `pycc_rt`
+# 4. `build-test-coverage`'s "Hard coverage gate" step builds `pycc_rt`
 #    for its cross-compile target and in debug profile inside its
 #    isolated `nobody` sandbox, but never in release profile -- D-090's
 #    own release-profile build step ran only later, outside that
@@ -138,15 +146,15 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 #    the `env!("CARGO_MANIFEST_DIR")`-relative path
 #    `find_pycc_rt_lib_dir` looks up.
 #
-# Items 1's bench-manifest-tail carve-out and 2 (build.rs) were flagged by
-# GitHub's automated review (`chatgpt-codex-connector`) on PR #189 before
-# merge and folded into this same digest rather than filed as follow-ups.
+# Items 2 (bench-manifest tail) and 3 (build.rs) were flagged by GitHub's
+# automated review (`chatgpt-codex-connector`) on PR #189 before merge and
+# folded into this same digest rather than filed as follow-ups.
 #
 # Staged alongside D84 (still the live, active workflow's own digest)
 # until the PR that actually edits `ci.yml` to this content lands and
 # retires D84.
 D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
-  "dd6116c2f7bbb5449496003df72528e5ab841b524da9ae90eec7f2c07fa801e5"
+  "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
   D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
@@ -436,11 +444,18 @@ D91_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
   # benchmark inputs"' own comment. Nothing below [dev-dependencies]
   # reaches the built pycc binary the benchmark times, so relaxing
   # it would let a faster measuring apparatus (a bumped criterion, a
-  # rewritten [[bench]] target) pass as a faster compiler. The
-  # extraction asserts its own invariant instead of assuming it: if a
-  # future manifest reorders sections so something other than
-  # [[bench]] follows [dev-dependencies], abort loudly rather than
-  # silently over- or under-pinning.
+  # rewritten [[bench]] target) pass as a faster compiler. This is a
+  # standalone check, not an addition to contract_paths above: it
+  # extracts and diffs a sub-region of one file rather than
+  # requiring a whole path byte-identical. Two invariants are
+  # asserted, not assumed, so a future manifest edit cannot widen
+  # or narrow the pinned region without a loud abort: (1)
+  # [dev-dependencies] exists and only [[bench]] follows it, so an
+  # unrelated section landing after [dev-dependencies] cannot be
+  # silently swallowed into the pinned tail; (2) every [[bench]]
+  # section in the file is inside that tail, so reordering
+  # [[bench]] above [dev-dependencies] cannot silently move it out
+  # of the pinned region and into the softer reclassification below.
   for repo_dir in previous current; do
     manifest="$repo_dir/Cargo.toml"
     if ! grep -q '^\[dev-dependencies\]$' "$manifest"; then
@@ -453,6 +468,12 @@ D91_VERIFY_REVISIONS_SCRIPT = <<~'SHELL'.strip
     ' "$manifest")"
     if [ -n "$extra_headers" ]; then
       echo "$manifest has unexpected section(s) after [dev-dependencies]: $extra_headers" >&2
+      exit 1
+    fi
+    whole_bench_count="$(grep -c '^\[\[bench\]\]$' "$manifest" || true)"
+    tail_bench_count="$(awk '/^\[dev-dependencies\]$/,0' "$manifest" | grep -c '^\[\[bench\]\]$' || true)"
+    if [ "$whole_bench_count" != "$tail_bench_count" ]; then
+      echo "$manifest has a [[bench]] section outside its [dev-dependencies]-onward tail; bench-manifest fingerprint invariant violated" >&2
       exit 1
     fi
   done
