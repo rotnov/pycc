@@ -13,7 +13,7 @@ require_relative "check_roadmap_evidence"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
-  ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW =
+  LIVE_CI_WORKFLOW =
     Pathname(__dir__).parent / ".github/workflows/ci.yml"
   RETIRED_D51_PAIRED_WORKFLOW =
     Pathname(__dir__).parent / "tests/fixtures/d51-paired-ci.yml"
@@ -565,7 +565,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     hidden_items.each do |hidden_item|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{hidden_item}",
-        workflow: ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
+        workflow: LIVE_CI_WORKFLOW.read
       )
 
       assert status.success?, stderr
@@ -584,7 +584,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
+      workflow: LIVE_CI_WORKFLOW.read
     )
 
     assert status.success?, stderr
@@ -604,7 +604,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
+      workflow: LIVE_CI_WORKFLOW.read
     )
 
     assert status.success?, stderr
@@ -615,7 +615,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     ["    - [x] Root code example.\n", ">     - [x] Quoted code example.\n"].each do |example|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{example}",
-        workflow: ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read
+        workflow: LIVE_CI_WORKFLOW.read
       )
 
       assert status.success?, stderr
@@ -1076,7 +1076,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   def test_d91_release_pycc_rt_workflow_is_active_and_reviewed
     assert_equal(
       D91_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW).hexdigest
+      Digest::SHA256.file(LIVE_CI_WORKFLOW).hexdigest
     )
     assert_equal(
       REPLICATED_PERF_CHECKER_SHA256,
@@ -1093,8 +1093,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       ).hexdigest
     )
     assert validate_source_aware_perf_gate_lifecycle(
-      ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.read,
-      ACTIVE_D84_THROUGHPUT_FLOOR_WORKFLOW.to_s
+      LIVE_CI_WORKFLOW.read,
+      LIVE_CI_WORKFLOW.to_s
     )
   end
 
@@ -1152,7 +1152,38 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
+  end
+
+  # D-091 activated a *second* live digest (D91) in addition to D84's own
+  # still-accepted, now-historical fixture -- the two tests above only ever
+  # exercised the frozen D84 fixture through the public CLI, so nothing
+  # proved the checker's own drift rejection actually holds against the
+  # file that's live today. These two do, mirroring the D84 pair's exact
+  # shape against `LIVE_CI_WORKFLOW` instead of the frozen fixture.
+  def test_public_cli_accepts_the_live_workflow
+    stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: LIVE_CI_WORKFLOW.read
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_public_cli_rejects_drift_in_the_live_workflow
+    workflow = LIVE_CI_WORKFLOW.read.sub(
+      "for round in 1 2 3 4 5; do",
+      "for round in 1 2 3; do"
+    )
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_rejects_an_active_workflow_without_both_perf_jobs
@@ -1168,7 +1199,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_rejects_retired_d48_with_unchecked_tier1_claim
@@ -1178,7 +1209,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_rejects_retired_d48_without_a_tier1_claim
@@ -1188,7 +1219,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_requires_active_digest_without_a_tier1_claim
@@ -1201,7 +1232,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_rejects_the_retired_d56_workflow
@@ -1211,7 +1242,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_rejects_the_retired_d51_workflow
@@ -1221,7 +1252,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_rejects_the_retired_d62_workflow
@@ -1231,7 +1262,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_rejects_the_retired_d80_workflow
@@ -1241,7 +1272,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_public_cli_rejects_unreviewed_d56_workflow_drift
@@ -1253,7 +1284,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_paired_measurement_resolves_the_exact_pull_request_base
@@ -1908,7 +1939,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active performance CI workflow digest"
   end
 
   def test_requires_the_hard_coverage_gate_while_its_roadmap_claim_is_unchecked

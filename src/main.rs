@@ -561,7 +561,14 @@ mod linker_tests {
         let root = std::path::Path::new("/workspace");
         let err = find_pycc_rt_lib_dir_in(root, None, true, |_| false).unwrap_err();
         assert!(err.contains("cargo build --release -p pycc_rt"));
-        assert!(err.contains("target/release"));
+        // Not a literal "target/release" substring check: `dir.display()`
+        // renders with the platform's native separator, so this would be
+        // "target\\release" on Windows -- a real bug caught by the pinned
+        // reviewer in this same fix's own review round. `assert_eq!` against
+        // a `PathBuf` join (like the sibling `Ok(...)` tests above) compares
+        // components instead of literal separator bytes.
+        let expected_dir = root.join("target").join("release");
+        assert!(err.contains(&expected_dir.display().to_string()));
     }
 
     #[test]

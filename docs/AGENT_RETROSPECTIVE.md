@@ -34,8 +34,9 @@ never a merge gate.
 (D-090's same-machine paired nbody benchmark, `pyperformance`'s own
 `DEFAULT_ITERATIONS = 20000`) measured a ~10-11x pycc-vs-CPython speedup
 ratio, reported as a genuine, investigated shortfall against the design
-spec's ≥20x gate (docs/superpowers/sdd task-5-report.md, first draft). A
-second-reviewer pass re-derived the real cause from the same report's own
+spec's ≥20x gate (the task's own untracked working notes -- not a repo
+file, see `docs/DECISIONS.md`'s D-091 for the tracked, full write-up). A
+second-reviewer pass re-derived the real cause from that report's own
 numbers: CPython's nbody total (68.2ms) minus its own bare-interpreter
 baseline (20.3ms) gives ~47.9ms of actual compute; pycc's nbody total
 (6.1ms) minus its own trivial-binary baseline (3.0ms) gives ~3.1ms --

@@ -1200,7 +1200,7 @@ def validate_evidence(root, _evidence_ids)
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match the reviewed active D-084 performance CI workflow"
+          "#{workflow}: does not match a reviewed active performance CI workflow digest"
   end
   validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
 end
