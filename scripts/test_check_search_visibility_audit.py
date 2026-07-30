@@ -267,8 +267,26 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                     f"{duplicate_heading}{forged_table}{self.head_visibility}"
                 )
                 with self.assertRaisesRegex(
-                    AuditError, "exactly one level-2|container boundaries"
+                    AuditError,
+                    "exactly one level-2|container boundaries|inline markup markers",
                 ):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_history_headings_reject_literal_inline_markup_markers(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        canonical = "## GitHub repository search history"
+        for replacement in (
+            "## GitHub repository search hist_ory",
+            "## GitHub repository search hist&#95;ory",
+            "## GitHub repository search hist*ory",
+            "## GitHub repository search hist~ory",
+            "## GitHub repository search hist`ory",
+        ):
+            with self.subTest(replacement=replacement):
+                path.write_text(
+                    self.head_visibility.replace(canonical, replacement, 1)
+                )
+                with self.assertRaisesRegex(AuditError, "inline markup markers"):
                     validate(self.head, self.base, self.audited_at)
 
     def test_canonical_history_heading_must_be_top_level(self) -> None:
@@ -800,6 +818,29 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 )
                 self.write_registry()
                 with self.assertRaisesRegex(AuditError, "HTML tag or comment"):
+                    validate(self.head, self.base, self.audited_at)
+                self.registry["queries"].pop()
+
+    def test_github_registry_raw_query_rejects_control_characters(self) -> None:
+        for control in ("\x00", "\x01", "\t", "\x1f", "\x7f", "\x80", "\x9f"):
+            with self.subTest(control=repr(control)):
+                self.registry["queries"].append(
+                    {
+                        **self.registry["queries"][0],
+                        "id": "github-diagnostic-control-query",
+                        "raw_query": f"python{control}compiler",
+                        "semantic_identity": (
+                            "github-repository-search-v1:syntax:control-query"
+                        ),
+                        "intent_class": "brand",
+                        "lifecycle": "diagnostic",
+                        "kpi_role": "diagnostic",
+                        "rationale": "Synthetic unprojectable control query.",
+                        "activated_at": "2026-07-31T00:00:00Z",
+                    }
+                )
+                self.write_registry()
+                with self.assertRaisesRegex(AuditError, "control characters"):
                     validate(self.head, self.base, self.audited_at)
                 self.registry["queries"].pop()
 

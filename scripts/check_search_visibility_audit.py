@@ -114,7 +114,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77"
     ),
     "SEARCH_VISIBILITY.md": (
-        "d6d23072a3077c512028a8608b93d0b409e6f9ab941ceef207423a8b8a416359"
+        "353501a358cdafe3822c98624198be1f2234642d58a8c3ae6ee1952acb643110"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -289,11 +289,14 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
 def rendered_heading_words(candidate: str) -> list[str]:
     """Return visible heading words after entity and markup normalization."""
     rendered = html.unescape(candidate)
+    if any(character in rendered for character in "*_~`"):
+        raise AuditError(
+            "search visibility headings cannot contain inline markup markers"
+        )
     if any(unicodedata.category(character) in {"Cf", "Mn", "Me"} for character in rendered):
         raise AuditError(
             "search visibility headings cannot contain invisible Unicode formatting"
         )
-    rendered = rendered.translate(str.maketrans("", "", "*_~`"))
     return re.findall(r"[A-Za-z0-9]+", rendered.casefold())
 
 
@@ -639,6 +642,12 @@ def validate_registry(
         ):
             raise AuditError(
                 "GitHub registry raw_query cannot contain HTML tag or comment syntax"
+            )
+        if surface == GITHUB_SURFACE and any(
+            unicodedata.category(character) == "Cc" for character in raw_query
+        ):
+            raise AuditError(
+                "GitHub registry raw_query cannot contain control characters"
             )
         if surface not in SEMANTIC_IDENTITY_VERSIONS:
             raise AuditError("registry query has an unsupported surface")

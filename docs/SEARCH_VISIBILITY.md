@@ -50,7 +50,10 @@ because the ledger uses a single-backtick code span to project it exactly, or a
 pipe or line separator, because the ledger uses unescaped pipes and one physical
 line per table row. HTML tag and comment syntax is also forbidden in raw GitHub
 queries because the fail-closed ledger parser rejects those constructs before
-reading its machine-owned Markdown table. An existing active or diagnostic query may make only one
+reading its machine-owned Markdown table. Unicode control characters in the
+`Cc` category, including NUL and tabs, are forbidden because CommonMark can
+replace, expand, or invisibly render them instead of preserving exact raw query
+text. An existing active or diagnostic query may make only one
 lifecycle transition: to `retired`, with a non-null retirement timestamp
 value. For GitHub, that timestamp must be strictly after the final history
 observation and structured measurement. The registry has no Google snapshot

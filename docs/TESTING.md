@@ -457,8 +457,9 @@ rows or checkpoint. Raw HTML tags are likewise rejected wherever they occur,
 not only at the start of a visible line; text before `<details>` cannot bypass
 the audit and place the unchanged table in a collapsed container. Literal rank
 values such as `>50` remain valid because they are not tags. Heading
-identity is compared after HTML character-reference decoding and inline-markup
-normalization without inserting intraword boundaries. Invisible Unicode format
+identity is compared after HTML character-reference decoding. Inline markup
+marker characters are forbidden even intraword or entity-encoded, rather than
+being stripped into a canonical title the renderer does not produce. Invisible Unicode format
 and mark characters are rejected after entity decoding, and Setext level-2
 paragraph recovery stops when the explicit quote/list container signature
 changes; text from a top-level paragraph cannot be joined to a blockquoted
@@ -486,7 +487,7 @@ schema validation covers the registry version, semantic
 identity versions, both surface contracts, query lifecycle/KPI/alias rules,
 one-way identity-preserving query retirement, unambiguous backtick projection,
 provider-scoped legacy-history lifecycle bounds, rejection of unprojectable raw
-HTML, pipes, and line separators, and the retired `AI-native compiler` authorship
+HTML, controls, pipes, and line separators, and the retired `AI-native compiler` authorship
 diagnostic. Google retirement remains activation/clock-bounded until the
 registry gains a Google snapshot series. This is a pinned
 bootstrap, not a timestamp exception that future rows can claim. The suite and

@@ -28,8 +28,8 @@ remains work in flight.
 The initial machine-readable query registry and both reviewed pre-registry
 GitHub history prefixes are staged before the trusted workflow activates. The
 registry normalizes case and repeated whitespace before deduplicating syntax-
-sensitive GitHub acquisition identities, and rejects HTML-like raw query forms
-that the fail-closed ledger cannot later project. Its closed intent/KPI matrix
+sensitive GitHub acquisition identities, and rejects HTML-like or control-
+bearing raw query forms that the fail-closed ledger cannot later project. Its closed intent/KPI matrix
 prevents diagnostic classes from entering the acquisition denominator. The
 prospective base-owned audit pins and validates this exact bootstrap; a later
 activation PR may enable the reviewed workflow but must preserve both markers,
