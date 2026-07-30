@@ -131,6 +131,23 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
+The live workflow currently matches the D-084 fixture. D-091 and D-099 are
+independent staged digests: D-091 is PR-8's not-yet-active release-runtime and
+frontend-performance-contract workflow, while D-099 is the live D-084 workflow
+plus only a Windows vcpkg binary-cache boundary for D-027's libxml2 build.
+D-099 resolves the hosted image's exact vcpkg commit before restoring, then
+uses an exact key containing that commit, the hosted `ImageVersion`,
+`LLVM_VERSION`, runner OS and architecture, and `x64-windows-static-md`; it
+deliberately provides no prefix `restore-keys`. The image version rotates the
+immutable outer key if MSVC or another vcpkg ABI input changes without a vcpkg
+commit change. Pull requests may restore the default branch's cache but the
+separate save action is guarded to exact `push` plus `refs/heads/main` and an
+exact-key miss. Both action entrypoints use the immutable reviewed
+`actions/cache` v6.1.0 commit. The fixture tests prove that removing these three
+cache steps produces the active D-084 workflow semantics exactly, that the
+restore/save keys and paths are paired, and that removing either the hosted
+image or LLVM component of the key is rejected by the public checker.
+
 The `conformance-fib-mandelbrot-tier1` and `check-throughput-1k-loc-50ms`
 evidence bind the same reviewed `ci.yml` digest as `ci-tier1-cross-compile`,
 so proving the digest is reviewed and current also proves these two steps
@@ -162,11 +179,13 @@ fixed sample plan and comparator. Artifact and checkout actions remain immutable
 reviewed pins.
 
 The active `.github/workflows/ci.yml` is byte-identical to
-`tests/fixtures/d62-replicated-paired-ci.yml`. The checker allowlist contains
-only that active whole-file digest, while structural mutation tests exercise
-both the active fixed-replicate jobs and D-056's retained source-aware audit
-fixture. The retired D-051 and D-056 fixtures and comparators remain historical
-audit evidence, but the public policy rejects both older workflow digests.
+`tests/fixtures/d84-throughput-floor-ci.yml`. Its performance jobs remain
+byte-identical to the reviewed D-062 fixture. The checker allowlist contains
+active D-084 plus independently staged D-091 and D-099, while structural
+mutation tests exercise the active fixed-replicate jobs, both staged workflows,
+and D-056's retained source-aware audit fixture. The retired D-051, D-056,
+D-062, and D-080 whole-file digests remain historical audit evidence, but the
+public policy rejects them.
 The D-048 steady-state, pre-split, and activation fixtures, their digests, and
 their bootstrap tests are absent.
 The retired D-048 mean comparator and its standalone test are absent too;
@@ -235,10 +254,12 @@ input keeps the same greater-than-2% failure. Boolean validation, complete-path
 classification, step ordering, output propagation, comparator binding, and
 the unchanged failure path have focused positive and negative tests.
 
-This identity rule remains current inside D-062. The live workflow is
-byte-identical to the reviewed D-062 fixture, and only its digest is accepted.
-D-051 and D-056 are retained as audit fixtures and have public-CLI rejection
-tests.
+This identity rule remains current in the active D-084 workflow: its
+performance-job content is still byte-identical to the reviewed D-062 fixture,
+while the whole-file digest changed for later conformance and throughput-floor
+steps. D-051, D-056, D-062, and D-080 are retained as audit fixtures and have
+public-CLI rejection tests; staged D-091 and D-099 have positive and mutation
+tests before either can activate.
 
 D-062 addresses the residual single-observation defect tracked in #109 without
 changing D-056's identity rule or threshold. PR run `30200982922` and immediate

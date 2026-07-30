@@ -155,9 +155,19 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 # retires D84.
 D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
   "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
+# D-099: prospective D84 workflow plus a Windows-only vcpkg binary-cache
+# restore/save boundary for D-027's libxml2 build. The exact cache key binds
+# LLVM_VERSION, runner OS/architecture, the hosted runner image version,
+# x64-windows-static-md, and the image's vcpkg commit. Pull requests restore
+# only; an exact-key miss is saved only by a trusted push to main. This is
+# staged independently of D-091 and does not change the live D84 workflow
+# until a later activation pull request.
+D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
+  "f8656c7a525fe8775f90c5afe0950b4706eb043ef6f78f6b66e1f50146fc5366"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-  D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
+  D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
+  D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -1430,7 +1440,7 @@ def validate_evidence(root, _evidence_ids)
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match the reviewed active D-084 performance CI workflow"
+          "#{workflow}: does not match a reviewed active-or-staged performance CI workflow"
   end
   validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
 end
