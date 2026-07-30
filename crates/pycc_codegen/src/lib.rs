@@ -1335,7 +1335,7 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                 collect_stmt_bindings(stmt, bindings);
             }
         }
-        MirStmt::ExprStmt(_) | MirStmt::Return(_) => {}
+        MirStmt::ExprStmt(_) | MirStmt::Return(_) | MirStmt::NoOp => {}
     }
 }
 
@@ -1962,6 +1962,7 @@ fn emit_stmt<'ctx>(
             emit_assign(context, builder, locals, target, scalar);
             Ok(())
         }
+        MirStmt::NoOp => Ok(()),
         MirStmt::If { test, body, orelse } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
             let cond = {
@@ -2297,6 +2298,27 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"42\n");
+    }
+
+    #[test]
+    fn a_no_op_statement_compiles_and_produces_no_observable_output() {
+        // `MirStmt::NoOp` is produced only by lowering a value-less PEP 526
+        // annotation (`y: int`, Task 5) -- it must compile to nothing at
+        // all: no store, no allocation, and it must not swallow or block
+        // the statements sequenced around it.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::NoOp),
+                MirItem::TopLevelStmt(call_print(1)),
+            ],
+        };
+        let dir = tempfile_dir("slice0_no_op");
+        let obj_path = dir.join("slice0_no_op.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("slice0_no_op");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
     }
 
     #[test]

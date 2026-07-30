@@ -648,6 +648,32 @@ HirStmt::AnnAssign { value: None, .. } => MirStmt::NoOp,
 
 (No `bind_variable` call for the value-less arm — matches `pycc_types`' own choice in Task 4 not to bind a value-less declaration; `pycc_mir`'s `lookup` panics if a name is read with no scope entry, but since `pycc_types` already rejects any premature read via `T0021` before this code ever runs, no successfully-type-checked program can reach `pycc_mir` with an unbound read.)
 
+**Correction found during Task 5's own implementation (do not copy the `value: Some(value)` snippet above verbatim):** `bind_variable(scopes, target.clone(), value.ty())` is wrong. `pycc_types` (Task 4) binds its checker `env` to the *annotation's* type via `check_assignment(env, target, *annotation)`, not the initializer's inferred type — see its own comment citing D-074's "first assignment fixes a binding's representation" rule as the reason. Lowering must bind the same (annotation) type, or a later plain reassignment (e.g. `x: int = True` then `x = 5`) silently mis-sizes `x`'s eventual codegen slot (confirmed empirically: printed `11`, not `5`, before the fix). The actual committed arm instead does:
+
+```rust
+HirStmt::AnnAssign { target, annotation, value: Some(value) } => {
+    let value = lower_expr(value, scopes);
+    let value = if value.ty() == *annotation {
+        value
+    } else {
+        // The only reachable mismatch, given `pycc_types::is_assignable`
+        // (`from == to || (Bool, Int)`), is a `bool` initializer under an
+        // `int` annotation. Reuses the existing `BinOp`/`Add`-with-`0`
+        // path (and codegen's already-tested `bool -> tagged int`
+        // widening) instead of a new MIR node or codegen arm.
+        MirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(value),
+            right: Box::new(MirExpr::IntLiteral(0)),
+            ty: *annotation,
+        }
+    };
+    bind_variable(scopes, target.clone(), *annotation);
+    MirStmt::Assign { target: target.clone(), value }
+}
+HirStmt::AnnAssign { value: None, .. } => MirStmt::NoOp,
+```
+
 - [ ] **Step 5: Add the 2 trivial `pycc_codegen` arms**
 
 In `crates/pycc_codegen/src/lib.rs`'s `emit_stmt` (dispatch match, ~line 1955), add right after the `MirStmt::Assign { ... } => { ... }` arm:

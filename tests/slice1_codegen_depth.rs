@@ -1,5 +1,6 @@
 use pycc_mir::{BinOpKind, MirExpr, MirItem, MirModule, MirStmt, Ty};
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 
 fn pycc_bin() -> std::path::PathBuf {
@@ -704,4 +705,46 @@ while row < height:
             "row {row_index} contained a character outside the shading palette: {line:?}"
         );
     }
+}
+
+#[test]
+fn pep_0526_annotated_assignments_compile_and_run_correctly() {
+    // `tests/fixtures/pep_0526_var_annotations_smoke.py` exercises both
+    // `HirStmt::AnnAssign` shapes end to end: `x: int = 1` (annotated with a
+    // value, lowered to a plain `MirStmt::Assign`) and `y: int` followed by a
+    // separate `y = 2` (value-less annotation, lowered to `MirStmt::NoOp`,
+    // CPython itself does nothing observable for it either). This is a
+    // throwaway smoke fixture for this task's own test only -- the real
+    // dual-profile conformance fixture is a separate task.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/pep_0526_var_annotations_smoke.py");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", fixture.display()));
+    let output = build_and_run("pep_0526_var_annotations", &source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n");
+}
+
+#[test]
+fn a_bool_initializer_under_an_int_annotation_widens_before_a_later_reassignment() {
+    // Regression test for a cross-task divergence found and fixed while
+    // implementing this task: `pycc_types` (Task 4) binds its checker
+    // `env` to the *annotation's* type for `x: int = True` (`Ty::Int`), not
+    // the initializer's own type (`Ty::Bool`). `pycc_mir`'s lowering must
+    // agree with that, per D-074's "first assignment fixes a binding's
+    // representation" rule, or the later plain reassignment `x = 5` would
+    // silently store into a slot still permanently sized for `bool`.
+    // Before this fix this exact program printed `11` (the raw tagged-int
+    // bit pattern read back out of a truncated slot), not `5`.
+    let source = "\
+def f() -> int:
+    x: int = True
+    x = 5
+    return x
+
+print(f())
+";
+    let output = build_and_run("pep_0526_bool_initializer_widens_to_int", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"5\n");
 }
