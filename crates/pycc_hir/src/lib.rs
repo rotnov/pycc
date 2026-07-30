@@ -106,7 +106,18 @@ pub enum HirExpr {
         index: Box<HirExpr>,
     },
     /// `list.append(value)`, recognized as a single dedicated node rather
-    /// than through any general method-call mechanism (D-104).
+    /// than through any general method-call mechanism (D-104). Unlike
+    /// `Subscript` above, this arm is *not* structurally restricted to any
+    /// particular position -- because `ListAppend` is an `HirExpr` (not a
+    /// statement-only form), it currently lowers successfully anywhere an
+    /// expression is accepted, e.g. `y = x.append(2)` or
+    /// `print(x.append(1))`, even though real Python's `list.append()`
+    /// always returns `None` there and a value-producing use is
+    /// meaningless. This lowering step deliberately does not judge that --
+    /// rejecting a value-position `.append()` (or any type-driven
+    /// distinction at all) is `pycc_types`' job, not this one's (see
+    /// `list_append_used_as_a_value_lowers_successfully_today` below, which
+    /// locks in today's actual behavior).
     ListAppend {
         list: String,
         value: Box<HirExpr>,
@@ -1053,6 +1064,25 @@ mod tests {
     }
 
     #[test]
+    fn subscript_assignment_target_is_unsupported() {
+        // D-104: v0.2's `list[int]` slice is read-only -- there is no
+        // subscript assignment target anywhere in this file (see
+        // `HirExpr::Subscript`'s own doc comment). That invariant holds
+        // today only as an incidental consequence of `Stmt::Assign`'s
+        // existing bare-name-target check above (a `Subscript` node is not
+        // an `Expr::Name`, so it's rejected there, the same as `x.attr = 1`)
+        // -- not through any dedicated subscript-specific check. This test
+        // names `x[0] = 1` explicitly so a future refactor of that target
+        // extraction can't silently regress the read-only invariant without
+        // a test calling it out by name, even though the message and code
+        // path are shared with the `x.attr = 1` case above.
+        assert_capability_error_message(
+            "x[0] = 1\n",
+            "only assigning to a bare name is supported so far",
+        );
+    }
+
+    #[test]
     fn matrix_multiplication_is_unsupported() {
         assert_capability_error_message("x = a @ b\n", "binary operator not supported yet");
     }
@@ -1062,7 +1092,7 @@ mod tests {
         // `if` itself is supported (Task 8); `pass` inside it is not -- no
         // v0.1 grammar construct needs it (empty bodies aren't reachable
         // through anything pycc lowers) and it exercises the same catch-all
-        // as `a_list_literal_expression_is_unsupported` does for expressions.
+        // as `a_tuple_literal_expression_is_unsupported` does for expressions.
         assert_capability_error_message("if True:\n    pass\n", "statement kind not supported yet");
     }
 
@@ -1864,6 +1894,31 @@ mod tests {
                 list: "x".to_string(),
                 value: Box::new(HirExpr::IntLiteral(2)),
             }))
+        );
+    }
+
+    #[test]
+    fn list_append_used_as_a_value_lowers_successfully_today() {
+        // Real Python's `list.append()` always returns `None`, so using its
+        // result as a value (as opposed to a bare `ExprStmt`) is meaningless
+        // -- but rejecting that is a type judgment, which is `pycc_types`'
+        // job (see `HirExpr::ListAppend`'s own doc comment), not this
+        // lowering step's. This test locks in today's actual behavior --
+        // `y = x.append(2)` lowers successfully -- so a future change to
+        // this arm doesn't silently start rejecting (or accepting some
+        // different shape of) value-position `.append()` without its own
+        // deliberate decision.
+        let module = pycc_parser_test_helper::parse("x = [1]\ny = x.append(2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::ListAppend {
+                    list: "x".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(2)),
+                },
+            })
         );
     }
 
