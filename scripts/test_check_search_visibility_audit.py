@@ -422,6 +422,20 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuditError, "exactly one leading"):
                     validate(self.head, self.base, self.audited_at)
 
+    def test_history_delimiter_requires_three_hyphens_per_cell(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        delimiter = "|---|---|---:|---:|---:|---:|"
+        for short_delimiter in (
+            "|-|-|-:|-:|-:|-:|",
+            "|--|--|--:|--:|--:|--:|",
+        ):
+            with self.subTest(delimiter=short_delimiter):
+                path.write_text(
+                    self.head_visibility.replace(delimiter, short_delimiter, 1)
+                )
+                with self.assertRaisesRegex(AuditError, "at least three hyphens"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_registry_activation_is_immutable(self) -> None:
         self.registry["registry_activated_at"] = "2026-08-01T00:00:00Z"
         self.write_registry()

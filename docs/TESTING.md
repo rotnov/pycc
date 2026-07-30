@@ -417,7 +417,9 @@ Markdown table header and delimiter. A table-like line without the canonical
 unindented leading pipe fails instead of becoming visible, unaudited evidence.
 Every accepted history line also has exactly one leading and one trailing
 boundary pipe, so repeated pipes cannot add an empty rendered column while the
-parser silently strips it.
+parser silently strips it. Every delimiter cell has the GFM minimum of three
+hyphens, preserving the table rendering that gives the evidence its column
+meaning.
 GitHub query text rejects every qualifier except an `in:description` metadata
 diagnostic or a single `topic:` diagnostic. A complete REST response must
 contain exactly `min(api_total, 50)` rows; a shorter result list cannot support

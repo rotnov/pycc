@@ -376,6 +376,10 @@ def history_rows(markdown: str) -> list[list[str]]:
             saw_header = True
             continue
         if len(cells) == 6 and all(re.fullmatch(r":?-+:?", cell) for cell in cells):
+            if not all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+                raise AuditError(
+                    "GitHub history delimiter cells require at least three hyphens"
+                )
             if not saw_header or saw_delimiter:
                 raise AuditError("misplaced GitHub history delimiter")
             saw_delimiter = True
