@@ -163,6 +163,24 @@ def begins_list_item(line: str) -> bool:
     return LIST_MARKER.fullmatch(content) is not None
 
 
+def explicit_container_signature(line: str) -> tuple[str, ...]:
+    """Return the quote/list markers explicitly present on one source line."""
+    content = line.strip()
+    containers: list[str] = []
+    while content:
+        if content.startswith(">"):
+            containers.append("quote")
+            content = content[1:].lstrip(" \t")
+            continue
+        marker = LIST_MARKER.fullmatch(content)
+        if marker is not None:
+            containers.append("list")
+            content = marker.group(1).lstrip(" \t")
+            continue
+        break
+    return tuple(containers)
+
+
 def has_indented_code_prefix(line: str) -> bool:
     """Detect code indentation after the supported block containers."""
     content = line
@@ -185,7 +203,15 @@ def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | No
     """Recover the complete paragraph promoted by a Setext underline."""
     paragraph: list[str] = []
     start = underline_index
+    container = explicit_container_signature(lines[underline_index])
     for index in range(underline_index - 1, -1, -1):
+        line_container = explicit_container_signature(lines[index])
+        if line_container != container:
+            if begins_list_item(lines[index]):
+                raise AuditError(
+                    "Setext headings cannot cross Markdown container boundaries"
+                )
+            break
         content = visible_block_content(lines[index])
         if (
             not content

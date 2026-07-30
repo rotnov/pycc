@@ -252,7 +252,9 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 path.write_text(
                     f"{duplicate_heading}{forged_table}{self.head_visibility}"
                 )
-                with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+                with self.assertRaisesRegex(
+                    AuditError, "exactly one level-2|container boundaries"
+                ):
                     validate(self.head, self.base, self.audited_at)
 
     def test_canonical_history_heading_must_be_top_level(self) -> None:
@@ -346,8 +348,23 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                     )
                     + self.head_visibility
                 )
-                with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+                with self.assertRaisesRegex(
+                    AuditError, "exactly one level-2|container boundaries"
+                ):
                     validate(self.head, self.base, self.audited_at)
+
+    def test_setext_title_stops_at_container_boundary(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        canonical = "## GitHub repository search history"
+        path.write_text(
+            self.head_visibility.replace(
+                canonical,
+                "GitHub repository search\n> history\n> ---",
+                1,
+            )
+        )
+        with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+            validate(self.head, self.base, self.audited_at)
 
     def test_multiline_setext_duplicate_history_heading_is_rejected(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
@@ -365,7 +382,9 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 path.write_text(
                     f"{duplicate_heading}{forged_table}{self.head_visibility}"
                 )
-                with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+                with self.assertRaisesRegex(
+                    AuditError, "exactly one level-2|container boundaries"
+                ):
                     validate(self.head, self.base, self.audited_at)
 
     def test_fenced_history_table_is_rejected(self) -> None:

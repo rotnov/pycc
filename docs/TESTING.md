@@ -445,8 +445,12 @@ values such as `>50` remain valid because they are not tags. Heading
 identity is compared after HTML character-reference decoding and inline-markup
 normalization without inserting intraword boundaries. Invisible Unicode format
 and mark characters are rejected after entity decoding, and Setext level-2
-headings recover their complete multiline paragraph through blockquote and list
-container prefixes. Because this evidence file is a data ledger rather than
+paragraph recovery stops when the explicit quote/list container signature
+changes; text from a top-level paragraph cannot be joined to a blockquoted
+underline to forge the canonical title. Ambiguous list-contained Setext shapes
+fail closed instead of being partially normalized. Top-level and consistently
+blockquoted Setext level-2 headings recover their complete multiline paragraph.
+Because this evidence file is a data ledger rather than
 general documentation, inline
 links or HTML are forbidden in headings, and fenced or raw-HTML blocks are
 rejected fail-closed anywhere in the document. They cannot turn the canonical
