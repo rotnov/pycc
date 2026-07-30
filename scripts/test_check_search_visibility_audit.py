@@ -148,6 +148,20 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "must follow the table delimiter"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_history_rejects_a_visible_row_without_a_leading_pipe(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        visible_but_unbound = (
+            "2026-07-31T01:00:00Z | `python aot compiler` | 1 | +6 | 50 | 240"
+        )
+        path.write_text(
+            path.read_text().replace(
+                "\n\n## GitHub traffic history",
+                f"\n{visible_but_unbound}\n\n## GitHub traffic history",
+            )
+        )
+        with self.assertRaisesRegex(AuditError, "unindented leading pipe"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_registry_activation_is_immutable(self) -> None:
         self.registry["registry_activated_at"] = "2026-08-01T00:00:00Z"
         self.write_registry()

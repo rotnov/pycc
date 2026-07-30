@@ -99,6 +99,10 @@ def history_rows(markdown: str) -> list[list[str]]:
     saw_delimiter = False
     for line in section(markdown, "GitHub repository search history").splitlines():
         if not line.startswith("|"):
+            if line.lstrip().startswith("|") or line.count("|") >= 5:
+                raise AuditError(
+                    "GitHub history table lines must use an unindented leading pipe"
+                )
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if cells == [
