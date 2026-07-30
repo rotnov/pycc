@@ -268,6 +268,9 @@ def section(markdown: str, heading: str) -> str:
     ]
     if len(matches) != 1:
         raise AuditError(f"expected exactly one level-2 {heading!r} section")
+    canonical_line = lines[matches[0][0]]
+    if visible_block_content(canonical_line) != canonical_line.strip():
+        raise AuditError(f"canonical {heading!r} heading must be top-level")
     start = matches[0][1]
     end = len(lines)
     for heading_start, _, level, _ in headings:

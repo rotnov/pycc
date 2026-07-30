@@ -20,7 +20,7 @@ SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
   "6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
-    "042d74dde3ea961581ae0913dd499f5ae1a62f6d6c978d9b462846b05855b9f1",
+    "e446e62438a9e426bf371baa9c37efb1c3d12dd75992fa27680f69d16180fc99",
   "docs/SEARCH_QUERY_REGISTRY.json" =>
     "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c",
   "docs/SEARCH_VISIBILITY.md" =>
@@ -43,6 +43,8 @@ SEARCH_SUCCESSOR_EXECUTABLES = %w[
   scripts/test_check_roadmap_evidence.rb
   scripts/test_check_search_visibility_audit.py
 ].freeze
+ACTIVATED_POLICY_CHECKER_PATH = "scripts/check_ci_permissions.rb"
+ACTIVATED_POLICY_TEST_PATH = "scripts/test_check_ci_permissions.rb"
 SEARCH_ACTIVATION_PATHS =
   (STAGED_SEARCH_ACTIVATION_SHA256.keys + SEARCH_SUCCESSOR_EXECUTABLES +
     [SEARCH_ROADMAP_PATH]).uniq.freeze
@@ -226,6 +228,70 @@ def validate_policy_set(paths)
         "#{TRUST_ANCHOR_FILENAME} does not match an approved trust-anchor digest"
 end
 
+def replace_exact_once(text, before, after, description)
+  unless text.scan(before).length == 1
+    raise PolicyError, "trusted base #{description} transform is ambiguous"
+  end
+  text.sub(before, after)
+end
+
+def activated_successor_executable(relative, repository_root)
+  content = (repository_root / relative).binread
+  case relative
+  when ACTIVATED_POLICY_CHECKER_PATH
+    old_anchor =
+      "4dc12b9c053dbc94011ba86c32c7a103" \
+      "afe223582cc94e93ff79255dc6e5b2e6"
+    content = replace_exact_once(
+      content,
+      "  #{old_anchor}\n",
+      "",
+      "policy checker retired-anchor"
+    )
+    bridge_call = "  validate_search_" + "activation_transition(paths)\n"
+    replace_exact_once(
+      content,
+      bridge_call,
+      "",
+      "policy checker activation bridge"
+    )
+  when ACTIVATED_POLICY_TEST_PATH
+    content = replace_exact_once(
+      content,
+      "tests/fixtures/workflow-policy-roadmap-evidence.yml",
+      "tests/fixtures/workflow-policy-search-ledger.yml",
+      "policy test active fixture"
+    )
+    content = replace_exact_once(
+      content,
+      "4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6",
+      SEARCH_LEDGER_TRUST_ANCHOR_SHA256,
+      "policy test active digest"
+    )
+    content = replace_exact_once(
+      content,
+      "3a8b56776e7d44f32759301f0691220800ee6f3184b2702d13c01a28f82ce277",
+      "4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6",
+      "policy test retired digest"
+    )
+    helper_start = content.index("\n  def activation_candidate\n")
+    helper_end = content.index("\n  def workflow", helper_start || 0)
+    unless helper_start && helper_end
+      raise PolicyError, "trusted base policy test helper transform is ambiguous"
+    end
+    content = content[0...helper_start] + content[helper_end..]
+    transition_start = content.index(
+      "\n  def test_activation_trust_anchor_preserves_staged_search_assets\n"
+    )
+    unless transition_start && content.end_with?("\nend\n")
+      raise PolicyError, "trusted base policy test transition transform is ambiguous"
+    end
+    content[0...transition_start] + "\nend\n"
+  else
+    content
+  end
+end
+
 def pull_request_head_data(event_path, repository_root)
   event = JSON.parse(Pathname(event_path).read)
   pull_request = event["pull_request"]
@@ -302,9 +368,8 @@ def validate_search_activation_transition(
   end
   SEARCH_SUCCESSOR_EXECUTABLES.each do |relative|
     content = candidate[relative]
-    base_path = repository_root / relative
-    unless content.is_a?(String) && base_path.file? &&
-           content.b == base_path.binread
+    expected = activated_successor_executable(relative, repository_root)
+    unless content.is_a?(String) && content.b == expected
       raise PolicyError,
             "search trust-anchor activation must preserve trusted successor " \
             "executable #{relative} byte-for-byte"

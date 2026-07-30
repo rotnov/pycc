@@ -432,7 +432,9 @@ blank line ends the history table, a later pipe row cannot resume it. Section
 lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
 equivalent duplicate history heading cannot hide a second table. Any later H1
 or H2, in ATX or Setext form, ends the history section; a table below a new
-top-level heading cannot remain bound to the canonical H2. Heading
+top-level heading cannot remain bound to the canonical H2. The one canonical
+H2 itself must be top-level: blockquoted/list-contained versions remain visible
+for duplicate detection but cannot own the outside table. Heading
 identity is compared after HTML character-reference decoding and inline-markup
 normalization without inserting intraword boundaries. Invisible Unicode format
 and mark characters are rejected after entity decoding, and Setext level-2
@@ -474,14 +476,20 @@ Git data without checking it out or executing it, verifies the fetched SHA,
 and requires the candidate registry, ledger, and checkpoints to remain
 byte-identical to this staged base. Every repository script the successor
 workflow executes -- the three policy/audit implementations and their three
-self-test suites -- must also remain byte-identical to the trusted base. This
-prevents the activation commit from replacing any successor checker with a
-no-op that would become trusted after merge. Both successor Python invocations
-use isolated mode; the self-test loads its byte-pinned sibling auditor by exact
-path, so new modules or package initializers in the activation tree cannot
-shadow standard-library or trusted imports. Git blob output is normalized to
-binary strings before comparison so identical UTF-8 files cannot fail solely
-because Ruby assigned different in-memory encodings. The candidate roadmap may
+self-test suites -- is pinned byte-for-byte. Four remain identical to the
+trusted base. The policy checker and its self-test instead use deterministic,
+exactly-once transforms: they activate only the new digest, retire the old
+digest and one-use bridge, select the active fixture, and remove transition-only
+tests. The staged suite materializes that transformed pair in an isolated tree
+and runs its remaining self-tests, so the activation cannot leave a permanent
+bridge or trust both workflow generations. These constraints prevent the
+activation commit from replacing any successor checker with a no-op that would
+become trusted after merge. Both successor Python invocations use isolated
+mode; the self-test loads its byte-pinned sibling auditor by exact path, so new
+modules or package initializers in the activation tree cannot shadow
+standard-library or trusted imports. Git blob output is normalized to binary
+strings before comparison so identical UTF-8 files cannot fail solely because
+Ruby assigned different in-memory encodings. The candidate roadmap may
 still update unrelated current-status text, but the bridge extracts every
 `search-history-checkpoint` line and requires exactly the two staged markers in
 their reviewed order, rejecting removal, rewriting, or injection. Regular

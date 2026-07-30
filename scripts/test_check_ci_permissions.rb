@@ -22,7 +22,7 @@ class WorkflowPermissionsTest < Minitest::Test
   def activation_candidate
     root = Pathname(__dir__).parent
     SEARCH_ACTIVATION_PATHS.to_h do |relative|
-      [relative, (root / relative).binread]
+      [relative, activated_successor_executable(relative, root)]
     end
   end
 
@@ -385,6 +385,44 @@ class WorkflowPermissionsTest < Minitest::Test
         event_name: "pull_request_target",
         data_loader: ->(_paths) { candidate }
       )
+    end
+  end
+
+  def test_activated_policy_retires_transition_and_passes_its_self_tests
+    root = Pathname(__dir__).parent
+    checker = activated_successor_executable(ACTIVATED_POLICY_CHECKER_PATH, root)
+    tests = activated_successor_executable(ACTIVATED_POLICY_TEST_PATH, root)
+    retired_anchor =
+      "4dc12b9c053dbc94011ba86c32c7a103" \
+      "afe223582cc94e93ff79255dc6e5b2e6"
+
+    refute_includes checker, "  #{retired_anchor}\n"
+    refute_includes checker,
+                    "  validate_search_" + "activation_transition(paths)\n"
+    assert_includes checker, "  #{SEARCH_LEDGER_TRUST_ANCHOR_SHA256}\n"
+    refute_includes tests, "\n  def activation_candidate\n"
+    refute_includes tests,
+                    "\n  def test_activation_trust_anchor_preserves_staged_search_assets\n"
+
+    Dir.mktmpdir do |directory|
+      activated_root = Pathname(directory)
+      FileUtils.mkdir_p(activated_root / "scripts")
+      FileUtils.mkdir_p(activated_root / "tests/fixtures")
+      FileUtils.mkdir_p(activated_root / ".github/workflows")
+      (activated_root / ACTIVATED_POLICY_CHECKER_PATH).binwrite(checker)
+      (activated_root / ACTIVATED_POLICY_TEST_PATH).binwrite(tests)
+      fixture = PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread
+      (activated_root / "tests/fixtures/workflow-policy-search-ledger.yml")
+        .binwrite(fixture)
+      (activated_root / ".github/workflows/workflow-policy.yml")
+        .binwrite(fixture)
+
+      stdout, stderr, status = Open3.capture3(
+        "ruby",
+        ACTIVATED_POLICY_TEST_PATH,
+        chdir: activated_root.to_s
+      )
+      assert status.success?, "#{stdout}\n#{stderr}"
     end
   end
 

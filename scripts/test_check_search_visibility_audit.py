@@ -255,6 +255,21 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuditError, "exactly one level-2"):
                     validate(self.head, self.base, self.audited_at)
 
+    def test_canonical_history_heading_must_be_top_level(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        canonical = "## GitHub repository search history"
+        for replacement in (
+            "> ## GitHub repository search history",
+            "- ## GitHub repository search history",
+            "> GitHub repository search history\n> ---",
+        ):
+            with self.subTest(replacement=replacement):
+                path.write_text(
+                    self.head_visibility.replace(canonical, replacement, 1)
+                )
+                with self.assertRaisesRegex(AuditError, "must be top-level"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_history_headings_reject_inline_links_and_html(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         for duplicate_heading in (
