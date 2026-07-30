@@ -100,7 +100,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c"
     ),
     "SEARCH_VISIBILITY.md": (
-        "2ee5268995d86366c8bc42625a437dc4a2e30bb0bdeddda957fbd49f0b9efd41"
+        "609fc52a962b6cac67b45d4ac03e074458d6c3cd6af1a2cae2d83ac94c3d92fb"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -562,6 +562,10 @@ def validate_registry(
             raise AuditError("GitHub registry raw_query cannot contain backticks")
         if surface == GITHUB_SURFACE and "|" in raw_query:
             raise AuditError("GitHub registry raw_query cannot contain pipes")
+        if surface == GITHUB_SURFACE and len(raw_query.splitlines()) != 1:
+            raise AuditError(
+                "GitHub registry raw_query cannot contain line separators"
+            )
         if surface not in SEMANTIC_IDENTITY_VERSIONS:
             raise AuditError("registry query has an unsupported surface")
         version = SEMANTIC_IDENTITY_VERSIONS[surface]
@@ -587,7 +591,11 @@ def validate_registry(
                 raise AuditError("registry query retires before activation")
             if query_retired > audited_at:
                 raise AuditError("registry query retirement cannot be in the future")
-            last_history = history_last_observed.get(raw_query)
+            last_history = (
+                history_last_observed.get(raw_query)
+                if surface == GITHUB_SURFACE
+                else None
+            )
             if last_history is not None and query_retired <= last_history:
                 raise AuditError(
                     "registry query retirement must follow its final history observation"

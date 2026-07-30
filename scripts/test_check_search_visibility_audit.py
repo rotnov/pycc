@@ -533,6 +533,35 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "final history observation"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_google_retirement_ignores_same_text_github_history(self) -> None:
+        google_query = {
+            "id": "google-product-python-aot-compiler",
+            "surface": "google_web",
+            "raw_query": "python aot compiler",
+            "semantic_identity": "google-web-query-v1:raw:python aot compiler",
+            "semantic_identity_version": "google-web-query-v1",
+            "intent_class": "product_category",
+            "lifecycle": "active",
+            "kpi_role": "product_acquisition",
+            "rationale": "Synthetic cross-surface query.",
+            "activated_at": "2026-07-29T10:25:27Z",
+            "retired_at": None,
+            "alias_of": None,
+        }
+        base_registry_path = self.base / "docs" / "SEARCH_QUERY_REGISTRY.json"
+        base_registry = json.loads(base_registry_path.read_text())
+        base_registry["queries"].append(google_query)
+        base_registry_path.write_text(json.dumps(base_registry, indent=2) + "\n")
+        self.registry["queries"].append(
+            {
+                **google_query,
+                "lifecycle": "retired",
+                "retired_at": "2026-07-30T00:00:00Z",
+            }
+        )
+        self.write_registry()
+        validate(self.head, self.base, self.audited_at)
+
     def test_query_retirement_cannot_rewrite_identity(self) -> None:
         query = self.registry["queries"][0]
         query["lifecycle"] = "retired"
@@ -572,6 +601,29 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "cannot contain pipes"):
             validate(self.head, self.base, self.audited_at)
+
+    def test_github_registry_raw_query_rejects_line_separators(self) -> None:
+        for separator in ("\n", "\r", "\u2028"):
+            with self.subTest(separator=repr(separator)):
+                query = {
+                    **self.registry["queries"][0],
+                    "id": "github-diagnostic-multiline-query",
+                    "raw_query": f"foo{separator}bar",
+                    "semantic_identity": (
+                        "github-repository-search-v1:syntax:" \
+                        f"foo{separator}bar"
+                    ),
+                    "intent_class": "brand",
+                    "lifecycle": "diagnostic",
+                    "kpi_role": "diagnostic",
+                    "rationale": "Synthetic unprojectable multiline query.",
+                    "activated_at": "2026-07-31T00:00:00Z",
+                }
+                self.registry["queries"].append(query)
+                self.write_registry()
+                with self.assertRaisesRegex(AuditError, "line separators"):
+                    validate(self.head, self.base, self.audited_at)
+                self.registry["queries"].pop()
 
     def test_history_raw_query_rejects_embedded_backticks(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"

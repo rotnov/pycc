@@ -46,12 +46,12 @@ remain syntax-distinct. At most one active product KPI query may use a given
 semantic identity on one provider surface. Raw query text always remains
 append-only replay evidence. A GitHub raw query cannot contain a backtick,
 because the ledger uses a single-backtick code span to project it exactly, or a
-pipe, because the ledger uses pipes as unescaped table delimiters. An existing
-active or diagnostic query may make only one lifecycle transition: to
-`retired`, with a non-null retirement timestamp strictly after its final
-history observation and structured measurement. Every identity, intent, KPI,
-alias, rationale, activation, and surface field remains unchanged during
-retirement.
+pipe or line separator, because the ledger uses unescaped pipes and one physical
+line per table row. An existing active or diagnostic query may make only one
+lifecycle transition: to `retired`, with a non-null retirement timestamp
+strictly after its final observation on that provider surface. Every identity,
+intent, KPI, alias, rationale, activation, and surface field remains unchanged
+during retirement.
 
 The active GitHub product-acquisition set is:
 
