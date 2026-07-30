@@ -132,6 +132,24 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "trusted base prefix"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_markdown_equivalent_duplicate_history_heading_is_rejected(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        forged_table = (
+            "\n\n| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |\n"
+            "|---|---|---:|---:|---:|---:|\n"
+            "| 2026-07-31T02:00:00Z | `forged` | 1 | — | 1 | 1 |\n\n"
+        )
+        for duplicate_heading in (
+            "## GitHub repository search history   ",
+            "## GitHub repository search history ##",
+        ):
+            with self.subTest(duplicate_heading=duplicate_heading):
+                path.write_text(
+                    f"{duplicate_heading}{forged_table}{self.head_visibility}"
+                )
+                with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_history_rows_must_follow_the_table_delimiter(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         header = (

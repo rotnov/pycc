@@ -423,8 +423,10 @@ row. Both measurements and checkpoints preserve their trusted base list as an
 immutable prefix before new entries are accepted. The mutation suite treats
 only rows already present in the trusted base prefix as legacy; every append
 requires replay metadata regardless of its claimed timestamp. Once prose or a
-blank line ends the history table, a later pipe row cannot resume it. This
-staging commit therefore also imports the 22 reviewed
+blank line ends the history table, a later pipe row cannot resume it. Section
+lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
+equivalent duplicate history heading cannot hide a second table. This staging
+commit therefore also imports the 22 reviewed
 2026-07-29/30 GitHub rows that predate the registry, making them part of the
 actual trusted base rather than granting a timestamp-based bootstrap exception.
 The suite covers each failure class before the prospective workflow can be

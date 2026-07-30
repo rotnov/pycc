@@ -56,11 +56,32 @@ class AuditError(ValueError):
     """Raised when untrusted head data violates the trusted search contract."""
 
 
+def atx_heading(line: str) -> tuple[int, str] | None:
+    match = re.fullmatch(r" {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)", line)
+    if match is None:
+        return None
+    content = (match.group(2) or "").strip()
+    content = re.sub(r"[ \t]+#+[ \t]*\Z", "", content).rstrip()
+    return len(match.group(1)), content
+
+
 def section(markdown: str, heading: str) -> str:
-    marker = f"## {heading}\n"
-    if markdown.count(marker) != 1:
-        raise AuditError(f"expected exactly one {marker.strip()!r} section")
-    return markdown.split(marker, 1)[1].split("\n## ", 1)[0]
+    lines = markdown.splitlines()
+    matches = [
+        index
+        for index, line in enumerate(lines)
+        if atx_heading(line) == (2, heading)
+    ]
+    if len(matches) != 1:
+        raise AuditError(f"expected exactly one level-2 {heading!r} section")
+    start = matches[0] + 1
+    end = len(lines)
+    for index in range(start, len(lines)):
+        parsed = atx_heading(lines[index])
+        if parsed is not None and parsed[0] == 2:
+            end = index
+            break
+    return "\n".join(lines[start:end])
 
 
 def parse_timestamp(value: Any, description: str) -> datetime:
