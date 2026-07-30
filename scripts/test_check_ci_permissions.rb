@@ -369,6 +369,8 @@ class WorkflowPermissionsTest < Minitest::Test
       assert_equal digest, Digest::SHA256.hexdigest(content)
       [relative, content]
     end
+    candidate[SEARCH_ROADMAP_PATH] =
+      (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
     Dir.mktmpdir do |directory|
       anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
       anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
@@ -384,6 +386,8 @@ class WorkflowPermissionsTest < Minitest::Test
     original = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
       [relative, (Pathname(__dir__).parent / relative).binread]
     end
+    original[SEARCH_ROADMAP_PATH] =
+      (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
     STAGED_SEARCH_ACTIVATION_SHA256.each_key do |relative|
       candidate = original.transform_values(&:dup)
       candidate[relative] << "\nmutated\n"
@@ -404,6 +408,37 @@ class WorkflowPermissionsTest < Minitest::Test
     end
   end
 
+  def test_activation_trust_anchor_rejects_changed_roadmap_projection
+    candidate = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
+      [relative, (Pathname(__dir__).parent / relative).binread]
+    end
+    roadmap = (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
+    mutations = [
+      roadmap.sub("#{SEARCH_ROADMAP_CHECKPOINTS.first}\n", ""),
+      roadmap.sub(SEARCH_ROADMAP_CHECKPOINTS.last,
+                  SEARCH_ROADMAP_CHECKPOINTS.last.sub(" 130 ", " 129 ")),
+      roadmap.sub(SEARCH_ROADMAP_CHECKPOINTS.last,
+                  "#{SEARCH_ROADMAP_CHECKPOINTS.last}\n" \
+                  "#{SEARCH_ROADMAP_CHECKPOINTS.first}")
+    ]
+    mutations.each do |mutated_roadmap|
+      changed = candidate.merge(SEARCH_ROADMAP_PATH => mutated_roadmap)
+      Dir.mktmpdir do |directory|
+        anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+        anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+        error = assert_raises(PolicyError) do
+          validate_search_activation_transition(
+            [anchor],
+            event_name: "pull_request_target",
+            data_loader: ->(_paths) { changed }
+          )
+        end
+        assert_match(/preserve the staged roadmap checkpoint projection/,
+                     error.message)
+      end
+    end
+  end
+
   def test_non_activation_event_does_not_fetch_staged_search_assets
     Dir.mktmpdir do |directory|
       anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
@@ -420,6 +455,8 @@ class WorkflowPermissionsTest < Minitest::Test
     candidate = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
       [relative, (Pathname(__dir__).parent / relative).binread]
     end
+    candidate[SEARCH_ROADMAP_PATH] =
+      (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
     Dir.mktmpdir do |directory|
       root = Pathname(directory)
       anchor = root / TRUST_ANCHOR_FILENAME

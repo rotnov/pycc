@@ -28,6 +28,15 @@ STAGED_SEARCH_ACTIVATION_SHA256 = {
   "docs/SEARCH_VISIBILITY_CHECKPOINTS.json" =>
     "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
 }.freeze
+SEARCH_ROADMAP_PATH = "docs/ROADMAP.md"
+SEARCH_ROADMAP_CHECKPOINTS = [
+  "<!-- search-history-checkpoint: github_repository_search 108 " \
+    "e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->",
+  "<!-- search-history-checkpoint: github_repository_search 130 " \
+    "3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->"
+].freeze
+SEARCH_ACTIVATION_PATHS =
+  (STAGED_SEARCH_ACTIVATION_SHA256.keys + [SEARCH_ROADMAP_PATH]).freeze
 TRUSTED_EVENT_AND_REF_GUARD = /\A(?:\$\{\{\s*)?github\.event_name\s*==\s*(['"])push\1\s*&&\s*github\.ref\s*==\s*(['"])refs\/heads\/main\2\s*(?:\}\})?\z/
 
 def mapping_entries(node, context)
@@ -237,7 +246,7 @@ def pull_request_head_data(event_path, repository_root)
     raise PolicyError, "fetched candidate PR head does not match the event SHA: #{stderr.strip}"
   end
 
-  STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
+  SEARCH_ACTIVATION_PATHS.to_h do |relative|
     content, error, result = Open3.capture3(
       "git", "cat-file", "blob", "#{head_sha}:#{relative}",
       chdir: repository_root.to_s
@@ -265,7 +274,7 @@ def validate_search_activation_transition(
   raise PolicyError, "pull_request_target event path is missing" unless event_path || data_loader
 
   candidate = if data_loader
-                data_loader.call(STAGED_SEARCH_ACTIVATION_SHA256.keys)
+                data_loader.call(SEARCH_ACTIVATION_PATHS)
               else
                 pull_request_head_data(event_path, repository_root)
               end
@@ -281,6 +290,18 @@ def validate_search_activation_transition(
       raise PolicyError,
             "search trust-anchor activation disagrees with trusted base #{relative}"
     end
+  end
+  roadmap = candidate[SEARCH_ROADMAP_PATH]
+  unless roadmap.is_a?(String)
+    raise PolicyError,
+          "search trust-anchor activation is missing staged #{SEARCH_ROADMAP_PATH}"
+  end
+  checkpoints = roadmap.lines(chomp: true).select do |line|
+    line.include?("search-history-checkpoint:")
+  end
+  unless checkpoints == SEARCH_ROADMAP_CHECKPOINTS
+    raise PolicyError,
+          "search trust-anchor activation must preserve the staged roadmap checkpoint projection"
   end
 end
 

@@ -463,8 +463,12 @@ Git data without checking it out or executing it, verifies the fetched SHA,
 and requires the candidate base-owned search auditor, registry, ledger, and
 checkpoints to remain byte-identical to this staged base. Pinning the auditor
 itself prevents the activation commit from replacing the script with a no-op
-that would become trusted after merge. Regular `pull_request` CI never performs
-that fetch; the bridge is limited to the one trust-anchor activation shape.
+that would become trusted after merge. The candidate roadmap may still update
+unrelated current-status text, but the bridge extracts every
+`search-history-checkpoint` line and requires exactly the two staged markers in
+their reviewed order, rejecting removal, rewriting, or injection. Regular
+`pull_request` CI never performs that fetch; the bridge is limited to the one
+trust-anchor activation shape.
 
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
