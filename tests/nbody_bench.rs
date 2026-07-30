@@ -68,9 +68,96 @@ fn strip_windows_newline_translation(bytes: Vec<u8>) -> Vec<u8> {
     out
 }
 
+/// Parses the fixture's final-sun-position stdout (`print(sun_x, sun_y,
+/// sun_z)`, three whitespace-separated floats, one trailing newline) into
+/// `[f64; 3]`. Asserts exactly three tokens rather than silently truncating
+/// or padding, so a build that prints too little or too much output (a
+/// truncated write, an extra print) fails loudly here instead of comparing
+/// a degenerate subset.
+fn parse_three_floats(bytes: &[u8]) -> [f64; 3] {
+    let text = String::from_utf8(bytes.to_vec()).expect("nbody output must be valid UTF-8");
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    assert_eq!(
+        tokens.len(),
+        3,
+        "expected exactly 3 whitespace-separated floats in nbody output, got {}: {text:?}",
+        tokens.len()
+    );
+    let mut values = [0.0; 3];
+    for (value, token) in values.iter_mut().zip(tokens.iter()) {
+        *value = token
+            .parse::<f64>()
+            .unwrap_or_else(|e| panic!("failed to parse {token:?} as f64: {e}"));
+    }
+    values
+}
+
+/// D-098: compares parsed floats with a *relative* tolerance rather than
+/// D-097's original exact bytes, which CI on `windows-latest` refuted (see
+/// D-098's own Context). A single absolute epsilon would be either useless
+/// (too large relative to the third value, ~3e-4 in magnitude) or vacuous
+/// (too small relative to the first, ~8e-3) -- nbody's own three reported
+/// values span multiple orders of magnitude. `1e-6` leaves roughly three
+/// orders of margin above the worst cross-platform relative difference
+/// actually observed in CI (~7.41e-10, the second of the three values,
+/// pycc vs. CPython on `windows-latest`) while staying far below what a
+/// real miscompile (wrong formula, wrong iteration count, wrong update
+/// order) would produce -- those diverge in early digits, not the trailing
+/// ones.
+const RELATIVE_TOLERANCE: f64 = 1e-6;
+
+fn assert_relative_eq(pycc: [f64; 3], cpython: [f64; 3]) {
+    for (index, (p, c)) in pycc.iter().zip(cpython.iter()).enumerate() {
+        let relative_diff = (p - c).abs() / c.abs().max(f64::MIN_POSITIVE);
+        assert!(
+            relative_diff <= RELATIVE_TOLERANCE,
+            "pycc and CPython 3.14.6 disagree on tests/fixtures/nbody.py's output value #{index} \
+             beyond the {RELATIVE_TOLERANCE:e} relative tolerance -- a fast but wrong binary must \
+             not pass this speedup gate (pycc={p}, cpython={c}, relative difference={relative_diff:e})"
+        );
+    }
+}
+
 #[test]
 fn median_returns_the_middle_of_five_sorted_values() {
     assert_eq!(median(vec![3.0, 1.0, 2.0, 5.0, 4.0]), 3.0);
+}
+
+#[test]
+fn parse_three_floats_reads_whitespace_separated_values() {
+    assert_eq!(
+        parse_three_floats(b"0.5 -1.25 3.0\n"),
+        [0.5_f64, -1.25_f64, 3.0_f64]
+    );
+}
+
+#[test]
+#[should_panic(expected = "expected exactly 3 whitespace-separated floats")]
+fn parse_three_floats_rejects_the_wrong_token_count() {
+    parse_three_floats(b"0.5 -1.25\n");
+}
+
+#[test]
+#[should_panic(expected = "failed to parse")]
+fn parse_three_floats_rejects_a_non_numeric_token() {
+    parse_three_floats(b"0.5 abc 3.0\n");
+}
+
+#[test]
+fn assert_relative_eq_accepts_differences_within_tolerance() {
+    // Mirrors the real cross-platform gap observed on windows-latest
+    // (~7.41e-10 relative, the worst of the three values), comfortably
+    // inside the 1e-6 bound.
+    assert_relative_eq(
+        [1.0, 0.00387155830433383, 1.0],
+        [1.0, 0.0038715583072033615, 1.0],
+    );
+}
+
+#[test]
+#[should_panic(expected = "beyond the 1e-6 relative tolerance")]
+fn assert_relative_eq_rejects_differences_beyond_tolerance() {
+    assert_relative_eq([1.0, 1.0, 1.0], [1.01, 1.0, 1.0]);
 }
 
 #[test]
@@ -94,8 +181,10 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// D-094's nbody measurement contract (design doc's own §1): same-machine
 /// paired comparison, `K = 5` runs each, ratio of medians, `--release` pycc
 /// vs. the pinned CPython 3.14.6 oracle, gate at ratio >= 20 -- preceded by
-/// one untimed correctness check (D-097) that verifies both sides actually
-/// compute the same output before any ratio is trusted. `#[ignore]`d like
+/// one untimed correctness check (D-097) that verifies both sides compute
+/// matching output, within a small relative tolerance (D-098, superseding
+/// D-097's original exact-byte comparison), before any ratio is trusted.
+/// `#[ignore]`d like
 /// `tests/conformance.rs`'s two fixtures -- genuinely slow (a full
 /// `--release` LLVM build plus twelve total program executions: one untimed
 /// correctness-check launch per side, then the ten timed launches below) --
@@ -194,8 +283,18 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
     // `oracle_python_bin`'s doc comment above) -- CPython's stdio layer
     // translates `\n` to `\r\n` on Windows even when piped (D-082), which
     // `pycc_rt`'s `println!`-based `print()` never does, so the oracle's
-    // side needs the same normalization `tests/conformance.rs` already
-    // applies before an exact byte comparison is meaningful.
+    // side needs the same normalization before tokenizing either side's
+    // output into floats. D-097's original version compared raw bytes for
+    // exact equality; CI on `windows-latest` refuted that (see this
+    // function's own doc comment and D-098's Context, which supersedes
+    // D-097's comparison method) -- pycc and CPython disagreed with each
+    // other on Windows, and both disagreed with the macOS-recorded values,
+    // all starting around the 10th significant digit, consistent with
+    // `pow`/libm rounding differences amplified by this fixture's own
+    // chaotic dynamics over 525,000 iterations, not a wrong formula or
+    // miscompile (ten agreeing digits rules those out).
+    // `assert_relative_eq` below compares parsed floats with a relative
+    // tolerance instead.
     let pycc_check_output = Command::new(&bin_path)
         .output()
         .expect("pycc nbody binary must spawn for the correctness check");
@@ -211,12 +310,11 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
         cpython_check_output.status.success(),
         "cpython oracle exited non-zero during the correctness check"
     );
-    assert_eq!(
-        pycc_check_output.stdout,
-        strip_windows_newline_translation(cpython_check_output.stdout),
-        "pycc and CPython 3.14.6 disagree on tests/fixtures/nbody.py's output -- \
-         a fast but wrong binary must not pass this speedup gate"
-    );
+    let pycc_values = parse_three_floats(&pycc_check_output.stdout);
+    let cpython_values = parse_three_floats(&strip_windows_newline_translation(
+        cpython_check_output.stdout,
+    ));
+    assert_relative_eq(pycc_values, cpython_values);
 
     let pycc_times: Vec<f64> = (0..RUNS)
         .map(|_| time_command(Command::new(&bin_path)))
