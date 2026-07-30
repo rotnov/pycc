@@ -400,6 +400,17 @@ while the old anchor remains, then replace the active anchor byte-for-byte from
 that fixture in a later pull request and retire the superseded digest in that
 activation change.
 
+The prospective search-ledger audit is staged under
+`tests/fixtures/workflow-policy-search-ledger.yml` with SHA-256
+`8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43`.
+It keeps the existing read-only `pull_request_target` boundary, additionally
+downloads the head search ledger, query registry, checkpoint file, and roadmap
+as non-executable data, and runs the base-owned
+`check_search_visibility_audit.py` against the checked-out base ledger. The
+fixture is not active in this staging commit. Activation must copy it
+byte-for-byte to `workflow-policy.yml` in a later pull request, prove the new
+required `audit` run, and retire the older roadmap-only trust-anchor digest.
+
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
 `pull_request_target` on every pull request, checks out the trusted base commit,

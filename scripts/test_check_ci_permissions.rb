@@ -9,10 +9,14 @@ class WorkflowPermissionsTest < Minitest::Test
   ACTIVE_TRUST_ANCHOR = WORKFLOW_DIRECTORY / TRUST_ANCHOR_FILENAME
   REVIEWED_TRUST_ANCHOR_SNAPSHOT =
     Pathname(__dir__).parent / "tests/fixtures/workflow-policy-roadmap-evidence.yml"
+  PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR =
+    Pathname(__dir__).parent / "tests/fixtures/workflow-policy-search-ledger.yml"
   ACTIVE_TRUST_ANCHOR_SHA256 =
     "4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6"
   RETIRED_TRUST_ANCHOR_SHA256 =
     "3a8b56776e7d44f32759301f0691220800ee6f3184b2702d13c01a28f82ce277"
+  PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
+    "8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43"
 
   def workflow(test_job = "runs-on: ubuntu-latest", trigger: "pull_request", extra_jobs: nil)
     lines = [
@@ -324,5 +328,37 @@ class WorkflowPermissionsTest < Minitest::Test
     assert_includes run_commands, "ruby scripts/test_check_roadmap_evidence.rb"
     assert_includes run_commands,
                     "ruby scripts/check_roadmap_evidence.rb /tmp/pr-policy-input"
+  end
+
+  def test_prospective_trust_anchor_audits_search_ledger_as_data
+    assert PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.file?,
+           "missing prospective search-ledger trust anchor"
+    text = PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.read
+    validate_workflow(text, PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.to_s)
+    digest = Digest::SHA256.hexdigest(text)
+    assert_equal PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR_SHA256, digest
+    assert_includes TRUST_ANCHOR_SHA256_ALLOWLIST, digest
+
+    anchor = Psych.load(text)
+    steps = anchor.fetch("jobs").fetch("audit").fetch("steps")
+    download = steps.find do |step|
+      step["name"] == "Download head policy inputs as non-executable data"
+    end
+    script = download.fetch("with").fetch("script")
+    %w[
+      docs/ROADMAP.md
+      docs/SEARCH_QUERY_REGISTRY.json
+      docs/SEARCH_VISIBILITY.md
+      docs/SEARCH_VISIBILITY_CHECKPOINTS.json
+    ].each { |path| assert_includes script, path.inspect }
+
+    commands = steps
+               .map { |step| step["run"] }
+               .compact
+               .flat_map { |run| run.lines.map(&:strip) }
+    assert_includes commands,
+                    "python3 -B -m unittest scripts.test_check_search_visibility_audit"
+    assert_includes commands, "--head-root /tmp/pr-policy-input \\"
+    assert_includes commands, '--base-root "$GITHUB_WORKSPACE"'
   end
 end
