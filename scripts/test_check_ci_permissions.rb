@@ -387,6 +387,21 @@ class WorkflowPermissionsTest < Minitest::Test
     end
   end
 
+  def test_activation_compares_successor_executables_as_bytes
+    candidate = activation_candidate.transform_values do |content|
+      content.dup.force_encoding(Encoding::UTF_8)
+    end
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      validate_search_activation_transition(
+        [anchor],
+        event_name: "pull_request_target",
+        data_loader: ->(_paths) { candidate }
+      )
+    end
+  end
+
   def test_activation_trust_anchor_rejects_changed_staged_search_assets
     original = activation_candidate
     STAGED_SEARCH_ACTIVATION_SHA256.each_key do |relative|

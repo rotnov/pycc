@@ -468,8 +468,10 @@ byte-identical to this staged base. Every repository script the successor
 workflow executes -- the three policy/audit implementations and their three
 self-test suites -- must also remain byte-identical to the trusted base. This
 prevents the activation commit from replacing any successor checker with a
-no-op that would become trusted after merge. The candidate roadmap may still
-update unrelated current-status text, but the bridge extracts every
+no-op that would become trusted after merge. Git blob output is normalized to
+binary strings before comparison so identical UTF-8 files cannot fail solely
+because Ruby assigned different in-memory encodings. The candidate roadmap may
+still update unrelated current-status text, but the bridge extracts every
 `search-history-checkpoint` line and requires exactly the two staged markers in
 their reviewed order, rejecting removal, rewriting, or injection. Regular
 `pull_request` CI never performs that fetch; the bridge is limited to the one

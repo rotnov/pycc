@@ -263,7 +263,7 @@ def pull_request_head_data(event_path, repository_root)
     unless result.success?
       raise PolicyError, "candidate PR head is missing #{relative}: #{error.strip}"
     end
-    [relative, content]
+    [relative, content.b]
   end
 rescue Errno::ENOENT, JSON::ParserError => e
   raise PolicyError, "could not read pull_request_target event data: #{e.message}"
@@ -304,7 +304,7 @@ def validate_search_activation_transition(
     content = candidate[relative]
     base_path = repository_root / relative
     unless content.is_a?(String) && base_path.file? &&
-           content == base_path.binread
+           content.b == base_path.binread
       raise PolicyError,
             "search trust-anchor activation must preserve trusted successor " \
             "executable #{relative} byte-for-byte"
