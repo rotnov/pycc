@@ -193,11 +193,13 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// (`.github/workflows/ci.yml`), so no further CI test-wiring change was
 /// needed beyond D-092's own release-`pycc_rt`-build step addition there.
 ///
-/// As of this commit this test still fails, but for a narrower, better
-/// understood reason than the ~10-11x this benchmark first measured
+/// This test now passes on every Tier-1 target given the per-target floors
+/// below (20x on three of five, 12x on macOS aarch64 per D-095, 15x on
+/// `windows-latest` per D-096) -- it originally failed, for a narrower,
+/// better understood reason than the ~10-11x this benchmark first measured
 /// (D-093): that first measurement conflated a real methodology gap with
-/// what turned out to be a real, separate implementation bug, both now
-/// addressed:
+/// what turned out to be a real, separate implementation bug, both fixed
+/// before the gate itself was later revisited per-target:
 /// 1. `src/main.rs::find_pycc_rt_lib_dir_in` used to always link
 ///    `target/debug/libpycc_rt.a` regardless of `--release` (the flag only
 ///    optimized the compiled module's own LLVM IR, never selected an

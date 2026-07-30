@@ -875,10 +875,13 @@ SHELL
 # `coverage_gate_present?`/`workflow-policy.yml`'s `pull_request_target`
 # audit reaches this exact step body under the identical base-branch-only
 # trust boundary `REVIEWED_PERF_CI_WORKFLOW_SHA256S` exists for, so this
-# needs the same coexist-then-retire treatment: both the pre-D91 shape
-# (`COVERAGE_SCRIPT`, still the live workflow's own content) and this one
-# are accepted below until a later activation commit flips `ci.yml` and
-# this becomes the sole accepted shape.
+# needed the same coexist-then-retire treatment as that digest array while
+# `ci.yml` still had the pre-D91 shape. v0.2 PR-8's own merge is that later
+# activation commit: `ci.yml` now matches the D91 shape exactly, so
+# `COVERAGE_SCRIPT`/`TRUSTED_COVERAGE_STEPS` (the pre-D91 shape) are kept
+# defined below only as historical audit fixtures, the same way D51/D56/D62/
+# D80's own retired constants are kept -- `REVIEWED_COVERAGE_SCRIPTS`/
+# `REVIEWED_TRUSTED_COVERAGE_STEPS` accept only the D91 shape now.
 D91_COVERAGE_SCRIPT = <<~SHELL.strip
   set -euo pipefail
   LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -919,7 +922,7 @@ D91_COVERAGE_SCRIPT = <<~SHELL.strip
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
-REVIEWED_COVERAGE_SCRIPTS = [COVERAGE_SCRIPT, D91_COVERAGE_SCRIPT].freeze
+REVIEWED_COVERAGE_SCRIPTS = [D91_COVERAGE_SCRIPT].freeze
 TRUSTED_COVERAGE_ENV = {
   "CARGO_LLVM_COV_VERSION" => "0.8.7",
   "LLVM_VERSION" => "22.1.1"
@@ -957,8 +960,7 @@ D91_TRUSTED_COVERAGE_STEPS =
       "run" => D91_COVERAGE_SCRIPT
     }
   ]).freeze
-REVIEWED_TRUSTED_COVERAGE_STEPS =
-  [TRUSTED_COVERAGE_STEPS, D91_TRUSTED_COVERAGE_STEPS].freeze
+REVIEWED_TRUSTED_COVERAGE_STEPS = [D91_TRUSTED_COVERAGE_STEPS].freeze
 
 def yaml_mapping(node, context)
   raise RoadmapEvidenceError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)

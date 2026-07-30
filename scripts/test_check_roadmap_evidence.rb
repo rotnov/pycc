@@ -92,6 +92,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
                 cd "$GITHUB_WORKSPACE"
                 run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
                 run_isolated "$TRUSTED_CARGO" build --workspace
+                run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
                 #{command}
                 rm "$GITHUB_WORKSPACE/target"
                 printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
@@ -971,6 +972,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
+  # v0.2 PR-8's own merge is the activation commit for the coverage-step
+  # shape too (same as the digest array above): `ci.yml` now matches the
+  # D91 coverage-step shape exclusively, so the pre-D91 shape
+  # (`COVERAGE_SCRIPT`/`TRUSTED_COVERAGE_STEPS`) must no longer be accepted
+  # alongside it.
+  def test_coverage_gate_authorization_contains_only_active_d91
+    assert_equal([D91_COVERAGE_SCRIPT], REVIEWED_COVERAGE_SCRIPTS)
+    assert_equal([D91_TRUSTED_COVERAGE_STEPS], REVIEWED_TRUSTED_COVERAGE_STEPS)
+  end
+
   # `coverage_gate_present?`/`COVERAGE_SCRIPT` DO model part of
   # build-test-coverage (the exact body of its "Hard coverage gate" step),
   # unlike the frontend-perf-measure job the lifecycle validator above
@@ -1429,6 +1440,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
   end
 
+  # This block's expected message is `coverage_gate_present?`'s ("evidence
+  # does not provide the exact 100% line and region gate"), not the
+  # digest-mismatch one used elsewhere in this file for D91-drift cases:
+  # `validate_evidence` checks `coverage_gate_present?` before the whole-file
+  # digest, and every fixture below genuinely predates D91's coverage-step
+  # release-`pycc_rt`-build line (that line did not exist yet at each of
+  # these fixtures' own points in history), so they are now caught by that
+  # earlier, more specific check rather than by the digest mismatch. Both
+  # checks would reject these fixtures; `refute status.success?` is the
+  # actual property under test either way.
   def test_public_cli_rejects_the_retired_d56_workflow
     _stdout, stderr, status = run_checker(
       roadmap: roadmap_with_tier1_claim(:absent),
@@ -1436,7 +1457,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
   end
 
   def test_public_cli_rejects_the_retired_d51_workflow
@@ -1446,7 +1467,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
   end
 
   def test_public_cli_rejects_the_retired_d62_workflow
@@ -1456,7 +1477,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
   end
 
   def test_public_cli_rejects_the_retired_d80_workflow
@@ -1466,7 +1487,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
   end
 
   def test_public_cli_rejects_the_retired_d84_workflow
@@ -1476,7 +1497,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
   end
 
   def test_public_cli_rejects_unreviewed_d56_workflow_drift
@@ -1488,7 +1509,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
   end
 
   def test_paired_measurement_resolves_the_exact_pull_request_base
