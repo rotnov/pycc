@@ -13,16 +13,19 @@ history alone, not a full narrative.
 
 ## 2026-07-30 — v0.2 PR-8 merged (D-101 lowers the `ubuntu-24.04-arm` nbody floor to 18x)
 
-**Authoritative checkpoint:** PR-8 head, once this entry's own commit lands,
-is a new commit on top of `a48d243` (the second merge of `origin/main`
-needed after stage PR #231 itself introduced a new, differently-worded
-D-100 entry to `main`'s own
+**Authoritative checkpoint:** `main`'s tip is
+[`23a106c`](https://github.com/rotnov/pycc/commit/23a106c) — [PR #188](https://github.com/rotnov/pycc/pull/188)
+(v0.2 PR-8), squash-merged, carrying every commit from `a48d243` (the
+second merge of `origin/main` needed after stage PR #231 itself introduced
+a new, differently-worded D-100 entry to `main`'s own
 `docs/DECISIONS.md`/`docs/ROADMAP.md`/`docs/SPEC.md`/`docs/TESTING.md`/
 `scripts/check_roadmap_evidence.rb`/`scripts/test_check_roadmap_evidence.rb`,
-resolved by keeping PR-8 branch's own fuller D-100 text throughout). CI run
-[`30554237302`](https://github.com/rotnov/pycc/actions/runs/30554237302) on
-`a48d243` was fully green, including `ubuntu-24.04-arm` — a genuinely fresh
-commit, not a rerun.
+resolved by keeping PR-8 branch's own fuller D-100 text throughout) through
+D-101's own final commit. The final pre-merge CI run on PR-8's head was
+fully green (all five `native-build-test` legs including
+`ubuntu-24.04-arm`, `build-test-coverage`, both `cross-compile-*` jobs,
+`frontend-perf-measure`/`frontend-perf-gate`, `ci-gate`) — see the "Merged."
+paragraph below for the exact run and merge commit.
 
 **`ubuntu-24.04-arm`'s nbody-gate history took two passes to read correctly.**
 The first pass (5 observations: 3 failures clustered at
