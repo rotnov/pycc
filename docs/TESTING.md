@@ -460,8 +460,10 @@ During that transition, the still-active roadmap-only workflow runs this
 revision's base-owned policy checker. The checker recognizes only the exact
 prospective workflow digest, fetches the event's `refs/pull/<n>/head` commit as
 Git data without checking it out or executing it, verifies the fetched SHA,
-and requires the candidate registry, ledger, and checkpoints to remain
-byte-identical to this staged base. Regular `pull_request` CI never performs
+and requires the candidate base-owned search auditor, registry, ledger, and
+checkpoints to remain byte-identical to this staged base. Pinning the auditor
+itself prevents the activation commit from replacing the script with a no-op
+that would become trusted after merge. Regular `pull_request` CI never performs
 that fetch; the bridge is limited to the one trust-anchor activation shape.
 
 The regular PR job runs this checker for fast feedback only; pull-request code

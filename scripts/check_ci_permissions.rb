@@ -18,7 +18,9 @@ TRUST_ANCHOR_SHA256_ALLOWLIST = %w[
 ].freeze
 SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
   "8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43"
-STAGED_SEARCH_DATA_SHA256 = {
+STAGED_SEARCH_ACTIVATION_SHA256 = {
+  "scripts/check_search_visibility_audit.py" =>
+    "807dfb9ac9dd6b661b2e230bdb79f04f042015eb4f608a5007cbd724696d8ba6",
   "docs/SEARCH_QUERY_REGISTRY.json" =>
     "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c",
   "docs/SEARCH_VISIBILITY.md" =>
@@ -235,7 +237,7 @@ def pull_request_head_data(event_path, repository_root)
     raise PolicyError, "fetched candidate PR head does not match the event SHA: #{stderr.strip}"
   end
 
-  STAGED_SEARCH_DATA_SHA256.to_h do |relative, _digest|
+  STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
     content, error, result = Open3.capture3(
       "git", "cat-file", "blob", "#{head_sha}:#{relative}",
       chdir: repository_root.to_s
@@ -263,11 +265,11 @@ def validate_search_activation_transition(
   raise PolicyError, "pull_request_target event path is missing" unless event_path || data_loader
 
   candidate = if data_loader
-                data_loader.call(STAGED_SEARCH_DATA_SHA256.keys)
+                data_loader.call(STAGED_SEARCH_ACTIVATION_SHA256.keys)
               else
                 pull_request_head_data(event_path, repository_root)
               end
-  STAGED_SEARCH_DATA_SHA256.each do |relative, expected_digest|
+  STAGED_SEARCH_ACTIVATION_SHA256.each do |relative, expected_digest|
     content = candidate[relative]
     unless content.is_a?(String) && Digest::SHA256.hexdigest(content) == expected_digest
       raise PolicyError,

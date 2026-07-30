@@ -363,8 +363,8 @@ class WorkflowPermissionsTest < Minitest::Test
     assert_includes commands, '--base-root "$GITHUB_WORKSPACE"'
   end
 
-  def test_activation_trust_anchor_preserves_staged_search_data
-    candidate = STAGED_SEARCH_DATA_SHA256.to_h do |relative, digest|
+  def test_activation_trust_anchor_preserves_staged_search_assets
+    candidate = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, digest|
       content = (Pathname(__dir__).parent / relative).binread
       assert_equal digest, Digest::SHA256.hexdigest(content)
       [relative, content]
@@ -380,11 +380,11 @@ class WorkflowPermissionsTest < Minitest::Test
     end
   end
 
-  def test_activation_trust_anchor_rejects_changed_staged_search_data
-    original = STAGED_SEARCH_DATA_SHA256.to_h do |relative, _digest|
+  def test_activation_trust_anchor_rejects_changed_staged_search_assets
+    original = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
       [relative, (Pathname(__dir__).parent / relative).binread]
     end
-    STAGED_SEARCH_DATA_SHA256.each_key do |relative|
+    STAGED_SEARCH_ACTIVATION_SHA256.each_key do |relative|
       candidate = original.transform_values(&:dup)
       candidate[relative] << "\nmutated\n"
       error = nil
@@ -404,7 +404,7 @@ class WorkflowPermissionsTest < Minitest::Test
     end
   end
 
-  def test_non_activation_event_does_not_fetch_staged_search_data
+  def test_non_activation_event_does_not_fetch_staged_search_assets
     Dir.mktmpdir do |directory|
       anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
       anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
@@ -416,15 +416,15 @@ class WorkflowPermissionsTest < Minitest::Test
     end
   end
 
-  def test_activation_trust_anchor_rejects_changed_trusted_base_data
-    candidate = STAGED_SEARCH_DATA_SHA256.to_h do |relative, _digest|
+  def test_activation_trust_anchor_rejects_changed_trusted_base_assets
+    candidate = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
       [relative, (Pathname(__dir__).parent / relative).binread]
     end
     Dir.mktmpdir do |directory|
       root = Pathname(directory)
       anchor = root / TRUST_ANCHOR_FILENAME
       anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
-      STAGED_SEARCH_DATA_SHA256.each_key do |relative|
+      STAGED_SEARCH_ACTIVATION_SHA256.each_key do |relative|
         destination = root / relative
         FileUtils.mkdir_p(destination.dirname)
         destination.binwrite(candidate.fetch(relative))
