@@ -274,7 +274,8 @@ def validate_search_activation_transition(
             "search trust-anchor activation must preserve staged #{relative} byte-for-byte"
     end
     base_path = repository_root / relative
-    unless base_path.file? && content == base_path.binread
+    unless base_path.file? &&
+           Digest::SHA256.file(base_path).hexdigest == expected_digest
       raise PolicyError,
             "search trust-anchor activation disagrees with trusted base #{relative}"
     end

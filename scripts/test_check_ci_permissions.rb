@@ -3,6 +3,7 @@
 
 require "minitest/autorun"
 require "tmpdir"
+require "fileutils"
 require_relative "check_ci_permissions"
 
 class WorkflowPermissionsTest < Minitest::Test
@@ -412,6 +413,34 @@ class WorkflowPermissionsTest < Minitest::Test
         event_name: "pull_request",
         data_loader: ->(_paths) { flunk "regular PR validation must not fetch" }
       )
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_changed_trusted_base_data
+    candidate = STAGED_SEARCH_DATA_SHA256.to_h do |relative, _digest|
+      [relative, (Pathname(__dir__).parent / relative).binread]
+    end
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      anchor = root / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      STAGED_SEARCH_DATA_SHA256.each_key do |relative|
+        destination = root / relative
+        FileUtils.mkdir_p(destination.dirname)
+        destination.binwrite(candidate.fetch(relative))
+      end
+      changed = root / "docs/SEARCH_VISIBILITY.md"
+      changed.binwrite(changed.binread + "\nmutated base\n")
+      error = assert_raises(PolicyError) do
+        validate_search_activation_transition(
+          [anchor],
+          event_name: "pull_request_target",
+          repository_root: root,
+          data_loader: ->(_paths) { candidate }
+        )
+      end
+      assert_match(/disagrees with trusted base docs\/SEARCH_VISIBILITY.md/,
+                   error.message)
     end
   end
 end
