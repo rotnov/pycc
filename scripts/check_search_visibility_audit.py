@@ -118,6 +118,8 @@ def history_rows(markdown: str) -> list[list[str]]:
                 raise AuditError("misplaced GitHub history delimiter")
             saw_delimiter = True
             continue
+        if not saw_header or not saw_delimiter:
+            raise AuditError("GitHub history rows must follow the table delimiter")
         if len(cells) != 6:
             raise AuditError(f"malformed GitHub history row: {line}")
         parse_timestamp(cells[0], "history observed_at")
@@ -205,6 +207,7 @@ def roadmap_checkpoints(head_root: Path) -> list[dict[str, Any]]:
 
 def validate_registry(
     head_root: Path,
+    base_root: Path,
     rows: list[list[str]],
     activated_at: datetime,
     audited_at: datetime,
@@ -235,6 +238,13 @@ def validate_registry(
     measurements = registry.get("measurements")
     if not isinstance(measurements, list):
         raise AuditError("registry measurements must be a list")
+    base_registry_path = base_root / "docs" / "SEARCH_QUERY_REGISTRY.json"
+    if base_registry_path.exists():
+        base_measurements = load_object(base_registry_path).get("measurements")
+        if not isinstance(base_measurements, list):
+            raise AuditError("trusted base registry measurements must be a list")
+        if measurements[: len(base_measurements)] != base_measurements:
+            raise AuditError("registry must preserve trusted base measurements")
     projected: dict[tuple[str, str], dict[str, Any]] = {}
     snapshot_ids: set[str] = set()
     for measurement in measurements:
@@ -365,7 +375,7 @@ def validate(
     activated_at = parse_timestamp(ACTIVATED_AT, "registry activated_at")
     if audited_at is None:
         audited_at = datetime.now(timezone.utc)
-    validate_registry(head_root, head_rows, activated_at, audited_at)
+    validate_registry(head_root, base_root, head_rows, activated_at, audited_at)
 
 
 def main() -> None:

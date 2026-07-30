@@ -411,9 +411,11 @@ audit rejects a rewritten history prefix, invalid checkpoints, mutable surface
 or activation contracts, incorrect rank deltas, and replay metadata whose
 types, ranges, result-count relationships, or corpus digest are invalid. Its
 trusted clock also rejects future-dated evidence, and each timestamp/query
-pair must identify exactly one observation. Its mutation suite covers each
-failure class before the prospective workflow can be activated. The fixture
-is not active in this staging commit. Activation must copy it
+pair must identify exactly one observation. Existing base measurements are an
+immutable registry prefix, and history rows are accepted only after the exact
+Markdown table header and delimiter. Its mutation suite covers each failure
+class before the prospective workflow can be activated. The fixture is not
+active in this staging commit. Activation must copy it
 byte-for-byte to `workflow-policy.yml` in a later pull request, prove the new
 required `audit` run, and retire the older roadmap-only trust-anchor digest.
 

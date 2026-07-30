@@ -132,6 +132,22 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "trusted base prefix"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_history_rows_must_follow_the_table_delimiter(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        header = (
+            "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |\n"
+            "|---|---|---:|---:|---:|---:|\n"
+        )
+        markdown = path.read_text().replace(header, "")
+        path.write_text(
+            markdown.replace(
+                "\n\n## GitHub traffic history",
+                f"\n{header}\n## GitHub traffic history",
+            )
+        )
+        with self.assertRaisesRegex(AuditError, "must follow the table delimiter"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_registry_activation_is_immutable(self) -> None:
         self.registry["registry_activated_at"] = "2026-08-01T00:00:00Z"
         self.write_registry()
@@ -151,6 +167,18 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         self.registry["measurements"] = []
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "lacks trusted replay metadata"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_registry_preserves_trusted_base_measurements(self) -> None:
+        (self.base / "docs" / "SEARCH_VISIBILITY.md").write_text(
+            self.head_visibility
+        )
+        (self.base / "docs" / "SEARCH_QUERY_REGISTRY.json").write_text(
+            json.dumps(self.registry, indent=2) + "\n"
+        )
+        self.registry["measurements"][0]["ordered_corpus_sha256"] = "b" * 64
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "trusted base measurements"):
             validate(self.head, self.base, self.audited_at)
 
     def test_registry_era_row_requires_correct_rank_delta(self) -> None:
