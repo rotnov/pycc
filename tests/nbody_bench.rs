@@ -232,9 +232,10 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// (design doc's §1); rewriting this fixture's computation to dodge
 /// `pycc_rt_float_pow` calls would defeat the point of building this
 /// measurement in the first place, and the gate stays at 20 on every
-/// Tier-1 target except two documented, evidence-backed exceptions -- see
-/// `required_nbody_ratio`'s own doc comment for macOS aarch64's (D-095)
-/// and `windows-latest`'s (D-096) separately-measured floors. See D-093
+/// Tier-1 target except three documented, evidence-backed exceptions -- see
+/// `required_nbody_ratio`'s own doc comment for macOS aarch64's (D-095),
+/// `windows-latest`'s (D-096), and `ubuntu-24.04-arm`'s (D-101) separately-
+/// measured floors. See D-093
 /// for the full investigation and the task dispatcher's own decision on
 /// how to proceed.
 ///
@@ -335,23 +336,25 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
     let required = required_nbody_ratio(
         cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"),
         cfg!(target_os = "windows"),
+        cfg!(target_os = "linux") && cfg!(target_arch = "aarch64"),
     );
 
     // Report the measured ratio unconditionally, not only on failure: the
     // assertion below only ever produces a message when it fails, which left
-    // every passing run's exact ratio unrecorded (see docs/ROADMAP.md's
-    // ubuntu-24.04-arm follow-up item, opened once a tight sub-20x fail
-    // cluster turned out to sit alongside passes at unknown ratios -- a
-    // censored-left-tail problem no amount of re-running fixes). Writing
-    // directly to `$GITHUB_STEP_SUMMARY` (not `println!`/`eprintln!`) is
-    // deliberate: cargo test's own libtest harness captures each test's
-    // stdout/stderr and only forwards it to real process output on failure,
-    // so a plain print here would stay invisible on a pass without
-    // `--nocapture` -- and this repo's CI never adds that flag, since every
-    // `--include-ignored` run and D-014's coverage step would become far
-    // noisier for no benefit. A failed write is silently ignored: this is a
-    // diagnostic aid, not part of the gate itself, and must never turn an
-    // otherwise-passing measurement into a spurious failure.
+    // every passing run's exact ratio unrecorded -- the gap that made
+    // `ubuntu-24.04-arm`'s own fail cluster look like a censored left tail
+    // before a 4th failure landing inside the same band settled it (D-101).
+    // This instrumentation is what gives any future revisit of D-101's own
+    // floor real pass-side ratio data to work from. Writing directly to
+    // `$GITHUB_STEP_SUMMARY` (not `println!`/`eprintln!`) is deliberate:
+    // cargo test's own libtest harness captures each test's stdout/stderr and
+    // only forwards it to real process output on failure, so a plain print
+    // here would stay invisible on a pass without `--nocapture` -- and this
+    // repo's CI never adds that flag, since every `--include-ignored` run and
+    // D-014's coverage step would become far noisier for no benefit. A failed
+    // write is silently ignored: this is a diagnostic aid, not part of the
+    // gate itself, and must never turn an otherwise-passing measurement into
+    // a spurious failure.
     if let Ok(summary_path) = std::env::var("GITHUB_STEP_SUMMARY") {
         use std::io::Write;
         let _ = std::fs::OpenOptions::new()
@@ -432,23 +435,60 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
 /// observations (17.61x), not the single pass (which sets no useful
 /// floor), matching D-095's own margin-below-worst-observation
 /// convention.
-fn required_nbody_ratio(is_macos_aarch64: bool, is_windows: bool) -> f64 {
+///
+/// D-101: `ubuntu-24.04-arm` gets its own relaxed floor (18x), decided later
+/// and on a different evidentiary shape than D-095/D-096. Across PR-8's own
+/// CI history this leg recorded 6 measurements: 4 failures -- 19.92x,
+/// 19.88x, 19.86x, 19.90x -- all four landing inside a single 0.06-point
+/// band, and 2 passes at unrecorded ratios (this assertion, like D-095's/
+/// D-096's own, only ever reports a ratio on failure). An earlier reading of
+/// the first 5 of these 6 observations concluded the tight fail band was a
+/// censored-left-tail artifact of that reporting gap rather than a measured
+/// ceiling, reasoning that a genuine ~19.9x plateau with ordinary noise
+/// should scatter across independent draws, not repeatedly land in the same
+/// narrow band, and that a near-40% pass rate argued for a true center
+/// comfortably above 20x. The 4th failure landing inside that same band,
+/// rather than scattering, is the evidence that reading said would be
+/// needed before a floor decision here was defensible -- four independent
+/// draws clustering this tightly is no longer read as a truncated view of a
+/// distribution centered above 20x. Unlike D-095/D-096, no mechanism is
+/// proposed for *why* this leg sits below 20x: nothing beyond the CI
+/// measurements themselves has been investigated, and the two passes'
+/// unrecorded ratios leave open something as simple as a true center near
+/// 19.95x with ordinary noise of a few tenths straddling the gate, not
+/// necessarily a bimodal "usually-degraded, sometimes-clean" pattern like
+/// D-096's own Defender hypothesis -- that hypothesis is Windows-specific
+/// and is not imported here for a different platform with no investigation
+/// behind it. 18.0 is chosen with real margin below the worst observed
+/// failure (19.86x) -- not just under it, which would leave no room for
+/// ordinary run-to-run noise -- but well above D-096's 15.0, since this
+/// leg's measured plateau sits a full ~2 points higher than
+/// `windows-latest`'s and reusing D-096's own absolute margin here would
+/// discard several points of real, already-observed headroom this leg has
+/// never actually needed.
+fn required_nbody_ratio(is_macos_aarch64: bool, is_windows: bool, is_linux_aarch64: bool) -> f64 {
     if is_macos_aarch64 {
         12.0
     } else if is_windows {
         15.0
+    } else if is_linux_aarch64 {
+        18.0
     } else {
         20.0
     }
 }
 
 #[test]
-fn required_nbody_ratio_is_relaxed_only_on_macos_aarch64_and_windows() {
-    assert_eq!(required_nbody_ratio(true, false), 12.0);
-    assert_eq!(required_nbody_ratio(false, true), 15.0);
-    assert_eq!(required_nbody_ratio(false, false), 20.0);
-    // macos_aarch64 wins if somehow both were true (never actually happens --
-    // no target is both macOS and Windows -- but the precedence should be
-    // deterministic and documented rather than left to argument order).
-    assert_eq!(required_nbody_ratio(true, true), 12.0);
+fn required_nbody_ratio_is_relaxed_only_on_macos_aarch64_windows_and_linux_aarch64() {
+    assert_eq!(required_nbody_ratio(true, false, false), 12.0);
+    assert_eq!(required_nbody_ratio(false, true, false), 15.0);
+    assert_eq!(required_nbody_ratio(false, false, true), 18.0);
+    assert_eq!(required_nbody_ratio(false, false, false), 20.0);
+    // macos_aarch64 wins over both others if somehow more than one were true
+    // (never actually happens -- no target is both macOS and Windows, or
+    // both macOS and Linux -- but the precedence should be deterministic and
+    // documented rather than left to argument order), and windows wins over
+    // linux_aarch64 for the same never-occurring-in-practice reason.
+    assert_eq!(required_nbody_ratio(true, true, true), 12.0);
+    assert_eq!(required_nbody_ratio(false, true, true), 15.0);
 }

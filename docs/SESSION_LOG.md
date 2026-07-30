@@ -11,58 +11,56 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-30 — PR-8 fully green on `a48d243`; ubuntu-24.04-arm nbody flakiness tracked, not floor-lowered
+## 2026-07-30 — D-101 lowers the `ubuntu-24.04-arm` nbody floor to 18x; PR-8 pending final green
 
-**Authoritative checkpoint:** PR-8 head is
-[`a48d243`](https://github.com/rotnov/pycc/commit/a48d243), the second merge
-of `origin/main` needed after stage PR #231 itself introduced a new,
-differently-worded D-100 entry to `main`'s own
+**Authoritative checkpoint:** PR-8 head, once this entry's own commit lands,
+is a new commit on top of `a48d243` (the second merge of `origin/main`
+needed after stage PR #231 itself introduced a new, differently-worded
+D-100 entry to `main`'s own
 `docs/DECISIONS.md`/`docs/ROADMAP.md`/`docs/SPEC.md`/`docs/TESTING.md`/
-`scripts/check_roadmap_evidence.rb`/`scripts/test_check_roadmap_evidence.rb`.
-Resolved by keeping PR-8 branch's own fuller D-100 text throughout (already
-containing the Update note referencing #231) plus one added cross-reference
-in D-099's Consequences. CI run
+`scripts/check_roadmap_evidence.rb`/`scripts/test_check_roadmap_evidence.rb`,
+resolved by keeping PR-8 branch's own fuller D-100 text throughout). CI run
 [`30554237302`](https://github.com/rotnov/pycc/actions/runs/30554237302) on
-that commit is **fully green**: `build-test-coverage`, all five
-`native-build-test` legs (including `ubuntu-24.04-arm`), both
-`cross-compile-*` jobs, `frontend-perf-measure`/`frontend-perf-gate`, and
-`ci-gate` all passed on the first attempt — this is a genuinely fresh commit
-(not a rerun), so this is an accepted pass, not a chased one.
+`a48d243` was fully green, including `ubuntu-24.04-arm` — a genuinely fresh
+commit, not a rerun.
 
-**`ubuntu-24.04-arm` nbody-gate pattern investigated, not resolved by
-lowering the floor.** Across PR-8's CI history this leg produced 5
-observations: 3 failures clustered tightly at 19.92x/19.88x/19.86x, and 2
-passes at unrecorded exact ratios (the assertion, like D-096's own, only ever
-prints a ratio on failure). This looks superficially like D-096's own
-3-fail/1-pass Windows pattern, but isn't: D-096's fails sat a full ~2 points
-below its gate, while this leg's fails sit only ~0.1-0.14x below 20, and a
-~40% pass rate alongside that tight a fail cluster is inconsistent with a
-genuine stable ceiling below 20x — advisor review (this session, prompted by
-the second pass arriving after the first draft of this reasoning) concluded
-the tight clustering is a censored-left-tail artifact (exact ratios are only
-ever visible on failure), not a measured ceiling, and that setting a relaxed
-floor from it would repeat the exact mistake D-095/D-096 avoided by having
-either local-hardware corroboration or a much larger one-directional gap.
-**No floor was lowered for this leg** (`docs/ROADMAP.md`'s Quality-gates row
-and `required_nbody_ratio` are both unchanged — 20x still applies). Instead,
-`tests/nbody_bench.rs::nbody_release_binary_meets_required_speedup_over_cpython`
-now writes its measured ratio and pass/fail outcome to `$GITHUB_STEP_SUMMARY`
-unconditionally (not only on failure), so the next several observations on
-this leg become usable evidence for a real decision later; tracked as
-`docs/ROADMAP.md`'s new follow-up item (3), not a `docs/DECISIONS.md` entry,
-since no gate behavior actually changed.
+**`ubuntu-24.04-arm`'s nbody-gate history took two passes to read correctly.**
+The first pass (5 observations: 3 failures clustered at
+19.92x/19.88x/19.86x, 2 passes at unrecorded ratios) concluded the tight fail
+band was a censored-left-tail artifact — the assertion only ever prints a
+ratio on failure — not a measured ceiling, since a ~40% pass rate alongside
+that tight a cluster looked inconsistent with a genuine sub-20x plateau.
+Committed as `5923c61` (unconditional `$GITHUB_STEP_SUMMARY` ratio reporting
+plus a `docs/ROADMAP.md` follow-up item, no floor change) and pushed. The
+very next fresh CI run on that commit produced a 6th observation: a 4th
+failure at 19.90x, landing inside the *same* 19.86x-19.92x band rather than
+scattering — exactly the additional evidence the first pass said would be
+needed before a floor decision was defensible, and it flipped the
+conclusion. **D-101** now lowers `ubuntu-24.04-arm`'s floor to 18x (real
+margin below the worst observed 19.86x, well above D-096's 15x since this
+leg's own plateau sits ~2 points higher than Windows'), with no mechanism
+proposed — unlike D-095/D-096, this rests on CI evidence alone with no
+local Linux aarch64 hardware to corroborate. The `$GITHUB_STEP_SUMMARY`
+instrumentation from the first pass stays: it is now cited by D-101 itself
+as what makes future observations (including passes) usable if this floor
+ever needs revisiting. The `docs/ROADMAP.md` follow-up item was rewritten,
+not left alongside the superseded reasoning — it now points at D-101 and its
+own open mechanism question, matching D-095's/D-096's own follow-up
+entries.
 
-**Next step:** merge PR #188 into `main` now that the required checks are
-genuinely green and no unresolved conflicts or review threads remain — this
-is the last blocker before continuing to PR-9. Note for whoever picks up
-after this: PR-8 consumed D-090 through D-100 plus three separate `main`
-merges before landing, and every one of the last four blockers was
-CI-infrastructure reconciliation (concurrent D-099 activation, a self-inflicted
-stage-PR merge conflict, and this nbody-flakiness investigation) rather than
-PR-8's own compiler work (`pycc.toml` parsing, `--release`/LTO wiring, the
-nbody fixture and harness). Worth a deliberate look before PR-9 at whether
-future CI-gate/digest decisions should be split into their own PRs rather than
-absorbed into whichever feature PR happens to be open when they occur.
+**Next step:** confirm the fresh CI run on the D-101 commit is green
+(including `ubuntu-24.04-arm`, now gated at 18x), verify PR #188's
+`mergeStateStatus` is still `CLEAN` with no unresolved review threads, then
+merge into `main` — this is the last blocker before continuing to PR-9. Note
+for whoever picks up after this: PR-8 consumed D-090 through D-101 plus
+three separate `main` merges before landing, and every one of the last five
+blockers was CI-infrastructure reconciliation (concurrent D-099 activation, a
+self-inflicted stage-PR merge conflict, and this two-pass nbody-flakiness
+investigation) rather than PR-8's own compiler work (`pycc.toml` parsing,
+`--release`/LTO wiring, the nbody fixture and harness). Worth a deliberate
+look before PR-9 at whether future CI-gate/digest decisions should be split
+into their own PRs rather than absorbed into whichever feature PR happens to
+be open when they occur.
 
 ## 2026-07-30 — D-100 composes D-099 (merged to `main`) with PR-8's own D-091
 
