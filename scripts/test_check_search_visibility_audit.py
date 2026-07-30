@@ -249,6 +249,27 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "trusted base measurements"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_checkpoints_preserve_the_trusted_base_prefix(self) -> None:
+        base_rows = history_rows(
+            (self.base / "docs" / "SEARCH_VISIBILITY.md").read_text()
+        )
+        base_checkpoint = {
+            "checkpoint_version": 1,
+            "surfaces": {
+                "github_repository_search": [
+                    {
+                        "required_prefix_rows": len(base_rows),
+                        "sha256": history_digest(base_rows),
+                    }
+                ]
+            },
+        }
+        (
+            self.base / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+        ).write_text(json.dumps(base_checkpoint, indent=2) + "\n")
+        with self.assertRaisesRegex(AuditError, "trusted base prefix"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_registry_era_row_requires_correct_rank_delta(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         path.write_text(path.read_text().replace("| 7 | +12 |", "| 7 | nonsense |"))
@@ -305,6 +326,12 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         measurement["target_rank"] = None
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "incomplete result window"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_incomplete_response_cannot_produce_rank_evidence(self) -> None:
+        self.registry["measurements"][0]["incomplete_results"] = True
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "cannot produce rank evidence"):
             validate(self.head, self.base, self.audited_at)
 
     def test_future_observation_is_rejected(self) -> None:

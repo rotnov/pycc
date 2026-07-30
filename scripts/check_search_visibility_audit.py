@@ -339,10 +339,9 @@ def validate_registry(
                 raise AuditError("measurement target_rank is outside returned results")
         if not isinstance(measurement["incomplete_results"], bool):
             raise AuditError("measurement incomplete_results must be boolean")
-        if (
-            measurement["incomplete_results"] is False
-            and returned_results != min(api_total, measurement["result_window"])
-        ):
+        if measurement["incomplete_results"]:
+            raise AuditError("incomplete search responses cannot produce rank evidence")
+        if returned_results != min(api_total, measurement["result_window"]):
             raise AuditError("complete measurement returned an incomplete result window")
         corpus_digest = measurement["ordered_corpus_sha256"]
         if not isinstance(corpus_digest, str) or not SHA256.fullmatch(corpus_digest):
@@ -411,6 +410,13 @@ def validate(
     if head_rows[: len(base_rows)] != base_rows:
         raise AuditError("head history must preserve the trusted base prefix")
     values = checkpoints(head_root, head_rows)
+    base_checkpoint_path = (
+        base_root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+    )
+    if base_checkpoint_path.exists():
+        base_values = checkpoints(base_root, base_rows)
+        if values[: len(base_values)] != base_values:
+            raise AuditError("checkpoints must preserve the trusted base prefix")
     if roadmap_checkpoints(head_root) != values:
         raise AuditError("roadmap checkpoints do not match the bound ledger")
     activated_at = parse_timestamp(ACTIVATED_AT, "registry activated_at")
