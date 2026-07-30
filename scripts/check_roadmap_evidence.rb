@@ -176,7 +176,11 @@ D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
 # (disjoint regions of `ci.yml` -- D-091 touches `build-test-coverage`/every
 # `native-build-test` leg's release-`pycc_rt` step plus `frontend-perf-
 # measure`; D-099 touches only `native-build-test (windows-latest)`'s LLVM-
-# install section) into the one digest PR-8 actually activates.
+# install section) into the one digest PR-8 actually activates. D-100's own
+# digest also needed its own separate stage PR (#231) before `main`'s
+# base-owned audit would recognize it -- staging it here, alongside active
+# D99, was the fix; this array now holds only the final, activated D-100
+# entry since PR-8's own merge is that activation.
 D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
   "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
