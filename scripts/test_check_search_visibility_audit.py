@@ -365,6 +365,30 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuditError, "invisible Unicode"):
                     validate(self.head, self.base, self.audited_at)
 
+    def test_history_headings_reject_unicode_confusables(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        canonical = "## GitHub repository search history"
+        forged_table = (
+            "\n\n| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |\n"
+            "|---|---|---:|---:|---:|---:|\n"
+            "| 2026-07-31T02:00:00Z | `forged` | 1 | — | 1 | 1 |\n"
+        )
+        for confusable in (
+            "## GitHub repository search histоry",
+            "## GіtHub repository search history",
+            "## GitHub repοsitory search history",
+        ):
+            with self.subTest(confusable=confusable):
+                path.write_text(
+                    self.head_visibility.replace(
+                        canonical,
+                        f"{confusable}{forged_table}",
+                        1,
+                    )
+                )
+                with self.assertRaisesRegex(AuditError, "ASCII text"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_history_heading_cannot_be_an_indented_code_block(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         canonical = "## GitHub repository search history"

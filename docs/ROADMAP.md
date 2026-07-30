@@ -33,7 +33,8 @@ control/formatting-bearing raw query forms that the fail-closed ledger cannot
 later project. Its Markdown parser uses CommonMark's exact line-ending and
 ASCII blank-line boundaries rather than Python's broader Unicode whitespace,
 rejects fenced and GitHub display-math containers, and allows only top-level
-headings to end the machine-owned history section.
+ASCII headings to end the machine-owned history section so Unicode homoglyphs
+cannot forge a second evidence owner.
 Its closed intent/KPI matrix
 prevents diagnostic classes from entering the acquisition denominator. The
 prospective base-owned audit pins and validates this exact bootstrap; a later

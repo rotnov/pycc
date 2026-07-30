@@ -330,6 +330,10 @@ def rendered_heading_words(candidate: str) -> list[str]:
         raise AuditError(
             "search visibility headings cannot contain invisible Unicode formatting"
         )
+    if not rendered.isascii():
+        raise AuditError(
+            "search visibility headings must use ASCII text to prevent confusables"
+        )
     return re.findall(r"[A-Za-z0-9]+", rendered.casefold())
 
 

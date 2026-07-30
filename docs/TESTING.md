@@ -469,7 +469,9 @@ ATX closing-marker or Setext paragraph parsing, the canonical owner title must
 equal the prescribed plain source text exactly; punctuation, entities,
 backslashes, and repeated spaces cannot disappear through word tokenization.
 Invisible Unicode format
-and mark characters are rejected after entity decoding, and Setext level-2
+and mark characters are rejected after entity decoding. Every machine-ledger
+heading is ASCII-only, so Cyrillic, Greek, and other homoglyphs cannot evade
+canonical lookalike detection. Setext level-2
 paragraph recovery stops when the explicit quote/list container signature
 changes; text from a top-level paragraph cannot be joined to a blockquoted
 underline to forge the canonical title. Ambiguous list-contained Setext shapes
