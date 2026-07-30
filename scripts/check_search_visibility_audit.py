@@ -268,6 +268,10 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str, bool]]:
             )
         if FENCE_START.fullmatch(content):
             raise AuditError("search visibility ledger cannot contain fenced blocks")
+        if content == "$$":
+            raise AuditError(
+                "search visibility ledger cannot contain display-math blocks"
+            )
 
     headings: list[tuple[int, int, int, str, bool]] = []
     for index, line in enumerate(lines):

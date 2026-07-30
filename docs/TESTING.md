@@ -477,9 +477,10 @@ fail closed instead of being partially normalized. Top-level and consistently
 blockquoted Setext level-2 headings recover their complete multiline paragraph.
 Because this evidence file is a data ledger rather than
 general documentation, inline
-links or HTML are forbidden in headings, and fenced or raw-HTML blocks are
-rejected fail-closed anywhere in the document. They cannot turn the canonical
-table into rendered code or an unaudited Markdown/HTML surface; ATX/Setext
+links or HTML are forbidden in headings, and fenced, GitHub display-math, or
+raw-HTML blocks are rejected fail-closed anywhere in the document. They cannot
+turn the canonical table into rendered code/math or an unaudited Markdown/HTML
+surface; ATX/Setext
 heading syntax behind four-space or tab code indentation is rejected for the
 same reason. The checkpoint
 schema also requires a non-boolean JSON integer version before accepting

@@ -463,6 +463,21 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuditError, "fenced blocks"):
                     validate(self.head, self.base, self.audited_at)
 
+    def test_display_math_history_container_is_rejected(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        header = (
+            "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |\n"
+            "|---|---|---:|---:|---:|---:|\n"
+        )
+        table = header + self.head_visibility.split(header, 1)[1].split(
+            "\n\n## GitHub traffic history", 1
+        )[0]
+        path.write_text(
+            self.head_visibility.replace(table, f"$$\n\n{table}\n$$")
+        )
+        with self.assertRaisesRegex(AuditError, "display-math blocks"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_raw_html_history_container_is_rejected(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         path.write_text(
