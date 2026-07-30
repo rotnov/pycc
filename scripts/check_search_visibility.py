@@ -47,6 +47,7 @@ REQUIRED_MEASUREMENT_KEYS = {
 }
 SIMPLE_TERM = re.compile(r"[A-Za-z0-9]+\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 BOOLEAN_TERMS = {"AND", "NOT", "OR"}
 
 
@@ -57,7 +58,7 @@ class ContractError(ValueError):
 def parse_utc_timestamp(value: Any, description: str) -> datetime:
     """Parse the canonical second-precision UTC timestamp used by the ledger."""
 
-    if not isinstance(value, str) or not value.endswith("Z"):
+    if not isinstance(value, str) or not UTC_TIMESTAMP.fullmatch(value):
         raise ContractError(f"{description} must be an ISO 8601 UTC timestamp")
     try:
         parsed = datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
@@ -133,6 +134,42 @@ def history_digest(rows: list[list[str]]) -> str:
         separators=(",", ":"),
     ).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def validate_history_deltas(rows: list[list[str]]) -> None:
+    """Ensure a delta never claims precision absent from the rank evidence."""
+
+    previous_ranks: dict[str, int | None] = {}
+    for row in rows:
+        raw_query = row[1]
+        rank_text = row[2]
+        if rank_text == ">50":
+            rank = None
+        else:
+            try:
+                rank = int(rank_text)
+            except ValueError as error:
+                raise ContractError(f"Invalid history rank: {rank_text!r}") from error
+            if rank < 1:
+                raise ContractError(f"Invalid history rank: {rank_text!r}")
+
+        if raw_query not in previous_ranks:
+            expected_delta = "—"
+        else:
+            previous = previous_ranks[raw_query]
+            if rank is None:
+                expected_delta = "—"
+            elif previous is None:
+                expected_delta = "new"
+            else:
+                movement = previous - rank
+                expected_delta = f"+{movement}" if movement > 0 else str(movement)
+        if row[3] != expected_delta:
+            raise ContractError(
+                f"History delta for {raw_query} must be {expected_delta!r}, "
+                f"found {row[3]!r}"
+            )
+        previous_ranks[raw_query] = rank
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -326,6 +363,19 @@ def validate_measurements(
         surface = measurement["surface"]
         if surface != query["surface"] or surface != GITHUB_SURFACE:
             raise ContractError(f"Measurement {snapshot_id} has the wrong surface")
+        query_activated_at = parse_utc_timestamp(
+            query["activated_at"], f"Query {query_id} activated_at"
+        )
+        if observed_at < query_activated_at:
+            raise ContractError(f"Measurement {snapshot_id} predates query activation")
+        if query["retired_at"] is not None:
+            query_retired_at = parse_utc_timestamp(
+                query["retired_at"], f"Query {query_id} retired_at"
+            )
+            if observed_at >= query_retired_at:
+                raise ContractError(
+                    f"Measurement {snapshot_id} is outside the query lifecycle"
+                )
         surface_contract = surfaces[surface]
         if measurement["provider"] != surface_contract["provider"]:
             raise ContractError(f"Measurement {snapshot_id} has the wrong provider")
@@ -414,6 +464,7 @@ def validate(root: Path) -> None:
         )
     if history_digest(rows[:required_rows]) != required_digest:
         raise ContractError("Historical GitHub observation prefix was rewritten")
+    validate_history_deltas(rows)
 
     for row in rows:
         observed_at_text = row[0]

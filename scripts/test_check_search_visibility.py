@@ -141,7 +141,7 @@ class SearchVisibilityContractTests(unittest.TestCase):
 
     def test_registry_era_row_requires_replay_metadata(self) -> None:
         self.append_history_row(
-            "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | 0 | 50 | 240 |"
+            "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | +12 | 50 | 240 |"
         )
         self.advance_history_floor()
         self.assert_rejected("Registry-era history row is missing replay metadata")
@@ -149,7 +149,7 @@ class SearchVisibilityContractTests(unittest.TestCase):
     def test_complete_registry_era_measurement_projects_to_history(self) -> None:
         observed_at = "2026-07-31T00:00:00Z"
         self.append_history_row(
-            f"| {observed_at} | `python aot compiler` | 7 | 0 | 50 | 240 |"
+            f"| {observed_at} | `python aot compiler` | 7 | +12 | 50 | 240 |"
         )
         self.advance_history_floor()
         registry = self.registry()
@@ -176,6 +176,55 @@ class SearchVisibilityContractTests(unittest.TestCase):
         self.write_registry(registry)
         result = self.run_checker()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_registry_timestamp_requires_seconds(self) -> None:
+        registry = self.registry()
+        registry["registry_activated_at"] = "2026-07-30T14:14Z"
+        self.write_registry(registry)
+        self.assert_rejected("must be an ISO 8601 UTC timestamp")
+
+    def test_measurement_cannot_poll_a_retired_query(self) -> None:
+        observed_at = "2026-07-31T00:00:00Z"
+        self.append_history_row(
+            f"| {observed_at} | `AI-native compiler` | >50 | — | 50 | 100 |"
+        )
+        self.advance_history_floor()
+        registry = self.registry()
+        registry["measurements"].append(
+            {
+                "snapshot_id": "github-2026-07-31-ai-native-compiler",
+                "observed_at": observed_at,
+                "query_id": "github-authorship-ai-native-compiler",
+                "surface": "github_repository_search",
+                "provider": "github",
+                "request_parameters": {
+                    "q": "AI-native compiler",
+                    "per_page": 50,
+                },
+                "sort_contract": "default_best_match",
+                "result_window": 50,
+                "returned_results": 50,
+                "api_total": 100,
+                "target_rank": None,
+                "incomplete_results": False,
+                "ordered_corpus_sha256": "b" * 64,
+            }
+        )
+        self.write_registry(registry)
+        self.assert_rejected("is outside the query lifecycle")
+
+    def test_unknown_rank_delta_is_non_comparable(self) -> None:
+        path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        content = path.read_text()
+        required = (
+            "| 2026-07-30T00:52:41Z | `python llvm compiler` | >50 | — | 50 | 218 |"
+        )
+        self.assertIn(required, content)
+        path.write_text(
+            content.replace(required, required.replace("| — |", "| 0 |"), 1)
+        )
+        self.advance_history_floor()
+        self.assert_rejected("History delta for `python llvm compiler` must be '—'")
 
     def test_current_interpretation_cannot_promote_retired_query(self) -> None:
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
