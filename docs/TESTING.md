@@ -455,7 +455,8 @@ one-time initialization path accepts only those exact reviewed 108-row and
 schema validation covers the registry version, semantic
 identity versions, both surface contracts, query lifecycle/KPI/alias rules,
 one-way identity-preserving query retirement, unambiguous backtick projection,
-and the retired `AI-native compiler` authorship diagnostic. This is a pinned
+legacy-history lifecycle bounds, rejection of unprojectable raw pipes, and the
+retired `AI-native compiler` authorship diagnostic. This is a pinned
 bootstrap, not a timestamp exception that future rows can claim. The suite and
 a direct head-versus-`origin/main` invocation cover the real bootstrap before
 the prospective workflow can be activated. The fixture is not active in this

@@ -486,7 +486,51 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         query["lifecycle"] = "retired"
         query["retired_at"] = "2026-07-31T00:00:00Z"
         self.write_registry()
-        with self.assertRaisesRegex(AuditError, "outside the query lifecycle"):
+        with self.assertRaisesRegex(AuditError, "final history observation"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_query_retirement_must_follow_legacy_history(self) -> None:
+        brand_query = {
+            "id": "github-brand-pycc",
+            "surface": "github_repository_search",
+            "raw_query": "pycc",
+            "semantic_identity": "github-repository-search-v1:bag:pycc",
+            "semantic_identity_version": "github-repository-search-v1",
+            "intent_class": "brand",
+            "lifecycle": "diagnostic",
+            "kpi_role": "diagnostic",
+            "rationale": "Synthetic legacy brand query.",
+            "activated_at": "2026-07-24T23:02:03Z",
+            "retired_at": None,
+            "alias_of": None,
+        }
+        base_registry_path = self.base / "docs" / "SEARCH_QUERY_REGISTRY.json"
+        base_registry = json.loads(base_registry_path.read_text())
+        base_registry["queries"].append(brand_query)
+        base_registry_path.write_text(json.dumps(base_registry, indent=2) + "\n")
+        self.registry["queries"].append(
+            {
+                **brand_query,
+                "lifecycle": "retired",
+                "retired_at": "2026-07-24T23:02:03Z",
+            }
+        )
+        self.write_registry()
+        base_row = (
+            "| 2026-07-29T00:00:00Z | `python aot compiler` | 19 | — | 28 | 28 |"
+        )
+        brand_row = "| 2026-07-30T00:00:00Z | `pycc` | >50 | — | 50 | 364 |"
+        head_row = (
+            "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | +12 | 50 | 240 |"
+        )
+        (self.base / "docs" / "SEARCH_VISIBILITY.md").write_text(
+            self.visibility(base_row, brand_row)
+        )
+        (self.head / "docs" / "SEARCH_VISIBILITY.md").write_text(
+            self.visibility(base_row, brand_row, head_row)
+        )
+        self.refresh_checkpoint()
+        with self.assertRaisesRegex(AuditError, "final history observation"):
             validate(self.head, self.base, self.audited_at)
 
     def test_query_retirement_cannot_rewrite_identity(self) -> None:
@@ -506,6 +550,27 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         )
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "cannot contain backticks"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_github_registry_raw_query_rejects_pipes(self) -> None:
+        self.registry["queries"].append(
+            {
+                "id": "github-diagnostic-pipe-query",
+                "surface": "github_repository_search",
+                "raw_query": "foo|bar",
+                "semantic_identity": "github-repository-search-v1:syntax:foo|bar",
+                "semantic_identity_version": "github-repository-search-v1",
+                "intent_class": "brand",
+                "lifecycle": "diagnostic",
+                "kpi_role": "diagnostic",
+                "rationale": "Synthetic unprojectable query.",
+                "activated_at": "2026-07-31T00:00:00Z",
+                "retired_at": None,
+                "alias_of": None,
+            }
+        )
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "cannot contain pipes"):
             validate(self.head, self.base, self.audited_at)
 
     def test_history_raw_query_rejects_embedded_backticks(self) -> None:

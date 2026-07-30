@@ -100,7 +100,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c"
     ),
     "SEARCH_VISIBILITY.md": (
-        "d09c3386b9b9c088cf6a0a69479d5f0bfe470edeca0fbdb47bec5af9c8a72d44"
+        "2ee5268995d86366c8bc42625a437dc4a2e30bb0bdeddda957fbd49f0b9efd41"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -325,6 +325,15 @@ def parse_rank(value: str) -> int | None:
     return int(value)
 
 
+def history_raw_query(value: str) -> str:
+    if len(value) < 2 or value[0] != "`" or value[-1] != "`":
+        raise AuditError("history query must preserve backticked raw text")
+    raw_query = value[1:-1]
+    if "`" in raw_query:
+        raise AuditError("history raw query cannot contain embedded backticks")
+    return raw_query
+
+
 def rank_delta(previous: int | None, current: int | None, has_previous: bool) -> str:
     if current is None or not has_previous:
         return "—"
@@ -522,6 +531,13 @@ def validate_registry(
     queries_by_id: dict[str, dict[str, Any]] = {}
     queries_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     product_identities: set[tuple[str, str]] = set()
+    history_last_observed: dict[str, datetime] = {}
+    for row in rows:
+        raw_query = history_raw_query(row[1])
+        observed = parse_timestamp(row[0], "history observed_at")
+        previous = history_last_observed.get(raw_query)
+        if previous is None or observed > previous:
+            history_last_observed[raw_query] = observed
     for query in queries:
         if not isinstance(query, dict) or set(query) != QUERY_KEYS:
             raise AuditError("registry query has unexpected fields")
@@ -544,6 +560,8 @@ def validate_registry(
         raw_query = query["raw_query"]
         if surface == GITHUB_SURFACE and "`" in raw_query:
             raise AuditError("GitHub registry raw_query cannot contain backticks")
+        if surface == GITHUB_SURFACE and "|" in raw_query:
+            raise AuditError("GitHub registry raw_query cannot contain pipes")
         if surface not in SEMANTIC_IDENTITY_VERSIONS:
             raise AuditError("registry query has an unsupported surface")
         version = SEMANTIC_IDENTITY_VERSIONS[surface]
@@ -569,6 +587,11 @@ def validate_registry(
                 raise AuditError("registry query retires before activation")
             if query_retired > audited_at:
                 raise AuditError("registry query retirement cannot be in the future")
+            last_history = history_last_observed.get(raw_query)
+            if last_history is not None and query_retired <= last_history:
+                raise AuditError(
+                    "registry query retirement must follow its final history observation"
+                )
         elif retired_at is not None:
             raise AuditError("non-retired registry query cannot have retired_at")
         if surface == GITHUB_SURFACE:
@@ -763,12 +786,7 @@ def validate_registry(
         if observed > audited_at:
             raise AuditError("history observed_at cannot be in the future")
         previous = observed
-        raw_query = row[1]
-        if len(raw_query) < 2 or raw_query[0] != "`" or raw_query[-1] != "`":
-            raise AuditError("history query must preserve backticked raw text")
-        raw_query = raw_query[1:-1]
-        if "`" in raw_query:
-            raise AuditError("history raw query cannot contain embedded backticks")
+        raw_query = history_raw_query(row[1])
         current_rank = parse_rank(row[2])
         expected_delta = rank_delta(
             previous_ranks.get(raw_query), current_rank, raw_query in previous_ranks
