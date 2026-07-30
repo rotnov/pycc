@@ -20,15 +20,17 @@ SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
   "6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
-    "67d20a9802ed936e4917d1b28579441232f9e6009ed83098488a12301ce1e32d",
+    "153bc8eb8b2efcc20273dac075e543e2d1ae09b1d6c9f996e78c7e401db16afc",
   "docs/SEARCH_QUERY_REGISTRY.json" =>
     "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77",
   "docs/SEARCH_VISIBILITY.md" =>
-    "353501a358cdafe3822c98624198be1f2234642d58a8c3ae6ee1952acb643110",
+    "a87e3713f43419857501c0a2d5ff3482261e219cd165b8dc79d92a549d29c3ef",
   "docs/SEARCH_VISIBILITY_CHECKPOINTS.json" =>
     "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
 }.freeze
 SEARCH_ROADMAP_PATH = "docs/ROADMAP.md"
+SEARCH_GIT_ATTRIBUTES_KEY = "\0search-activation-gitattributes"
+SEARCH_GIT_ATTRIBUTES_MANIFEST = "".b.freeze
 SEARCH_ROADMAP_CHECKPOINTS = [
   "<!-- search-history-checkpoint: github_repository_search 108 " \
     "e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->",
@@ -308,6 +310,12 @@ def activated_successor_executable(relative, repository_root)
   end
 end
 
+def git_attributes_manifest(tree)
+  tree.b.split("\0").reject(&:empty?).select do |relative|
+    File.basename(relative) == ".gitattributes"
+  end.sort.join("\0").b
+end
+
 def pull_request_head_data(event_path, repository_root)
   event = JSON.parse(Pathname(event_path).read)
   pull_request = event["pull_request"]
@@ -337,7 +345,7 @@ def pull_request_head_data(event_path, repository_root)
     raise PolicyError, "fetched candidate PR head does not match the event SHA: #{stderr.strip}"
   end
 
-  SEARCH_ACTIVATION_PATHS.to_h do |relative|
+  candidate = SEARCH_ACTIVATION_PATHS.to_h do |relative|
     content, error, result = Open3.capture3(
       "git", "cat-file", "blob", "#{head_sha}:#{relative}",
       chdir: repository_root.to_s
@@ -347,6 +355,15 @@ def pull_request_head_data(event_path, repository_root)
     end
     [relative, content.b]
   end
+  tree, error, result = Open3.capture3(
+    "git", "ls-tree", "-rz", "--name-only", head_sha,
+    chdir: repository_root.to_s
+  )
+  unless result.success?
+    raise PolicyError, "could not inspect candidate PR tree: #{error.strip}"
+  end
+  candidate[SEARCH_GIT_ATTRIBUTES_KEY] = git_attributes_manifest(tree)
+  candidate
 rescue Errno::ENOENT, JSON::ParserError => e
   raise PolicyError, "could not read pull_request_target event data: #{e.message}"
 end
@@ -369,6 +386,10 @@ def validate_search_activation_transition(
               else
                 pull_request_head_data(event_path, repository_root)
               end
+  unless candidate[SEARCH_GIT_ATTRIBUTES_KEY] == SEARCH_GIT_ATTRIBUTES_MANIFEST
+    raise PolicyError,
+          "search trust-anchor activation cannot add checkout-affecting .gitattributes"
+  end
   STAGED_SEARCH_ACTIVATION_SHA256.each do |relative, expected_digest|
     content = candidate[relative]
     unless content.is_a?(String) && Digest::SHA256.hexdigest(content) == expected_digest

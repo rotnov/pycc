@@ -114,7 +114,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77"
     ),
     "SEARCH_VISIBILITY.md": (
-        "353501a358cdafe3822c98624198be1f2234642d58a8c3ae6ee1952acb643110"
+        "a87e3713f43419857501c0a2d5ff3482261e219cd165b8dc79d92a549d29c3ef"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -293,7 +293,10 @@ def rendered_heading_words(candidate: str) -> list[str]:
         raise AuditError(
             "search visibility headings cannot contain inline markup markers"
         )
-    if any(unicodedata.category(character) in {"Cf", "Mn", "Me"} for character in rendered):
+    if any(
+        unicodedata.category(character) in {"Cc", "Cf", "Mn", "Me"}
+        for character in rendered
+    ):
         raise AuditError(
             "search visibility headings cannot contain invisible Unicode formatting"
         )
@@ -320,7 +323,7 @@ def section(markdown: str, heading: str) -> str:
     ]
     if len(matches) != 1:
         raise AuditError(f"expected exactly one level-2 {heading!r} section")
-    if rendered_heading_words(matches[0][3]) != rendered_heading_words(heading):
+    if matches[0][3] != heading:
         raise AuditError(f"canonical {heading!r} title must match exactly")
     canonical_line = lines[matches[0][0]]
     if (
@@ -631,6 +634,10 @@ def validate_registry(
             raise AuditError("GitHub registry raw_query cannot contain backticks")
         if surface == GITHUB_SURFACE and "|" in raw_query:
             raise AuditError("GitHub registry raw_query cannot contain pipes")
+        if surface == GITHUB_SURFACE and "  " in raw_query:
+            raise AuditError(
+                "GitHub registry raw_query cannot contain repeated ASCII spaces"
+            )
         if surface == GITHUB_SURFACE and len(raw_query.splitlines()) != 1:
             raise AuditError(
                 "GitHub registry raw_query cannot contain line separators"

@@ -21,9 +21,11 @@ AUDIT_SPEC.loader.exec_module(AUDIT_MODULE)
 ACTIVATED_AT = AUDIT_MODULE.ACTIVATED_AT
 AuditError = AUDIT_MODULE.AuditError
 GITHUB_SURFACE_CONTRACT = AUDIT_MODULE.GITHUB_SURFACE_CONTRACT
+GITHUB_SURFACE = AUDIT_MODULE.GITHUB_SURFACE
 GOOGLE_SURFACE_CONTRACT = AUDIT_MODULE.GOOGLE_SURFACE_CONTRACT
 history_digest = AUDIT_MODULE.history_digest
 history_rows = AUDIT_MODULE.history_rows
+semantic_identity = AUDIT_MODULE.semantic_identity
 validate = AUDIT_MODULE.validate
 
 
@@ -309,15 +311,19 @@ class SearchVisibilityAuditTests(unittest.TestCase):
     def test_canonical_history_heading_must_match_exactly(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         canonical = "## GitHub repository search history"
-        path.write_text(
-            self.head_visibility.replace(
-                canonical,
-                "## Archived GitHub repository search history evidence",
-                1,
-            )
-        )
-        with self.assertRaisesRegex(AuditError, "title must match exactly"):
-            validate(self.head, self.base, self.audited_at)
+        for replacement in (
+            "## Archived GitHub repository search history evidence",
+            "## GitHub repository search history!",
+            "## GitHub repository search history&#33;",
+            "## GitHub repository search \\history",
+            "## GitHub  repository search history",
+        ):
+            with self.subTest(replacement=replacement):
+                path.write_text(
+                    self.head_visibility.replace(canonical, replacement, 1)
+                )
+                with self.assertRaisesRegex(AuditError, "title must match exactly"):
+                    validate(self.head, self.base, self.audited_at)
 
     def test_history_headings_reject_inline_links_and_html(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
@@ -351,6 +357,8 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             "## GitHub repository search hist&#x200B;ory",
             "## GitHub repository search hist\u200bory",
             "## GitHub repository search hist&#x34f;ory",
+            "## GitHub repository search hist\x01ory",
+            "## GitHub repository search hist\x7fory",
         ):
             with self.subTest(duplicate_heading=duplicate_heading):
                 path.write_text(f"{duplicate_heading}\n\n{self.head_visibility}")
@@ -723,6 +731,15 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             validate(self.head, self.base, self.audited_at)
 
     def test_syntax_identity_normalizes_case_and_repeated_whitespace(self) -> None:
+        version = "github-repository-search-v1"
+        self.assertEqual(
+            semantic_identity(
+                GITHUB_SURFACE,
+                "Ahead-of-time  compiler python",
+                version,
+            ),
+            f"{version}:syntax:ahead-of-time compiler python",
+        )
         common = {
             **self.registry["queries"][0],
             "semantic_identity": (
@@ -741,7 +758,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 {
                     **common,
                     "id": "github-product-ahead-of-time-python-duplicate",
-                    "raw_query": "Ahead-of-time  compiler python",
+                    "raw_query": "Ahead-of-time compiler python",
                 },
             ]
         )
@@ -768,6 +785,24 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         )
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "cannot contain pipes"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_github_registry_raw_query_rejects_repeated_ascii_spaces(self) -> None:
+        self.registry["queries"].append(
+            {
+                **self.registry["queries"][0],
+                "id": "github-diagnostic-repeated-space-query",
+                "raw_query": "python  compiler",
+                "semantic_identity": "github-repository-search-v1:bag:compiler python",
+                "intent_class": "brand",
+                "lifecycle": "diagnostic",
+                "kpi_role": "diagnostic",
+                "rationale": "Synthetic unprojectable whitespace query.",
+                "activated_at": "2026-07-31T00:00:00Z",
+            }
+        )
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "repeated ASCII spaces"):
             validate(self.head, self.base, self.audited_at)
 
     def test_github_registry_raw_query_rejects_line_separators(self) -> None:

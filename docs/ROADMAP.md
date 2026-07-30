@@ -29,14 +29,17 @@ The initial machine-readable query registry and both reviewed pre-registry
 GitHub history prefixes are staged before the trusted workflow activates. The
 registry normalizes case and repeated whitespace before deduplicating syntax-
 sensitive GitHub acquisition identities, and rejects HTML-like or control-
-bearing raw query forms that the fail-closed ledger cannot later project. Its closed intent/KPI matrix
+bearing raw query forms plus repeated code-span whitespace that the fail-closed
+ledger cannot later project. Its closed intent/KPI matrix
 prevents diagnostic classes from entering the acquisition denominator. The
 prospective base-owned audit pins and validates this exact bootstrap; a later
 activation PR may enable the reviewed workflow but must preserve both markers,
 the bound registry/ledger/checkpoint files, every unchanged successor script,
 every repository-resident self-test input, and the pinned activation-specific
 steady-state policy checker and self-test. Those two variants retire the older
-workflow digest and the one-use activation bridge. The still-active base checker
+workflow digest and the one-use activation bridge. The transition also rejects
+every root or nested `.gitattributes` path so candidate checkout rules cannot
+change the materialized successor behind byte-identical Git blobs. The still-active base checker
 enforces that transition against the verified pull-request head before the
 successor trust anchor can merge.
 

@@ -21,9 +21,10 @@ class WorkflowPermissionsTest < Minitest::Test
 
   def activation_candidate
     root = Pathname(__dir__).parent
-    SEARCH_ACTIVATION_PATHS.to_h do |relative|
+    candidate = SEARCH_ACTIVATION_PATHS.to_h do |relative|
       [relative, activated_successor_executable(relative, root)]
     end
+    candidate.merge(SEARCH_GIT_ATTRIBUTES_KEY => SEARCH_GIT_ATTRIBUTES_MANIFEST)
   end
 
   def workflow(test_job = "runs-on: ubuntu-latest", trigger: "pull_request", extra_jobs: nil)
@@ -514,6 +515,40 @@ class WorkflowPermissionsTest < Minitest::Test
         end
       end
     end
+  end
+
+  def test_activation_trust_anchor_rejects_added_gitattributes_anywhere
+    candidate = activation_candidate.merge(
+      SEARCH_GIT_ATTRIBUTES_KEY => ".github/.gitattributes\0docs/.gitattributes".b
+    )
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      error = assert_raises(PolicyError) do
+        validate_search_activation_transition(
+          [anchor],
+          event_name: "pull_request_target",
+          data_loader: ->(_paths) { candidate }
+        )
+      end
+      assert_match(/cannot add checkout-affecting \.gitattributes/, error.message)
+    end
+  end
+
+  def test_git_attributes_manifest_is_nul_safe_and_complete
+    tree = [
+      "README.md",
+      "docs/.gitattributes",
+      "directory\nwith-newline/.gitattributes",
+      ".github/.gitattributes",
+      ".gitattributes.txt"
+    ].join("\0") + "\0"
+    expected = [
+      ".github/.gitattributes",
+      "directory\nwith-newline/.gitattributes",
+      "docs/.gitattributes"
+    ].join("\0").b
+    assert_equal expected, git_attributes_manifest(tree)
   end
 
   def test_activation_trust_anchor_rejects_changed_roadmap_projection

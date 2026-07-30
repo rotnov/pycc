@@ -459,7 +459,11 @@ the audit and place the unchanged table in a collapsed container. Literal rank
 values such as `>50` remain valid because they are not tags. Heading
 identity is compared after HTML character-reference decoding. Inline markup
 marker characters are forbidden even intraword or entity-encoded, rather than
-being stripped into a canonical title the renderer does not produce. Invisible Unicode format
+being stripped into a canonical title the renderer does not produce. After
+ATX closing-marker or Setext paragraph parsing, the canonical owner title must
+equal the prescribed plain source text exactly; punctuation, entities,
+backslashes, and repeated spaces cannot disappear through word tokenization.
+Invisible Unicode format
 and mark characters are rejected after entity decoding, and Setext level-2
 paragraph recovery stops when the explicit quote/list container signature
 changes; text from a top-level paragraph cannot be joined to a blockquoted
@@ -487,7 +491,7 @@ schema validation covers the registry version, semantic
 identity versions, both surface contracts, query lifecycle/KPI/alias rules,
 one-way identity-preserving query retirement, unambiguous backtick projection,
 provider-scoped legacy-history lifecycle bounds, rejection of unprojectable raw
-HTML, controls, pipes, and line separators, and the retired `AI-native compiler` authorship
+HTML, controls, repeated spaces, pipes, and line separators, and the retired `AI-native compiler` authorship
 diagnostic. Google retirement remains activation/clock-bounded until the
 registry gains a Google snapshot series. This is a pinned
 bootstrap, not a timestamp exception that future rows can claim. The suite and
@@ -521,7 +525,10 @@ activation commit from replacing any successor checker with a no-op that would
 become trusted after merge. Both successor Python invocations use isolated
 mode; the self-test loads its byte-pinned sibling auditor by exact path, so new
 modules or package initializers in the activation tree cannot shadow
-standard-library or trusted imports. Git blob output is normalized to binary
+standard-library or trusted imports. The bridge also enumerates the complete
+candidate Git tree and requires an empty `.gitattributes` manifest, so root or
+nested checkout attributes cannot preserve Git blob bytes while changing the
+successor's materialized workflow, scripts, or fixtures. Git blob output is normalized to binary
 strings before comparison so identical UTF-8 files cannot fail solely because
 Ruby assigned different in-memory encodings. The candidate roadmap may
 still update unrelated current-status text, but the bridge extracts every
