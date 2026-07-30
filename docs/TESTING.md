@@ -435,7 +435,10 @@ or H2, in ATX or Setext form, ends the history section; a table below a new
 top-level heading cannot remain bound to the canonical H2. The one canonical
 H2 itself must start at column zero and be top-level: blockquoted,
 list-contained, and indented list-continuation versions remain visible for
-duplicate detection but cannot own the outside table. Raw HTML comment
+duplicate detection but cannot own the outside table. The sole owner must equal
+the canonical normalized word sequence; broader
+containment matching is used only to reject prefixed/suffixed lookalike H2s.
+Raw HTML comment
 delimiters are forbidden anywhere in the ledger because a multiline inline
 comment can otherwise hide the canonical table without changing its source
 rows or checkpoint. Raw HTML tags are likewise rejected wherever they occur,

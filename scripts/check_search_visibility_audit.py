@@ -276,16 +276,21 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
     return headings
 
 
-def rendered_heading_matches(candidate: str, expected: str) -> bool:
-    """Match the canonical title after entity and inline-markup normalization."""
+def rendered_heading_words(candidate: str) -> list[str]:
+    """Return visible heading words after entity and markup normalization."""
     rendered = html.unescape(candidate)
     if any(unicodedata.category(character) in {"Cf", "Mn", "Me"} for character in rendered):
         raise AuditError(
             "search visibility headings cannot contain invisible Unicode formatting"
         )
     rendered = rendered.translate(str.maketrans("", "", "*_~`"))
-    candidate_words = re.findall(r"[A-Za-z0-9]+", rendered.casefold())
-    expected_words = re.findall(r"[A-Za-z0-9]+", expected.casefold())
+    return re.findall(r"[A-Za-z0-9]+", rendered.casefold())
+
+
+def rendered_heading_matches(candidate: str, expected: str) -> bool:
+    """Find the canonical words anywhere to reject rendered lookalikes."""
+    candidate_words = rendered_heading_words(candidate)
+    expected_words = rendered_heading_words(expected)
     return any(
         candidate_words[index : index + len(expected_words)] == expected_words
         for index in range(len(candidate_words) - len(expected_words) + 1)
@@ -302,6 +307,8 @@ def section(markdown: str, heading: str) -> str:
     ]
     if len(matches) != 1:
         raise AuditError(f"expected exactly one level-2 {heading!r} section")
+    if rendered_heading_words(matches[0][3]) != rendered_heading_words(heading):
+        raise AuditError(f"canonical {heading!r} title must match exactly")
     canonical_line = lines[matches[0][0]]
     if (
         canonical_line != canonical_line.lstrip(" \t")
