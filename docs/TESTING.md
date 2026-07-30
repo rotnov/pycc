@@ -417,7 +417,13 @@ Markdown table header and delimiter. A table-like line without the canonical
 unindented leading pipe fails instead of becoming visible, unaudited evidence.
 GitHub query text also rejects case-insensitive `repo:` and `user:` qualifiers
 while retaining explicitly registered field and topic diagnostics. Its mutation
-suite covers each failure class before the prospective workflow can be
+suite treats only rows already present in the trusted base prefix as legacy;
+every append requires replay metadata regardless of its claimed timestamp.
+Once prose or a blank line ends the history table, a later pipe row cannot
+resume it. This staging commit therefore also imports the 22 reviewed
+2026-07-29/30 GitHub rows that predate the registry, making them part of the
+actual trusted base rather than granting a timestamp-based bootstrap exception.
+The suite covers each failure class before the prospective workflow can be
 activated. The fixture is not active in this staging commit. Activation must
 copy it
 byte-for-byte to `workflow-policy.yml` in a later pull request, prove the new

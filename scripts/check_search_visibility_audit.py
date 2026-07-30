@@ -98,13 +98,20 @@ def history_rows(markdown: str) -> list[list[str]]:
     rows: list[list[str]] = []
     saw_header = False
     saw_delimiter = False
+    table_ended = False
     for line in section(markdown, "GitHub repository search history").splitlines():
         if not line.startswith("|"):
             if line.lstrip().startswith("|") or line.count("|") >= 5:
                 raise AuditError(
                     "GitHub history table lines must use an unindented leading pipe"
                 )
+            if saw_header and not saw_delimiter:
+                raise AuditError("GitHub history header must be followed by its delimiter")
+            if saw_delimiter:
+                table_ended = True
             continue
+        if table_ended:
+            raise AuditError("GitHub history table cannot resume after an interruption")
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
         if cells == [
             "Observed at (UTC)",
@@ -214,6 +221,7 @@ def validate_registry(
     head_root: Path,
     base_root: Path,
     rows: list[list[str]],
+    trusted_prefix_rows: int,
     activated_at: datetime,
     audited_at: datetime,
 ) -> None:
@@ -324,7 +332,8 @@ def validate_registry(
     history_keys: set[tuple[str, str]] = set()
     previous: datetime | None = None
     previous_ranks: dict[str, int | None] = {}
-    for row in rows:
+    replay_keys: set[tuple[str, str]] = set()
+    for row_index, row in enumerate(rows):
         observed = parse_timestamp(row[0], "history observed_at")
         if previous is not None and observed < previous:
             raise AuditError("history timestamps must be nondecreasing")
@@ -346,8 +355,10 @@ def validate_registry(
         if key in history_keys:
             raise AuditError("history observation keys must be unique")
         history_keys.add(key)
-        if observed < activated_at:
+        requires_replay = row_index >= trusted_prefix_rows or observed >= activated_at
+        if not requires_replay:
             continue
+        replay_keys.add(key)
         measurement = projected.get(key)
         if measurement is None:
             raise AuditError("registry-era history row lacks trusted replay metadata")
@@ -362,12 +373,7 @@ def validate_registry(
             or row[5] != str(measurement["api_total"])
         ):
             raise AuditError("history row disagrees with replay metadata")
-    registry_era_keys = {
-        key
-        for key in history_keys
-        if parse_timestamp(key[0], "history observed_at") >= activated_at
-    }
-    if set(projected) != registry_era_keys:
+    if set(projected) != replay_keys:
         raise AuditError("registry-era measurement projection is incomplete")
 
 
@@ -390,7 +396,14 @@ def validate(
     activated_at = parse_timestamp(ACTIVATED_AT, "registry activated_at")
     if audited_at is None:
         audited_at = datetime.now(timezone.utc)
-    validate_registry(head_root, base_root, head_rows, activated_at, audited_at)
+    validate_registry(
+        head_root,
+        base_root,
+        head_rows,
+        len(base_rows),
+        activated_at,
+        audited_at,
+    )
 
 
 def main() -> None:

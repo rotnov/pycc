@@ -148,6 +148,13 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "must follow the table delimiter"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_history_table_cannot_resume_after_an_interruption(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        delimiter = "|---|---|---:|---:|---:|---:|"
+        path.write_text(path.read_text().replace(delimiter, f"{delimiter}\ninterruption"))
+        with self.assertRaisesRegex(AuditError, "cannot resume"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_history_rejects_a_visible_row_without_a_leading_pipe(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         visible_but_unbound = (
@@ -197,6 +204,27 @@ class SearchVisibilityAuditTests(unittest.TestCase):
     def test_registry_era_row_requires_replay_metadata(self) -> None:
         self.registry["measurements"] = []
         self.write_registry()
+        with self.assertRaisesRegex(AuditError, "lacks trusted replay metadata"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_new_row_cannot_claim_legacy_status_from_its_timestamp(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        current_row = (
+            "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | +12 | 50 | 240 |\n"
+        )
+        legacy_claim = (
+            "| 2026-07-30T14:14:23Z | `python aot compiler` | 19 | 0 | 50 | 240 |"
+        )
+        markdown = path.read_text().replace(current_row, "")
+        path.write_text(
+            markdown.replace(
+                "\n\n## GitHub traffic history",
+                f"\n{legacy_claim}\n\n## GitHub traffic history",
+            )
+        )
+        self.registry["measurements"] = []
+        self.write_registry()
+        self.refresh_checkpoint()
         with self.assertRaisesRegex(AuditError, "lacks trusted replay metadata"):
             validate(self.head, self.base, self.audited_at)
 

@@ -140,6 +140,34 @@ was not recorded. Later snapshots record both returned rows and `Total`.
 | 2026-07-25T20:21:57Z | `AI-native compiler` | 48 | 0 | 50 | 95 |
 | 2026-07-25T20:21:57Z | `topic:aot-compiler` | 14 | +1 | 18 | 18 |
 | 2026-07-25T20:21:57Z | `topic:python-compiler` | 43 | 0 | 44 | 44 |
+| 2026-07-29T15:46:34Z | `typed python aot compiler` | 2 | — | 3 | 3 |
+| 2026-07-29T15:46:34Z | `python 3.14 compiler` | 12 | — | 17 | 17 |
+| 2026-07-29T15:46:34Z | `ahead-of-time compiler python` | 8 | 0 | 11 | 11 |
+| 2026-07-29T15:46:34Z | `python aot compiler` | 19 | 0 | 28 | 28 |
+| 2026-07-29T15:46:34Z | `compile python to native binary` | >50 | — | 24 | 24 |
+| 2026-07-29T15:46:34Z | `compile python native binary` | 22 | 0 | 40 | 40 |
+| 2026-07-29T15:46:34Z | `typed Python compiler` | >50 | — | 50 | 325 |
+| 2026-07-29T15:46:34Z | `pycc` | >50 | — | 50 | 364 |
+| 2026-07-29T15:46:34Z | `python llvm compiler` | >50 | — | 50 | 219 |
+| 2026-07-29T15:46:34Z | `topic:aot-compiler` | 9 | +5 | 17 | 17 |
+| 2026-07-29T15:46:34Z | `topic:python-compiler` | 31 | +12 | 44 | 44 |
+| 2026-07-30T00:52:41Z | `typed python aot compiler` | 2 | 0 | 3 | 3 |
+| 2026-07-30T00:52:41Z | `python 3.14 compiler` | 12 | 0 | 17 | 17 |
+| 2026-07-30T00:52:41Z | `ahead-of-time compiler python` | 8 | 0 | 11 | 11 |
+| 2026-07-30T00:52:41Z | `python aot compiler` | 19 | 0 | 28 | 28 |
+| 2026-07-30T00:52:41Z | `compile python to native binary` | >50 | — | 24 | 24 |
+| 2026-07-30T00:52:41Z | `compile python native binary` | 22 | 0 | 40 | 40 |
+| 2026-07-30T00:52:41Z | `typed Python compiler` | >50 | — | 50 | 326 |
+| 2026-07-30T00:52:41Z | `pycc` | >50 | — | 50 | 364 |
+| 2026-07-30T00:52:41Z | `python llvm compiler` | >50 | — | 50 | 218 |
+| 2026-07-30T00:52:41Z | `topic:aot-compiler` | 8 | +1 | 17 | 17 |
+| 2026-07-30T00:52:41Z | `topic:python-compiler` | 31 | 0 | 44 | 44 |
+
+The two 2026-07-29/30 snapshots used the public REST endpoint, default
+best-match order, `per_page=50`, no `user:` or `repo:` qualifier, and returned
+`incomplete_results=false` for every request. Their ordered-corpus fingerprints
+were not retained before the registry contract existed and are therefore
+recorded as unavailable rather than reconstructed.
 
 ## GitHub traffic history
 
@@ -192,16 +220,15 @@ later movement can be correlated without presenting correlation as causation.
 
 ## Current interpretation
 
-At 20:21 UTC, `topic:aot-compiler` improved one position to rank 14. The other
-eight measured positions were unchanged: the repository remains rank 12 for
-the Python 3.14 description query, rank 8 for
-`ahead-of-time compiler python`, rank 19 for `python aot compiler`, rank 48 for
-`AI-native compiler`, and rank 43 for `topic:python-compiler`. The API-wide
-`AI-native compiler` result set grew from 94 to 95 while pycc's rank stayed
-fixed, which is a corpus-size change rather than a project ranking change. The
-project remains outside the top 50 for the ambiguous exact name and broad
-typed-Python query. This small topic movement alone does not justify a content
-or metadata change.
+At the latest comparable GitHub observation, the repository is rank 2 of 3 for
+`typed python aot compiler`, rank 12 of 17 for `python 3.14 compiler`, rank 8
+of 11 for `ahead-of-time compiler python`, rank 19 of 28 for
+`python aot compiler`, and rank 22 of 40 for `compile python native binary`.
+It is absent from the complete 24-result `compile python to native binary`
+corpus and remains outside the first 50 for the broad `typed Python compiler`
+query. The `pycc` brand and `python llvm compiler` diagnostics are outside the
+first 50; the topic diagnostics are ranks 8 and 31. `AI-native compiler` was
+not polled in this series because authorship is not compiler-product intent.
 All five canonical URLs now have positive URL Inspection evidence: the four
 pre-existing URLs were on Google at 10:29 UTC, and the live
 `/python-aot-compilers/` page was on Google at 16:43 UTC with a successful
