@@ -14,10 +14,10 @@ WORKFLOW_DIRECTORY = Pathname(".github/workflows")
 TRUST_ANCHOR_FILENAME = "workflow-policy.yml"
 TRUST_ANCHOR_SHA256_ALLOWLIST = %w[
   4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6
-  6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31
+  324025aaec3a3dce7bb4779901ef3d2444524c587bbcbcbb918522f95aa536d7
 ].freeze
 SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
-  "6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31"
+  "324025aaec3a3dce7bb4779901ef3d2444524c587bbcbcbb918522f95aa536d7"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
     "16b8ce2e88cad9fbb2565dacfd0e7b69dc40e8aca7d43d31a78961905bd55a3a",

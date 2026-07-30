@@ -47,9 +47,10 @@ every root or nested `.gitattributes` path and pins all activation paths,
 including the newly active trust-anchor workflow itself, to their reviewed
 regular-file Git modes, so symlinks, submodules, executable-bit changes,
 or candidate checkout rules cannot change the materialized successor behind
-byte-identical Git blobs. The still-active base checker
-enforces that transition against the verified pull-request head before the
-successor trust anchor can merge.
+byte-identical Git blobs. The successor repeats the `100644 blob` requirement
+for every workflow and evidence file it downloads on all later PRs. The
+still-active base checker enforces that transition against the verified
+pull-request head before the successor trust anchor can merge.
 
 <!-- search-history-checkpoint: github_repository_search 108 e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->
 <!-- search-history-checkpoint: github_repository_search 130 3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->

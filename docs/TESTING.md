@@ -402,10 +402,13 @@ activation change.
 
 The prospective search-ledger audit is staged under
 `tests/fixtures/workflow-policy-search-ledger.yml` with SHA-256
-`6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31`.
+`324025aaec3a3dce7bb4779901ef3d2444524c587bbcbcbb918522f95aa536d7`.
 It keeps the existing read-only `pull_request_target` boundary, additionally
 downloads the head search ledger, query registry, checkpoint file, and roadmap
-as non-executable data, and runs the base-owned
+as non-executable data. Before materialization it requires every workflow and
+required evidence path returned by the Git tree API to be an exact
+`100644 blob`; symlinks, executable files, trees, and submodules cannot reuse
+approved bytes while breaking the next trusted checkout. It then runs the base-owned
 `check_search_visibility_audit.py` against the checked-out base ledger. The
 audit rejects a rewritten history prefix, invalid checkpoints, mutable surface
 or activation contracts, incorrect rank deltas, and replay metadata whose

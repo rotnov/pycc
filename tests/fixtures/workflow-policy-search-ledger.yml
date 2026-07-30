@@ -54,13 +54,18 @@ jobs:
               }
             }
             const workflows = tree.tree.filter((entry) =>
-              entry.type === "blob" && isWorkflow(entry.path)
+              isWorkflow(entry.path)
             );
             if (workflows.length === 0) {
               throw new Error("Head revision contains no workflow files");
             }
 
             const writeBlob = async (entry, destination) => {
+              if (entry.type !== "blob" || entry.mode !== "100644") {
+                throw new Error(
+                  `Policy input is not a regular non-executable file: ${entry.path}`
+                );
+              }
               if (entry.size > 1024 * 1024) {
                 throw new Error(`Policy input is unexpectedly large: ${entry.path}`);
               }
@@ -93,7 +98,7 @@ jobs:
               "docs/SEARCH_VISIBILITY_CHECKPOINTS.json",
             ]) {
               const entry = tree.tree.find((candidate) =>
-                candidate.type === "blob" && candidate.path === requiredPath
+                candidate.path === requiredPath
               );
               if (!entry) {
                 throw new Error(`Head revision is missing ${requiredPath}`);

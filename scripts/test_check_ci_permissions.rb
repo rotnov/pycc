@@ -17,7 +17,7 @@ class WorkflowPermissionsTest < Minitest::Test
   RETIRED_TRUST_ANCHOR_SHA256 =
     "3a8b56776e7d44f32759301f0691220800ee6f3184b2702d13c01a28f82ce277"
   PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
-    "6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31"
+    "324025aaec3a3dce7bb4779901ef3d2444524c587bbcbcbb918522f95aa536d7"
 
   def activation_candidate
     root = Pathname(__dir__).parent
@@ -363,6 +363,13 @@ class WorkflowPermissionsTest < Minitest::Test
       docs/SEARCH_VISIBILITY.md
       docs/SEARCH_VISIBILITY_CHECKPOINTS.json
     ].each { |path| assert_includes script, path.inspect }
+    assert_includes script,
+                    'entry.type !== "blob" || entry.mode !== "100644"'
+    assert_includes script,
+                    "Policy input is not a regular non-executable file"
+    refute_includes script, 'entry.type === "blob" && isWorkflow(entry.path)'
+    refute_includes script,
+                    'candidate.type === "blob" && candidate.path === requiredPath'
 
     commands = steps
                .map { |step| step["run"] }
