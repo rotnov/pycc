@@ -486,6 +486,36 @@ class WorkflowPermissionsTest < Minitest::Test
     end
   end
 
+  def test_activation_trust_anchor_rejects_changed_or_missing_successor_inputs
+    original = activation_candidate
+    SEARCH_SUCCESSOR_INPUTS.each do |relative|
+      candidates = {
+        "changed" => original.transform_values(&:dup).tap do |candidate|
+          candidate[relative] << "\nmutated\n"
+        end,
+        "missing" => original.transform_values(&:dup).tap do |candidate|
+          candidate.delete(relative)
+        end
+      }
+      candidates.each do |mutation, candidate|
+        Dir.mktmpdir do |directory|
+          anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+          anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+          error = assert_raises(PolicyError) do
+            validate_search_activation_transition(
+              [anchor],
+              event_name: "pull_request_target",
+              data_loader: ->(_paths) { candidate }
+            )
+          end
+          message =
+            /preserve trusted successor input #{Regexp.escape(relative)}/
+          assert_match message, error.message, mutation
+        end
+      end
+    end
+  end
+
   def test_activation_trust_anchor_rejects_changed_roadmap_projection
     candidate = activation_candidate
     roadmap = (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread

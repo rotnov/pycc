@@ -180,11 +180,25 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             "SEARCH_VISIBILITY.md",
             "SEARCH_QUERY_REGISTRY.json",
             "SEARCH_VISIBILITY_CHECKPOINTS.json",
-            "ROADMAP.md",
         ):
             self.head.joinpath("docs", name).write_text(
                 repository_root.joinpath("docs", name).read_text()
             )
+        checkpoint_document = json.loads(
+            self.head.joinpath(
+                "docs", "SEARCH_VISIBILITY_CHECKPOINTS.json"
+            ).read_text()
+        )
+        markers = [
+            "<!-- search-history-checkpoint: github_repository_search "
+            f"{checkpoint['required_prefix_rows']} {checkpoint['sha256']} -->"
+            for checkpoint in checkpoint_document["surfaces"][
+                "github_repository_search"
+            ]
+        ]
+        self.head.joinpath("docs", "ROADMAP.md").write_text(
+            "# Roadmap\n\n" + "\n".join(markers) + "\n"
+        )
         return rows
 
     def test_valid_append_passes(self) -> None:

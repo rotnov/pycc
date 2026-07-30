@@ -43,11 +43,27 @@ SEARCH_SUCCESSOR_EXECUTABLES = %w[
   scripts/test_check_roadmap_evidence.rb
   scripts/test_check_search_visibility_audit.py
 ].freeze
+SEARCH_SUCCESSOR_INPUTS = %w[
+  .github/workflows/ci.yml
+  scripts/check_replicated_paired_perf_regression.rb
+  scripts/check_source_aware_perf_regression.rb
+  scripts/test_check_replicated_paired_perf_regression.rb
+  scripts/test_check_source_aware_perf_regression.rb
+  tests/fixtures/d100-compose-d91-d99-ci.yml
+  tests/fixtures/d51-paired-ci.yml
+  tests/fixtures/d56-source-aware-ci.yml
+  tests/fixtures/d62-replicated-paired-ci.yml
+  tests/fixtures/d80-conformance-oracle-ci.yml
+  tests/fixtures/d84-throughput-floor-ci.yml
+  tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml
+  tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml
+  tests/fixtures/workflow-policy-search-ledger.yml
+].freeze
 ACTIVATED_POLICY_CHECKER_PATH = "scripts/check_ci_permissions.rb"
 ACTIVATED_POLICY_TEST_PATH = "scripts/test_check_ci_permissions.rb"
 SEARCH_ACTIVATION_PATHS =
   (STAGED_SEARCH_ACTIVATION_SHA256.keys + SEARCH_SUCCESSOR_EXECUTABLES +
-    [SEARCH_ROADMAP_PATH]).uniq.freeze
+    SEARCH_SUCCESSOR_INPUTS + [SEARCH_ROADMAP_PATH]).uniq.freeze
 TRUSTED_EVENT_AND_REF_GUARD = /\A(?:\$\{\{\s*)?github\.event_name\s*==\s*(['"])push\1\s*&&\s*github\.ref\s*==\s*(['"])refs\/heads\/main\2\s*(?:\}\})?\z/
 
 def mapping_entries(node, context)
@@ -386,6 +402,15 @@ def validate_search_activation_transition(
   unless checkpoints == SEARCH_ROADMAP_CHECKPOINTS
     raise PolicyError,
           "search trust-anchor activation must preserve the staged roadmap checkpoint projection"
+  end
+  SEARCH_SUCCESSOR_INPUTS.each do |relative|
+    content = candidate[relative]
+    base_path = repository_root / relative
+    unless content.is_a?(String) && base_path.file? && content.b == base_path.binread
+      raise PolicyError,
+            "search trust-anchor activation must preserve trusted successor " \
+            "input #{relative} byte-for-byte"
+    end
   end
 end
 

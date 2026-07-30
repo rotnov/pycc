@@ -30,10 +30,11 @@ GitHub history prefixes are staged before the trusted workflow activates. The
 prospective base-owned audit pins and validates this exact bootstrap; a later
 activation PR may enable the reviewed workflow but must preserve both markers,
 the bound registry/ledger/checkpoint files, every unchanged successor script,
-and the pinned activation-specific steady-state policy checker and self-test.
-Those two variants retire the older workflow digest and the one-use activation
-bridge. The still-active base checker enforces that transition against the
-verified pull-request head before the successor trust anchor can merge.
+every repository-resident self-test input, and the pinned activation-specific
+steady-state policy checker and self-test. Those two variants retire the older
+workflow digest and the one-use activation bridge. The still-active base checker
+enforces that transition against the verified pull-request head before the
+successor trust anchor can merge.
 
 <!-- search-history-checkpoint: github_repository_search 108 e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->
 <!-- search-history-checkpoint: github_repository_search 130 3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->

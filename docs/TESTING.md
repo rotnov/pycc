@@ -497,7 +497,14 @@ self-test suites -- is pinned byte-for-byte. Four remain identical to the
 trusted base. The policy checker and its self-test instead use deterministic,
 exactly-once transforms: they activate only the new digest, retire the old
 digest and one-use bridge, select the active fixture, and remove transition-only
-tests. The staged suite materializes that transformed pair in an isolated tree
+tests. Every repository-resident input those successor self-tests read is also
+byte-pinned: the active CI workflow, all eight historical performance workflow
+fixtures, the prospective search-policy fixture, and the four performance
+checker/test files whose digests the roadmap suite verifies. Changed and missing
+mutations cover each input independently. The search-audit self-test synthesizes
+its temporary roadmap projection from the already pinned checkpoint document,
+so unrelated activation-status prose may still be updated without becoming an
+implicit executable input. The staged suite materializes that transformed pair in an isolated tree
 and runs its remaining self-tests, so the activation cannot leave a permanent
 bridge or trust both workflow generations. These constraints prevent the
 activation commit from replacing any successor checker with a no-op that would
