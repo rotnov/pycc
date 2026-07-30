@@ -99,6 +99,9 @@ BOOTSTRAP_FILE_SHA256 = {
     "SEARCH_QUERY_REGISTRY.json": (
         "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c"
     ),
+    "SEARCH_VISIBILITY.md": (
+        "ce03b8296624230d3856cfcadabef43bfc0c97937830f20166671462b79793a6"
+    ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
     ),
@@ -383,9 +386,18 @@ def history_digest(rows: list[list[str]]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise AuditError(f"JSON object contains duplicate key {key!r}")
+        value[key] = item
+    return value
+
+
 def load_object(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(), object_pairs_hook=unique_json_object)
     except (OSError, json.JSONDecodeError) as error:
         raise AuditError(f"could not read valid JSON from {path}: {error}") from error
     if not isinstance(value, dict):
@@ -530,6 +542,8 @@ def validate_registry(
         query_activated = parse_timestamp(
             query["activated_at"], f"query {query_id} activated_at"
         )
+        if query_activated > audited_at:
+            raise AuditError("registry query activation cannot be in the future")
         retired_at = query["retired_at"]
         if query["lifecycle"] == "retired":
             query_retired = parse_timestamp(
@@ -537,6 +551,8 @@ def validate_registry(
             )
             if query_retired < query_activated:
                 raise AuditError("registry query retires before activation")
+            if query_retired > audited_at:
+                raise AuditError("registry query retirement cannot be in the future")
         elif retired_at is not None:
             raise AuditError("non-retired registry query cannot have retired_at")
         if surface == GITHUB_SURFACE:

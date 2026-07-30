@@ -4,6 +4,8 @@
 require "pathname"
 require "psych"
 require "digest"
+require "json"
+require "open3"
 
 class PolicyError < StandardError; end
 
@@ -14,6 +16,16 @@ TRUST_ANCHOR_SHA256_ALLOWLIST = %w[
   4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6
   8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43
 ].freeze
+SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
+  "8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43"
+STAGED_SEARCH_DATA_SHA256 = {
+  "docs/SEARCH_QUERY_REGISTRY.json" =>
+    "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c",
+  "docs/SEARCH_VISIBILITY.md" =>
+    "ce03b8296624230d3856cfcadabef43bfc0c97937830f20166671462b79793a6",
+  "docs/SEARCH_VISIBILITY_CHECKPOINTS.json" =>
+    "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
+}.freeze
 TRUSTED_EVENT_AND_REF_GUARD = /\A(?:\$\{\{\s*)?github\.event_name\s*==\s*(['"])push\1\s*&&\s*github\.ref\s*==\s*(['"])refs\/heads\/main\2\s*(?:\}\})?\z/
 
 def mapping_entries(node, context)
@@ -194,9 +206,85 @@ def validate_policy_set(paths)
         "#{TRUST_ANCHOR_FILENAME} does not match an approved trust-anchor digest"
 end
 
+def pull_request_head_data(event_path, repository_root)
+  event = JSON.parse(Pathname(event_path).read)
+  pull_request = event["pull_request"]
+  unless pull_request.is_a?(Hash)
+    raise PolicyError, "pull_request_target event is missing pull_request data"
+  end
+  number = pull_request["number"] || event["number"]
+  head = pull_request["head"]
+  head_sha = head["sha"] if head.is_a?(Hash)
+  unless number.is_a?(Integer) && number.positive? &&
+         head_sha.is_a?(String) && head_sha.match?(/\A[0-9a-f]{40}\z/)
+    raise PolicyError, "pull_request_target event has an invalid PR number or head SHA"
+  end
+
+  _stdout, stderr, status = Open3.capture3(
+    "git", "fetch", "--no-tags", "--depth=1", "origin",
+    "refs/pull/#{number}/head",
+    chdir: repository_root.to_s
+  )
+  unless status.success?
+    raise PolicyError, "could not fetch candidate PR head as data: #{stderr.strip}"
+  end
+  fetched, stderr, status = Open3.capture3(
+    "git", "rev-parse", "FETCH_HEAD", chdir: repository_root.to_s
+  )
+  unless status.success? && fetched.strip == head_sha
+    raise PolicyError, "fetched candidate PR head does not match the event SHA: #{stderr.strip}"
+  end
+
+  STAGED_SEARCH_DATA_SHA256.to_h do |relative, _digest|
+    content, error, result = Open3.capture3(
+      "git", "cat-file", "blob", "#{head_sha}:#{relative}",
+      chdir: repository_root.to_s
+    )
+    unless result.success?
+      raise PolicyError, "candidate PR head is missing #{relative}: #{error.strip}"
+    end
+    [relative, content]
+  end
+rescue Errno::ENOENT, JSON::ParserError => e
+  raise PolicyError, "could not read pull_request_target event data: #{e.message}"
+end
+
+def validate_search_activation_transition(
+  paths,
+  event_name: ENV["GITHUB_EVENT_NAME"],
+  event_path: ENV["GITHUB_EVENT_PATH"],
+  repository_root: Pathname(__dir__).parent,
+  data_loader: nil
+)
+  anchor = paths.find { |path| path.basename.to_s == TRUST_ANCHOR_FILENAME }
+  return unless anchor
+  return unless Digest::SHA256.file(anchor).hexdigest == SEARCH_LEDGER_TRUST_ANCHOR_SHA256
+  return unless event_name == "pull_request_target"
+  raise PolicyError, "pull_request_target event path is missing" unless event_path || data_loader
+
+  candidate = if data_loader
+                data_loader.call(STAGED_SEARCH_DATA_SHA256.keys)
+              else
+                pull_request_head_data(event_path, repository_root)
+              end
+  STAGED_SEARCH_DATA_SHA256.each do |relative, expected_digest|
+    content = candidate[relative]
+    unless content.is_a?(String) && Digest::SHA256.hexdigest(content) == expected_digest
+      raise PolicyError,
+            "search trust-anchor activation must preserve staged #{relative} byte-for-byte"
+    end
+    base_path = repository_root / relative
+    unless base_path.file? && content == base_path.binread
+      raise PolicyError,
+            "search trust-anchor activation disagrees with trusted base #{relative}"
+    end
+  end
+end
+
 def main(arguments)
   paths = expand_paths(arguments)
   validate_policy_set(paths)
+  validate_search_activation_transition(paths)
   failures = []
   paths.each do |path|
     begin

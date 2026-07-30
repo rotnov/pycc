@@ -410,6 +410,38 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "activation timestamp is immutable"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_registry_rejects_duplicate_json_keys(self) -> None:
+        path = self.head / "docs" / "SEARCH_QUERY_REGISTRY.json"
+        text = path.read_text().replace(
+            '"target_rank": 7,',
+            '"target_rank": 999,\n      "target_rank": 7,',
+            1,
+        )
+        path.write_text(text)
+        with self.assertRaisesRegex(AuditError, "duplicate key 'target_rank'"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_new_query_activation_cannot_be_in_the_future(self) -> None:
+        query = {
+            **self.registry["queries"][0],
+            "id": "github-product-future-python-compiler",
+            "raw_query": "future python compiler",
+            "semantic_identity": (
+                "github-repository-search-v1:bag:compiler future python"
+            ),
+            "activated_at": "9999-12-31T23:59:59Z",
+        }
+        self.registry["queries"].append(query)
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "activation cannot be in the future"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_query_retirement_cannot_be_in_the_future(self) -> None:
+        self.registry["queries"][1]["retired_at"] = "9999-12-31T23:59:59Z"
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "retirement cannot be in the future"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_registry_version_rejects_json_boolean(self) -> None:
         self.registry["registry_version"] = True
         self.write_registry()

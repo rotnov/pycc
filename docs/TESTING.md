@@ -446,8 +446,8 @@ staging commit therefore also imports the 22 reviewed
 actual trusted base. It stages the initial registry, both history checkpoints,
 and their roadmap projection in the same pre-activation revision. The audit's
 one-time initialization path accepts only those exact reviewed 108-row and
-130-row digests plus the byte-exact registry and checkpoint files. Its schema
-validation covers the registry version, semantic
+130-row digests plus the byte-exact registry, ledger, and checkpoint files. Its
+schema validation covers the registry version, semantic
 identity versions, both surface contracts, query lifecycle/KPI/alias rules,
 and the retired `AI-native compiler` authorship diagnostic. This is a pinned
 bootstrap, not a timestamp exception that future rows can claim. The suite and
@@ -456,6 +456,13 @@ the prospective workflow can be activated. The fixture is not active in this
 staging commit. Activation must copy it byte-for-byte to
 `workflow-policy.yml` in a later pull request, prove the new
 required `audit` run, and retire the older roadmap-only trust-anchor digest.
+During that transition, the still-active roadmap-only workflow runs this
+revision's base-owned policy checker. The checker recognizes only the exact
+prospective workflow digest, fetches the event's `refs/pull/<n>/head` commit as
+Git data without checking it out or executing it, verifies the fetched SHA,
+and requires the candidate registry, ledger, and checkpoints to remain
+byte-identical to this staged base. Regular `pull_request` CI never performs
+that fetch; the bridge is limited to the one trust-anchor activation shape.
 
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses

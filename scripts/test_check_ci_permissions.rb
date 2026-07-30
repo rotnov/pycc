@@ -361,4 +361,57 @@ class WorkflowPermissionsTest < Minitest::Test
     assert_includes commands, "--head-root /tmp/pr-policy-input \\"
     assert_includes commands, '--base-root "$GITHUB_WORKSPACE"'
   end
+
+  def test_activation_trust_anchor_preserves_staged_search_data
+    candidate = STAGED_SEARCH_DATA_SHA256.to_h do |relative, digest|
+      content = (Pathname(__dir__).parent / relative).binread
+      assert_equal digest, Digest::SHA256.hexdigest(content)
+      [relative, content]
+    end
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      validate_search_activation_transition(
+        [anchor],
+        event_name: "pull_request_target",
+        data_loader: ->(_paths) { candidate }
+      )
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_changed_staged_search_data
+    original = STAGED_SEARCH_DATA_SHA256.to_h do |relative, _digest|
+      [relative, (Pathname(__dir__).parent / relative).binread]
+    end
+    STAGED_SEARCH_DATA_SHA256.each_key do |relative|
+      candidate = original.transform_values(&:dup)
+      candidate[relative] << "\nmutated\n"
+      error = nil
+      Dir.mktmpdir do |directory|
+        anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+        anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+        error = assert_raises(PolicyError) do
+          validate_search_activation_transition(
+            [anchor],
+            event_name: "pull_request_target",
+            data_loader: ->(_paths) { candidate }
+          )
+        end
+      end
+      assert_match(/preserve staged #{Regexp.escape(relative)} byte-for-byte/,
+                   error.message)
+    end
+  end
+
+  def test_non_activation_event_does_not_fetch_staged_search_data
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      validate_search_activation_transition(
+        [anchor],
+        event_name: "pull_request",
+        data_loader: ->(_paths) { flunk "regular PR validation must not fetch" }
+      )
+    end
+  end
 end
