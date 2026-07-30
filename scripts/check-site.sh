@@ -138,6 +138,7 @@ class MetadataParser(HTMLParser):
         self.json_ld = []
         self.current_json_ld = []
         self.visible_body_text = []
+        self.keyword_metas = []
 
     def handle_starttag(self, tag, attrs):
         if tag in {"base", "link", "script"}:
@@ -145,6 +146,11 @@ class MetadataParser(HTMLParser):
             if len(attribute_names) != len(set(attribute_names)):
                 raise SystemExit(f"Duplicate attributes are not allowed on <{tag}>")
         attributes = dict(attrs)
+        if (
+            tag == "meta"
+            and attributes.get("name", "").strip().lower() == "keywords"
+        ):
+            self.keyword_metas.append(attributes)
         if tag in self.inert_asset_tags:
             self.inert_element_stack.append(tag)
         if tag in self.foreign_root_tags:
@@ -275,6 +281,8 @@ if parser.foreign_root_stack:
     raise SystemExit(f"Unclosed foreign root: {parser.foreign_root_stack[-1]}")
 if parser.base_elements:
     raise SystemExit("Base elements are not allowed because assets must resolve locally")
+if parser.keyword_metas:
+    raise SystemExit("HTML meta keywords are unsupported and must not be published")
 
 title = require_one(parser.titles, "page title")
 if title != "pycc — AOT compiler for typed Python to native binaries":
@@ -308,6 +316,22 @@ for key in required_metadata:
     meta = require_one(metadata.get(key, []), f"{key!r} metadata field")
     if not meta.get("content", "").strip():
         raise SystemExit(f"Metadata field {key!r} must have nonempty content")
+
+expected_description = (
+    "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with "
+    "an implemented native-binary path through Rust and LLVM; AI-created "
+    "and human-managed."
+)
+expected_social_description = (
+    "A pre-alpha AOT compiler for typed Python 3.14 with an implemented "
+    "native-binary path through Rust and LLVM, created by AI and managed "
+    "by a human."
+)
+if metadata["description"][0]["content"] != expected_description:
+    raise SystemExit("Landing description must be product-first and pre-alpha")
+for key in ("og:description", "twitter:description"):
+    if metadata[key][0]["content"] != expected_social_description:
+        raise SystemExit(f"{key} must preserve the product-first social description")
 
 expected_values = {
     "google-site-verification": "JYWBkUpaYuJgPDksjf5oGOn49o8X41PqUxS--u-eF24",
@@ -402,6 +426,8 @@ if web_page.get("name") != title:
     raise SystemExit("WebPage JSON-LD name must match the page title")
 if web_page.get("description") != metadata["description"][0]["content"]:
     raise SystemExit("WebPage JSON-LD description must match the meta description")
+if web_page.get("dateModified") != "2026-07-30":
+    raise SystemExit("Landing WebPage dateModified is stale")
 if web_page.get("mainEntity") != {"@id": project_id}:
     raise SystemExit("WebPage JSON-LD must identify the pycc project as its main entity")
 
@@ -411,6 +437,13 @@ if software_source.get("mainEntityOfPage") != {"@id": web_page_id}:
     raise SystemExit("SoftwareSourceCode JSON-LD must point back to the webpage")
 if software_source.get("codeRepository") != "https://github.com/rotnov/pycc":
     raise SystemExit("SoftwareSourceCode JSON-LD must link to the public repository")
+expected_source_description = (
+    "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with "
+    "an implemented path to standalone native binaries; AI-created and "
+    "human-managed."
+)
+if software_source.get("description") != expected_source_description:
+    raise SystemExit("SoftwareSourceCode description must preserve product-first truth")
 
 visible_body_text = " ".join(" ".join(parser.visible_body_text).split())
 required_disclosures = (
@@ -425,6 +458,15 @@ required_disclosures = (
 for disclosure in required_disclosures:
     if disclosure not in visible_body_text:
         raise SystemExit(f"Missing visible AI authorship disclosure: {disclosure}")
+product_phrase = (
+    "pycc is an open-source ahead-of-time compiler project for standard "
+    "Python 3.14."
+)
+provenance_phrase = "AI agents create the entire project"
+if product_phrase not in visible_body_text or provenance_phrase not in visible_body_text:
+    raise SystemExit("Landing body must state both product and provenance roles")
+if visible_body_text.index(product_phrase) > visible_body_text.index(provenance_phrase):
+    raise SystemExit("Landing body must explain the product before provenance")
 PY
 
 python3 - \
@@ -528,6 +570,7 @@ PAGE_SPECS = {
     },
     "ai-native": {
         "canonical": f"{ROOT}ai-native/",
+        "date_modified": "2026-07-30",
         "title": (
             "pycc AI-native experiment — software built entirely by AI"
         ),
@@ -535,6 +578,9 @@ PAGE_SPECS = {
             "See how AI agents create pycc's specifications, code, tests, "
             "reviews, documentation, and automation while a human only "
             "manages direction and constraints."
+        ),
+        "required_visible_text": (
+            "AI-native” does not mean that pycc compiles AI models or an AI-specific language.",
         ),
     },
 }
@@ -562,9 +608,15 @@ class PageParser(HTMLParser):
         self.current_json_ld = []
         self.visible_text = []
         self.anchors = []
+        self.keyword_metas = []
 
     def handle_starttag(self, tag, attrs):
         attributes = dict(attrs)
+        if (
+            tag == "meta"
+            and attributes.get("name", "").strip().lower() == "keywords"
+        ):
+            self.keyword_metas.append(attributes)
         if tag == "body":
             self.in_body = True
             return
@@ -645,6 +697,11 @@ for path_value in sys.argv[1:]:
     spec = PAGE_SPECS[slug]
     parser = PageParser()
     parser.feed(path.read_text())
+
+    if parser.keyword_metas:
+        raise SystemExit(
+            f"{slug} publishes unsupported HTML meta keywords"
+        )
 
     title = require_one(parser.titles, f"{slug} title")
     if title != spec["title"]:
@@ -892,6 +949,10 @@ for entry in urls:
 llms = llms_path.read_text()
 if not llms.startswith("# pycc\n\n> "):
     raise SystemExit("llms.txt must start with the project H1 and blockquote summary")
+if not llms.startswith(
+    "# pycc\n\n> pycc is a pre-alpha strict ahead-of-time compiler for typed, standard Python"
+):
+    raise SystemExit("llms.txt summary must put the product before provenance")
 for heading in ("## Project", "## Specifications", "## Optional"):
     if llms.count(heading) != 1:
         raise SystemExit(f"llms.txt must contain exactly one {heading!r} section")
@@ -911,10 +972,17 @@ for required_link in (
 markdown = markdown_path.read_text()
 if not markdown.startswith("# pycc — AOT compiler for typed Python to native binaries"):
     raise SystemExit("index.html.md must start with the canonical page title")
+if not markdown.startswith(
+    "# pycc — AOT compiler for typed Python to native binaries\n\n"
+    "> pycc is a pre-alpha ahead-of-time compiler for typed, standard Python"
+):
+    raise SystemExit("index.html.md summary must put the product before provenance")
 for disclosure in (
-    "fully AI-created, human-managed",
+    "AI agents create",
+    "a human manages",
     "A human only manages goals, constraints,",
     "No project code is handwritten by a human.",
+    "pycc is not an AI\nor machine-learning compiler.",
 ):
     if disclosure not in llms or disclosure not in markdown:
         raise SystemExit(f"LLM-readable files are missing disclosure: {disclosure}")

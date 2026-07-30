@@ -345,18 +345,138 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-required = (
-    'content="pycc is a fully AI-created, human-managed pre-alpha project '
-    'building an ahead-of-time compiler for typed Python 3.14 with Rust and LLVM."'
-)
-assert required in content
-path.write_text(content.replace(required, 'content=""', 1))
+marker = 'name="description"'
+marker_offset = content.index(marker)
+content_offset = content.index('content="', marker_offset) + len('content="')
+content_end = content.index('"', content_offset)
+assert content_end > content_offset
+path.write_text(content[:content_offset] + content[content_end:])
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
   echo "Validator accepted an empty required metadata value" >&2
   exit 1
 fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+python3 - "$repo_root" "$fixture_root/site" <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+
+repo_root = Path(sys.argv[1])
+site_dir = Path(sys.argv[2])
+checker = repo_root / "scripts" / "check-site.sh"
+index_path = site_dir / "index.html"
+ai_path = site_dir / "ai-native" / "index.html"
+original_index = index_path.read_text()
+original_ai = ai_path.read_text()
+head_marker = "  </head>"
+body_marker = "  <body>"
+
+keyword_mutations = (
+    (
+        index_path,
+        original_index.replace(
+            head_marker,
+            '    <meta name="keywords" content="python compiler">\n' + head_marker,
+            1,
+        ),
+        "landing head keywords metadata",
+    ),
+    (
+        index_path,
+        original_index.replace(
+            body_marker,
+            body_marker + '\n    <meta name=" KEYWORDS " content="python compiler">',
+            1,
+        ),
+        "landing body mixed-case keywords metadata",
+    ),
+    (
+        ai_path,
+        original_ai.replace(
+            head_marker,
+            '    <meta name="keywords" content="AI compiler">\n' + head_marker,
+            1,
+        ),
+        "evidence-page keywords metadata",
+    ),
+)
+environment = dict(os.environ)
+environment["SITE_DIR"] = str(site_dir)
+
+for path, mutation, description in keyword_mutations:
+    original = path.read_text()
+    path.write_text(mutation)
+    result = subprocess.run(
+        [str(checker)],
+        cwd=repo_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    path.write_text(original)
+    if result.returncode == 0:
+        raise SystemExit(f"Validator accepted {description}")
+
+root_description = (
+    "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with "
+    "an implemented native-binary path through Rust and LLVM; AI-created "
+    "and human-managed."
+)
+social_description = (
+    "A pre-alpha AOT compiler for typed Python 3.14 with an implemented "
+    "native-binary path through Rust and LLVM, created by AI and managed "
+    "by a human."
+)
+source_description = (
+    "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with "
+    "an implemented path to standalone native binaries; AI-created and "
+    "human-managed."
+)
+description_mutations = (
+    (
+        "A fully AI-created project, human-managed, building a pre-alpha "
+        "ahead-of-time compiler for typed Python 3.14 with Rust and LLVM.",
+        "AI-created software shared by agents and independently verified by humans.",
+        "AI-created software shared by agents and independently verified by humans.",
+        "provenance-first acquisition descriptions",
+    ),
+    (
+        "A production-ready AI compiler that replaces CPython and makes typed "
+        "Python native binaries 100x faster.",
+        "The production-ready AI compiler that replaces CPython with 100x speedups.",
+        "The production-ready AI compiler that replaces CPython with 100x speedups.",
+        "unsupported product claims",
+    ),
+)
+for root_replacement, social_replacement, source_replacement, description in description_mutations:
+    mutation = original_index
+    assert mutation.count(root_description) == 2
+    assert mutation.count(social_description) == 2
+    assert mutation.count(source_description) == 1
+    mutation = mutation.replace(root_description, root_replacement)
+    mutation = mutation.replace(social_description, social_replacement)
+    mutation = mutation.replace(source_description, source_replacement)
+    index_path.write_text(mutation)
+    result = subprocess.run(
+        [str(checker)],
+        cwd=repo_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    index_path.write_text(original_index)
+    if result.returncode == 0:
+        raise SystemExit(f"Validator accepted {description}")
+PY
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
 python3 - "$fixture_root/site/index.html" <<'PY'
@@ -629,6 +749,12 @@ mutations = (
         "llms.txt with a superseded backend status",
     ),
     (
+        site_dir / "llms.txt",
+        "pycc is not an AI\nor machine-learning compiler.",
+        "pycc is an AI\nand machine-learning compiler.",
+        "llms.txt that misclassifies the product as an AI compiler",
+    ),
+    (
         site_dir / "index.html.md",
         "`pycc check` now parses and type-checks the v0.1",
         "`pycc check` is not implemented for the v0.1",
@@ -639,6 +765,12 @@ mutations = (
         "`pycc build` and `pycc run` compile that implemented surface",
         "`pycc build` and `pycc run` compile only a narrow slice",
         "Markdown landing page with a superseded backend status",
+    ),
+    (
+        site_dir / "index.html.md",
+        "pycc is not an AI\nor machine-learning compiler.",
+        "pycc is an AI\nand machine-learning compiler.",
+        "Markdown landing page that misclassifies the product as an AI compiler",
     ),
 )
 environment = dict(os.environ)

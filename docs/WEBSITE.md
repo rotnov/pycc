@@ -72,6 +72,21 @@ Every canonical HTML page must provide:
 - page-level crawl permission with unlimited text, image, and video previews;
 - a sitemap reference.
 
+The unsupported HTML `meta name="keywords"` field is forbidden on every
+canonical page. Google and Bing do not use it as a ranking booster, and a
+hidden list must not mix product-acquisition terms with AI-authorship
+provenance. This zero-policy does not change the separately reviewed
+`SoftwareSourceCode.keywords` property.
+
+Descriptions are role-specific. The root is the product-acquisition landing:
+its HTML, Open Graph, X, and JSON-LD descriptions put the AOT compiler for typed
+Python and current pre-alpha maturity in the first semantic clause, with
+AI-created/human-managed provenance second. Status, architecture, and
+comparison pages describe their product-evidence role. The dedicated
+authorship/provenance page may lead with the AI experiment, but must still make
+the pre-alpha compiler context unambiguous. These projections share material
+truth without requiring byte-identical prose.
+
 The landing page also carries the persistent Google Search Console verification
 token for the `https://rotnov.github.io/pycc/` URL-prefix property and a
 `WebPage` → `SoftwareSourceCode` JSON-LD graph whose descriptions match the
@@ -118,6 +133,12 @@ contract. All `link` and `script` elements are rejected anywhere inside SVG or
 MathML subtrees because foreign scripts use different URL attributes and HTML
 integration points can change descendant namespaces. Valid self-closing void
 and non-asset foreign-content elements remain accepted.
+The same validator rejects the unsupported keywords field at head or body
+depth and binds the root description family to the product, maturity, output,
+and provenance tuple. Negative controls co-mutate HTML and JSON-LD
+descriptions, corrupt social/source descriptions, reverse product/provenance
+ordering, add unsupported benchmarks or readiness claims, and reintroduce the
+keywords field on both landing and evidence pages.
 Table-driven negative controls cover missing,
 empty, duplicate, absolute, local-only, and differently targeted asset
 references so the uploaded files cannot silently become browser-orphaned.
@@ -204,6 +225,11 @@ GitHub query and rolling traffic observations are preserved in
 [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) using a fixed top-50 ranking
 contract and timestamped API snapshots so changes can be compared without
 rewriting earlier responses or attributing automation traffic to SEO.
+Its machine-readable query registry separates product acquisition from brand,
+topic, competitive, and authorship diagnostics; provider-specific semantic
+identities prevent aliases from inflating query coverage. The checker protects
+the historical row prefix, allows append-only observations, and keeps retired
+authorship experiments out of the product KPI.
 The same ledger records Search Console URL Inspection, sitemap-processing, and
 performance-report states independently because none of those signals is a
 substitute for the others.
