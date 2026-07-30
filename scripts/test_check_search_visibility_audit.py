@@ -404,6 +404,24 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "unindented leading pipe"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_history_table_requires_exactly_one_boundary_pipe(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        header = "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |"
+        appended_row = (
+            "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | +12 | 50 | 240 |"
+        )
+        for original, replacement in (
+            (header, f"|{header}|"),
+            (appended_row, f"|{appended_row}|"),
+            (appended_row, appended_row[:-1]),
+        ):
+            with self.subTest(replacement=replacement):
+                path.write_text(
+                    self.head_visibility.replace(original, replacement, 1)
+                )
+                with self.assertRaisesRegex(AuditError, "exactly one leading"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_registry_activation_is_immutable(self) -> None:
         self.registry["registry_activated_at"] = "2026-08-01T00:00:00Z"
         self.write_registry()

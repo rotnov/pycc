@@ -19,6 +19,13 @@ class WorkflowPermissionsTest < Minitest::Test
   PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
     "8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43"
 
+  def activation_candidate
+    root = Pathname(__dir__).parent
+    SEARCH_ACTIVATION_PATHS.to_h do |relative|
+      [relative, (root / relative).binread]
+    end
+  end
+
   def workflow(test_job = "runs-on: ubuntu-latest", trigger: "pull_request", extra_jobs: nil)
     lines = [
       "name: Test",
@@ -364,13 +371,11 @@ class WorkflowPermissionsTest < Minitest::Test
   end
 
   def test_activation_trust_anchor_preserves_staged_search_assets
-    candidate = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, digest|
-      content = (Pathname(__dir__).parent / relative).binread
+    candidate = activation_candidate
+    STAGED_SEARCH_ACTIVATION_SHA256.each do |relative, digest|
+      content = candidate.fetch(relative)
       assert_equal digest, Digest::SHA256.hexdigest(content)
-      [relative, content]
     end
-    candidate[SEARCH_ROADMAP_PATH] =
-      (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
     Dir.mktmpdir do |directory|
       anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
       anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
@@ -383,11 +388,7 @@ class WorkflowPermissionsTest < Minitest::Test
   end
 
   def test_activation_trust_anchor_rejects_changed_staged_search_assets
-    original = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
-      [relative, (Pathname(__dir__).parent / relative).binread]
-    end
-    original[SEARCH_ROADMAP_PATH] =
-      (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
+    original = activation_candidate
     STAGED_SEARCH_ACTIVATION_SHA256.each_key do |relative|
       candidate = original.transform_values(&:dup)
       candidate[relative] << "\nmutated\n"
@@ -408,10 +409,31 @@ class WorkflowPermissionsTest < Minitest::Test
     end
   end
 
-  def test_activation_trust_anchor_rejects_changed_roadmap_projection
-    candidate = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
-      [relative, (Pathname(__dir__).parent / relative).binread]
+  def test_activation_trust_anchor_rejects_changed_successor_executables
+    original = activation_candidate
+    exact_assets = STAGED_SEARCH_ACTIVATION_SHA256.keys
+    (SEARCH_SUCCESSOR_EXECUTABLES - exact_assets).each do |relative|
+      candidate = original.transform_values(&:dup)
+      candidate[relative] << "\n# mutated\n"
+      Dir.mktmpdir do |directory|
+        anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+        anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+        error = assert_raises(PolicyError) do
+          validate_search_activation_transition(
+            [anchor],
+            event_name: "pull_request_target",
+            data_loader: ->(_paths) { candidate }
+          )
+        end
+        message =
+          /preserve trusted successor executable #{Regexp.escape(relative)}/
+        assert_match(message, error.message)
+      end
     end
+  end
+
+  def test_activation_trust_anchor_rejects_changed_roadmap_projection
+    candidate = activation_candidate
     roadmap = (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
     mutations = [
       roadmap.sub("#{SEARCH_ROADMAP_CHECKPOINTS.first}\n", ""),
@@ -452,11 +474,7 @@ class WorkflowPermissionsTest < Minitest::Test
   end
 
   def test_activation_trust_anchor_rejects_changed_trusted_base_assets
-    candidate = STAGED_SEARCH_ACTIVATION_SHA256.to_h do |relative, _digest|
-      [relative, (Pathname(__dir__).parent / relative).binread]
-    end
-    candidate[SEARCH_ROADMAP_PATH] =
-      (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
+    candidate = activation_candidate
     Dir.mktmpdir do |directory|
       root = Pathname(directory)
       anchor = root / TRUST_ANCHOR_FILENAME

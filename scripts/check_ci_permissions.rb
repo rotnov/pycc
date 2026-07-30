@@ -20,7 +20,7 @@ SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
   "8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
-    "807dfb9ac9dd6b661b2e230bdb79f04f042015eb4f608a5007cbd724696d8ba6",
+    "1631fabc58b5c395d144f586c5999c1fe131b35bdff9ac94ef6e0288e0ba2927",
   "docs/SEARCH_QUERY_REGISTRY.json" =>
     "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c",
   "docs/SEARCH_VISIBILITY.md" =>
@@ -35,8 +35,17 @@ SEARCH_ROADMAP_CHECKPOINTS = [
   "<!-- search-history-checkpoint: github_repository_search 130 " \
     "3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->"
 ].freeze
+SEARCH_SUCCESSOR_EXECUTABLES = %w[
+  scripts/check_ci_permissions.rb
+  scripts/check_roadmap_evidence.rb
+  scripts/check_search_visibility_audit.py
+  scripts/test_check_ci_permissions.rb
+  scripts/test_check_roadmap_evidence.rb
+  scripts/test_check_search_visibility_audit.py
+].freeze
 SEARCH_ACTIVATION_PATHS =
-  (STAGED_SEARCH_ACTIVATION_SHA256.keys + [SEARCH_ROADMAP_PATH]).freeze
+  (STAGED_SEARCH_ACTIVATION_SHA256.keys + SEARCH_SUCCESSOR_EXECUTABLES +
+    [SEARCH_ROADMAP_PATH]).uniq.freeze
 TRUSTED_EVENT_AND_REF_GUARD = /\A(?:\$\{\{\s*)?github\.event_name\s*==\s*(['"])push\1\s*&&\s*github\.ref\s*==\s*(['"])refs\/heads\/main\2\s*(?:\}\})?\z/
 
 def mapping_entries(node, context)
@@ -289,6 +298,16 @@ def validate_search_activation_transition(
            Digest::SHA256.file(base_path).hexdigest == expected_digest
       raise PolicyError,
             "search trust-anchor activation disagrees with trusted base #{relative}"
+    end
+  end
+  SEARCH_SUCCESSOR_EXECUTABLES.each do |relative|
+    content = candidate[relative]
+    base_path = repository_root / relative
+    unless content.is_a?(String) && base_path.file? &&
+           content == base_path.binread
+      raise PolicyError,
+            "search trust-anchor activation must preserve trusted successor " \
+            "executable #{relative} byte-for-byte"
     end
   end
   roadmap = candidate[SEARCH_ROADMAP_PATH]

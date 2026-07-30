@@ -352,7 +352,17 @@ def history_rows(markdown: str) -> list[list[str]]:
             continue
         if table_ended:
             raise AuditError("GitHub history table cannot resume after an interruption")
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        stripped = line.strip()
+        if (
+            not stripped.endswith("|")
+            or stripped.startswith("||")
+            or stripped.endswith("||")
+        ):
+            raise AuditError(
+                "GitHub history table lines must use exactly one leading and "
+                "trailing pipe"
+            )
+        cells = [cell.strip() for cell in stripped[1:-1].split("|")]
         if cells == [
             "Observed at (UTC)",
             "Exact query",

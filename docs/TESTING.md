@@ -415,6 +415,9 @@ pair must identify exactly one observation. Existing base measurements are an
 immutable registry prefix, and history rows are accepted only after the exact
 Markdown table header and delimiter. A table-like line without the canonical
 unindented leading pipe fails instead of becoming visible, unaudited evidence.
+Every accepted history line also has exactly one leading and one trailing
+boundary pipe, so repeated pipes cannot add an empty rendered column while the
+parser silently strips it.
 GitHub query text rejects every qualifier except an `in:description` metadata
 diagnostic or a single `topic:` diagnostic. A complete REST response must
 contain exactly `min(api_total, 50)` rows; a shorter result list cannot support
@@ -460,11 +463,13 @@ During that transition, the still-active roadmap-only workflow runs this
 revision's base-owned policy checker. The checker recognizes only the exact
 prospective workflow digest, fetches the event's `refs/pull/<n>/head` commit as
 Git data without checking it out or executing it, verifies the fetched SHA,
-and requires the candidate base-owned search auditor, registry, ledger, and
-checkpoints to remain byte-identical to this staged base. Pinning the auditor
-itself prevents the activation commit from replacing the script with a no-op
-that would become trusted after merge. The candidate roadmap may still update
-unrelated current-status text, but the bridge extracts every
+and requires the candidate registry, ledger, and checkpoints to remain
+byte-identical to this staged base. Every repository script the successor
+workflow executes -- the three policy/audit implementations and their three
+self-test suites -- must also remain byte-identical to the trusted base. This
+prevents the activation commit from replacing any successor checker with a
+no-op that would become trusted after merge. The candidate roadmap may still
+update unrelated current-status text, but the bridge extracts every
 `search-history-checkpoint` line and requires exactly the two staged markers in
 their reviewed order, rejecting removal, rewriting, or injection. Regular
 `pull_request` CI never performs that fetch; the bridge is limited to the one
