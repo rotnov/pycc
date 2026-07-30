@@ -146,6 +146,8 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             "- ## GitHub repository search history",
             "## GitHub repository search&#32;history",
             "## **GitHub repository search history**",
+            "## GitHub repository search hist**or**y",
+            "## GitHub repository search hist`or`y",
             "## [GitHub repository search history](https://example.invalid)",
         ):
             with self.subTest(duplicate_heading=duplicate_heading):
@@ -269,6 +271,15 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "surface contract was rewritten"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_github_surface_window_requires_an_integer(self) -> None:
+        self.registry["surfaces"]["github_repository_search"] = {
+            **GITHUB_SURFACE_CONTRACT,
+            "result_window": 50.0,
+        }
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "surface result_window must be an integer"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_github_query_rejects_non_diagnostic_qualifiers(self) -> None:
         measurement = self.registry["measurements"][0]
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
@@ -372,6 +383,11 @@ class SearchVisibilityAuditTests(unittest.TestCase):
 
     def test_registry_replay_metadata_requires_valid_types_and_ranges(self) -> None:
         mutations = {
+            "result window type": (
+                "result_window",
+                50.0,
+                "result_window must be an integer",
+            ),
             "returned_results type": ("returned_results", False, "must be an integer"),
             "returned_results range": (
                 "returned_results",
@@ -412,6 +428,12 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 self.write_registry()
                 with self.assertRaisesRegex(AuditError, message):
                     validate(self.head, self.base, self.audited_at)
+
+    def test_measurement_per_page_requires_an_integer(self) -> None:
+        self.registry["measurements"][0]["request_parameters"]["per_page"] = 50.0
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "request per_page must be an integer"):
+            validate(self.head, self.base, self.audited_at)
 
     def test_complete_measurement_requires_the_complete_result_window(self) -> None:
         measurement = self.registry["measurements"][0]

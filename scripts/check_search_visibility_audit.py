@@ -118,7 +118,9 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
 
 def rendered_heading_matches(candidate: str, expected: str) -> bool:
     """Match the canonical title after entity and inline-markup normalization."""
-    candidate_words = re.findall(r"[A-Za-z0-9]+", html.unescape(candidate).casefold())
+    rendered = html.unescape(candidate)
+    rendered = rendered.translate(str.maketrans("", "", "*_~`"))
+    candidate_words = re.findall(r"[A-Za-z0-9]+", rendered.casefold())
     expected_words = re.findall(r"[A-Za-z0-9]+", expected.casefold())
     return any(
         candidate_words[index : index + len(expected_words)] == expected_words
@@ -325,6 +327,10 @@ def validate_registry(
         raise AuditError("registry must define exact GitHub and Google surfaces")
     if surfaces[GITHUB_SURFACE] != GITHUB_SURFACE_CONTRACT:
         raise AuditError("GitHub measurement surface contract was rewritten")
+    require_integer(
+        surfaces[GITHUB_SURFACE]["result_window"],
+        "GitHub surface result_window",
+    )
 
     queries = registry.get("queries")
     if not isinstance(queries, list):
@@ -400,20 +406,29 @@ def validate_registry(
             raise AuditError("measurement surface must be GitHub search")
         if measurement["provider"] != "github":
             raise AuditError("measurement provider must be github")
-        if measurement["request_parameters"] != {
-            "q": raw_query,
-            "per_page": 50,
+        request_parameters = measurement["request_parameters"]
+        if not isinstance(request_parameters, dict) or set(request_parameters) != {
+            "q",
+            "per_page",
         }:
+            raise AuditError("measurement request parameters have unexpected fields")
+        per_page = require_integer(
+            request_parameters["per_page"], "measurement request per_page"
+        )
+        if request_parameters["q"] != raw_query or per_page != 50:
             raise AuditError("measurement request parameters were rewritten")
         if measurement["sort_contract"] != "default_best_match":
             raise AuditError("measurement sort contract was rewritten")
-        if measurement["result_window"] != 50:
+        result_window = require_integer(
+            measurement["result_window"], "measurement result_window"
+        )
+        if result_window != 50:
             raise AuditError("measurement result window was rewritten")
         returned_results = require_integer(
             measurement["returned_results"], "measurement returned_results"
         )
         api_total = require_integer(measurement["api_total"], "measurement api_total")
-        if not 0 <= returned_results <= measurement["result_window"]:
+        if not 0 <= returned_results <= result_window:
             raise AuditError("measurement returned_results is outside its result window")
         if api_total < returned_results:
             raise AuditError("measurement api_total is smaller than returned_results")
@@ -426,7 +441,7 @@ def validate_registry(
             raise AuditError("measurement incomplete_results must be boolean")
         if measurement["incomplete_results"]:
             raise AuditError("incomplete search responses cannot produce rank evidence")
-        if returned_results != min(api_total, measurement["result_window"]):
+        if returned_results != min(api_total, result_window):
             raise AuditError("complete measurement returned an incomplete result window")
         corpus_digest = measurement["ordered_corpus_sha256"]
         if not isinstance(corpus_digest, str) or not SHA256.fullmatch(corpus_digest):
