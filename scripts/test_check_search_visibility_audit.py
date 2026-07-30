@@ -13,6 +13,7 @@ from scripts.check_search_visibility_audit import (
     ACTIVATED_AT,
     AuditError,
     GITHUB_SURFACE_CONTRACT,
+    GOOGLE_SURFACE_CONTRACT,
     history_digest,
     history_rows,
     validate,
@@ -43,17 +44,49 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             self.head_visibility
         )
         self.registry = {
+            "registry_version": 1,
             "registry_activated_at": ACTIVATED_AT,
+            "semantic_identity_versions": {
+                "github_repository_search": "github-repository-search-v1",
+                "google_web": "google-web-query-v1",
+            },
             "surfaces": {
                 "github_repository_search": GITHUB_SURFACE_CONTRACT,
-                "google_web": {},
+                "google_web": GOOGLE_SURFACE_CONTRACT,
             },
             "queries": [
                 {
                     "id": "github-product-python-aot-compiler",
                     "surface": "github_repository_search",
                     "raw_query": "python aot compiler",
-                }
+                    "semantic_identity": (
+                        "github-repository-search-v1:bag:aot compiler python"
+                    ),
+                    "semantic_identity_version": "github-repository-search-v1",
+                    "intent_class": "product_category",
+                    "lifecycle": "active",
+                    "kpi_role": "product_acquisition",
+                    "rationale": "Synthetic product query for audit mutations.",
+                    "activated_at": ACTIVATED_AT,
+                    "retired_at": None,
+                    "alias_of": None,
+                },
+                {
+                    "id": "github-authorship-ai-native-compiler",
+                    "surface": "github_repository_search",
+                    "raw_query": "AI-native compiler",
+                    "semantic_identity": (
+                        "github-repository-search-v1:syntax:AI-native compiler"
+                    ),
+                    "semantic_identity_version": "github-repository-search-v1",
+                    "intent_class": "authorship_narrative",
+                    "lifecycle": "retired",
+                    "kpi_role": "excluded",
+                    "rationale": "Synthetic retired authorship query.",
+                    "activated_at": "2026-07-24T23:02:03Z",
+                    "retired_at": "2026-07-29T10:25:27Z",
+                    "alias_of": None,
+                },
             ],
             "measurements": [
                 {
@@ -76,6 +109,10 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 }
             ],
         }
+        base_registry = {**self.registry, "measurements": []}
+        (self.base / "docs" / "SEARCH_QUERY_REGISTRY.json").write_text(
+            json.dumps(base_registry, indent=2) + "\n"
+        )
         self.write_registry()
         self.refresh_checkpoint()
         self.audited_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
@@ -122,8 +159,63 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             f"# Roadmap\n\n{marker}\n"
         )
 
+    def install_reviewed_bootstrap(self) -> list[list[str]]:
+        repository_root = Path(__file__).resolve().parents[1]
+        visibility = (repository_root / "docs" / "SEARCH_VISIBILITY.md").read_text()
+        rows = history_rows(visibility)
+        self.base.joinpath("docs", "SEARCH_VISIBILITY.md").write_text(
+            self.visibility(
+                *("| " + " | ".join(row) + " |" for row in rows[:108])
+            )
+        )
+        self.base.joinpath("docs", "SEARCH_QUERY_REGISTRY.json").unlink()
+        for name in (
+            "SEARCH_VISIBILITY.md",
+            "SEARCH_QUERY_REGISTRY.json",
+            "SEARCH_VISIBILITY_CHECKPOINTS.json",
+            "ROADMAP.md",
+        ):
+            self.head.joinpath("docs", name).write_text(
+                repository_root.joinpath("docs", name).read_text()
+            )
+        return rows
+
     def test_valid_append_passes(self) -> None:
         validate(self.head, self.base, self.audited_at)
+
+    def test_reviewed_bootstrap_passes_without_a_base_registry(self) -> None:
+        self.install_reviewed_bootstrap()
+        validate(self.head, self.base, self.audited_at)
+
+    def test_initial_registry_rejects_an_unreviewed_bootstrap(self) -> None:
+        rows = self.install_reviewed_bootstrap()
+        checkpoint_path = (
+            self.head / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+        )
+        document = json.loads(checkpoint_path.read_text())
+        first = document["surfaces"]["github_repository_search"][0]
+        first["required_prefix_rows"] = 107
+        first["sha256"] = history_digest(rows[:107])
+        checkpoint_path.write_text(json.dumps(document, indent=2) + "\n")
+        roadmap_path = self.head / "docs" / "ROADMAP.md"
+        roadmap_path.write_text(
+            roadmap_path.read_text().replace(
+                "github_repository_search 108 "
+                "e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433",
+                "github_repository_search 107 " + history_digest(rows[:107]),
+            )
+        )
+        with self.assertRaisesRegex(AuditError, "exact reviewed bootstrap"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_initial_registry_rejects_mutated_registry_bytes(self) -> None:
+        self.install_reviewed_bootstrap()
+        registry_path = self.head / "docs" / "SEARCH_QUERY_REGISTRY.json"
+        document = json.loads(registry_path.read_text())
+        document["queries"][0]["rationale"] += " Mutated after review."
+        registry_path.write_text(json.dumps(document, indent=2) + "\n")
+        with self.assertRaisesRegex(AuditError, "exact reviewed bootstrap"):
+            validate(self.head, self.base, self.audited_at)
 
     def test_rewriting_trusted_history_fails(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
@@ -179,6 +271,19 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             with self.subTest(duplicate_heading=duplicate_heading):
                 path.write_text(f"{duplicate_heading}\n\n{self.head_visibility}")
                 with self.assertRaisesRegex(AuditError, "invisible Unicode"):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_history_heading_cannot_be_an_indented_code_block(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        canonical = "## GitHub repository search history"
+        for replacement in (
+            "    ## GitHub repository search history",
+            "\t## GitHub repository search history",
+            ">     ## GitHub repository search history",
+        ):
+            with self.subTest(replacement=replacement):
+                path.write_text(self.head_visibility.replace(canonical, replacement, 1))
+                with self.assertRaisesRegex(AuditError, "indented code blocks"):
                     validate(self.head, self.base, self.audited_at)
 
     def test_setext_duplicate_history_heading_is_rejected(self) -> None:
@@ -305,6 +410,12 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "activation timestamp is immutable"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_registry_version_rejects_json_boolean(self) -> None:
+        self.registry["registry_version"] = True
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "registry_version must be an integer"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_github_surface_contract_is_immutable(self) -> None:
         self.registry["surfaces"]["github_repository_search"] = {
             **GITHUB_SURFACE_CONTRACT,
@@ -321,6 +432,15 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         }
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "surface result_window must be an integer"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_google_surface_contract_is_immutable(self) -> None:
+        self.registry["surfaces"]["google_web"] = {
+            **GOOGLE_SURFACE_CONTRACT,
+            "transport": "url_inspection",
+        }
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "Google measurement surface"):
             validate(self.head, self.base, self.audited_at)
 
     def test_github_query_rejects_non_diagnostic_qualifiers(self) -> None:
@@ -343,6 +463,9 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 )
                 path.write_text(self.head_visibility.replace(original_row, qualified_row))
                 self.registry["queries"][0]["raw_query"] = qualified_query
+                self.registry["queries"][0]["semantic_identity"] = (
+                    "github-repository-search-v1:syntax:" + qualified_query
+                )
                 measurement["request_parameters"]["q"] = qualified_query
                 self.write_registry()
                 self.refresh_checkpoint()
@@ -386,6 +509,21 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         self.registry["measurements"][0]["ordered_corpus_sha256"] = "b" * 64
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "trusted base measurements"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_registry_preserves_trusted_base_queries(self) -> None:
+        self.registry["queries"][0]["rationale"] += " Rewritten."
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "trusted base queries"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_ai_native_query_remains_excluded_authorship_evidence(self) -> None:
+        query = self.registry["queries"][1]
+        query["lifecycle"] = "active"
+        query["retired_at"] = None
+        query["kpi_role"] = "product_acquisition"
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "authorship narrative"):
             validate(self.head, self.base, self.audited_at)
 
     def test_checkpoints_preserve_the_trusted_base_prefix(self) -> None:

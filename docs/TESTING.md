@@ -430,22 +430,31 @@ identity is compared after HTML character-reference decoding and inline-markup
 normalization without inserting intraword boundaries. Invisible Unicode format
 and mark characters are rejected after entity decoding, and Setext level-2
 headings recover their complete multiline paragraph through blockquote and list
-container prefixes. Because
-this evidence file is a data ledger rather than general documentation, inline
+container prefixes. Because this evidence file is a data ledger rather than
+general documentation, inline
 links or HTML are forbidden in headings, and fenced or raw-HTML blocks are
 rejected fail-closed anywhere in the document. They cannot turn the canonical
-table into rendered code or an unaudited Markdown/HTML surface. The checkpoint
+table into rendered code or an unaudited Markdown/HTML surface; ATX/Setext
+heading syntax behind four-space or tab code indentation is rejected for the
+same reason. The checkpoint
 schema also requires a non-boolean JSON integer version before accepting
 version `1`. The GitHub surface and every measurement require exact non-boolean
 integers for the top-50 result window and `per_page`; Python's numeric equality
 cannot admit JSON floats such as `50.0` into authoritative replay data. This
 staging commit therefore also imports the 22 reviewed
 2026-07-29/30 GitHub rows that predate the registry, making them part of the
-actual trusted base rather than granting a timestamp-based bootstrap exception.
-The suite covers each failure class before the prospective workflow can be
-activated. The fixture is not active in this staging commit. Activation must
-copy it
-byte-for-byte to `workflow-policy.yml` in a later pull request, prove the new
+actual trusted base. It stages the initial registry, both history checkpoints,
+and their roadmap projection in the same pre-activation revision. The audit's
+one-time initialization path accepts only those exact reviewed 108-row and
+130-row digests plus the byte-exact registry and checkpoint files. Its schema
+validation covers the registry version, semantic
+identity versions, both surface contracts, query lifecycle/KPI/alias rules,
+and the retired `AI-native compiler` authorship diagnostic. This is a pinned
+bootstrap, not a timestamp exception that future rows can claim. The suite and
+a direct head-versus-`origin/main` invocation cover the real bootstrap before
+the prospective workflow can be activated. The fixture is not active in this
+staging commit. Activation must copy it byte-for-byte to
+`workflow-policy.yml` in a later pull request, prove the new
 required `audit` run, and retire the older roadmap-only trust-anchor digest.
 
 The regular PR job runs this checker for fast feedback only; pull-request code

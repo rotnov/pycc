@@ -15,6 +15,7 @@ from typing import Any
 
 
 GITHUB_SURFACE = "github_repository_search"
+GOOGLE_SURFACE = "google_web"
 ACTIVATED_AT = "2026-07-30T14:14:24Z"
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -34,6 +35,14 @@ RAW_HTML_BLOCK_START = re.compile(
     re.IGNORECASE,
 )
 LIST_MARKER = re.compile(r"(?:[-+*]|\d+[.)])[ \t]+(.*)\Z")
+SIMPLE_TERM = re.compile(r"[A-Za-z0-9]+\Z")
+BOOLEAN_TERMS = {"AND", "NOT", "OR"}
+LIFECYCLES = {"active", "diagnostic", "retired"}
+KPI_ROLES = {"product_acquisition", "diagnostic", "excluded"}
+SEMANTIC_IDENTITY_VERSIONS = {
+    GITHUB_SURFACE: "github-repository-search-v1",
+    GOOGLE_SURFACE: "google-web-query-v1",
+}
 GITHUB_SURFACE_CONTRACT = {
     "provider": "github",
     "transport": "GET /search/repositories",
@@ -42,6 +51,56 @@ GITHUB_SURFACE_CONTRACT = {
     "qualifier_policy": (
         "No user: or repo: qualifier; field and topic qualifiers are "
         "diagnostic only."
+    ),
+}
+GOOGLE_SURFACE_CONTRACT = {
+    "provider": "google",
+    "transport": "search_console_performance",
+    "sort": "provider_aggregated",
+    "result_window": None,
+    "qualifier_policy": (
+        "Use processed owner-facing query data; do not substitute site: "
+        "searches or URL Inspection."
+    ),
+}
+REGISTRY_KEYS = {
+    "registry_version",
+    "registry_activated_at",
+    "semantic_identity_versions",
+    "surfaces",
+    "measurements",
+    "queries",
+}
+QUERY_KEYS = {
+    "id",
+    "surface",
+    "raw_query",
+    "semantic_identity",
+    "semantic_identity_version",
+    "intent_class",
+    "lifecycle",
+    "kpi_role",
+    "rationale",
+    "activated_at",
+    "retired_at",
+    "alias_of",
+}
+BOOTSTRAP_CHECKPOINTS = [
+    {
+        "required_prefix_rows": 108,
+        "sha256": "e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433",
+    },
+    {
+        "required_prefix_rows": 130,
+        "sha256": "3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5",
+    },
+]
+BOOTSTRAP_FILE_SHA256 = {
+    "SEARCH_QUERY_REGISTRY.json": (
+        "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c"
+    ),
+    "SEARCH_VISIBILITY_CHECKPOINTS.json": (
+        "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
     ),
 }
 MEASUREMENT_KEYS = {
@@ -97,6 +156,24 @@ def begins_list_item(line: str) -> bool:
     return LIST_MARKER.fullmatch(content) is not None
 
 
+def has_indented_code_prefix(line: str) -> bool:
+    """Detect code indentation after the supported block containers."""
+    content = line
+    while True:
+        quote = re.match(r" {0,3}>[ \t]?", content)
+        if quote is not None:
+            content = content[quote.end() :]
+            continue
+        list_item = re.match(r" {0,3}(?:[-+*]|\d+[.)])([ \t]+)", content)
+        if list_item is not None:
+            whitespace = list_item.group(1)
+            if "\t" in whitespace or len(whitespace) >= 5:
+                return True
+            content = content[list_item.end() :]
+            continue
+        return content.startswith("\t") or content.startswith("    ")
+
+
 def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | None:
     """Recover the complete paragraph promoted by a Setext underline."""
     paragraph: list[str] = []
@@ -123,6 +200,13 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
     lines = markdown.splitlines()
     for line in lines:
         content = visible_block_content(line)
+        if has_indented_code_prefix(line) and (
+            atx_heading(content) is not None
+            or SETEXT_UNDERLINE.fullmatch(content) is not None
+        ):
+            raise AuditError(
+                "search visibility headings cannot use indented code blocks"
+            )
         if FENCE_START.fullmatch(content):
             raise AuditError("search visibility ledger cannot contain fenced blocks")
         if RAW_HTML_BLOCK_START.match(content):
@@ -206,6 +290,28 @@ def require_integer(value: Any, description: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise AuditError(f"{description} must be an integer")
     return value
+
+
+def ascii_lower(value: str) -> str:
+    return value.translate(
+        str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+    )
+
+
+def semantic_identity(surface: str, raw_query: str, version: str) -> str:
+    if not raw_query or raw_query != raw_query.strip():
+        raise AuditError("query text must be nonempty and have no edge whitespace")
+    if surface == GITHUB_SURFACE:
+        terms = raw_query.split()
+        if terms and all(
+            SIMPLE_TERM.fullmatch(term) and term not in BOOLEAN_TERMS for term in terms
+        ):
+            normalized = " ".join(sorted(ascii_lower(term) for term in terms))
+            return f"{version}:bag:{normalized}"
+        return f"{version}:syntax:{raw_query}"
+    if surface == GOOGLE_SURFACE:
+        return f"{version}:raw:{raw_query}"
+    raise AuditError(f"unsupported query surface: {surface!r}")
 
 
 def parse_rank(value: str) -> int | None:
@@ -360,32 +466,80 @@ def validate_registry(
     audited_at: datetime,
 ) -> None:
     registry = load_object(head_root / "docs" / "SEARCH_QUERY_REGISTRY.json")
+    if set(registry) != REGISTRY_KEYS:
+        raise AuditError("registry has unexpected fields")
+    if require_integer(registry["registry_version"], "registry_version") != 1:
+        raise AuditError("registry_version must be 1")
     if registry.get("registry_activated_at") != ACTIVATED_AT:
         raise AuditError("registry activation timestamp is immutable")
+    versions = registry.get("semantic_identity_versions")
+    if versions != SEMANTIC_IDENTITY_VERSIONS:
+        raise AuditError("registry semantic identity versions were rewritten")
     surfaces = registry.get("surfaces")
     if not isinstance(surfaces, dict) or set(surfaces) != {
         GITHUB_SURFACE,
-        "google_web",
+        GOOGLE_SURFACE,
     }:
         raise AuditError("registry must define exact GitHub and Google surfaces")
     if surfaces[GITHUB_SURFACE] != GITHUB_SURFACE_CONTRACT:
         raise AuditError("GitHub measurement surface contract was rewritten")
+    if surfaces[GOOGLE_SURFACE] != GOOGLE_SURFACE_CONTRACT:
+        raise AuditError("Google measurement surface contract was rewritten")
     require_integer(
         surfaces[GITHUB_SURFACE]["result_window"],
         "GitHub surface result_window",
     )
 
     queries = registry.get("queries")
-    if not isinstance(queries, list):
-        raise AuditError("registry queries must be a list")
+    if not isinstance(queries, list) or not queries:
+        raise AuditError("registry queries must be a nonempty list")
     queries_by_id: dict[str, dict[str, Any]] = {}
+    queries_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    product_identities: set[tuple[str, str]] = set()
     for query in queries:
-        if not isinstance(query, dict) or not isinstance(query.get("id"), str):
-            raise AuditError("registry query is malformed")
-        raw_query = query.get("raw_query")
-        if query.get("surface") == GITHUB_SURFACE:
-            if not isinstance(raw_query, str) or not raw_query:
-                raise AuditError("GitHub query text must be a nonempty string")
+        if not isinstance(query, dict) or set(query) != QUERY_KEYS:
+            raise AuditError("registry query has unexpected fields")
+        for field in (
+            "id",
+            "surface",
+            "raw_query",
+            "semantic_identity",
+            "semantic_identity_version",
+            "intent_class",
+            "lifecycle",
+            "kpi_role",
+            "rationale",
+            "activated_at",
+        ):
+            if not isinstance(query[field], str) or not query[field].strip():
+                raise AuditError(f"registry query {field} must be a nonempty string")
+        query_id = query["id"]
+        surface = query["surface"]
+        raw_query = query["raw_query"]
+        if surface not in SEMANTIC_IDENTITY_VERSIONS:
+            raise AuditError("registry query has an unsupported surface")
+        version = SEMANTIC_IDENTITY_VERSIONS[surface]
+        if query["semantic_identity_version"] != version:
+            raise AuditError("registry query semantic identity version was rewritten")
+        if query["semantic_identity"] != semantic_identity(surface, raw_query, version):
+            raise AuditError("registry query semantic identity was rewritten")
+        if query["lifecycle"] not in LIFECYCLES:
+            raise AuditError("registry query lifecycle is invalid")
+        if query["kpi_role"] not in KPI_ROLES:
+            raise AuditError("registry query KPI role is invalid")
+        query_activated = parse_timestamp(
+            query["activated_at"], f"query {query_id} activated_at"
+        )
+        retired_at = query["retired_at"]
+        if query["lifecycle"] == "retired":
+            query_retired = parse_timestamp(
+                retired_at, f"query {query_id} retired_at"
+            )
+            if query_retired < query_activated:
+                raise AuditError("registry query retires before activation")
+        elif retired_at is not None:
+            raise AuditError("non-retired registry query cannot have retired_at")
+        if surface == GITHUB_SURFACE:
             qualifiers = [
                 match.group(1).lower()
                 for match in GITHUB_QUALIFIER.finditer(raw_query)
@@ -403,16 +557,59 @@ def validate_registry(
             )
             if qualifiers and not (description_diagnostic or topic_diagnostic):
                 raise AuditError("GitHub query violates the reviewed qualifier policy")
-        if query["id"] in queries_by_id:
+        if query_id in queries_by_id:
             raise AuditError("registry query IDs must be unique")
-        queries_by_id[query["id"]] = query
+        query_key = (surface, raw_query)
+        if query_key in queries_by_key:
+            raise AuditError("registry exact queries must be unique per surface")
+        if query["kpi_role"] == "product_acquisition":
+            if query["lifecycle"] != "active":
+                raise AuditError("product-acquisition query must be active")
+            if query["intent_class"] == "authorship_narrative":
+                raise AuditError("authorship narrative cannot be product acquisition")
+            if query["alias_of"] is not None:
+                raise AuditError("product-acquisition query cannot be an alias")
+            identity_key = (surface, query["semantic_identity"])
+            if identity_key in product_identities:
+                raise AuditError("product semantic identity is double-counted")
+            product_identities.add(identity_key)
+        queries_by_id[query_id] = query
+        queries_by_key[query_key] = query
+
+    for query in queries:
+        alias_of = query["alias_of"]
+        if alias_of is None:
+            continue
+        if not isinstance(alias_of, str) or alias_of not in queries_by_id:
+            raise AuditError("registry query has an unknown alias target")
+        target = queries_by_id[alias_of]
+        if (
+            query["kpi_role"] != "diagnostic"
+            or query["surface"] != target["surface"]
+            or query["semantic_identity"] != target["semantic_identity"]
+        ):
+            raise AuditError("registry query alias contract is invalid")
+
+    retired_authorship = queries_by_key.get((GITHUB_SURFACE, "AI-native compiler"))
+    if retired_authorship is None or (
+        retired_authorship["intent_class"] != "authorship_narrative"
+        or retired_authorship["lifecycle"] != "retired"
+        or retired_authorship["kpi_role"] != "excluded"
+    ):
+        raise AuditError("AI-native compiler must remain a retired authorship query")
 
     measurements = registry.get("measurements")
     if not isinstance(measurements, list):
         raise AuditError("registry measurements must be a list")
     base_registry_path = base_root / "docs" / "SEARCH_QUERY_REGISTRY.json"
     if base_registry_path.exists():
-        base_measurements = load_object(base_registry_path).get("measurements")
+        base_registry = load_object(base_registry_path)
+        base_queries = base_registry.get("queries")
+        if not isinstance(base_queries, list):
+            raise AuditError("trusted base registry queries must be a list")
+        if queries[: len(base_queries)] != base_queries:
+            raise AuditError("registry must preserve trusted base queries")
+        base_measurements = base_registry.get("measurements")
         if not isinstance(base_measurements, list):
             raise AuditError("trusted base registry measurements must be a list")
         if measurements[: len(base_measurements)] != base_measurements:
@@ -441,6 +638,15 @@ def validate_registry(
             raise AuditError("measurement predates registry activation")
         if observed > audited_at:
             raise AuditError("measurement observed_at cannot be in the future")
+        query_activated = parse_timestamp(
+            query["activated_at"], f"query {query_id} activated_at"
+        )
+        if observed < query_activated:
+            raise AuditError("measurement predates query activation")
+        if query["retired_at"] is not None and observed >= parse_timestamp(
+            query["retired_at"], f"query {query_id} retired_at"
+        ):
+            raise AuditError("measurement is outside the query lifecycle")
         raw_query = query.get("raw_query")
         key = (measurement["observed_at"], raw_query)
         if not isinstance(raw_query, str) or key in projected:
@@ -562,6 +768,16 @@ def validate(
             raise AuditError("checkpoints must preserve the trusted base prefix")
     if roadmap_checkpoints(head_root) != values:
         raise AuditError("roadmap checkpoints do not match the bound ledger")
+    base_registry_path = base_root / "docs" / "SEARCH_QUERY_REGISTRY.json"
+    trusted_prefix_rows = len(base_rows)
+    if not base_registry_path.exists():
+        if values != BOOTSTRAP_CHECKPOINTS:
+            raise AuditError("initial registry must use the exact reviewed bootstrap")
+        for filename, expected_digest in BOOTSTRAP_FILE_SHA256.items():
+            payload = head_root.joinpath("docs", filename).read_bytes()
+            if hashlib.sha256(payload).hexdigest() != expected_digest:
+                raise AuditError("initial registry must use the exact reviewed bootstrap")
+        trusted_prefix_rows = len(head_rows)
     activated_at = parse_timestamp(ACTIVATED_AT, "registry activated_at")
     if audited_at is None:
         audited_at = datetime.now(timezone.utc)
@@ -569,7 +785,7 @@ def validate(
         head_root,
         base_root,
         head_rows,
-        len(base_rows),
+        trusted_prefix_rows,
         activated_at,
         audited_at,
     )

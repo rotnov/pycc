@@ -23,7 +23,7 @@ Entry point to the full spec. Development model is AI-first (D-013): the normati
 | [AGENT_TOOLING.md](./AGENT_TOOLING.md) | Agent plugin pins, reviewed update process, validation, and rollback | `.agents/`, `.claude/`, agent-asset CI |
 | [WEBSITE.md](./WEBSITE.md) | Public website, search metadata, canonical URL, and GitHub Pages publication | `site/`, Pages workflow |
 | [DISTRIBUTION.md](./DISTRIBUTION.md) | Source-based pre-commit publication, hook contract, installation limits | `.pre-commit-hooks.yaml`, `pycc check`, release tags |
-| [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md) | Chronological search-query measurements and ranking methodology | discoverability monitoring |
+| [SEARCH_VISIBILITY.md](./SEARCH_VISIBILITY.md), [SEARCH_QUERY_REGISTRY.json](./SEARCH_QUERY_REGISTRY.json), and [SEARCH_VISIBILITY_CHECKPOINTS.json](./SEARCH_VISIBILITY_CHECKPOINTS.json) | Chronological provider-qualified measurements, the machine-readable query-intent registry, and append-only history-prefix checkpoints | discoverability monitoring and the staged trusted search audit |
 
 ## Invariants (short version)
 
