@@ -144,6 +144,9 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             "## GitHub repository search history ##",
             "> ## GitHub repository search history",
             "- ## GitHub repository search history",
+            "## GitHub repository search&#32;history",
+            "## **GitHub repository search history**",
+            "## [GitHub repository search history](https://example.invalid)",
         ):
             with self.subTest(duplicate_heading=duplicate_heading):
                 path.write_text(

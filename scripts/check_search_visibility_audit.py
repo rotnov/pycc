@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import html
 import json
 from pathlib import Path
 import re
@@ -115,10 +116,24 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
     return headings
 
 
+def rendered_heading_matches(candidate: str, expected: str) -> bool:
+    """Match the canonical title after entity and inline-markup normalization."""
+    candidate_words = re.findall(r"[A-Za-z0-9]+", html.unescape(candidate).casefold())
+    expected_words = re.findall(r"[A-Za-z0-9]+", expected.casefold())
+    return any(
+        candidate_words[index : index + len(expected_words)] == expected_words
+        for index in range(len(candidate_words) - len(expected_words) + 1)
+    )
+
+
 def section(markdown: str, heading: str) -> str:
     lines = markdown.splitlines()
     headings = markdown_headings(markdown)
-    matches = [item for item in headings if item[2:] == (2, heading)]
+    matches = [
+        item
+        for item in headings
+        if item[2] == 2 and rendered_heading_matches(item[3], heading)
+    ]
     if len(matches) != 1:
         raise AuditError(f"expected exactly one level-2 {heading!r} section")
     start = matches[0][1]
