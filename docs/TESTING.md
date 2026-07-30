@@ -180,14 +180,18 @@ D-056 retained the same boundary, and D-062 keeps it while changing only the
 fixed sample plan and comparator. Artifact and checkout actions remain immutable
 reviewed pins.
 
-The active `.github/workflows/ci.yml` is byte-identical to
-`tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml`. Its performance jobs remain
-byte-identical to the reviewed D-062 fixture. The checker allowlist contains
-only active D-099, while structural mutation tests exercise the active
-fixed-replicate and cache boundaries plus D-091's and D-056's retained audit
-fixtures. The retired D-051, D-056, D-062, D-080, D-084, and pre-D-099 D-091
-whole-file digests remain historical audit evidence, but the public policy
-rejects them.
+The active `.github/workflows/ci.yml` is still byte-identical to
+`tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml` as of this stage commit; its
+performance jobs remain byte-identical to the reviewed D-062 fixture. The
+checker allowlist now also stages `tests/fixtures/d100-compose-d91-d99-ci.yml`
+(D-091 composed with D-099) alongside active D-099, matching D-090's and
+D-099's own stage-alongside-active pattern -- v0.2 PR-8's own merge is the
+activation that replaces `ci.yml` with D-100's bytes and retires D-099's
+digest. Structural mutation tests exercise the active fixed-replicate and
+cache boundaries plus D-091's, D-099's (once retired), and D-056's retained
+audit fixtures. The retired D-051, D-056, D-062, D-080, D-084, and pre-D-100
+D-091 whole-file digests remain historical audit evidence, but the public
+policy rejects them.
 The D-048 steady-state, pre-split, and activation fixtures, their digests, and
 their bootstrap tests are absent.
 The retired D-048 mean comparator and its standalone test are absent too;
@@ -286,10 +290,10 @@ A synthetic isolated extreme outlier passes only when the other four samples
 keep the aggregate within 2%; three regressed samples make the median fail. An
 exact `true` passes even for an extreme delta. An identical-tree local 5+5 run
 retained all samples and measured aggregate medians `7068.84 ns -> 7054.06 ns`
-(`-0.21%`). Byte-exact activation proves the reviewed jobs execute, but an
-unchanged-source activation run follows the non-blocking identity path. #109
-therefore remains open until repeated changed-source PR/main runs validate the
-blocking aggregate without result selection.
+(`-0.21%`). Byte-exact activation proves the reviewed jobs execute, and
+repeated changed-source PR/main runs from merged PRs [#51](https://github.com/rotnov/pycc/pull/51)
+and [#132](https://github.com/rotnov/pycc/pull/132) later validated the
+blocking aggregate without result selection, closing #109 (2026-07-26).
 
 The byte-exact activation retired the D-048 workflow digest and fixture. No
 administrative bootstrap is required because each D-099 run uses D-062's

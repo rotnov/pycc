@@ -31,6 +31,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent /
     "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml"
+  D100_COMPOSED_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/d100-compose-d91-d99-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -967,13 +970,45 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d99
+  # D-100 stages a composed digest (D-091 + D-099) alongside active D-99,
+  # matching D-090's/D-099's own stage-alongside-active pattern -- this
+  # commit does not touch the live `ci.yml`, so D-99 remains what it
+  # authorizes until v0.2 PR-8's own merge activates D-100 and retires D-99.
+  def test_tier1_workflow_allowlist_contains_active_d99_and_staged_d100
     assert_equal(
       [
-        D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256
+        D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256,
+        D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256
       ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
+  end
+
+  def test_d100_composed_workflow_is_a_reviewed_staged_fixture
+    assert_equal(
+      D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D100_COMPOSED_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256
+    assert validate_source_aware_perf_gate_lifecycle(
+      D100_COMPOSED_WORKFLOW_FIXTURE.read,
+      D100_COMPOSED_WORKFLOW_FIXTURE.to_s
+    )
+    assert coverage_gate_present?(
+      D100_COMPOSED_WORKFLOW_FIXTURE.read,
+      D100_COMPOSED_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_public_cli_accepts_the_staged_d100_workflow
+    stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: D100_COMPOSED_WORKFLOW_FIXTURE.read
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
   end
 
   # D-090's own fixture is gone: it was staged but never activated, and
