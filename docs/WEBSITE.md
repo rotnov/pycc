@@ -83,9 +83,11 @@ its HTML, Open Graph, X, and JSON-LD descriptions put the AOT compiler for typed
 Python and current pre-alpha maturity in the first semantic clause, with
 AI-created/human-managed provenance second. Status, architecture, and
 comparison pages describe their product-evidence role. The dedicated
-authorship/provenance page may lead with the AI experiment, but must still make
-the pre-alpha compiler context unambiguous. These projections share material
-truth without requiring byte-identical prose.
+authorship/provenance page may lead with the AI experiment in its title and
+body, but its HTML, Open Graph, X, and JSON-LD descriptions must identify pycc
+as a pre-alpha AOT compiler for typed Python before describing the authorship
+experiment. These projections share material truth without requiring
+byte-identical prose.
 
 The landing page also carries the persistent Google Search Console verification
 token for the `https://rotnov.github.io/pycc/` URL-prefix property and a

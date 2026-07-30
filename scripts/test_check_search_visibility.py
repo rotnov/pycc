@@ -18,7 +18,11 @@ REPO_ROOT = SCRIPT_DIR.parent
 CHECKER = SCRIPT_DIR / "check_search_visibility.py"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from check_search_visibility import semantic_identity  # noqa: E402
+from check_search_visibility import (  # noqa: E402
+    github_history_rows,
+    history_digest,
+    semantic_identity,
+)
 
 
 class SearchVisibilityContractTests(unittest.TestCase):
@@ -57,6 +61,22 @@ class SearchVisibilityContractTests(unittest.TestCase):
         (self.root / "docs" / "SEARCH_QUERY_REGISTRY.json").write_text(
             json.dumps(registry, indent=2, ensure_ascii=False) + "\n"
         )
+
+    def append_history_row(self, row: str) -> None:
+        path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        content = path.read_text()
+        marker = "\n## GitHub traffic history"
+        self.assertIn(marker, content)
+        path.write_text(content.replace(marker, f"\n{row}{marker}", 1))
+
+    def advance_history_floor(self) -> None:
+        path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        rows = github_history_rows(path.read_text())
+        registry = self.registry()
+        floor = registry["history_floor"]["github_repository_search"]
+        floor["required_prefix_rows"] = len(rows)
+        floor["sha256"] = history_digest(rows)
+        self.write_registry(registry)
 
     def assert_rejected(self, expected: str) -> None:
         result = self.run_checker()
@@ -107,7 +127,55 @@ class SearchVisibilityContractTests(unittest.TestCase):
         )
         self.assertIn(historical, content)
         path.write_text(content.replace(historical, "", 1))
-        self.assert_rejected("Historical GitHub observation prefix was rewritten")
+        self.assert_rejected("Historical GitHub observations were deleted")
+
+    def test_imported_replacement_query_rows_are_also_immutable(self) -> None:
+        path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        content = path.read_text()
+        historical = (
+            "| 2026-07-30T00:52:41Z | `typed python aot compiler` | 2 | 0 | 3 | 3 |\n"
+        )
+        self.assertIn(historical, content)
+        path.write_text(content.replace(historical, "", 1))
+        self.assert_rejected("Historical GitHub observations were deleted")
+
+    def test_registry_era_row_requires_replay_metadata(self) -> None:
+        self.append_history_row(
+            "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | 0 | 50 | 240 |"
+        )
+        self.advance_history_floor()
+        self.assert_rejected("Registry-era history row is missing replay metadata")
+
+    def test_complete_registry_era_measurement_projects_to_history(self) -> None:
+        observed_at = "2026-07-31T00:00:00Z"
+        self.append_history_row(
+            f"| {observed_at} | `python aot compiler` | 7 | 0 | 50 | 240 |"
+        )
+        self.advance_history_floor()
+        registry = self.registry()
+        registry["measurements"].append(
+            {
+                "snapshot_id": "github-2026-07-31-python-aot-compiler",
+                "observed_at": observed_at,
+                "query_id": "github-product-python-aot-compiler",
+                "surface": "github_repository_search",
+                "provider": "github",
+                "request_parameters": {
+                    "q": "python aot compiler",
+                    "per_page": 50,
+                },
+                "sort_contract": "default_best_match",
+                "result_window": 50,
+                "returned_results": 50,
+                "api_total": 240,
+                "target_rank": 7,
+                "incomplete_results": False,
+                "ordered_corpus_sha256": "a" * 64,
+            }
+        )
+        self.write_registry(registry)
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_current_interpretation_cannot_promote_retired_query(self) -> None:
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"

@@ -476,6 +476,41 @@ for root_replacement, social_replacement, source_replacement, description in des
     index_path.write_text(original_index)
     if result.returncode == 0:
         raise SystemExit(f"Validator accepted {description}")
+
+ai_description = (
+    "pycc is a pre-alpha AOT compiler for typed Python 3.14 and an AI-native "
+    "development experiment: AI agents create the project while a human "
+    "manages direction."
+)
+ai_social_description = (
+    "pycc is a pre-alpha AOT compiler for typed Python 3.14, created entirely "
+    "by AI agents and managed by a human."
+)
+assert original_ai.count(ai_description) == 2
+assert original_ai.count(ai_social_description) == 2
+ai_path.write_text(
+    original_ai.replace(
+        ai_description,
+        "AI agents create every artifact while a human manages the experiment.",
+    ).replace(
+        ai_social_description,
+        "An experiment created by AI agents and managed by a human.",
+    )
+)
+result = subprocess.run(
+    [str(checker)],
+    cwd=repo_root,
+    env=environment,
+    capture_output=True,
+    text=True,
+    check=False,
+    timeout=15,
+)
+ai_path.write_text(original_ai)
+if result.returncode == 0:
+    raise SystemExit(
+        "Validator accepted provenance metadata without compiler context"
+    )
 PY
 
 cp "$repo_root/site/index.html" "$fixture_root/site/index.html"

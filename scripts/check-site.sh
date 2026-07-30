@@ -575,9 +575,13 @@ PAGE_SPECS = {
             "pycc AI-native experiment — software built entirely by AI"
         ),
         "description": (
-            "See how AI agents create pycc's specifications, code, tests, "
-            "reviews, documentation, and automation while a human only "
-            "manages direction and constraints."
+            "pycc is a pre-alpha AOT compiler for typed Python 3.14 and an "
+            "AI-native development experiment: AI agents create the project "
+            "while a human manages direction."
+        ),
+        "social_description": (
+            "pycc is a pre-alpha AOT compiler for typed Python 3.14, created "
+            "entirely by AI agents and managed by a human."
         ),
         "required_visible_text": (
             "AI-native” does not mean that pycc compiles AI models or an AI-specific language.",
@@ -751,6 +755,14 @@ for path_value in sys.argv[1:]:
             f"Evidence page description is not unique: {description!r}"
         )
     seen_descriptions.add(description)
+
+    if "social_description" in spec:
+        for key in ("og:description", "twitter:description"):
+            if metadata[key][0]["content"] != spec["social_description"]:
+                raise SystemExit(
+                    f"Unexpected {slug} {key}: "
+                    f"{metadata[key][0]['content']!r}"
+                )
 
     expected_metadata = {
         "robots": ROBOTS,

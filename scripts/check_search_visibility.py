@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -29,12 +30,46 @@ REQUIRED_QUERY_KEYS = {
     "retired_at",
     "alias_of",
 }
+REQUIRED_MEASUREMENT_KEYS = {
+    "snapshot_id",
+    "observed_at",
+    "query_id",
+    "surface",
+    "provider",
+    "request_parameters",
+    "sort_contract",
+    "result_window",
+    "returned_results",
+    "api_total",
+    "target_rank",
+    "incomplete_results",
+    "ordered_corpus_sha256",
+}
 SIMPLE_TERM = re.compile(r"[A-Za-z0-9]+\Z")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 BOOLEAN_TERMS = {"AND", "NOT", "OR"}
 
 
 class ContractError(ValueError):
     """Raised when a checked search-visibility contract is inconsistent."""
+
+
+def parse_utc_timestamp(value: Any, description: str) -> datetime:
+    """Parse the canonical second-precision UTC timestamp used by the ledger."""
+
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ContractError(f"{description} must be an ISO 8601 UTC timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+    except ValueError as error:
+        raise ContractError(
+            f"{description} must be an ISO 8601 UTC timestamp"
+        ) from error
+    if parsed.tzinfo != timezone.utc or parsed.microsecond:
+        raise ContractError(
+            f"{description} must use second precision and the Z timezone"
+        )
+    return parsed
 
 
 def ascii_lower(value: str) -> str:
@@ -114,7 +149,10 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def validate_registry(
     registry: dict[str, Any],
-) -> dict[tuple[str, str], dict[str, Any]]:
+) -> tuple[
+    dict[tuple[str, str], dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
     if registry.get("registry_version") != 1:
         raise ContractError("Search query registry_version must be 1")
 
@@ -180,6 +218,15 @@ def validate_registry(
             raise ContractError(f"Retired query {query_id} needs retired_at")
         if query["lifecycle"] != "retired" and query["retired_at"] is not None:
             raise ContractError(f"Non-retired query {query_id} cannot have retired_at")
+        activated_at = parse_utc_timestamp(
+            query["activated_at"], f"Query {query_id} activated_at"
+        )
+        if query["retired_at"] is not None:
+            retired_at = parse_utc_timestamp(
+                query["retired_at"], f"Query {query_id} retired_at"
+            )
+            if retired_at < activated_at:
+                raise ContractError(f"Query {query_id} retires before activation")
 
         if query["kpi_role"] == "product_acquisition":
             if query["lifecycle"] != "active":
@@ -229,7 +276,113 @@ def validate_registry(
             "AI-native compiler must be a retired authorship diagnostic"
         )
 
-    return by_key
+    return by_key, by_id
+
+
+def validate_measurements(
+    registry: dict[str, Any],
+    by_id: dict[str, dict[str, Any]],
+) -> tuple[datetime, dict[tuple[str, str], dict[str, Any]]]:
+    """Validate replay metadata required for every registry-era history row."""
+
+    activated_at = parse_utc_timestamp(
+        registry.get("registry_activated_at"), "registry_activated_at"
+    )
+    surfaces = registry["surfaces"]
+    measurements = registry.get("measurements")
+    if not isinstance(measurements, list):
+        raise ContractError("Registry measurements must be a list")
+
+    by_history_key: dict[tuple[str, str], dict[str, Any]] = {}
+    snapshot_ids: set[str] = set()
+    for measurement in measurements:
+        if (
+            not isinstance(measurement, dict)
+            or set(measurement) != REQUIRED_MEASUREMENT_KEYS
+        ):
+            raise ContractError(
+                "Every registry-era measurement must have the exact replay field set"
+            )
+        snapshot_id = measurement["snapshot_id"]
+        if not isinstance(snapshot_id, str) or not snapshot_id.strip():
+            raise ContractError("Measurement snapshot_id must be nonempty")
+        if snapshot_id in snapshot_ids:
+            raise ContractError(f"Duplicate measurement snapshot_id: {snapshot_id}")
+        snapshot_ids.add(snapshot_id)
+
+        observed_at_text = measurement["observed_at"]
+        observed_at = parse_utc_timestamp(
+            observed_at_text, f"Measurement {snapshot_id} observed_at"
+        )
+        if observed_at < activated_at:
+            raise ContractError(
+                f"Measurement {snapshot_id} predates registry activation"
+            )
+
+        query_id = measurement["query_id"]
+        if query_id not in by_id:
+            raise ContractError(f"Measurement {snapshot_id} has an unknown query_id")
+        query = by_id[query_id]
+        surface = measurement["surface"]
+        if surface != query["surface"] or surface != GITHUB_SURFACE:
+            raise ContractError(f"Measurement {snapshot_id} has the wrong surface")
+        surface_contract = surfaces[surface]
+        if measurement["provider"] != surface_contract["provider"]:
+            raise ContractError(f"Measurement {snapshot_id} has the wrong provider")
+        if measurement["sort_contract"] != surface_contract["sort"]:
+            raise ContractError(
+                f"Measurement {snapshot_id} has the wrong sort contract"
+            )
+        if measurement["result_window"] != surface_contract["result_window"]:
+            raise ContractError(
+                f"Measurement {snapshot_id} has the wrong result window"
+            )
+
+        raw_query = query["raw_query"]
+        expected_parameters = {"q": raw_query, "per_page": 50}
+        if measurement["request_parameters"] != expected_parameters:
+            raise ContractError(
+                f"Measurement {snapshot_id} must preserve exact request parameters"
+            )
+        returned = measurement["returned_results"]
+        total = measurement["api_total"]
+        rank = measurement["target_rank"]
+        window = measurement["result_window"]
+        if (
+            not isinstance(returned, int)
+            or isinstance(returned, bool)
+            or not 0 <= returned <= window
+        ):
+            raise ContractError(
+                f"Measurement {snapshot_id} has invalid returned_results"
+            )
+        if not isinstance(total, int) or isinstance(total, bool) or total < returned:
+            raise ContractError(f"Measurement {snapshot_id} has invalid api_total")
+        if rank is not None and (
+            not isinstance(rank, int)
+            or isinstance(rank, bool)
+            or not 1 <= rank <= returned
+        ):
+            raise ContractError(f"Measurement {snapshot_id} has invalid target_rank")
+        if not isinstance(measurement["incomplete_results"], bool):
+            raise ContractError(
+                f"Measurement {snapshot_id} has invalid incomplete_results"
+            )
+        if not isinstance(
+            measurement["ordered_corpus_sha256"], str
+        ) or not SHA256.fullmatch(measurement["ordered_corpus_sha256"]):
+            raise ContractError(
+                f"Measurement {snapshot_id} needs an ordered-corpus SHA-256"
+            )
+
+        history_key = (observed_at_text, raw_query)
+        if history_key in by_history_key:
+            raise ContractError(
+                f"Duplicate registry-era measurement for {history_key!r}"
+            )
+        by_history_key[history_key] = measurement
+
+    return activated_at, by_history_key
 
 
 def validate(root: Path) -> None:
@@ -240,7 +393,8 @@ def validate(root: Path) -> None:
     spec_path = root / "docs" / "SPEC.md"
 
     registry = load_json(registry_path)
-    by_key = validate_registry(registry)
+    by_key, by_id = validate_registry(registry)
+    registry_activated_at, measurements = validate_measurements(registry, by_id)
     visibility = visibility_path.read_text()
     compact_visibility = " ".join(visibility.split())
     rows = github_history_rows(visibility)
@@ -254,10 +408,16 @@ def validate(root: Path) -> None:
         raise ContractError("History floor row count must be positive")
     if len(rows) < required_rows:
         raise ContractError("Historical GitHub observations were deleted")
+    if len(rows) > required_rows:
+        raise ContractError(
+            "History floor must cover every committed GitHub observation"
+        )
     if history_digest(rows[:required_rows]) != required_digest:
         raise ContractError("Historical GitHub observation prefix was rewritten")
 
     for row in rows:
+        observed_at_text = row[0]
+        observed_at = parse_utc_timestamp(observed_at_text, "History observed_at")
         raw_query = row[1]
         if (
             len(raw_query) < 2
@@ -272,6 +432,30 @@ def validate(root: Path) -> None:
             raise ContractError(
                 f"Historical query is missing from registry: {key[1]!r}"
             )
+        if observed_at >= registry_activated_at:
+            measurement = measurements.get((observed_at_text, key[1]))
+            if measurement is None:
+                raise ContractError(
+                    "Registry-era history row is missing replay metadata"
+                )
+            expected_rank = (
+                ">50"
+                if measurement["target_rank"] is None
+                else str(measurement["target_rank"])
+            )
+            if (
+                row[2] != expected_rank
+                or row[4] != str(measurement["returned_results"])
+                or row[5] != str(measurement["api_total"])
+            ):
+                raise ContractError(
+                    "Registry-era history row disagrees with replay metadata"
+                )
+
+    history_keys = {(row[0], row[1][1:-1]) for row in rows}
+    orphaned_measurements = set(measurements) - history_keys
+    if orphaned_measurements:
+        raise ContractError("Registry-era replay metadata has no matching history row")
 
     required_visibility = (
         "[machine-readable query registry](./SEARCH_QUERY_REGISTRY.json)",
