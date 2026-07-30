@@ -474,6 +474,53 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "retirement cannot be in the future"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_existing_active_query_can_be_retired(self) -> None:
+        query = self.registry["queries"][0]
+        query["lifecycle"] = "retired"
+        query["retired_at"] = "2026-07-31T00:00:01Z"
+        self.write_registry()
+        validate(self.head, self.base, self.audited_at)
+
+    def test_query_retirement_must_follow_existing_measurements(self) -> None:
+        query = self.registry["queries"][0]
+        query["lifecycle"] = "retired"
+        query["retired_at"] = "2026-07-31T00:00:00Z"
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "outside the query lifecycle"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_query_retirement_cannot_rewrite_identity(self) -> None:
+        query = self.registry["queries"][0]
+        query["lifecycle"] = "retired"
+        query["retired_at"] = "2026-07-31T00:00:01Z"
+        query["rationale"] += " Rewritten during retirement."
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "trusted base queries"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_registry_raw_query_rejects_embedded_backticks(self) -> None:
+        query = self.registry["queries"][0]
+        query["raw_query"] = "python `aot` compiler"
+        query["semantic_identity"] = (
+            "github-repository-search-v1:syntax:python `aot` compiler"
+        )
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "cannot contain backticks"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_history_raw_query_rejects_embedded_backticks(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        path.write_text(
+            path.read_text().replace(
+                "`python aot compiler` | 7",
+                "`python `aot` compiler` | 7",
+                1,
+            )
+        )
+        self.refresh_checkpoint()
+        with self.assertRaisesRegex(AuditError, "embedded backticks"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_registry_version_rejects_json_boolean(self) -> None:
         self.registry["registry_version"] = True
         self.write_registry()

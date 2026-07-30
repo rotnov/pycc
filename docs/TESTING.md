@@ -454,6 +454,7 @@ one-time initialization path accepts only those exact reviewed 108-row and
 130-row digests plus the byte-exact registry, ledger, and checkpoint files. Its
 schema validation covers the registry version, semantic
 identity versions, both surface contracts, query lifecycle/KPI/alias rules,
+one-way identity-preserving query retirement, unambiguous backtick projection,
 and the retired `AI-native compiler` authorship diagnostic. This is a pinned
 bootstrap, not a timestamp exception that future rows can claim. The suite and
 a direct head-versus-`origin/main` invocation cover the real bootstrap before

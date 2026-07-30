@@ -100,7 +100,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c"
     ),
     "SEARCH_VISIBILITY.md": (
-        "ce03b8296624230d3856cfcadabef43bfc0c97937830f20166671462b79793a6"
+        "d09c3386b9b9c088cf6a0a69479d5f0bfe470edeca0fbdb47bec5af9c8a72d44"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -542,6 +542,8 @@ def validate_registry(
         query_id = query["id"]
         surface = query["surface"]
         raw_query = query["raw_query"]
+        if surface == GITHUB_SURFACE and "`" in raw_query:
+            raise AuditError("GitHub registry raw_query cannot contain backticks")
         if surface not in SEMANTIC_IDENTITY_VERSIONS:
             raise AuditError("registry query has an unsupported surface")
         version = SEMANTIC_IDENTITY_VERSIONS[surface]
@@ -593,16 +595,19 @@ def validate_registry(
         if query_key in queries_by_key:
             raise AuditError("registry exact queries must be unique per surface")
         if query["kpi_role"] == "product_acquisition":
-            if query["lifecycle"] != "active":
-                raise AuditError("product-acquisition query must be active")
+            if query["lifecycle"] not in {"active", "retired"}:
+                raise AuditError(
+                    "product-acquisition query must be active or retired"
+                )
             if query["intent_class"] == "authorship_narrative":
                 raise AuditError("authorship narrative cannot be product acquisition")
             if query["alias_of"] is not None:
                 raise AuditError("product-acquisition query cannot be an alias")
-            identity_key = (surface, query["semantic_identity"])
-            if identity_key in product_identities:
-                raise AuditError("product semantic identity is double-counted")
-            product_identities.add(identity_key)
+            if query["lifecycle"] == "active":
+                identity_key = (surface, query["semantic_identity"])
+                if identity_key in product_identities:
+                    raise AuditError("product semantic identity is double-counted")
+                product_identities.add(identity_key)
         queries_by_id[query_id] = query
         queries_by_key[query_key] = query
 
@@ -637,8 +642,28 @@ def validate_registry(
         base_queries = base_registry.get("queries")
         if not isinstance(base_queries, list):
             raise AuditError("trusted base registry queries must be a list")
-        if queries[: len(base_queries)] != base_queries:
+        if len(queries) < len(base_queries):
             raise AuditError("registry must preserve trusted base queries")
+        immutable_query_fields = QUERY_KEYS - {"lifecycle", "retired_at"}
+        for base_query, query in zip(base_queries, queries):
+            if query == base_query:
+                continue
+            preserves_identity = (
+                isinstance(base_query, dict)
+                and all(
+                    query.get(field) == base_query.get(field)
+                    for field in immutable_query_fields
+                )
+            )
+            retires_once = (
+                isinstance(base_query, dict)
+                and base_query.get("lifecycle") in {"active", "diagnostic"}
+                and base_query.get("retired_at") is None
+                and query.get("lifecycle") == "retired"
+                and query.get("retired_at") is not None
+            )
+            if not preserves_identity or not retires_once:
+                raise AuditError("registry must preserve trusted base queries")
         base_measurements = base_registry.get("measurements")
         if not isinstance(base_measurements, list):
             raise AuditError("trusted base registry measurements must be a list")
@@ -742,6 +767,8 @@ def validate_registry(
         if len(raw_query) < 2 or raw_query[0] != "`" or raw_query[-1] != "`":
             raise AuditError("history query must preserve backticked raw text")
         raw_query = raw_query[1:-1]
+        if "`" in raw_query:
+            raise AuditError("history raw query cannot contain embedded backticks")
         current_rank = parse_rank(row[2])
         expected_delta = rank_delta(
             previous_ranks.get(raw_query), current_rank, raw_query in previous_ranks
