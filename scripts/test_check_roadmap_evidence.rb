@@ -13,7 +13,7 @@ require_relative "check_roadmap_evidence"
 
 class RoadmapEvidenceCliTest < Minitest::Test
   CHECKER = Pathname(__dir__) / "check_roadmap_evidence.rb"
-  ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW =
+  ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW =
     Pathname(__dir__).parent / ".github/workflows/ci.yml"
   RETIRED_D51_PAIRED_WORKFLOW =
     Pathname(__dir__).parent / "tests/fixtures/d51-paired-ci.yml"
@@ -28,6 +28,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent /
     "tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml"
+  D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml"
+  D100_COMPOSED_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/d100-compose-d91-d99-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -658,7 +664,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     hidden_items.each do |hidden_item|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{hidden_item}",
-        workflow: ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW.read
+        workflow: ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
       )
 
       assert status.success?, stderr
@@ -677,7 +683,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW.read
+      workflow: ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
     )
 
     assert status.success?, stderr
@@ -697,7 +703,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
 
     stdout, stderr, status = run_checker(
       roadmap: roadmap,
-      workflow: ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW.read
+      workflow: ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
     )
 
     assert status.success?, stderr
@@ -708,7 +714,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     ["    - [x] Root code example.\n", ">     - [x] Quoted code example.\n"].each do |example|
       stdout, stderr, status = run_checker(
         roadmap: "# pycc Roadmap\n\n#{example}",
-        workflow: ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW.read
+        workflow: ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
       )
 
       assert status.success?, stderr
@@ -956,25 +962,26 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
-  def test_tier1_workflow_authorization_is_the_active_d91_digest
+  def test_tier1_workflow_authorization_is_the_active_d100_digest
     assert_equal(
-      D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
+      D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d91
+  def test_tier1_workflow_authorization_contains_only_active_d100
     assert_equal(
-      [D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256],
+      [D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
 
   # v0.2 PR-8's own merge is the activation commit for the coverage-step
   # shape too (same as the digest array above): `ci.yml` now matches the
-  # D91 coverage-step shape exclusively, so the pre-D91 shape
+  # D91 coverage-step shape exclusively (D-099's own vcpkg-cache change never
+  # touched build-test-coverage's own step at all), so the pre-D91 shape
   # (`COVERAGE_SCRIPT`/`TRUSTED_COVERAGE_STEPS`) must no longer be accepted
   # alongside it.
   def test_coverage_gate_authorization_contains_only_active_d91
@@ -982,18 +989,148 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_equal([D91_TRUSTED_COVERAGE_STEPS], REVIEWED_TRUSTED_COVERAGE_STEPS)
   end
 
-  # `coverage_gate_present?`/`COVERAGE_SCRIPT` DO model part of
-  # build-test-coverage (the exact body of its "Hard coverage gate" step),
-  # unlike the frontend-perf-measure job the lifecycle validator above
-  # checks. D-091's own release-profile build line inside that step (see
-  # check_roadmap_evidence.rb's COVERAGE_SCRIPT) must keep matching this
-  # fixture's actual content, or the activation commit that copies this
-  # fixture into ci.yml would fail its own "Check roadmap evidence" step.
+  # D-090's own fixture is gone: it was staged but never activated, and
+  # was found (while opening PR-8's own pull request) to be missing the
+  # coverage-sandbox release build D-091 adds -- see D-091's comment in
+  # check_roadmap_evidence.rb for the full correction. Its digest constant
+  # remains only as a historical record that it was once reviewed and
+  # staged, matching D51/D56/D62/D80's own "no longer accepted" pattern.
+
+  # Retained pre-D100 audit fixture: D91 is D84 plus PR-8's release-mode
+  # runtime/coverage builds and relaxed manifest contract. D-099 activated
+  # first on `main` (unrelated to PR-8), retiring this digest before D-100
+  # composed it back in alongside D-099's own cache boundary.
+  def test_d91_relax_frontend_perf_manifest_workflow_remains_an_audit_fixture
+    assert_equal(
+      D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE).hexdigest
+    )
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
+  end
+
+
+  # `coverage_gate_present?`/`D91_COVERAGE_SCRIPT` model the exact body of
+  # D91's "Hard coverage gate" step, unlike the frontend-perf-measure job the
+  # lifecycle validator above checks. Keeping this pre-D99 audit fixture
+  # structurally recognized proves it remains a sound input for a future
+  # D91+D99 composition; recognition alone does not publicly authorize its
+  # whole-file digest or permit direct activation.
   def test_d91_relax_frontend_perf_manifest_workflow_still_has_a_recognized_coverage_gate
     assert coverage_gate_present?(
       D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read,
       D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.to_s
     )
+  end
+
+  # Retained pre-D100 audit fixture: D99 (D84 plus the Windows vcpkg cache
+  # boundary) activated on `main` before this PR-8 branch's own merge, but
+  # is itself retired once D-100 composes it with D-091's changes. Its own
+  # coverage step is still D84's pre-D91 shape (D-099 never touched
+  # `build-test-coverage` at all), so it does NOT satisfy the now-narrowed
+  # `coverage_gate_present?` -- matching D91's own retired-fixture pattern
+  # above, not the pre-narrowing expectation an earlier draft of this test
+  # assumed.
+  def test_d99_vcpkg_libxml2_cache_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE).hexdigest
+    )
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256
+    assert validate_source_aware_perf_gate_lifecycle(
+      D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read,
+      D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.to_s
+    )
+    refute coverage_gate_present?(
+      D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read,
+      D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_d99_changes_only_the_retired_d84_native_job_cache_steps
+    retired = Psych.load(D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read)
+    active = Psych.load(D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read)
+    active.fetch("jobs")
+          .fetch("native-build-test")
+          .fetch("steps")
+          .reject! do |step|
+            [
+              "Configure vcpkg binary cache identity (Windows)",
+              "Restore vcpkg libxml2 binary cache (Windows)",
+              "Save vcpkg libxml2 binary cache (Windows main only)"
+            ].include?(step["name"])
+          end
+
+    assert_equal retired, active
+  end
+
+  def test_d99_vcpkg_cache_key_and_write_boundary_are_fail_closed
+    steps = Psych.load(D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read)
+                 .fetch("jobs")
+                 .fetch("native-build-test")
+                 .fetch("steps")
+    identity = steps.find do |step|
+      step["name"] == "Configure vcpkg binary cache identity (Windows)"
+    end
+    restore = steps.find do |step|
+      step["name"] == "Restore vcpkg libxml2 binary cache (Windows)"
+    end
+    install = steps.find do |step|
+      step["name"] == "Install libxml2 (Windows, via vcpkg, for llvm-sys's system-libs)"
+    end
+    save = steps.find do |step|
+      step["name"] == "Save vcpkg libxml2 binary cache (Windows main only)"
+    end
+
+    refute_nil identity
+    refute_nil restore
+    refute_nil install
+    refute_nil save
+    assert_operator steps.index(identity), :<, steps.index(restore)
+    assert_operator steps.index(restore), :<, steps.index(install)
+    assert_operator steps.index(install), :<, steps.index(save)
+
+    expected_action =
+      "actions/cache/%<mode>s@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+    assert_equal format(expected_action, mode: "restore"), restore.fetch("uses")
+    assert_equal format(expected_action, mode: "save"), save.fetch("uses")
+    assert_equal "runner.os == 'Windows'", identity.fetch("if")
+    assert_equal "runner.os == 'Windows'", restore.fetch("if")
+    assert_includes identity.fetch("run"),
+                    "git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD"
+    assert_includes identity.fetch("run"), "'^[0-9a-f]{40}$'"
+    assert_includes identity.fetch("run"), "$imageVersion = $env:ImageVersion"
+    assert_includes identity.fetch("run"),
+                    "'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'"
+    assert_includes identity.fetch("run"),
+                    "\"image_version=$imageVersion\" >> $env:GITHUB_OUTPUT"
+    assert_includes identity.fetch("run"),
+                    "\"VCPKG_DEFAULT_BINARY_CACHE=$cacheDir\" >> $env:GITHUB_ENV"
+
+    expected_key =
+      "vcpkg-libxml2-${{ runner.os }}-${{ runner.arch }}-" \
+      "image-${{ steps.vcpkg_cache_identity.outputs.image_version }}-" \
+      "llvm-${{ env.LLVM_VERSION }}-x64-windows-static-md-" \
+      "${{ steps.vcpkg_cache_identity.outputs.vcpkg_commit }}"
+    assert_equal expected_key, restore.fetch("with").fetch("key")
+    refute restore.fetch("with").key?("restore-keys")
+    assert_equal(
+      "${{ steps.vcpkg_cache_identity.outputs.cache_path }}",
+      restore.fetch("with").fetch("path")
+    )
+    assert_equal(
+      "runner.os == 'Windows' && github.event_name == 'push' && " \
+      "github.ref == 'refs/heads/main' && " \
+      "steps.vcpkg_libxml2_cache_restore.outputs.cache-hit != 'true'",
+      save.fetch("if")
+    )
+    assert_equal(
+      "${{ steps.vcpkg_libxml2_cache_restore.outputs.cache-primary-key }}",
+      save.fetch("with").fetch("key")
+    )
+    assert_equal restore.fetch("with").fetch("path"),
+                 save.fetch("with").fetch("path")
   end
 
   # D-091: the bench-manifest fingerprint (`[dev-dependencies]` onward) must
@@ -1118,11 +1255,13 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_allowlist_retains_the_active_d80_digest
+  def test_d80_conformance_oracle_digest_is_retained_as_historical_audit_evidence
     assert_equal(
       "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234",
       D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
     )
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256
   end
 
   def test_tier1_workflow_allowlist_retires_the_d48_steady_digest
@@ -1286,18 +1425,18 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d91_relax_frontend_perf_manifest_workflow_is_active_and_reviewed
+  def test_d100_composed_workflow_is_active_and_reviewed
     assert_equal(
-      D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE).hexdigest
+      D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D100_COMPOSED_WORKFLOW_FIXTURE).hexdigest
     )
     assert_equal(
-      D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW).hexdigest
+      D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
     )
     assert_equal(
-      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read,
-      ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW.read
+      D100_COMPOSED_WORKFLOW_FIXTURE.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
     )
     assert_equal(
       REPLICATED_PERF_CHECKER_SHA256,
@@ -1314,8 +1453,25 @@ class RoadmapEvidenceCliTest < Minitest::Test
       ).hexdigest
     )
     assert validate_source_aware_perf_gate_lifecycle(
-      ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW.read,
-      ACTIVE_D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW.to_s
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
+    )
+    assert coverage_gate_present?(
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
+    )
+  end
+
+  def test_d84_throughput_floor_workflow_remains_a_retired_audit_fixture
+    assert_equal(
+      D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE).hexdigest
+    )
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256
+    assert validate_source_aware_perf_gate_lifecycle(
+      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read,
+      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.to_s
     )
   end
 
@@ -1327,21 +1483,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert validate_source_aware_perf_gate_lifecycle(
       D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.read,
       D80_CONFORMANCE_ORACLE_WORKFLOW_FIXTURE.to_s
-    )
-  end
-
-  # D-091's activation (v0.2 PR-8) retires D84 the same way D84's own
-  # activation retired D80: the fixture stays as historical audit evidence
-  # proving what was once the real, reviewed, live workflow, even though
-  # its digest no longer authorizes anything new.
-  def test_d84_throughput_floor_workflow_remains_a_reviewed_audit_fixture
-    assert_equal(
-      D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE).hexdigest
-    )
-    assert validate_source_aware_perf_gate_lifecycle(
-      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read,
-      D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.to_s
     )
   end
 
@@ -1366,18 +1507,80 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_public_cli_accepts_the_active_d91_workflow
+  def test_public_cli_accepts_the_active_d100_workflow
     stdout, stderr, status = run_checker(
       roadmap: roadmap_with_tier1_claim(:absent),
-      workflow: D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read
+      workflow: D100_COMPOSED_WORKFLOW_FIXTURE.read
     )
 
     assert status.success?, stderr
     assert_includes stdout, "Roadmap evidence policy passed."
   end
 
-  def test_public_cli_rejects_drift_in_the_active_d91_workflow
-    workflow = D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read.sub(
+  # D99's own fixture is D84 plus the vcpkg-cache steps -- it predates D91's
+  # coverage-step release-`pycc_rt`-build line, so it fails the earlier
+  # `coverage_gate_present?` check (see the D56/D51/D62/D80/D84 block below),
+  # not the digest-mismatch message this file uses elsewhere for D91-shaped
+  # drift. It is no longer active regardless: D100 composed it with D91.
+  def test_public_cli_rejects_the_retired_d99_workflow
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read
+    )
+
+    refute status.success?
+    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
+  end
+
+  def test_public_cli_rejects_the_pre_d99_d91_workflow
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read
+    )
+
+    refute status.success?
+    assert_includes stderr,
+                    "does not match a reviewed active-or-staged performance CI workflow"
+  end
+
+  # D100's own composed fixture DOES carry D91's coverage-step release-build
+  # line (D91 contributed that half of the composition), so mutating its
+  # cache key or timed-loop shape is caught by the digest mismatch, not by
+  # `coverage_gate_present?`.
+  def test_public_cli_rejects_d100_cache_key_without_the_pinned_llvm_version
+    workflow = D100_COMPOSED_WORKFLOW_FIXTURE.read.sub(
+      "-llvm-${{ env.LLVM_VERSION }}-",
+      "-llvm-unpinned-"
+    )
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr,
+                    "does not match a reviewed active-or-staged performance CI workflow"
+  end
+
+  def test_public_cli_rejects_d100_cache_key_without_the_hosted_image_version
+    workflow = D100_COMPOSED_WORKFLOW_FIXTURE.read.sub(
+      "-image-${{ steps.vcpkg_cache_identity.outputs.image_version }}-",
+      "-image-unpinned-"
+    )
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr,
+                    "does not match a reviewed active-or-staged performance CI workflow"
+  end
+
+  def test_public_cli_rejects_drift_in_the_active_d100_workflow
+    workflow = D100_COMPOSED_WORKFLOW_FIXTURE.read.sub(
       "for round in 1 2 3 4 5; do",
       "for round in 1 2 3; do"
     )
@@ -1388,12 +1591,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_an_active_workflow_without_both_perf_jobs
     workflow = without_workflow_jobs(
-      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read,
+      D100_COMPOSED_WORKFLOW_FIXTURE.read,
       "frontend-perf-measure",
       "frontend-perf-gate"
     )
@@ -1404,7 +1607,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_with_unchecked_tier1_claim
@@ -1414,7 +1617,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_without_a_tier1_claim
@@ -1424,12 +1627,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_requires_active_digest_without_a_tier1_claim
     workflow =
-      D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read + "\n# unreviewed drift\n"
+      D100_COMPOSED_WORKFLOW_FIXTURE.read + "\n# unreviewed drift\n"
 
     _stdout, stderr, status = run_checker(
       roadmap: roadmap_with_tier1_claim(:absent),
@@ -1437,7 +1640,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   # This block's expected message is `coverage_gate_present?`'s ("evidence
@@ -2164,7 +2367,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-091 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_requires_the_hard_coverage_gate_while_its_roadmap_claim_is_unchecked

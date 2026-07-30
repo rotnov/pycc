@@ -66,7 +66,16 @@ D62_REPLICATED_SOURCE_AWARE_PERF_CI_WORKFLOW_SHA256 =
 # Historical audit-fixture digest. The public policy no longer accepts it.
 D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
   "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234"
-# Historical audit-fixture digest. The public policy no longer accepts it.
+# D-084: PR-6, Task 7's `pycc check` absolute-throughput-floor CI step
+# added to build-test-coverage, after the cargo-test step so it is never
+# the first exec of the freshly-linked binary in that job -- see D-084's
+# text. Staged onto main first as D80's coexisting sibling by a separate
+# stage PR, required by the pull_request_target audit's base-branch-only
+# checker trust boundary (same mechanism D-080 already needed -- see
+# D-080's "Staging note"); this activation commit retires D80 now that
+# the digest below is already authorized.
+# D-099 later retired this digest from the public allowlist; it remains here
+# only as historical audit evidence and as D-099's exact pre-cache baseline.
 D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256 =
   "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
 # D-090: superseded before activation, never live. This digest covered
@@ -143,17 +152,35 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 # automated review (`chatgpt-codex-connector`) on PR #189 before merge and
 # folded into this same digest rather than filed as follow-ups.
 #
-# Staged onto main first as D84's coexisting sibling by PR #189, required
-# by the pull_request_target audit's base-branch-only checker trust
-# boundary (same mechanism D-080/D-084 already needed); this activation
-# commit (v0.2 PR-8, which needs the manifest relaxation to add its own
-# `toml`/`serde` dependency and the coverage-sandbox fix for its own
-# release-built `pycc_rt` test) retires D84 now that the digest below is
-# already authorized.
+# Pre-D100 staged fixture retained as audit evidence. D-099 activated on
+# `main` before this PR-8 branch's own merge, briefly retiring this digest;
+# D-100 (below) composes these changes with D-099's cache boundary into the
+# digest that actually activates.
 D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
   "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
+# D-099: active D84 successor plus a Windows-only vcpkg binary-cache
+# restore/save boundary for D-027's libxml2 build. The exact cache key binds
+# LLVM_VERSION, runner OS/architecture, the hosted runner image version,
+# x64-windows-static-md, and the image's vcpkg commit. Pull requests restore
+# only; an exact-key miss is saved only by a trusted push to main. D84 and
+# the pre-D100 D91 digest were retired from the public allowlist when this
+# activated; D-100 (below) composes this decision's own cache boundary with
+# D-091's changes under a new digest.
+D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
+  "f8656c7a525fe8775f90c5afe0950b4706eb043ef6f78f6b66e1f50146fc5366"
+# D-100: D-099 (Windows vcpkg libxml2 cache, unrelated to PR-8) activated on
+# `main` while this PR-8 branch still carried D-091's own changes (release-
+# mode `pycc_rt` build step, relaxed `frontend-perf-measure` manifest
+# classification), retiring D-091's digest to audit-only status before PR-8
+# could merge. This composes D-091's changes with D-099's cache boundary
+# (disjoint regions of `ci.yml` -- D-091 touches `build-test-coverage`/every
+# `native-build-test` leg's release-`pycc_rt` step plus `frontend-perf-
+# measure`; D-099 touches only `native-build-test (windows-latest)`'s LLVM-
+# install section) into the one digest PR-8 actually activates.
+D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
+  "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
+  D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -1428,7 +1455,7 @@ def validate_evidence(root, _evidence_ids)
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
     raise RoadmapEvidenceError,
-          "#{workflow}: does not match the reviewed active D-091 performance CI workflow"
+          "#{workflow}: does not match a reviewed active-or-staged performance CI workflow"
   end
   validate_source_aware_perf_gate_lifecycle(workflow_text, workflow.to_s)
 end

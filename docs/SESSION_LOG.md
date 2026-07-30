@@ -11,6 +11,100 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-07-30 — D-100 composes D-099 (merged to `main`) with PR-8's own D-091
+
+**Authoritative checkpoint:** refreshed default `main` is
+[`3bd05f3`](https://github.com/rotnov/pycc/commit/3bd05f3), which merged both
+D-099 staging ([PR #227](https://github.com/rotnov/pycc/pull/227)) and D-099
+activation ([PR #228](https://github.com/rotnov/pycc/pull/228)) — an
+independent, unrelated concurrent change (Windows vcpkg binary cache for
+D-027's libxml2 build, closing issue #225) that landed while this v0.2 PR-8
+branch (`feat/v0-2-pr8-release-profile-pycctoml-nbody`) was still open. D-099's
+own activation retired PR-8's D-091 digest to audit-only status in
+`main`'s `scripts/check_roadmap_evidence.rb`, which made `workflow-policy.yml`'s
+base-owned audit job fail on every PR-8 push regardless of anything PR-8 itself
+changed (that job runs `main`'s copy of the checker against PR-8's `ci.yml` as
+data).
+
+**What this session did:** merged `main` into the PR-8 branch and recorded
+D-100, composing D-091's changes (release-mode `pycc_rt` build step,
+relaxed `frontend-perf-measure` manifest classification) with D-099's Windows
+vcpkg cache into one new reviewed digest
+(`tests/fixtures/d100-compose-d91-d99-ci.yml`,
+`D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256`) — the two touch disjoint regions of
+`ci.yml` and composed with a clean `git merge` (no conflicts inside `ci.yml`
+itself; only surrounding docs/scripts needed manual resolution). Also
+corrected a stale `docs/ROADMAP.md`/`docs/TESTING.md` claim that issue #109
+"stays open" — it closed 2026-07-26 on repeated changed-source PR/main
+evidence from merged PRs #51 and #132.
+
+**Also resolved during this reconciliation:** a real, locally-reproduced
+`frontend-perf-gate` investigation that initially suspected D-090's `toml`/
+`serde` dependency addition was regressing `pycc check`'s own startup speed
+(~5-8% measured locally, spawning the actual CLI binary) — but the gate's own
+`benches/check_bench.rs` never spawns that binary at all; it calls
+`pycc_parser`/`pycc_hir`/`pycc_types` in-process on a fixed fixture, none of
+which PR-8 touched. The CI-reported 4.4961% delta on that specific gate is
+most likely measurement noise (unconfirmed either way — the investigation
+was superseded by the D-099/D-100 reconciliation before a fresh, genuinely
+independent remeasurement was obtained). A quick mitigation attempt (dropping
+`toml`'s `display` feature, hand-formatting `pycc init`'s scaffolded
+`pycc.toml` instead of using `toml::to_string`) was tried and reverted: it
+saved only ~0.05% of binary size since both `toml`'s `parse` and `display`
+features depend on the same underlying `toml_edit` parser, so it did not
+address the (unrelated, since-reframed) regression theory at all.
+
+**Still open, not yet resolved this session:** the `frontend-perf-gate`
+4.4961% delta and `ubuntu-24.04-arm`'s nbody-gate near-miss history (19.92x,
+19.88x, both sub-20x, then a genuine pass) both need a fresh look once CI
+runs again on the reconciled branch — a real new predecessor/candidate pair
+now exists (D-100's merge), so the next CI run on this branch will be a
+genuinely fresh, independent measurement for both, not a replay of a sealed
+artifact.
+
+## 2026-07-30 — D-099 staged; byte-exact activation PR #228 open
+
+**Authoritative checkpoint:** refreshed default `main` is
+[`b62f539e0655997d2e33c7b779d186f58df76d43`](https://github.com/rotnov/pycc/commit/b62f539e0655997d2e33c7b779d186f58df76d43),
+the squash merge of staging
+[PR #227](https://github.com/rotnov/pycc/pull/227). That commit adds the
+reviewed D-099 workflow fixture and digest without changing live CI. Draft
+activation [PR #228](https://github.com/rotnov/pycc/pull/228) is `OPEN` at
+head `d1f7d7ef8a1f1d16afd4f6526fa9418c3b418330`, exact base `b62f539`,
+`MERGEABLE`, and has no review threads. Its base-owned `audit`,
+`agent-policy`, and `agent-assets` checks are successful; the remaining
+required CI jobs are still running. This is a point-in-time snapshot before
+this session-log commit advances the same pull request head.
+
+**Activation scope:** PR #228 copies
+`tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml` byte-for-byte into live
+`.github/workflows/ci.yml`, makes D-099 the sole publicly authorized
+whole-workflow digest, and retains D-084 plus pre-D-099 D-091 only as rejected
+audit evidence. D-062's fixed-replicate performance-job content remains
+byte-identical inside D-099. Pull requests can restore the Windows vcpkg
+binary archive but cannot publish it; only an exact-key miss on a trusted
+`main` push can save. Local evidence includes `actionlint`, exact fixture/live
+SHA-256 equality, 128 roadmap-policy tests (537 assertions), 33 permission
+tests (87 assertions), the public policy checkers, `cargo doc`, and the full
+workspace test suite. The immutable pinned iEvo reviewer reached a clean
+11-point verdict after every finding was fixed.
+
+**Adjacent live state:** v0.2 PR-8
+[PR #188](https://github.com/rotnov/pycc/pull/188) remains `OPEN` at head
+`d66982a0b4d615db6b37da197129254f67fbb1a0` but is now `CONFLICTING`/
+`DIRTY` against the advanced default branch. Its pre-D-099 D-091 workflow
+must not replace the activated cache: before PR-8 can resume, it needs a
+separately staged and reviewed D-091+D-099 composed digest. Issue #225 does
+not authorize modifying that PR-8 branch, so this task records the boundary
+without resolving its conflict.
+
+**Next:** push this log checkpoint, wait for PR #228's exact new head to pass
+`audit`, hard 100% coverage, the Tier-1 matrix, performance gate, and aggregate
+`ci-gate`, then mark it ready and merge through protected `main`. Inspect the
+exact post-merge Windows job to prove the trusted save ran, then inspect a
+later exact-key Windows run for a real cache hit and the resulting libxml2/job
+duration before declaring #225 complete.
+
 ## 2026-07-27 — v0.1's acceptance checklist is fully green; PR-7 (final v0.1 buffer slice) complete
 
 **Status:** all five bullets in `docs/ROADMAP.md`'s "v0.1 acceptance

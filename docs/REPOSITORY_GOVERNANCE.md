@@ -24,10 +24,14 @@ enforce the normal delivery path.
   artifacts by distinct numeric IDs, flattens each into an exact destination,
   verifies the predecessor-owned source-aware comparator, and fails closed on
   revision, benchmark-contract, executable-input identity, artifact-identity,
-  file-set, or comparison drift. D-062 addresses the residual changed-source
-  single-observation variance tracked in open issue #109 with five fixed runs
-  per revision and a median-of-five aggregate. Only its exact reviewed workflow
-  digest is authorized; the D-056 digest is historical audit evidence. The
+  file-set, or comparison drift. D-062's fixed-replicate contract addresses the
+  residual changed-source single-observation variance tracked in open issue
+  #109 with five fixed runs per revision and a median-of-five aggregate; that
+  job content remains embedded unchanged in D-100, which composes D-091's
+  release-runtime/manifest-relaxation changes with D-099's Windows vcpkg cache
+  after D-099 activated first on `main`. Only D-100's exact reviewed
+  whole-workflow digest is authorized; superseded whole-workflow digests are
+  historical audit evidence only. The
   standalone `agent-policy` job provides faster
   feedback until its exact context has run successfully on `main` and is
   added to branch protection.
@@ -95,12 +99,14 @@ identical. D-062 retains that classifier and the existing `>2%` block for
 changed source, but fixes the sample plan at five complete runs per revision.
 
 The active `.github/workflows/ci.yml` is byte-identical to the reviewed
-[`d62-replicated-paired-ci.yml`](../tests/fixtures/d62-replicated-paired-ci.yml),
-and the allowlist contains only its digest. The D-051 and D-056 fixtures and
-comparators remain historical audit evidence, but the active policy rejects
-their workflow digests; D-048 remains absent. Every pull request and `main`
-push still measures both exact revisions inside its own run, so no successful
-external baseline artifact or administrative bootstrap state is required.
+[`d100-compose-d91-d99-ci.yml`](../tests/fixtures/d100-compose-d91-d99-ci.yml),
+and the allowlist contains only its digest. Its performance-job content remains
+byte-identical to the reviewed D-062 fixture. D-051, D-056, D-062, D-080,
+D-084, pre-D-100 D-091, and pre-D-100 D-099 remain historical audit evidence,
+but the active policy rejects their whole-workflow digests; D-048 remains absent. Every pull
+request and `main` push still measures both exact revisions inside its own run,
+so no successful external baseline artifact or administrative bootstrap state
+is required.
 
 PR #131 and its post-merge main run later gave contradictory `+0.10%` and
 `+3.66%` outcomes for byte-identical Git trees, proving that one paired median
