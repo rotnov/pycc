@@ -74,6 +74,8 @@ D80_CONFORMANCE_ORACLE_CI_WORKFLOW_SHA256 =
 # checker trust boundary (same mechanism D-080 already needed -- see
 # D-080's "Staging note"); this activation commit retires D80 now that
 # the digest below is already authorized.
+# D-099 later retired this digest from the public allowlist; it remains here
+# only as historical audit evidence and as D-099's exact pre-cache baseline.
 D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256 =
   "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
 # D-090: superseded before activation, never live. This digest covered
@@ -150,23 +152,22 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 # automated review (`chatgpt-codex-connector`) on PR #189 before merge and
 # folded into this same digest rather than filed as follow-ups.
 #
-# Staged alongside D84 (still the live, active workflow's own digest)
-# until the PR that actually edits `ci.yml` to this content lands and
-# retires D84.
+# Pre-D99 staged fixture retained as audit evidence. D99 activated first, so
+# this digest is no longer publicly authorized: PR-8 must compose these changes
+# with D99's cache boundary and stage the resulting new digest before activation.
 D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
   "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
-# D-099: prospective D84 workflow plus a Windows-only vcpkg binary-cache
+# D-099: active D84 successor plus a Windows-only vcpkg binary-cache
 # restore/save boundary for D-027's libxml2 build. The exact cache key binds
 # LLVM_VERSION, runner OS/architecture, the hosted runner image version,
 # x64-windows-static-md, and the image's vcpkg commit. Pull requests restore
-# only; an exact-key miss is saved only by a trusted push to main. This is
-# staged independently of D-091 and does not change the live D84 workflow
-# until a later activation pull request.
+# only; an exact-key miss is saved only by a trusted push to main. The live
+# workflow is byte-identical to this reviewed fixture. D84 and the pre-D99 D91
+# digest are retired from the public allowlist; D91's changes must be composed
+# with D99 and reviewed under a new digest before PR-8 can activate them.
 D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
   "f8656c7a525fe8775f90c5afe0950b4706eb043ef6f78f6b66e1f50146fc5366"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-  D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
   D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
