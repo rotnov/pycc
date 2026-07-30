@@ -337,6 +337,36 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
         cfg!(target_os = "windows"),
     );
 
+    // Report the measured ratio unconditionally, not only on failure: the
+    // assertion below only ever produces a message when it fails, which left
+    // every passing run's exact ratio unrecorded (see docs/ROADMAP.md's
+    // ubuntu-24.04-arm follow-up item, opened once a tight sub-20x fail
+    // cluster turned out to sit alongside passes at unknown ratios -- a
+    // censored-left-tail problem no amount of re-running fixes). Writing
+    // directly to `$GITHUB_STEP_SUMMARY` (not `println!`/`eprintln!`) is
+    // deliberate: cargo test's own libtest harness captures each test's
+    // stdout/stderr and only forwards it to real process output on failure,
+    // so a plain print here would stay invisible on a pass without
+    // `--nocapture` -- and this repo's CI never adds that flag, since every
+    // `--include-ignored` run and D-014's coverage step would become far
+    // noisier for no benefit. A failed write is silently ignored: this is a
+    // diagnostic aid, not part of the gate itself, and must never turn an
+    // otherwise-passing measurement into a spurious failure.
+    if let Ok(summary_path) = std::env::var("GITHUB_STEP_SUMMARY") {
+        use std::io::Write;
+        let _ = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(summary_path)
+            .and_then(|mut file| {
+                writeln!(
+                    file,
+                    "nbody speedup ratio: {ratio:.4}x (required {required:.0}x, pass={})",
+                    ratio >= required
+                )
+            });
+    }
+
     assert!(
         ratio >= required,
         "nbody speedup ratio {ratio:.2}x is below the required {required:.0}x gate \
