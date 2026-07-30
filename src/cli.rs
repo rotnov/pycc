@@ -25,6 +25,14 @@ pub enum Command {
         /// target -- the common case.
         #[arg(long)]
         target: Option<String>,
+        /// Enable LLVM optimization (O3-equivalent whole-module pipeline).
+        /// True cross-file LTO has no effect yet -- pycc compiles exactly
+        /// one module per invocation until v0.4's multi-file support lands
+        /// (D-094). Omit to use `pycc.toml`'s neighboring `[build] opt =
+        /// "release"` default when one is present, or plain debug output
+        /// otherwise.
+        #[arg(long)]
+        release: bool,
     },
     Run {
         path: String,
@@ -99,5 +107,26 @@ mod tests {
                 paths,
             } if paths.len() == 2
         ));
+    }
+
+    fn parsed_build_release(command: Command) -> Option<bool> {
+        match command {
+            Command::Build { release, .. } => Some(release),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn build_defaults_to_release_false_when_the_flag_is_omitted() {
+        let cli = Cli::try_parse_from(["pycc", "build", "in.py", "-o", "out"]).unwrap();
+        assert_eq!(parsed_build_release(cli.command), Some(false));
+        assert!(parsed_build_release(Command::Clean).is_none());
+    }
+
+    #[test]
+    fn build_accepts_an_explicit_release_flag() {
+        let cli =
+            Cli::try_parse_from(["pycc", "build", "in.py", "-o", "out", "--release"]).unwrap();
+        assert_eq!(parsed_build_release(cli.command), Some(true));
     }
 }

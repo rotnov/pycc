@@ -3,6 +3,7 @@ use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::module::Linkage;
+use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
@@ -1411,10 +1412,21 @@ fn declare_module_globals<'ctx>(
 /// foreign target is a separate concern the caller handles (see
 /// `src/main.rs`'s `--target` handling and its doc comment on what's
 /// actually achievable without bundling a full foreign sysroot).
+///
+/// `release`: `false` (the default, matching every build before this PR)
+/// creates the target machine with `OptimizationLevel::None` and skips
+/// LLVM's optimizer entirely -- today's only behavior. `true` selects
+/// `OptimizationLevel::Aggressive` and additionally runs the `"default<O3>"`
+/// whole-module pass pipeline via `Module::run_passes` before the object is
+/// written (D-094). True cross-translation-unit LTO has no effect yet:
+/// pycc emits exactly one LLVM module per compilation (single-file only
+/// until v0.4's multi-file support), so this is "maximum whole-module
+/// optimization," not literal cross-file link-time optimization.
 pub fn compile_to_object(
     mir: &MirModule,
     output_path: &Path,
     target_triple: Option<&str>,
+    release: bool,
 ) -> Result<(), String> {
     let context = Context::create();
     let module = context.create_module("pycc_module");
@@ -1694,7 +1706,11 @@ pub fn compile_to_object(
             &triple,
             "generic",
             "",
-            OptimizationLevel::None,
+            if release {
+                OptimizationLevel::Aggressive
+            } else {
+                OptimizationLevel::None
+            },
             // `RelocMode::Default` resolves to absolute (non-PIC)
             // addressing for this LLVM/target pairing on Linux, but
             // Ubuntu's `cc`/`gcc` links as a PIE by default (D-073):
@@ -1713,6 +1729,35 @@ pub fn compile_to_object(
             "creating a target machine with generic CPU/features should never fail for a \
              triple Target::from_triple has already accepted",
         );
+    // `--release`'s whole-module optimization pipeline (D-094). This is
+    // "maximum whole-module optimization," not literal cross-translation-
+    // unit LTO: pycc emits exactly one LLVM module per compilation today
+    // (single-file only until v0.4's multi-file support), so there is only
+    // ever one module for `"default<O3>"` to optimize.
+    //
+    // Deliberately `.expect(..)`, not `.map_err(llvm_string_to_owned)?` like
+    // `Target::from_triple`/`write_to_file` below: those two are genuine,
+    // externally-triggerable failure modes with their own dedicated tests
+    // and reachable `Err` paths this crate's 100% region-coverage gate
+    // (D-014) can actually exercise. `run_passes` here runs a fixed,
+    // always-valid pipeline string against a module `verify_module` has
+    // already accepted (skipped only on Windows per D-029's own "no
+    // Windows-specific IR-building path exists" reasoning, which applies
+    // here too) -- there is no way to make this fail that a test could
+    // construct, so this stays infallible given how this function always
+    // calls it, the same treatment `create_target_machine` gets immediately
+    // above and `module.verify()` gets in `verify_module` below. On the
+    // vanishingly narrow chance this ever legitimately panics on Windows,
+    // the `LLVMString`'s `Drop` would run during unwinding (D-029's crash)
+    // -- an accepted, currently unreachable risk, not a silently ignored one.
+    if release {
+        module
+            .run_passes("default<O3>", &target_machine, PassBuilderOptions::create())
+            .expect(
+                "LLVM's \"default<O3>\" pipeline should never fail against a module this \
+                 function has already verified, using a fixed, always-valid pipeline string",
+            );
+    }
     target_machine
         .write_to_file(&module, FileType::Object, output_path)
         .map_err(llvm_string_to_owned)
@@ -2211,7 +2256,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_uncalled_main");
         let obj_path = dir.join("slice0_uncalled_main.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("slice0_uncalled_main");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2233,7 +2278,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0");
         let obj_path = dir.join("slice0.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("slice0");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2247,7 +2292,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_toplevel");
         let obj_path = dir.join("slice0_toplevel.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("slice0_toplevel");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2275,7 +2320,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_combined");
         let obj_path = dir.join("slice0_combined.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("slice0_combined");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2289,7 +2334,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_undefined_fn");
         let obj_path = dir.join("slice0_undefined_fn.o");
-        let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
+        let err = compile_to_object(&mir, &obj_path, None, false).expect_err("should be rejected");
         assert!(
             err.contains("does_not_exist"),
             "error should name the offending function: {err}"
@@ -2308,7 +2353,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_undefined_fn_nested");
         let obj_path = dir.join("slice0_undefined_fn_nested.o");
-        let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
+        let err = compile_to_object(&mir, &obj_path, None, false).expect_err("should be rejected");
         assert!(
             err.contains("also_does_not_exist"),
             "error should name the offending function: {err}"
@@ -2329,7 +2374,7 @@ mod tests {
         };
         let dir = tempfile_dir("slice0_any_fn_name");
         let obj_path = dir.join("slice0_any_fn_name.o");
-        compile_to_object(&mir, &obj_path, None)
+        compile_to_object(&mir, &obj_path, None, false)
             .expect("defining a function under any name should succeed");
     }
 
@@ -2350,9 +2395,103 @@ mod tests {
             ))
             .join("does_not_exist")
             .join("out.o");
-        let err = compile_to_object(&mir, &bad_path, None)
+        let err = compile_to_object(&mir, &bad_path, None, false)
             .expect_err("should fail: parent dir doesn't exist");
         assert!(!err.is_empty());
+    }
+
+    /// `x = 1.0`; `i = 0`; `while i < 1000: x = x * 1.0000001; i = i + 1`;
+    /// `print(x)` -- as top-level statements directly in the synthetic
+    /// entry `main`, rather than a separately defined-and-called user
+    /// function: this crate's own test module has no helper for building a
+    /// `MirModule` from a Python source string (`pycc_codegen`'s
+    /// `Cargo.toml` depends only on `pycc_mir`, not the frontend crates
+    /// `pycc_parser`/`pycc_hir`/`pycc_types` that would be needed to parse
+    /// one), so every other test in this file hand-builds its `MirModule`
+    /// the same way -- this one does too, matching the shape of the
+    /// compute-heavy loop the plan's own brief describes: repeated float
+    /// multiplication in a loop is exactly the kind of code `"default<O3>"`
+    /// constant-folds/vectorizes/unrolls very differently from an
+    /// unoptimized build.
+    fn release_flag_fixture() -> MirModule {
+        MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::FloatLiteral(1.0),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "i".to_string(),
+                    value: MirExpr::IntLiteral(0),
+                }),
+                MirItem::TopLevelStmt(MirStmt::While {
+                    test: MirExpr::Compare {
+                        op: CmpOpKind::Lt,
+                        left: Box::new(MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(1000)),
+                        ty: Ty::Bool,
+                    },
+                    body: vec![
+                        MirStmt::Assign {
+                            target: "x".to_string(),
+                            value: MirExpr::BinOp {
+                                op: BinOpKind::Mul,
+                                left: Box::new(MirExpr::Name {
+                                    name: "x".to_string(),
+                                    ty: Ty::Float,
+                                }),
+                                right: Box::new(MirExpr::FloatLiteral(1.0000001)),
+                                ty: Ty::Float,
+                            },
+                        },
+                        MirStmt::Assign {
+                            target: "i".to_string(),
+                            value: MirExpr::BinOp {
+                                op: BinOpKind::Add,
+                                left: Box::new(MirExpr::Name {
+                                    name: "i".to_string(),
+                                    ty: Ty::Int,
+                                }),
+                                right: Box::new(MirExpr::IntLiteral(1)),
+                                ty: Ty::Int,
+                            },
+                        },
+                    ],
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Float,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        }
+    }
+
+    #[test]
+    fn release_mode_actually_runs_llvm_optimization_passes() {
+        let mir = release_flag_fixture();
+
+        let debug_dir = tempfile_dir("release_flag_debug");
+        let debug_obj_path = debug_dir.join("release_flag_debug.o");
+        compile_to_object(&mir, &debug_obj_path, None, false).expect("codegen should succeed");
+        let debug_obj = std::fs::read(&debug_obj_path).expect("object file should be readable");
+
+        let release_dir = tempfile_dir("release_flag_release");
+        let release_obj_path = release_dir.join("release_flag_release.o");
+        compile_to_object(&mir, &release_obj_path, None, true).expect("codegen should succeed");
+        let release_obj =
+            std::fs::read(&release_obj_path).expect("object file should be readable");
+
+        assert_ne!(
+            debug_obj, release_obj,
+            "release and debug object files must differ -- optimization passes did not run"
+        );
     }
 
     #[test]
@@ -2368,7 +2507,7 @@ mod tests {
         };
         let dir = tempfile_dir("cross_x64");
         let obj_path = dir.join("cross_x64.o");
-        compile_to_object(&mir, &obj_path, Some("x86_64-apple-darwin"))
+        compile_to_object(&mir, &obj_path, Some("x86_64-apple-darwin"), false)
             .expect("cross-compiling to a different Tier-1 target should succeed");
 
         assert!(
@@ -2402,7 +2541,7 @@ mod tests {
         };
         let dir = tempfile_dir("bad_triple");
         let obj_path = dir.join("bad_triple.o");
-        let err = compile_to_object(&mir, &obj_path, Some("not-a-real-target-triple"))
+        let err = compile_to_object(&mir, &obj_path, Some("not-a-real-target-triple"), false)
             .expect_err("an unrecognized target triple should be rejected");
         assert!(!err.is_empty());
     }
@@ -2418,7 +2557,7 @@ mod tests {
         };
         let dir = tempfile_dir("print_zero_args");
         let obj_path = dir.join("print_zero_args.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("print_zero_args");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2442,7 +2581,7 @@ mod tests {
         };
         let dir = tempfile_dir("print_mixed_multi");
         let obj_path = dir.join("print_mixed_multi.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("print_mixed_multi");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2460,7 +2599,7 @@ mod tests {
         };
         let dir = tempfile_dir("print_false");
         let obj_path = dir.join("print_false.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("print_false");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2491,7 +2630,7 @@ mod tests {
         };
         let dir = tempfile_dir("print_none_from_call");
         let obj_path = dir.join("print_none_from_call.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("print_none_from_call");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2533,7 +2672,7 @@ mod tests {
         };
         let dir = tempfile_dir("return_none_call");
         let obj_path = dir.join("return_none_call.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("return_none_call");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2582,7 +2721,7 @@ mod tests {
         };
         let dir = tempfile_dir("print_none_typed_parameter");
         let obj_path = dir.join("print_none_typed_parameter.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("print_none_typed_parameter");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2630,7 +2769,7 @@ mod tests {
         };
         let dir = tempfile_dir("bare_return_none");
         let obj_path = dir.join("bare_return_none.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("bare_return_none");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2673,7 +2812,7 @@ mod tests {
         };
         let dir = tempfile_dir("locals_arith");
         let obj_path = dir.join("locals_arith.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("locals_arith");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2702,7 +2841,7 @@ mod tests {
         };
         let dir = tempfile_dir("bool_local");
         let obj_path = dir.join("bool_local.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -2732,7 +2871,7 @@ mod tests {
         };
         let dir = tempfile_dir("reassign_local");
         let obj_path = dir.join("reassign_local.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("reassign_local");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2768,7 +2907,7 @@ mod tests {
         };
         let dir = tempfile_dir("int_binops");
         let obj_path = dir.join("int_binops.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("int_binops");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2803,7 +2942,7 @@ mod tests {
         };
         let dir = tempfile_dir("true_div_panics");
         let obj_path = dir.join("true_div_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -2832,7 +2971,7 @@ mod tests {
         };
         let dir = tempfile_dir("remaining_cmp_ops");
         let obj_path = dir.join("remaining_cmp_ops.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -2864,7 +3003,7 @@ mod tests {
         };
         let dir = tempfile_dir("ge_ne_values");
         let obj_path = dir.join("ge_ne_values.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("ge_ne_values");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2908,7 +3047,7 @@ mod tests {
         };
         let dir = tempfile_dir("nan_comparisons");
         let obj_path = dir.join("nan_comparisons.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("nan_comparisons");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -2942,7 +3081,7 @@ mod tests {
         };
         let dir = tempfile_dir("read_bool_local");
         let obj_path = dir.join("read_bool_local.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -2981,7 +3120,7 @@ mod tests {
         };
         let dir = tempfile_dir("binop_bool_left_promotes");
         let obj_path = dir.join("binop_bool_left_promotes.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("binop_bool_left_promotes");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3016,7 +3155,7 @@ mod tests {
         };
         let dir = tempfile_dir("binop_bool_right_promotes");
         let obj_path = dir.join("binop_bool_right_promotes.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("binop_bool_right_promotes");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3048,7 +3187,7 @@ mod tests {
         };
         let dir = tempfile_dir("compare_bool_left_promotes");
         let obj_path = dir.join("compare_bool_left_promotes.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -3067,7 +3206,7 @@ mod tests {
         };
         let dir = tempfile_dir("compare_bool_right_promotes");
         let obj_path = dir.join("compare_bool_right_promotes.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -3084,7 +3223,7 @@ mod tests {
         };
         let dir = tempfile_dir("oversized_int_literal_panics");
         let obj_path = dir.join("oversized_int_literal_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -3120,7 +3259,7 @@ mod tests {
         };
         let dir = tempfile_dir("fstring_zero_parts_panics");
         let obj_path = dir.join("fstring_zero_parts_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -3162,7 +3301,7 @@ mod tests {
         };
         let dir = tempfile_dir("print_mistyped_compare_prints_actual_value");
         let obj_path = dir.join("print_mistyped_compare_prints_actual_value.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("print_mistyped_compare_prints_actual_value");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3181,7 +3320,7 @@ mod tests {
         };
         let dir = tempfile_dir("bare_expr_stmt");
         let obj_path = dir.join("bare_expr_stmt.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -3305,7 +3444,7 @@ mod tests {
         };
         let dir = tempfile_dir("read_float_local");
         let obj_path = dir.join("read_float_local.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -3361,7 +3500,7 @@ mod tests {
         };
         let dir = tempfile_dir("param_reference_reads_back");
         let obj_path = dir.join("param_reference_reads_back.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("param_reference_reads_back");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3412,7 +3551,7 @@ mod tests {
         };
         let dir = tempfile_dir("function_reads_module_global");
         let obj_path = dir.join("function_reads_module_global.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("function_reads_module_global");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3453,7 +3592,7 @@ mod tests {
         };
         let dir = tempfile_dir("if_else");
         let obj_path = dir.join("if_else.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("if_else");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3490,7 +3629,7 @@ mod tests {
         };
         let dir = tempfile_dir("if_both_branches_return");
         let obj_path = dir.join("if_both_branches_return.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("if_both_branches_return");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3512,7 +3651,7 @@ mod tests {
         };
         let dir = tempfile_dir("if_no_else");
         let obj_path = dir.join("if_no_else.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("if_no_else");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3565,7 +3704,7 @@ mod tests {
         };
         let dir = tempfile_dir("while_countdown");
         let obj_path = dir.join("while_countdown.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("while_countdown");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3620,7 +3759,7 @@ mod tests {
         };
         let dir = tempfile_dir("while_int_truthy");
         let obj_path = dir.join("while_int_truthy.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("while_int_truthy");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3671,7 +3810,7 @@ mod tests {
         };
         let dir = tempfile_dir("while_body_always_returns");
         let obj_path = dir.join("while_body_always_returns.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("while_body_always_returns");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3699,7 +3838,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_pos");
         let obj_path = dir.join("for_range_pos.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("for_range_pos");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3748,7 +3887,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_reused_loop_var");
         let obj_path = dir.join("for_range_reused_loop_var.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("for_range_reused_loop_var");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3776,7 +3915,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_neg");
         let obj_path = dir.join("for_range_neg.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("for_range_neg");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3799,7 +3938,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_bad_start_panics");
         let obj_path = dir.join("for_range_bad_start_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -3817,7 +3956,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_bad_stop_panics");
         let obj_path = dir.join("for_range_bad_stop_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -3835,7 +3974,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_bad_step_panics");
         let obj_path = dir.join("for_range_bad_step_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -3872,7 +4011,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_bool_start_stop_step");
         let obj_path = dir.join("for_range_bool_start_stop_step.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("for_range_bool_start_stop_step");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3903,7 +4042,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_bool_stop");
         let obj_path = dir.join("for_range_bool_stop.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("for_range_bool_stop");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3963,7 +4102,7 @@ mod tests {
         };
         let dir = tempfile_dir("nested_control_flow_resume");
         let obj_path = dir.join("nested_control_flow_resume.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("nested_control_flow_resume");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -3991,7 +4130,7 @@ mod tests {
         };
         let dir = tempfile_dir("if_then_undefined_fn");
         let obj_path = dir.join("if_then_undefined_fn.o");
-        let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
+        let err = compile_to_object(&mir, &obj_path, None, false).expect_err("should be rejected");
         assert!(
             err.contains("does_not_exist_in_if_then"),
             "error should name the offending function: {err}"
@@ -4009,7 +4148,7 @@ mod tests {
         };
         let dir = tempfile_dir("if_orelse_undefined_fn");
         let obj_path = dir.join("if_orelse_undefined_fn.o");
-        let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
+        let err = compile_to_object(&mir, &obj_path, None, false).expect_err("should be rejected");
         assert!(
             err.contains("does_not_exist_in_if_orelse"),
             "error should name the offending function: {err}"
@@ -4026,7 +4165,7 @@ mod tests {
         };
         let dir = tempfile_dir("while_undefined_fn");
         let obj_path = dir.join("while_undefined_fn.o");
-        let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
+        let err = compile_to_object(&mir, &obj_path, None, false).expect_err("should be rejected");
         assert!(
             err.contains("does_not_exist_in_while"),
             "error should name the offending function: {err}"
@@ -4046,7 +4185,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_undefined_fn");
         let obj_path = dir.join("for_range_undefined_fn.o");
-        let err = compile_to_object(&mir, &obj_path, None).expect_err("should be rejected");
+        let err = compile_to_object(&mir, &obj_path, None, false).expect_err("should be rejected");
         assert!(
             err.contains("does_not_exist_in_for_range"),
             "error should name the offending function: {err}"
@@ -4088,7 +4227,7 @@ mod tests {
         };
         let dir = tempfile_dir("call_with_args");
         let obj_path = dir.join("call_with_args.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("call_with_args");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4137,7 +4276,7 @@ mod tests {
         };
         let dir = tempfile_dir("call_arg_order");
         let obj_path = dir.join("call_arg_order.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("call_arg_order");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4210,7 +4349,7 @@ mod tests {
         };
         let dir = tempfile_dir("recursive_fact");
         let obj_path = dir.join("recursive_fact.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("recursive_fact");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4263,7 +4402,7 @@ mod tests {
         };
         let dir = tempfile_dir("if_else_both_return");
         let obj_path = dir.join("if_else_both_return.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("if_else_both_return");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4287,7 +4426,7 @@ mod tests {
         let dir = tempfile_dir("fallthrough_internal_error");
         let obj_path = dir.join("fallthrough_internal_error.o");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_to_object(&mir, &obj_path, None)
+            compile_to_object(&mir, &obj_path, None, false)
         }));
         assert!(
             result.is_err(),
@@ -4313,7 +4452,7 @@ mod tests {
         let dir = tempfile_dir("top_level_return_internal_error");
         let obj_path = dir.join("top_level_return_internal_error.o");
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_to_object(&mir, &obj_path, None)
+            compile_to_object(&mir, &obj_path, None, false)
         }));
         assert!(
             result.is_err(),
@@ -4347,7 +4486,7 @@ mod tests {
         };
         let dir = tempfile_dir("undefined_fn_nested_expr_panics");
         let obj_path = dir.join("undefined_fn_nested_expr_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -4384,7 +4523,7 @@ mod tests {
         };
         let dir = tempfile_dir("call_returns_bool");
         let obj_path = dir.join("call_returns_bool.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -4415,7 +4554,7 @@ mod tests {
         };
         let dir = tempfile_dir("none_typed_call_result_has_no_storage");
         let obj_path = dir.join("none_typed_call_result_has_no_storage.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -4448,7 +4587,7 @@ mod tests {
         };
         let dir = tempfile_dir("infer_typed_call_result_panics");
         let obj_path = dir.join("infer_typed_call_result_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -4476,7 +4615,7 @@ mod tests {
         };
         let dir = tempfile_dir("infer_return_panics");
         let obj_path = dir.join("infer_return_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -4498,7 +4637,7 @@ mod tests {
         };
         let dir = tempfile_dir("none_param_compiles");
         let obj_path = dir.join("none_param_compiles.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -4533,7 +4672,7 @@ mod tests {
         };
         let dir = tempfile_dir("float_param_and_return");
         let obj_path = dir.join("float_param_and_return.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -4588,7 +4727,7 @@ mod tests {
         };
         let dir = tempfile_dir("for_range_return_inside_body");
         let obj_path = dir.join("for_range_return_inside_body.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("for_range_return_inside_body");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4624,7 +4763,7 @@ mod tests {
         };
         let dir = tempfile_dir("call_with_bool_arg");
         let obj_path = dir.join("call_with_bool_arg.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -4661,7 +4800,7 @@ mod tests {
         };
         let dir = tempfile_dir("bool_arg_widens_to_int");
         let obj_path = dir.join("bool_arg_widens_to_int.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("bool_arg_widens_to_int");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4698,7 +4837,7 @@ mod tests {
         };
         let dir = tempfile_dir("bool_return_widens_to_int");
         let obj_path = dir.join("bool_return_widens_to_int.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("bool_return_widens_to_int");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4738,7 +4877,7 @@ mod tests {
         };
         let dir = tempfile_dir("reassign_bool_into_int");
         let obj_path = dir.join("reassign_bool_into_int.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("reassign_bool_into_int");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4767,7 +4906,7 @@ mod tests {
         };
         let dir = tempfile_dir("print_result_nested_panics");
         let obj_path = dir.join("print_result_nested_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -4792,7 +4931,7 @@ mod tests {
         };
         let dir = tempfile_dir("unbound_name_panics");
         let obj_path = dir.join("unbound_name_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -4814,7 +4953,7 @@ mod tests {
         };
         let dir = tempfile_dir("true_div");
         let obj_path = dir.join("true_div.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -4833,7 +4972,7 @@ mod tests {
         };
         let dir = tempfile_dir("mixed_add");
         let obj_path = dir.join("mixed_add.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -4863,7 +5002,7 @@ mod tests {
         };
         let dir = tempfile_dir("bool_arith");
         let obj_path = dir.join("bool_arith.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("bool_arith");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4885,7 +5024,7 @@ mod tests {
         };
         let dir = tempfile_dir("float_cmp");
         let obj_path = dir.join("float_cmp.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -4906,7 +5045,7 @@ mod tests {
             };
             let dir = tempfile_dir(&format!("float_truthy_{test}"));
             let obj_path = dir.join("float_truthy.o");
-            compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+            compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
             let bin_path = dir.join("float_truthy");
             link_object_with_runtime(&obj_path, &bin_path);
             let output = Command::new(&bin_path).output().expect("binary should run");
@@ -4939,7 +5078,7 @@ mod tests {
         };
         let dir = tempfile_dir("binop_int_result_float_operand_panics");
         let obj_path = dir.join("binop_int_result_float_operand_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -4968,7 +5107,7 @@ mod tests {
         };
         let dir = tempfile_dir("binop_none_result_panics");
         let obj_path = dir.join("binop_none_result_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -4991,7 +5130,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_binop_left_mismatch_panics");
         let obj_path = dir.join("str_binop_left_mismatch_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -5014,7 +5153,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_binop_right_mismatch_panics");
         let obj_path = dir.join("str_binop_right_mismatch_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -5037,7 +5176,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_binop_unsupported_op_panics");
         let obj_path = dir.join("str_binop_unsupported_op_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -5062,7 +5201,7 @@ mod tests {
         };
         let dir = tempfile_dir("bool_float_mixed");
         let obj_path = dir.join("bool_float_mixed.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -5102,7 +5241,7 @@ mod tests {
         };
         let dir = tempfile_dir("float_binops");
         let obj_path = dir.join("float_binops.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -5127,7 +5266,7 @@ mod tests {
         };
         let dir = tempfile_dir("mixed_cmp");
         let obj_path = dir.join("mixed_cmp.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -5159,7 +5298,7 @@ mod tests {
         };
         let dir = tempfile_dir("remaining_float_cmp_ops");
         let obj_path = dir.join("remaining_float_cmp_ops.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -5191,7 +5330,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_concat_reassign");
         let obj_path = dir.join("str_concat_reassign.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("str_concat_reassign");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5219,7 +5358,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_assignment_non_str_slot_panics");
         let obj_path = dir.join("str_assignment_non_str_slot_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -5253,7 +5392,7 @@ mod tests {
         };
         let dir = tempfile_dir("int_first_assign_in_if_body");
         let obj_path = dir.join("int_first_assign_in_if_body.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("int_first_assign_in_if_body");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5292,7 +5431,7 @@ mod tests {
         };
         let dir = tempfile_dir("int_first_assign_in_if_else_both");
         let obj_path = dir.join("int_first_assign_in_if_else_both.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("int_first_assign_in_if_else_both");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5323,7 +5462,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_first_assign_in_if_body");
         let obj_path = dir.join("str_first_assign_in_if_body.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("str_first_assign_in_if_body");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5353,7 +5492,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_first_assign_in_if_else_both");
         let obj_path = dir.join("str_first_assign_in_if_else_both.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("str_first_assign_in_if_else_both");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5408,7 +5547,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_first_assign_in_while_body");
         let obj_path = dir.join("str_first_assign_in_while_body.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("str_first_assign_in_while_body");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5447,7 +5586,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_never_assigned_on_taken_path");
         let obj_path = dir.join("str_never_assigned_on_taken_path.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("str_never_assigned_on_taken_path");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5490,7 +5629,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_first_assign_in_fn_leading_if");
         let obj_path = dir.join("str_first_assign_in_fn_leading_if.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("str_first_assign_in_fn_leading_if");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5524,7 +5663,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_first_assign_in_fn_plain");
         let obj_path = dir.join("str_first_assign_in_fn_plain.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("str_first_assign_in_fn_plain");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5576,7 +5715,7 @@ mod tests {
         };
         let dir = tempfile_dir("int_first_assign_in_fn_leading_if_else");
         let obj_path = dir.join("int_first_assign_in_fn_leading_if_else.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("int_first_assign_in_fn_leading_if_else");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5620,7 +5759,7 @@ mod tests {
         };
         let dir = tempfile_dir("float_first_assign_in_fn");
         let obj_path = dir.join("float_first_assign_in_fn.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("float_first_assign_in_fn");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5642,7 +5781,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_cmp");
         let obj_path = dir.join("str_cmp.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -5670,7 +5809,7 @@ mod tests {
             };
             let dir = tempfile_dir(&format!("str_cmp_runtime_{left}_{right}"));
             let obj_path = dir.join("str_cmp_runtime.o");
-            compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+            compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
             let bin_path = dir.join("str_cmp_runtime");
             link_object_with_runtime(&obj_path, &bin_path);
             let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5712,7 +5851,7 @@ mod tests {
         };
         let dir = tempfile_dir("remaining_str_cmp_ops");
         let obj_path = dir.join("remaining_str_cmp_ops.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -5740,7 +5879,7 @@ mod tests {
         };
         let dir = tempfile_dir("mixed_int_str_cmp_panics");
         let obj_path = dir.join("mixed_int_str_cmp_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -5778,7 +5917,7 @@ mod tests {
         };
         let dir = tempfile_dir("lying_str_cmp_panics");
         let obj_path = dir.join("lying_str_cmp_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -5798,7 +5937,7 @@ mod tests {
             };
             let dir = tempfile_dir(&format!("str_truthy_{}", test.len()));
             let obj_path = dir.join("str_truthy.o");
-            compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+            compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
             let bin_path = dir.join("str_truthy");
             link_object_with_runtime(&obj_path, &bin_path);
             let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5817,7 +5956,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_long_literal");
         let obj_path = dir.join("str_long_literal.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -5859,7 +5998,7 @@ mod tests {
         };
         let dir = tempfile_dir("str_param_and_return");
         let obj_path = dir.join("str_param_and_return.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("str_param_and_return");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -5890,7 +6029,7 @@ mod tests {
         };
         let dir = tempfile_dir("binop_int_result_str_operand_panics");
         let obj_path = dir.join("binop_int_result_str_operand_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -5913,7 +6052,7 @@ mod tests {
         };
         let dir = tempfile_dir("binop_float_result_str_operand_panics");
         let obj_path = dir.join("binop_float_result_str_operand_panics.o");
-        let _ = compile_to_object(&mir, &obj_path, None);
+        let _ = compile_to_object(&mir, &obj_path, None, false);
     }
 
     #[test]
@@ -5971,7 +6110,7 @@ mod tests {
         };
         let dir = tempfile_dir("fstring_int");
         let obj_path = dir.join("fstring_int.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -5988,7 +6127,7 @@ mod tests {
         };
         let dir = tempfile_dir("fstring_float_bool");
         let obj_path = dir.join("fstring_float_bool.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -6023,7 +6162,7 @@ mod tests {
         };
         let dir = tempfile_dir("fstring_none_call");
         let obj_path = dir.join("fstring_none_call.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("fstring_none_call");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -6042,7 +6181,7 @@ mod tests {
         };
         let dir = tempfile_dir("fstring_literal_only");
         let obj_path = dir.join("fstring_literal_only.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -6077,7 +6216,7 @@ mod tests {
         };
         let dir = tempfile_dir("fstring_str_passthrough");
         let obj_path = dir.join("fstring_str_passthrough.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
     }
 
     #[test]
@@ -6119,7 +6258,7 @@ mod tests {
         };
         let dir = tempfile_dir("fstring_none_call");
         let obj_path = dir.join("fstring_none_call.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("fstring_none_call");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -6167,7 +6306,7 @@ mod tests {
         };
         let dir = tempfile_dir("fstring_none_typed_parameter");
         let obj_path = dir.join("fstring_none_typed_parameter.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("fstring_none_typed_parameter");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
@@ -6222,7 +6361,7 @@ mod tests {
         };
         let dir = tempfile_dir("bigint_overflow_loop");
         let obj_path = dir.join("bigint_overflow_loop.o");
-        compile_to_object(&mir, &obj_path, None).expect("codegen should succeed");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
         let bin_path = dir.join("bigint_overflow_loop");
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");

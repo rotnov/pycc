@@ -1,4 +1,5 @@
 mod cli;
+mod project_config;
 mod source;
 
 use clap::Parser;
@@ -10,10 +11,26 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Build { path, out, target } => match try_build(&path, &out, target.as_deref()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(code) => code,
-        },
+        Command::Build {
+            path,
+            out,
+            target,
+            release,
+        } => {
+            // Resolved here, not inside `try_build`: this consumption point
+            // (a neighboring `pycc.toml`'s `[build] opt = "release"` as a
+            // default profile) is scoped to `pycc build` specifically --
+            // CLI_SPEC.md/ROADMAP.md both document it that way, and `run`
+            // has no `--release` flag of its own to override it with if a
+            // user doesn't want that default applied. Resolving it here,
+            // before `try_build` ever runs, is what keeps `run`'s own
+            // hardcoded `false` (below) actually final.
+            let release = resolve_release_flag(release, Path::new(&path));
+            match try_build(&path, &out, target.as_deref(), release) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(code) => code,
+            }
+        }
         Command::Run { path } => run(&path),
         Command::Version { .. } => {
             println!("pycc 0.1.0 (rustc 1.97.1, LLVM 22.1.1)");
@@ -23,11 +40,34 @@ fn main() -> ExitCode {
             paths,
             error_format,
         } => check_paths(&paths, error_format),
-        Command::Test | Command::Explain { .. } | Command::Init { .. } | Command::Clean => {
+        Command::Init { name } => {
+            let cwd = std::env::current_dir().expect("current directory must be readable");
+            match init(name.as_deref(), &cwd) {
+                Ok(()) => {
+                    println!("Created pycc.toml and src/main.py");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: pycc init failed: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        Command::Test | Command::Explain { .. } | Command::Clean => {
             eprintln!("pycc: this subcommand is not yet implemented");
             ExitCode::from(2)
         }
     }
+}
+
+/// `pycc init [NAME]`: testable core of the `Command::Init` arm. Takes
+/// `dir` as a parameter instead of calling `std::env::current_dir()`
+/// internally -- matching `find_pycc_rt_lib_dir`/`find_pycc_rt_lib_dir_in`'s
+/// existing dependency-injection split below -- so a test can exercise
+/// `project_config::scaffold`'s error path (an unwritable target directory)
+/// without mutating this test process's real, shared working directory.
+fn init(name: Option<&str>, dir: &Path) -> Result<(), String> {
+    project_config::scaffold(name, dir).map_err(|e| e.to_string())
 }
 
 /// `pycc check`: parse + HIR-lowering + type-checking only, no codegen --
@@ -59,19 +99,29 @@ fn check_paths(paths: &[std::path::PathBuf], error_format: ErrorFormat) -> ExitC
 /// passes this, since running a cross-compiled binary on this host makes
 /// no sense). `Some(triple)` cross-compiles -- see `find_pycc_rt_lib_dir`
 /// for what that requires to actually be available.
-fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode> {
+///
+/// `release`: the final, already-resolved profile -- `true` runs LLVM's
+/// `"default<O3>"` pipeline, `false` skips it. This function does *not*
+/// consult a neighboring `pycc.toml` itself: that consumption point
+/// (`resolve_release_flag` below) is scoped to `Command::Build`'s own match
+/// arm in `main()`, resolved *before* `try_build` is ever called, precisely
+/// so that `run`'s hardcoded `false` here stays final and unconditional --
+/// `run` has no `--release` flag yet (CLI_SPEC.md doesn't document one for
+/// it), so a neighboring release-profile `pycc.toml` must not silently
+/// change what `pycc run` does with no way for the user to override it.
+fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Result<(), ExitCode> {
     let path = Path::new(path);
     let typed_hir = resolve_frontend(path)
         .map_err(|failure| ExitCode::from(report_build_failure(path, failure)))?;
     let mir = pycc_mir::build(&typed_hir);
 
     let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
-    pycc_codegen::compile_to_object(&mir, &obj_path, target).map_err(|e| {
+    pycc_codegen::compile_to_object(&mir, &obj_path, target, release).map_err(|e| {
         eprintln!("error: codegen failed: {e}");
         ExitCode::from(1)
     })?;
 
-    let rt_lib_dir = find_pycc_rt_lib_dir(target).map_err(|e| {
+    let rt_lib_dir = find_pycc_rt_lib_dir(target, release).map_err(|e| {
         eprintln!("error: {e}");
         ExitCode::from(2)
     })?;
@@ -92,6 +142,41 @@ fn try_build(path: &str, out: &str, target: Option<&str>) -> Result<(), ExitCode
         Ok(())
     } else {
         Err(ExitCode::from(1))
+    }
+}
+
+/// Resolves `pycc build`'s effective release/debug profile -- called only
+/// from `main()`'s `Command::Build` arm, before `try_build` runs (`run` has
+/// no `--release` flag and never calls this, so it's never subject to a
+/// neighboring `pycc.toml`'s default; see `try_build`'s own doc comment).
+/// An explicit `--release` (`explicit_release: true`) always wins outright
+/// -- this is not project-mode directory resolution (`docs/CLI_SPEC.md`'s
+/// deferred "PATH = ... project directory" case), just a narrow
+/// default-profile consumption point (this PR's plan, Task 3 Step 6a,
+/// moved here from Task 2's original Step 8 once this task's own `release`
+/// field existed for it to combine with).
+///
+/// Otherwise, this looks for a `pycc.toml` next to `source_path` and uses
+/// its `[build] opt == "release"` as the default. Every other outcome --
+/// no `pycc.toml` there, one that fails to parse (`project_config::parse`
+/// already rejects malformed TOML and any non-"3.14" `python`), or a
+/// `[build] opt` value other than `"release"` (including no `[build]`
+/// section at all, whose `opt` defaults to `None`) -- falls back to
+/// `false`. A malformed neighboring `pycc.toml` must not abort an
+/// otherwise-valid build over an optional default it doesn't even need.
+fn resolve_release_flag(explicit_release: bool, source_path: &Path) -> bool {
+    if explicit_release {
+        return true;
+    }
+    let Some(dir) = source_path.parent() else {
+        return false;
+    };
+    let Ok(contents) = std::fs::read_to_string(dir.join("pycc.toml")) else {
+        return false;
+    };
+    match project_config::parse(&contents) {
+        Ok(config) => config.build.opt.as_deref() == Some("release"),
+        Err(_) => false,
     }
 }
 
@@ -294,12 +379,19 @@ fn add_linux_system_libs(cmd: &mut std::process::Command) {
 #[cfg(not(target_os = "linux"))]
 fn add_linux_system_libs(_cmd: &mut std::process::Command) {}
 
+/// `pycc run` has no `--release` flag (undocumented in CLI_SPEC.md) and
+/// always builds in the debug profile: the hardcoded `false` below reaches
+/// `try_build` directly, which -- unlike `main()`'s `Command::Build` arm --
+/// never consults a neighboring `pycc.toml`'s `[build] opt = "release"`
+/// default, so this stays unconditional regardless of what any nearby
+/// `pycc.toml` names.
 fn run(path: &str) -> ExitCode {
     let out = std::env::temp_dir().join(format!("pycc_run_{}", std::process::id()));
     if let Err(code) = try_build(
         path,
         out.to_str().expect("temp dir path should be valid UTF-8"),
         None,
+        false,
     ) {
         return code;
     }
@@ -315,22 +407,39 @@ fn run(path: &str) -> ExitCode {
 }
 
 /// `target: None` (the common case) returns this workspace's ordinary
-/// `target/debug/` -- always populated once `pycc_rt` has been built
-/// (see that crate's own doc comment on the build-order requirement).
+/// `target/debug/` or `target/release/` -- always populated once `pycc_rt`
+/// has been built for the requested profile (see that crate's own doc
+/// comment on the build-order requirement).
 ///
-/// `target: Some(triple)` looks in `target/<triple>/debug/` -- where
-/// `cargo build --target <triple> -p pycc_rt` (after `rustup target add
-/// <triple>` if needed) puts it. Cross-compiling `pycc_rt` itself for the
-/// requested target is not done automatically here: unlike the ordinary
-/// case, there's no single always-correct way to trigger it that doesn't
-/// either require duplicating `rustup`/`cargo`'s own target-management
-/// logic or risk the same build-lock deadlock documented on `pycc_rt`
-/// (see that crate's own doc comment). Failing with a clear, actionable
-/// message is better than a confusing linker error about a missing
-/// `-lpycc_rt`.
-fn find_pycc_rt_lib_dir(target: Option<&str>) -> Result<std::path::PathBuf, String> {
+/// `target: Some(triple)` looks in `target/<triple>/debug/` or
+/// `target/<triple>/release/` -- where `cargo build [--release] --target
+/// <triple> -p pycc_rt` (after `rustup target add <triple>` if needed) puts
+/// it. Cross-compiling `pycc_rt` itself for the requested target is not
+/// done automatically here: unlike the ordinary case, there's no single
+/// always-correct way to trigger it that doesn't either require
+/// duplicating `rustup`/`cargo`'s own target-management logic or risk the
+/// same build-lock deadlock documented on `pycc_rt` (see that crate's own
+/// doc comment). Failing with a clear, actionable message is better than a
+/// confusing linker error about a missing `-lpycc_rt`.
+///
+/// `release`: selects which of `pycc_rt`'s own two builds to link against.
+/// Before this parameter existed, this function unconditionally linked the
+/// debug build regardless of `pycc build --release` -- a real, unambiguous
+/// bug (not a design choice) caught while investigating why a `--release`
+/// nbody benchmark's speedup ratio fell far short of expectations
+/// (`tests/nbody_bench.rs`): `--release` was optimizing the compiled
+/// module's own LLVM IR but every runtime call (`pycc_rt_float_pow`, string
+/// helpers, etc.) still ran through an unoptimized debug `pycc_rt`. Callers
+/// pass `try_build`'s own already-resolved `release` bool through here
+/// unchanged, so an optimized build is linked exactly when `--release`
+/// (explicit or via a neighboring `pycc.toml` default) is actually in
+/// effect.
+fn find_pycc_rt_lib_dir(
+    target: Option<&str>,
+    release: bool,
+) -> Result<std::path::PathBuf, String> {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    find_pycc_rt_lib_dir_in(workspace_root, target, std::path::Path::exists)
+    find_pycc_rt_lib_dir_in(workspace_root, target, release, std::path::Path::exists)
 }
 
 /// Rust's `staticlib` output naming is platform-specific: `lib<name>.a` on
@@ -373,23 +482,26 @@ fn pycc_rt_lib_filename(target: Option<&str>) -> &'static str {
 fn find_pycc_rt_lib_dir_in(
     workspace_root: &std::path::Path,
     target: Option<&str>,
+    release: bool,
     exists: fn(&std::path::Path) -> bool,
 ) -> Result<std::path::PathBuf, String> {
+    let profile = if release { "release" } else { "debug" };
+    let release_flag = if release { " --release" } else { "" };
     let dir = match target {
-        Some(triple) => workspace_root.join("target").join(triple).join("debug"),
-        None => workspace_root.join("target/debug"),
+        Some(triple) => workspace_root.join("target").join(triple).join(profile),
+        None => workspace_root.join("target").join(profile),
     };
     if exists(&dir.join(pycc_rt_lib_filename(target))) {
         Ok(dir)
     } else if let Some(triple) = target {
         Err(format!(
             "no pycc_rt build found for target `{triple}` (expected {}). \
-             Run `rustup target add {triple}` then `cargo build --target {triple} -p pycc_rt` first.",
+             Run `rustup target add {triple}` then `cargo build{release_flag} --target {triple} -p pycc_rt` first.",
             dir.display()
         ))
     } else {
         Err(format!(
-            "no pycc_rt build found (expected {}). Run `cargo build -p pycc_rt` first.",
+            "no pycc_rt build found (expected {}). Run `cargo build{release_flag} -p pycc_rt` first.",
             dir.display()
         ))
     }
@@ -402,21 +514,24 @@ mod linker_tests {
     #[test]
     fn finds_the_native_lib_dir_when_it_exists() {
         let root = std::path::Path::new("/workspace");
-        let result = find_pycc_rt_lib_dir_in(root, None, |_| true);
+        let result = find_pycc_rt_lib_dir_in(root, None, false, |_| true);
         assert_eq!(result, Ok(root.join("target/debug")));
     }
 
     #[test]
     fn reports_a_clean_error_when_the_native_build_is_missing() {
         let root = std::path::Path::new("/workspace");
-        let err = find_pycc_rt_lib_dir_in(root, None, |_| false).unwrap_err();
+        let err = find_pycc_rt_lib_dir_in(root, None, false, |_| false).unwrap_err();
         assert!(err.contains("cargo build -p pycc_rt"));
+        // Must not suggest --release for a debug-profile lookup.
+        assert!(!err.contains("--release"));
     }
 
     #[test]
     fn finds_the_target_specific_lib_dir_when_it_exists() {
         let root = std::path::Path::new("/workspace");
-        let result = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), |_| true);
+        let result =
+            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), false, |_| true);
         assert_eq!(
             result,
             Ok(root.join("target/x86_64-unknown-linux-gnu/debug"))
@@ -426,10 +541,57 @@ mod linker_tests {
     #[test]
     fn reports_a_clean_error_naming_the_target_when_its_build_is_missing() {
         let root = std::path::Path::new("/workspace");
-        let err =
-            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), |_| false).unwrap_err();
+        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), false, |_| {
+            false
+        })
+        .unwrap_err();
         assert!(err.contains("x86_64-unknown-linux-gnu"));
         assert!(err.contains("rustup target add"));
+    }
+
+    #[test]
+    fn finds_the_native_release_lib_dir_when_it_exists() {
+        let root = std::path::Path::new("/workspace");
+        let result = find_pycc_rt_lib_dir_in(root, None, true, |_| true);
+        assert_eq!(result, Ok(root.join("target/release")));
+    }
+
+    #[test]
+    fn reports_a_clean_error_naming_release_when_the_native_release_build_is_missing() {
+        let root = std::path::Path::new("/workspace");
+        let err = find_pycc_rt_lib_dir_in(root, None, true, |_| false).unwrap_err();
+        assert!(err.contains("cargo build --release -p pycc_rt"));
+        // Not a literal "target/release" substring check: `dir.display()`
+        // renders with the platform's native separator, so this would be
+        // "target\\release" on Windows -- a real bug caught by the pinned
+        // reviewer in this same fix's own review round. `assert_eq!` against
+        // a `PathBuf` join (like the sibling `Ok(...)` tests above) compares
+        // components instead of literal separator bytes.
+        let expected_dir = root.join("target").join("release");
+        assert!(err.contains(&expected_dir.display().to_string()));
+    }
+
+    #[test]
+    fn finds_the_target_specific_release_lib_dir_when_it_exists() {
+        let root = std::path::Path::new("/workspace");
+        let result =
+            find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), true, |_| true);
+        assert_eq!(
+            result,
+            Ok(root.join("target/x86_64-unknown-linux-gnu/release"))
+        );
+    }
+
+    #[test]
+    fn reports_a_clean_error_naming_the_target_and_release_when_its_build_is_missing() {
+        let root = std::path::Path::new("/workspace");
+        let err = find_pycc_rt_lib_dir_in(root, Some("x86_64-unknown-linux-gnu"), true, |_| {
+            false
+        })
+        .unwrap_err();
+        assert!(err.contains("x86_64-unknown-linux-gnu"));
+        assert!(err.contains("rustup target add"));
+        assert!(err.contains("cargo build --release --target x86_64-unknown-linux-gnu -p pycc_rt"));
     }
 
     #[test]
@@ -450,5 +612,215 @@ mod linker_tests {
             pycc_rt_lib_filename(Some("x86_64-unknown-linux-gnu")),
             "libpycc_rt.a"
         );
+    }
+}
+
+#[cfg(test)]
+mod init_tests {
+    use super::*;
+
+    #[test]
+    fn succeeds_and_scaffolds_a_project_in_a_writable_directory() {
+        let dir = std::env::temp_dir().join(format!("pycc_main_init_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(init(Some("initdirect"), &dir), Ok(()));
+        assert!(dir.join("pycc.toml").exists());
+        assert!(dir.join("src").join("main.py").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reports_the_scaffold_error_when_the_target_directory_does_not_exist() {
+        // `dir` simply never exists (and is never created), so
+        // `std::fs::write` inside `scaffold` fails because its immediate
+        // parent doesn't exist -- a plain `NotFound` on every Tier-1
+        // platform, independent of any `..`-lexical-resolution semantics
+        // (Windows resolves `..` before touching the filesystem, unlike
+        // POSIX, so a path built from a nonexistent segment plus a
+        // trailing ".." is not a reliable way to force a fresh `NotFound`
+        // there -- verified against `project_config.rs`'s equivalent test,
+        // which uses this same plain-nonexistent-directory approach).
+        let dir = std::env::temp_dir().join(format!(
+            "pycc_main_init_nonexistent_target_{}",
+            std::process::id()
+        ));
+        assert!(!dir.exists());
+
+        let err = init(Some("irrelevant"), &dir).unwrap_err();
+        assert!(!err.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod release_flag_tests {
+    use super::*;
+
+    fn temp_dir(label: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pycc_main_release_flag_{label}_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_explicit_release_flag_always_wins() {
+        // True regardless of the source path or any neighboring file --
+        // an explicit `--release` never needs a `pycc.toml` to exist at all.
+        assert!(resolve_release_flag(true, Path::new("/does/not/exist.py")));
+    }
+
+    #[test]
+    fn a_source_path_with_no_parent_falls_back_to_false() {
+        // `Path::new("").parent()` is documented to return `None` on every
+        // platform (an empty path has no components at all) -- the one
+        // input that reliably exercises this function's `None` branch
+        // without relying on any real filesystem root.
+        assert!(!resolve_release_flag(false, Path::new("")));
+    }
+
+    #[test]
+    fn no_neighboring_pycc_toml_falls_back_to_false() {
+        let dir = temp_dir("no_toml");
+        let source_path = dir.join("main.py");
+
+        assert!(!resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_malformed_neighboring_pycc_toml_falls_back_to_false_instead_of_aborting() {
+        // A build must not fail merely because an optional default it
+        // doesn't even need happens to be unreadable.
+        let dir = temp_dir("malformed_toml");
+        std::fs::write(dir.join("pycc.toml"), "this is not [valid toml").unwrap();
+        let source_path = dir.join("main.py");
+
+        assert!(!resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_neighboring_pycc_toml_with_a_non_release_opt_falls_back_to_false() {
+        let dir = temp_dir("debug_opt");
+        std::fs::write(
+            dir.join("pycc.toml"),
+            "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
+             [build]\nopt = \"debug\"\n",
+        )
+        .unwrap();
+        let source_path = dir.join("main.py");
+
+        assert!(!resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_neighboring_pycc_toml_with_no_build_section_falls_back_to_false() {
+        let dir = temp_dir("no_build_section");
+        std::fs::write(
+            dir.join("pycc.toml"),
+            "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n",
+        )
+        .unwrap();
+        let source_path = dir.join("main.py");
+
+        assert!(!resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_neighboring_pycc_toml_with_a_release_opt_becomes_the_default() {
+        let dir = temp_dir("release_opt");
+        std::fs::write(
+            dir.join("pycc.toml"),
+            "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
+             [build]\nopt = \"release\"\n",
+        )
+        .unwrap();
+        let source_path = dir.join("main.py");
+
+        assert!(resolve_release_flag(false, &source_path));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod try_build_release_isolation_tests {
+    use super::*;
+
+    /// Regression test for a bug caught in review: `try_build` used to call
+    /// `resolve_release_flag` internally, so `run`'s hardcoded `false` (see
+    /// `run`'s own doc comment) still got silently upgraded to `true` by a
+    /// neighboring release-profile `pycc.toml`, with no `--release` flag on
+    /// `run` to override it. Proves the object `try_build` actually emits
+    /// for `release: false` is identical regardless of a neighboring
+    /// `pycc.toml` naming `opt = "release"`, by comparing it against the
+    /// same source's MIR compiled directly through `pycc_codegen` with
+    /// `release: false` -- the same object-file-bytes technique
+    /// `pycc_codegen`'s own `release_mode_actually_runs_llvm_optimization_
+    /// passes` test uses to prove the *opposite* claim (that release *does*
+    /// change the emitted object). Deliberately not a final-linked-binary-
+    /// size comparison: `docs/AGENT_RETROSPECTIVE.md`'s 2026-07-28 entry
+    /// found that proxy has no signal at that level (a large statically-
+    /// linked runtime plus OS segment-alignment padding absorbs the
+    /// relevant code-size delta, and embedded path-string lengths
+    /// independently perturb it). Calling `try_build` directly (rather than
+    /// spawning `pycc` as a subprocess) is what makes this reliable:
+    /// `try_build`'s own `std::process::id()`-keyed temp object path is
+    /// this same test process's id, not an unpredictable child's, so it's
+    /// locatable here without reaching into any uncontracted external
+    /// path -- and safe from cross-test races since no other test in this
+    /// crate writes to that same path.
+    #[test]
+    fn try_build_ignores_a_neighboring_release_pycc_toml_when_given_release_false() {
+        let dir =
+            std::env::temp_dir().join(format!("pycc_release_isolation_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("main.py");
+        std::fs::write(&src, "def main() -> None:\n    print(42)\n\nmain()\n").unwrap();
+        std::fs::write(
+            dir.join("pycc.toml"),
+            "[project]\nname = \"t\"\nentry = \"main.py\"\npython = \"3.14\"\n\n\
+             [build]\nopt = \"release\"\n",
+        )
+        .unwrap();
+        let out = dir.join("out");
+
+        // Exactly what `run()` does: `release: false` straight through.
+        try_build(src.to_str().unwrap(), out.to_str().unwrap(), None, false)
+            .expect("try_build should succeed");
+
+        let obj_path = std::env::temp_dir().join(format!("pycc_obj_{}.o", std::process::id()));
+        let obj_bytes = std::fs::read(&obj_path).expect("try_build's temp object should exist");
+
+        // Independently compiled reference: the same source's MIR, built
+        // through the exact same frontend pipeline try_build itself uses,
+        // compiled directly with release=false.
+        let typed_hir = resolve_frontend(&src)
+            .ok()
+            .expect("fixture source should type-check");
+        let mir = pycc_mir::build(&typed_hir);
+        let ref_obj_path = dir.join("reference.o");
+        pycc_codegen::compile_to_object(&mir, &ref_obj_path, None, false)
+            .expect("reference codegen should succeed");
+        let ref_obj_bytes = std::fs::read(&ref_obj_path).unwrap();
+
+        assert_eq!(
+            obj_bytes, ref_obj_bytes,
+            "try_build(release: false) must ignore a neighboring pycc.toml's \
+             `opt = \"release\"` entirely -- only main()'s Command::Build arm may \
+             consult it, before try_build is ever called"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

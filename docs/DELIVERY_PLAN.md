@@ -114,10 +114,12 @@ does not remove. The active source-aware five-replicate successor uses:
 median-of-five per revision when inputs changed, D-056's non-blocking telemetry
 when they are identical, all ten JSON files retained, predecessor samples
 sealed before candidate execution, and no result-dependent retries. The
-checker authorizes only the exact active D-099 whole workflow, which is
-byte-identical to its reviewed fixture; its performance-job content remains
-byte-identical to the D-062 fixture. D-056 and D-062 remain historical audit
-evidence but their whole-workflow digests are retired. The 2% threshold,
+checker authorizes only the exact active D-100 whole workflow (composing
+D-091's release-runtime/manifest-relaxation changes with D-099's Windows
+vcpkg cache after D-099 activated first on `main`), which is byte-identical
+to its reviewed fixture; its performance-job content remains byte-identical
+to the D-062 fixture. D-056 and D-062 remain historical audit evidence but
+their whole-workflow digests are retired. The 2% threshold,
 `ci-gate` fan-in, benchmark contract, artifact-ID binding, and isolated
 predecessor-owned comparison boundary remain unchanged.
 
@@ -160,7 +162,7 @@ Two corrections to v0.1's ordering pattern, both from D-088's verification findi
 
 | PR | Content |
 |---|---|
-| 8 | `--release`/LTO profile (already specified in `docs/CLI_SPEC.md`) + `pycc.toml` (schema already specified there too) + the nbody benchmark harness (measurement contract in the design doc §1: hand-adapted, fully-unrolled, scalar-only 5-body simulation — no container dependency, since PR-10/11 haven't shipped `list`/`tuple` yet — same-machine paired median-of-5 wall-clock comparison, `--release` pycc vs. pinned CPython 3.14.6, ratio ≥ 20 gate). Lowest architectural risk of the milestone — CLI driver + `pycc_codegen`'s LLVM optimization-level wiring, no type-system changes — and unblocks the perf-critical acceptance bullet immediately |
+| 8 | `--release`/LTO profile (already specified in `docs/CLI_SPEC.md`) + `pycc.toml` (schema already specified there too) + the nbody benchmark harness (measurement contract in the design doc §1: hand-adapted, fully-unrolled, scalar-only 5-body simulation — no container dependency, since PR-10/11 haven't shipped `list`/`tuple` yet — same-machine paired median-of-5 wall-clock comparison, `--release` pycc vs. pinned CPython 3.14.6, ratio ≥ 20 gate on 2 of 5 Tier-1 targets, 12x on macOS aarch64, 15x on `windows-latest`, and 18x on `ubuntu-24.04-arm` per D-095/D-096/D-101's own documented, measurement-backed exceptions). Lowest architectural risk of the milestone — CLI driver + `pycc_codegen`'s LLVM optimization-level wiring, no type-system changes — and unblocks the perf-critical acceptance bullet immediately |
 | 9 | Real per-PEP conformance harness (`tests/conformance/pyXY/pep_NNNN_slug.py` fixtures + oracle-diff runner) seeded with the 9 no-new-work PEPs from the design doc §2 (already true of v0.1's shipped surface, empirically verified — an earlier draft of this row also claimed PEP 526 and PEP 594 needed no new work, which a review caught was false for both; see the design doc §2's corrected table) plus PEP 526's own small, bounded `Stmt::AnnAssign` addition (`pycc_hir` has no case for it today — verified `x: int = 1` produces `C0001`). Whether this warrants finally building the `pycc_testkit` crate (D-018/D-037/D-085 deferred it "until there's a PEP matrix to check against," which now exists) or continuing to extend a plain `tests/*.rs` integration test is this PR's own architecture decision to record via ADR when it's reached |
 | 10 | `Ty` representation migration (D-089: recursive `Box`/`Vec`-based variants, `Copy` dropped for `Clone` across ~729 call sites) as its first task, then monomorphization foundation + `list[T]` end-to-end thin slice (literal, indexing, `len()`, iteration, `.append()`) + its own PEP-585 fixture. v0.2's "slice 0" — proves the whole monomorphization pipeline works before building breadth on it |
 | 11 | `dict[K, V]`, `set[T]`, `tuple[...]` — breadth, reusing PR-10's monomorphization machinery. `set[T]`'s own representation (design doc §3: swiss table without a value slot, non-guaranteed ordering matching CPython, unlike `dict`) is this PR's own ADR to record. Adds the dict-insertion-order fixture |

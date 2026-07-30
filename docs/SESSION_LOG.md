@@ -11,6 +11,135 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-07-30 — D-101 lowers the `ubuntu-24.04-arm` nbody floor to 18x; PR-8 pending final green
+
+**Authoritative checkpoint:** PR-8 head, once this entry's own commit lands,
+is a new commit on top of `a48d243` (the second merge of `origin/main`
+needed after stage PR #231 itself introduced a new, differently-worded
+D-100 entry to `main`'s own
+`docs/DECISIONS.md`/`docs/ROADMAP.md`/`docs/SPEC.md`/`docs/TESTING.md`/
+`scripts/check_roadmap_evidence.rb`/`scripts/test_check_roadmap_evidence.rb`,
+resolved by keeping PR-8 branch's own fuller D-100 text throughout). CI run
+[`30554237302`](https://github.com/rotnov/pycc/actions/runs/30554237302) on
+`a48d243` was fully green, including `ubuntu-24.04-arm` — a genuinely fresh
+commit, not a rerun.
+
+**`ubuntu-24.04-arm`'s nbody-gate history took two passes to read correctly.**
+The first pass (5 observations: 3 failures clustered at
+19.92x/19.88x/19.86x, 2 passes at unrecorded ratios) concluded the tight fail
+band was a censored-left-tail artifact — the assertion only ever prints a
+ratio on failure — not a measured ceiling, since a ~40% pass rate alongside
+that tight a cluster looked inconsistent with a genuine sub-20x plateau.
+Committed as `5923c61` (unconditional `$GITHUB_STEP_SUMMARY` ratio reporting
+plus a `docs/ROADMAP.md` follow-up item, no floor change) and pushed. The
+very next fresh CI run on that commit produced a 6th observation: a 4th
+failure at 19.90x, landing inside the *same* 19.86x-19.92x band rather than
+scattering — exactly the additional evidence the first pass said would be
+needed before a floor decision was defensible, and it flipped the
+conclusion. **D-101** now lowers `ubuntu-24.04-arm`'s floor to 18x (real
+margin below the worst observed 19.86x, well above D-096's 15x since this
+leg's own plateau sits ~2 points higher than Windows'), with no mechanism
+proposed — unlike D-095/D-096, this rests on CI evidence alone with no
+local Linux aarch64 hardware to corroborate. The `$GITHUB_STEP_SUMMARY`
+instrumentation from the first pass stays: it is now cited by D-101 itself
+as what makes future observations (including passes) usable if this floor
+ever needs revisiting. The `docs/ROADMAP.md` follow-up item was rewritten,
+not left alongside the superseded reasoning — it now points at D-101 and its
+own open mechanism question, matching D-095's/D-096's own follow-up
+entries.
+
+**Next step:** confirm the fresh CI run on the D-101 commit is green
+(including `ubuntu-24.04-arm`, now gated at 18x), verify PR #188's
+`mergeStateStatus` is still `CLEAN` with no unresolved review threads, then
+merge into `main` — this is the last blocker before continuing to PR-9. Note
+for whoever picks up after this: PR-8 consumed D-090 through D-101 plus
+three separate `main` merges before landing, and every one of the last five
+blockers was CI-infrastructure reconciliation (concurrent D-099 activation, a
+self-inflicted stage-PR merge conflict, and this two-pass nbody-flakiness
+investigation) rather than PR-8's own compiler work (`pycc.toml` parsing,
+`--release`/LTO wiring, the nbody fixture and harness). Worth a deliberate
+look before PR-9 at whether future CI-gate/digest decisions should be split
+into their own PRs rather than absorbed into whichever feature PR happens to
+be open when they occur.
+
+## 2026-07-30 — D-100 composes D-099 (merged to `main`) with PR-8's own D-091
+
+**Authoritative checkpoint:** refreshed default `main` is
+[`3bd05f3`](https://github.com/rotnov/pycc/commit/3bd05f3), which merged both
+D-099 staging ([PR #227](https://github.com/rotnov/pycc/pull/227)) and D-099
+activation ([PR #228](https://github.com/rotnov/pycc/pull/228)) — an
+independent, unrelated concurrent change (Windows vcpkg binary cache for
+D-027's libxml2 build, closing issue #225) that landed while this v0.2 PR-8
+branch (`feat/v0-2-pr8-release-profile-pycctoml-nbody`) was still open. D-099's
+own activation retired PR-8's D-091 digest to audit-only status in
+`main`'s `scripts/check_roadmap_evidence.rb`, which made `workflow-policy.yml`'s
+base-owned audit job fail on every PR-8 push regardless of anything PR-8 itself
+changed (that job runs `main`'s copy of the checker against PR-8's `ci.yml` as
+data).
+
+**What this session did:** merged `main` into the PR-8 branch and recorded
+D-100, composing D-091's changes (release-mode `pycc_rt` build step,
+relaxed `frontend-perf-measure` manifest classification) with D-099's Windows
+vcpkg cache into one new reviewed digest
+(`tests/fixtures/d100-compose-d91-d99-ci.yml`,
+`D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256`) — the two touch disjoint regions of
+`ci.yml` and composed with a clean `git merge` (no conflicts inside `ci.yml`
+itself; only surrounding docs/scripts needed manual resolution). Also
+corrected a stale `docs/ROADMAP.md`/`docs/TESTING.md` claim that issue #109
+"stays open" — it closed 2026-07-26 on repeated changed-source PR/main
+evidence from merged PRs #51 and #132.
+
+**Also resolved during this reconciliation:** a real, locally-reproduced
+`frontend-perf-gate` investigation that initially suspected D-090's `toml`/
+`serde` dependency addition was regressing `pycc check`'s own startup speed
+(~5-8% measured locally, spawning the actual CLI binary) — but the gate's own
+`benches/check_bench.rs` never spawns that binary at all; it calls
+`pycc_parser`/`pycc_hir`/`pycc_types` in-process on a fixed fixture, none of
+which PR-8 touched. The CI-reported 4.4961% delta on that specific gate is
+most likely measurement noise (unconfirmed either way — the investigation
+was superseded by the D-099/D-100 reconciliation before a fresh, genuinely
+independent remeasurement was obtained). A quick mitigation attempt (dropping
+`toml`'s `display` feature, hand-formatting `pycc init`'s scaffolded
+`pycc.toml` instead of using `toml::to_string`) was tried and reverted: it
+saved only ~0.05% of binary size since both `toml`'s `parse` and `display`
+features depend on the same underlying `toml_edit` parser, so it did not
+address the (unrelated, since-reframed) regression theory at all.
+
+**Resolved once CI ran on the D-100 merge commit** (`34759559`, the genuinely
+fresh predecessor/candidate pair D-100's merge created): `frontend-perf-gate`
+passed cleanly, confirming the earlier 4.4961% reading was measurement noise
+as suspected, not a real regression from anything PR-8 changed. The
+`ubuntu-24.04-arm` nbody leg also passed. Every required job on that run
+(`build-test-coverage`, all five `native-build-test` legs, both
+`cross-compile-*` jobs, `frontend-perf-measure`/`frontend-perf-gate`,
+`ci-gate`) succeeded on the first attempt.
+
+**A second, distinct process mistake surfaced next:** D-100's own digest was
+registered only on the PR-8 branch itself, not on `main` — but
+`workflow-policy.yml`'s base-owned `audit` job runs *`main`'s own copy* of
+`scripts/check_roadmap_evidence.rb` against the PR head's `ci.yml`, so it
+correctly failed with "does not match a reviewed active-or-staged performance
+CI workflow" regardless of what PR-8's own branch contained. This is exactly
+the stage-then-activate two-phase pattern D-090/D-091/D-099 each already
+followed, which D-100's own initial Alternatives section wrongly argued could
+be skipped since everything happened inside PR-8's own branch. Fixed by
+opening a separate stage PR, [#231](https://github.com/rotnov/pycc/pull/231)
+(`chore/stage-d100-compose-d91-d99`), which registered
+`D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256` alongside active D-099 on `main`
+without touching live `ci.yml` — merged clean (all Tier-1 legs, coverage,
+cross-compile, perf gate, and the base-owned `audit` itself all passed).
+D-100's own decision text carries an appended Update note recording this
+correction, per this file's own edit-don't-rewrite policy.
+
+**Note for the next session:** `gh run rerun` on the previously-failed
+`Workflow policy` run did *not* pick up `main`'s newly-merged state — GitHub
+reuses the original run's already-resolved base-ref checkout rather than
+re-resolving it fresh. A genuinely fresh `pull_request_target` evaluation
+needs an actual new `synchronize` event (a real push to the PR-8 branch), not
+a rerun. This session pushed this same session-log update to trigger that;
+check whether `Workflow policy` passed on that push before assuming PR-8 is
+unblocked.
+
 ## 2026-07-30 — D-099 staged; byte-exact activation PR #228 open
 
 **Authoritative checkpoint:** refreshed default `main` is

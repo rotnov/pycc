@@ -152,33 +152,38 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 # automated review (`chatgpt-codex-connector`) on PR #189 before merge and
 # folded into this same digest rather than filed as follow-ups.
 #
-# Pre-D99 staged fixture retained as audit evidence. D99 activated first, so
-# this digest is no longer publicly authorized: PR-8 must compose these changes
-# with D99's cache boundary and stage the resulting new digest before activation.
+# Pre-D100 staged fixture retained as audit evidence. D-099 activated on
+# `main` before this PR-8 branch's own merge, briefly retiring this digest;
+# D-100 (below) composes these changes with D-099's cache boundary into the
+# digest that actually activates.
 D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
   "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
 # D-099: active D84 successor plus a Windows-only vcpkg binary-cache
 # restore/save boundary for D-027's libxml2 build. The exact cache key binds
 # LLVM_VERSION, runner OS/architecture, the hosted runner image version,
 # x64-windows-static-md, and the image's vcpkg commit. Pull requests restore
-# only; an exact-key miss is saved only by a trusted push to main. The live
-# workflow is byte-identical to this reviewed fixture. D84 and the pre-D100
-# D91 digest are retired from the public allowlist; D-100 (below) composes
-# D91's changes with this decision's cache boundary under a new digest.
+# only; an exact-key miss is saved only by a trusted push to main. D84 and
+# the pre-D100 D91 digest were retired from the public allowlist when this
+# activated; D-100 (below) composes this decision's own cache boundary with
+# D-091's changes under a new digest.
 D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
   "f8656c7a525fe8775f90c5afe0950b4706eb043ef6f78f6b66e1f50146fc5366"
-# D-100: staged here (this commit does not touch the live `ci.yml`) so v0.2
-# PR-8's own pull request -- which composes D-091's release-mode `pycc_rt`
-# build step and relaxed `frontend-perf-measure` manifest classification
-# with D-099's Windows vcpkg cache above, since D-099 activated first and
-# left D-091 without a live activation path of its own -- can pass this
-# base-owned `pull_request_target` audit once it changes `ci.yml` to match.
-# Staged alongside active D99 until PR-8's own merge retires D99's digest
-# (the same coexist-then-retire pattern D-090/D-091/D-099 each used).
+# D-100: D-099 (Windows vcpkg libxml2 cache, unrelated to PR-8) activated on
+# `main` while this PR-8 branch still carried D-091's own changes (release-
+# mode `pycc_rt` build step, relaxed `frontend-perf-measure` manifest
+# classification), retiring D-091's digest to audit-only status before PR-8
+# could merge. This composes D-091's changes with D-099's cache boundary
+# (disjoint regions of `ci.yml` -- D-091 touches `build-test-coverage`/every
+# `native-build-test` leg's release-`pycc_rt` step plus `frontend-perf-
+# measure`; D-099 touches only `native-build-test (windows-latest)`'s LLVM-
+# install section) into the one digest PR-8 actually activates. D-100's own
+# digest also needed its own separate stage PR (#231) before `main`'s
+# base-owned audit would recognize it -- staging it here, alongside active
+# D99, was the fix; this array now holds only the final, activated D-100
+# entry since PR-8's own merge is that activation.
 D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
   "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256,
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
@@ -901,10 +906,13 @@ SHELL
 # `coverage_gate_present?`/`workflow-policy.yml`'s `pull_request_target`
 # audit reaches this exact step body under the identical base-branch-only
 # trust boundary `REVIEWED_PERF_CI_WORKFLOW_SHA256S` exists for, so this
-# needs the same coexist-then-retire treatment: both the pre-D91 shape
-# (`COVERAGE_SCRIPT`, still the live workflow's own content) and this one
-# are accepted below until a later activation commit flips `ci.yml` and
-# this becomes the sole accepted shape.
+# needed the same coexist-then-retire treatment as that digest array while
+# `ci.yml` still had the pre-D91 shape. v0.2 PR-8's own merge is that later
+# activation commit: `ci.yml` now matches the D91 shape exactly, so
+# `COVERAGE_SCRIPT`/`TRUSTED_COVERAGE_STEPS` (the pre-D91 shape) are kept
+# defined below only as historical audit fixtures, the same way D51/D56/D62/
+# D80's own retired constants are kept -- `REVIEWED_COVERAGE_SCRIPTS`/
+# `REVIEWED_TRUSTED_COVERAGE_STEPS` accept only the D91 shape now.
 D91_COVERAGE_SCRIPT = <<~SHELL.strip
   set -euo pipefail
   LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -945,7 +953,7 @@ D91_COVERAGE_SCRIPT = <<~SHELL.strip
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
-REVIEWED_COVERAGE_SCRIPTS = [COVERAGE_SCRIPT, D91_COVERAGE_SCRIPT].freeze
+REVIEWED_COVERAGE_SCRIPTS = [D91_COVERAGE_SCRIPT].freeze
 TRUSTED_COVERAGE_ENV = {
   "CARGO_LLVM_COV_VERSION" => "0.8.7",
   "LLVM_VERSION" => "22.1.1"
@@ -983,8 +991,7 @@ D91_TRUSTED_COVERAGE_STEPS =
       "run" => D91_COVERAGE_SCRIPT
     }
   ]).freeze
-REVIEWED_TRUSTED_COVERAGE_STEPS =
-  [TRUSTED_COVERAGE_STEPS, D91_TRUSTED_COVERAGE_STEPS].freeze
+REVIEWED_TRUSTED_COVERAGE_STEPS = [D91_TRUSTED_COVERAGE_STEPS].freeze
 
 def yaml_mapping(node, context)
   raise RoadmapEvidenceError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)

@@ -28,6 +28,100 @@ never a merge gate.
 
 ---
 
+## 2026-07-29 — Whole-process wall-clock timing has no signal once the workload is a few milliseconds
+
+**What happened:** PR-8 Task 5's first pass at `tests/nbody_bench.rs`
+(D-094's same-machine paired nbody benchmark, `pyperformance`'s own
+`DEFAULT_ITERATIONS = 20000`) measured a ~10-11x pycc-vs-CPython speedup
+ratio, reported as a genuine, investigated shortfall against the design
+spec's ≥20x gate (the task's own untracked working notes -- not a repo
+file, see `docs/DECISIONS.md`'s D-093 for the tracked, full write-up). A
+second-reviewer pass re-derived the real cause from that report's own
+numbers: CPython's nbody total (68.2ms) minus its own bare-interpreter
+baseline (20.3ms) gives ~47.9ms of actual compute; pycc's nbody total
+(6.1ms) minus its own trivial-binary baseline (3.0ms) gives ~3.1ms --
+already a ~15.5x compute-only ratio, nowhere near the measured 11.2x. The
+gap was fixed per-process overhead (~3ms, essentially this machine's own
+OS-level process-spawn/codesign-verification floor, not anything pycc-
+specific) consuming ~45-50% of pycc's own ~6ms total versus only ~29% of
+CPython's ~68ms total -- a 6ms workload cannot support whole-process
+wall-clock timing as a clean compute proxy, no matter how carefully the
+timing loop itself is written.
+
+**Root cause:** `pyperformance`'s upstream `DEFAULT_ITERATIONS = 20000` was
+copied verbatim into the fixture without recognizing that constant is only
+meaningful *inside a harness that loops and amortizes startup* (as
+`pyperformance` itself does) -- this benchmark instead spawns one fresh
+process per measured run, so the iteration count needed to be chosen for
+*this* harness's own overhead profile, not inherited from a different
+measurement method's constant.
+
+**What fixed it:** raised the fixture's iteration count (525000, chosen by
+directly timing several candidates, not by linear extrapolation -- real
+measurement showed compute cost does not scale as cleanly as expected) so
+both sides' fixed overhead is a single-digit percentage of their own total.
+This dropped the noise band from a ~1.3x-wide swing across runs (10.23x-
+11.32x at 20000 iterations) to a tight, reproducible ~0.2x band (18.04x-
+18.24x at 525000) -- full details in D-093.
+
+**Lesson:** this is the second time in this one PR a benchmark used a proxy
+measurement with near-zero signal for what it was meant to measure -- see
+the very next entry below (linked-binary size as an "optimizer ran" proxy,
+Task 3). Both share the same shape: an artifact whose value is dominated by
+something *other* than the thing being measured (fixed process overhead
+here; static-runtime size and segment-alignment padding there). Before
+trusting a wall-clock measurement of a program that completes in low
+single-digit milliseconds, compute (don't assume) what fraction of that
+total is fixed per-process overhead by timing a trivial baseline program
+the same way -- if that fraction is not comfortably single-digit, the
+measurement is measuring the harness, not the workload, regardless of how
+many repetitions or median-taking are applied on top.
+
+## 2026-07-28 — Linked-binary size is not a reliable "did O3 actually run" proxy at the CLI level
+
+**What happened:** while writing PR-8 Task 3's end-to-end test for the
+`pycc.toml` release-profile default (`tests/pycc_toml_release_default.rs`),
+the first draft compared the *final linked binary's* file size between a
+plain build and one driven by a neighboring `pycc.toml`'s
+`[build] opt = "release"`, mirroring `pycc_codegen`'s own
+`release_mode_actually_runs_llvm_optimization_passes` unit test (which
+correctly compares raw *object-file* bytes). A negative control (two plain
+builds of identical source, expected equal length) initially "passed," but
+so did the positive assertion even under a deliberately broken stub that
+ignored `pycc.toml` entirely — the proxy had no real signal in either
+direction.
+
+**Root cause:** two compounding effects, found by direct empirical
+bisection (equalizing string lengths, then explicit `--release` vs. plain
+debug in the same directory): (1) every scenario directory's name and
+`-o` output filename differed in *string length* across test scenarios,
+and some embedded-path mechanism in the linked Mach-O output (plausibly
+OSO/STAB debug-map entries or similar) shifts final file size by
+approximately that same character-count delta — a confound unrelated to
+optimization entirely; (2) once path lengths were held equal, `--release`
+and plain debug builds of the same tiny compute loop produced
+byte-identical linked output, because the statically-linked `pycc_rt`
+runtime (~1.6MB) dominates total size and Mach-O segments pad to fixed
+alignment boundaries that absorb a few-hundred-byte `.text` delta from
+unrolling a short loop.
+
+**What fixed it:** dropped the binary-size assertion from the CLI-level
+test entirely. The end-to-end test now asserts only functional success
+(exit 0, correct stdout) through the real relative-path/`current_dir`
+route, which is the part not already covered by unit tests. The
+optimization-actually-ran claim stays proven where the effect is real and
+measurable: `pycc_codegen`'s own unit test comparing raw object-file
+bytes for the identical MIR.
+
+**Lesson:** a linked executable's file size is not a trustworthy proxy for
+"did the optimizer run" once a large static runtime and OS-level segment
+alignment are in the picture — prove optimization effects at the
+smallest artifact where they're real (the object file, not the final
+binary), and never compare test-scenario file sizes across paths/names of
+different lengths without first confirming a negative control that
+actually can fail (a control that "passes" under a deliberately broken
+implementation is not a control).
+
 ## 2026-07-27 — Nearly designed a `roadmap-evidence` content check that would have permanently broken the `workflow-policy.yml` audit
 
 **What happened:** while registering the three new `roadmap-evidence` IDs

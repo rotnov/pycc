@@ -82,6 +82,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
           run_isolated "$TRUSTED_CARGO" build --workspace
+          run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
           run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
           rm "$GITHUB_WORKSPACE/target"
           printf 'LLVM_SYS_221_PREFIX=%s\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
@@ -108,6 +109,16 @@ jobs:
 
       - name: cargo build --workspace
         run: cargo build --workspace
+
+      # tests/nbody_bench.rs's `#[ignore]`d benchmark builds its fixture with
+      # `pycc build --release` (no `--target`), which links whatever
+      # `pycc_rt` build lives in this host's own `target/release/` --
+      # previously nothing built one here, so that lookup always silently
+      # fell through to the debug-profile error path before D-091's fix to
+      # `src/main.rs::find_pycc_rt_lib_dir`. `--include-ignored` below is
+      # what actually exercises this.
+      - name: Build pycc_rt (release, for tests/nbody_bench.rs's --release build)
+        run: cargo build --release -p pycc_rt
 
       - name: Run offline alpha skill contract evals
         run: |
@@ -345,6 +356,13 @@ jobs:
       - name: cargo build --workspace
         run: cargo build --workspace
 
+      # Same D-091 need as build-test-coverage's own identically-named step
+      # above: tests/nbody_bench.rs's `pycc build --release` (no `--target`)
+      # links this host's own `target/release/pycc_rt`, which nothing built
+      # on this leg before this step existed.
+      - name: Build pycc_rt (release, for tests/nbody_bench.rs's --release build)
+        run: cargo build --release -p pycc_rt
+
       # `--include-ignored` runs tests/conformance.rs's two `#[ignore]`d
       # tests (D-078) alongside everything else, now that the oracle above
       # is on PATH.
@@ -519,8 +537,6 @@ jobs:
           test "$(git -C current rev-parse HEAD)" = "$EXPECTED_CURRENT_SHA"
           contract_paths=(
             benches
-            Cargo.toml
-            Cargo.lock
             rust-toolchain.toml
             rust-toolchain
             .cargo
@@ -534,31 +550,80 @@ jobs:
             fi
             git diff --no-index --exit-code -- "$previous_path" "$current_path"
           done
-          local_contract_digest() {
-            checkout="$1"
-            (
-              cd "$checkout"
-              git ls-files -z -- \
-                ':(glob)crates/**/Cargo.toml' \
-                ':(glob)**/build.rs' |
-                while IFS= read -r -d '' relative_path; do
-                  file_digest="$(/usr/bin/shasum -a 256 "$relative_path" |
-                    /usr/bin/awk '{print $1}')"
-                  printf '%s\0%s\0' "$relative_path" "$file_digest"
-                done
-            ) | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}'
-          }
-          test "$(local_contract_digest previous)" = \
-            "$(local_contract_digest current)"
+          # D-091: root Cargo.toml's bench-defining tail ([dev-dependencies]
+          # onward, which today is exactly [dev-dependencies] plus [[bench]])
+          # stays part of this hard contract even though the rest of the
+          # manifest is reclassified below -- see "Classify executable
+          # benchmark inputs"' own comment. Nothing below [dev-dependencies]
+          # reaches the built pycc binary the benchmark times, so relaxing
+          # it would let a faster measuring apparatus (a bumped criterion, a
+          # rewritten [[bench]] target) pass as a faster compiler. This is a
+          # standalone check, not an addition to contract_paths above: it
+          # extracts and diffs a sub-region of one file rather than
+          # requiring a whole path byte-identical. Two invariants are
+          # asserted, not assumed, so a future manifest edit cannot widen
+          # or narrow the pinned region without a loud abort: (1)
+          # [dev-dependencies] exists and only [[bench]] follows it, so an
+          # unrelated section landing after [dev-dependencies] cannot be
+          # silently swallowed into the pinned tail; (2) every [[bench]]
+          # section in the file is inside that tail, so reordering
+          # [[bench]] above [dev-dependencies] cannot silently move it out
+          # of the pinned region and into the softer reclassification below.
+          for repo_dir in previous current; do
+            manifest="$repo_dir/Cargo.toml"
+            if ! grep -q '^\[dev-dependencies\]$' "$manifest"; then
+              echo "$manifest has no [dev-dependencies] section; bench-manifest fingerprint invariant violated" >&2
+              exit 1
+            fi
+            extra_headers="$(awk '
+              /^\[dev-dependencies\]$/ { found = 1 }
+              found && /^\[/ && !/^\[dev-dependencies\]$/ && !/^\[\[bench\]\]$/ { print }
+            ' "$manifest")"
+            if [ -n "$extra_headers" ]; then
+              echo "$manifest has unexpected section(s) after [dev-dependencies]: $extra_headers" >&2
+              exit 1
+            fi
+            whole_bench_count="$(grep -c '^\[\[bench\]\]$' "$manifest" || true)"
+            tail_bench_count="$(awk '/^\[dev-dependencies\]$/,0' "$manifest" | grep -c '^\[\[bench\]\]$' || true)"
+            if [ "$whole_bench_count" != "$tail_bench_count" ]; then
+              echo "$manifest has a [[bench]] section outside its [dev-dependencies]-onward tail; bench-manifest fingerprint invariant violated" >&2
+              exit 1
+            fi
+          done
+          diff <(awk '/^\[dev-dependencies\]$/,0' previous/Cargo.toml) \
+               <(awk '/^\[dev-dependencies\]$/,0' current/Cargo.toml)
 
+      # D-091: the dependency manifest (root Cargo.toml/Cargo.lock, and each
+      # crate's own Cargo.toml/build.rs -- already covered by the plain
+      # `crates` diff below) is just another kind of "did the code that
+      # produces the benchmarked binary change," exactly like src/crates.
+      # It is classified here, not hard-required identical above: a
+      # dependency `pycc check` never invokes at runtime cannot confound
+      # the comparison, and if a manifest change somehow did shift timing,
+      # the same strict threshold applied to any other executable-input
+      # change below would still catch it. Only `benches` (the corpus
+      # itself), the toolchain/`.cargo`, and root Cargo.toml's own
+      # bench-defining tail (see "Verify exact benchmark revisions" above)
+      # measure genuinely incomparable work if they differ -- no numeric
+      # threshold fixes that, which is why those stay a hard, unconditional
+      # abort. Root-level build.rs is classified here (not hashed
+      # separately) since Cargo would silently use it without any
+      # Cargo.toml change; per-crate build.rs stays covered by the `crates`
+      # path below.
       - name: Classify executable benchmark inputs
         id: benchmark_contract
         run: |
           set -euo pipefail
           executable_inputs_equal=true
-          for executable_path in src crates; do
+          for executable_path in src crates Cargo.toml Cargo.lock build.rs; do
+            previous_path="previous/$executable_path"
+            current_path="current/$executable_path"
+            if [ ! -e "$previous_path" ] && [ ! -L "$previous_path" ] &&
+               [ ! -e "$current_path" ] && [ ! -L "$current_path" ]; then
+              continue
+            fi
             if git diff --no-index --no-ext-diff --no-textconv --quiet -- \
-              "previous/$executable_path" "current/$executable_path"; then
+              "$previous_path" "$current_path"; then
               continue
             else
               diff_status="$?"

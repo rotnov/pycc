@@ -27,7 +27,9 @@ enforce the normal delivery path.
   file-set, or comparison drift. D-062's fixed-replicate contract addresses the
   residual changed-source single-observation variance tracked in open issue
   #109 with five fixed runs per revision and a median-of-five aggregate; that
-  job content remains embedded unchanged in D-099. Only D-099's exact reviewed
+  job content remains embedded unchanged in D-100, which composes D-091's
+  release-runtime/manifest-relaxation changes with D-099's Windows vcpkg cache
+  after D-099 activated first on `main`. Only D-100's exact reviewed
   whole-workflow digest is authorized; superseded whole-workflow digests are
   historical audit evidence only. The
   standalone `agent-policy` job provides faster
@@ -97,11 +99,11 @@ identical. D-062 retains that classifier and the existing `>2%` block for
 changed source, but fixes the sample plan at five complete runs per revision.
 
 The active `.github/workflows/ci.yml` is byte-identical to the reviewed
-[`d99-vcpkg-libxml2-cache-ci.yml`](../tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml),
+[`d100-compose-d91-d99-ci.yml`](../tests/fixtures/d100-compose-d91-d99-ci.yml),
 and the allowlist contains only its digest. Its performance-job content remains
 byte-identical to the reviewed D-062 fixture. D-051, D-056, D-062, D-080,
-D-084, and pre-D-099 D-091 remain historical audit evidence, but the active
-policy rejects their whole-workflow digests; D-048 remains absent. Every pull
+D-084, pre-D-100 D-091, and pre-D-100 D-099 remain historical audit evidence,
+but the active policy rejects their whole-workflow digests; D-048 remains absent. Every pull
 request and `main` push still measures both exact revisions inside its own run,
 so no successful external baseline artifact or administrative bootstrap state
 is required.

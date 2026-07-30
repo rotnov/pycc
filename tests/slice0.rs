@@ -219,6 +219,50 @@ fn unimplemented_subcommands_exit_with_code_2() {
 }
 
 #[test]
+fn init_scaffolds_pycc_toml_and_main_py_in_the_current_directory() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let output = Command::new(pycc_bin())
+        .args(["init", "e2e_init_project"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Created pycc.toml and src/main.py"));
+
+    // A substring check on the raw name (rather than an exact
+    // `name = "..."` slice) avoids coupling this end-to-end test to the
+    // `toml` crate's own quote-style/spacing choice for serialized output
+    // -- `src/project_config.rs`'s own unit tests instead round-trip
+    // through `parse`, which this integration-test binary can't reach
+    // directly (no `[lib]` target to link against).
+    let toml_contents = std::fs::read_to_string(dir.join("pycc.toml")).unwrap();
+    assert!(toml_contents.contains("e2e_init_project"));
+    assert!(std::fs::read_to_string(dir.join("src").join("main.py"))
+        .unwrap()
+        .contains("def main"));
+}
+
+#[test]
+fn init_reports_a_clean_error_when_pycc_toml_cannot_be_written() {
+    // `pycc.toml` already existing as a directory (rather than an
+    // unwritable filesystem root) forces `scaffold`'s write to fail
+    // deterministically on every Tier-1 target without depending on the
+    // test runner's OS or privilege level.
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_conflict_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("pycc.toml")).unwrap();
+
+    let output = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("error: pycc init failed"));
+}
+
+#[test]
 fn a_syntax_error_is_a_compile_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_synerr_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
