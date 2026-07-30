@@ -17,3 +17,8 @@
 **Trigger:** user-observed mistake during PR monitoring
 
 а чего ты мониторишь 119 и 125, зачем?
+
+## 2026-07-30 17:50 UTC — Consider a background watcher for the autopilot loop
+**Trigger:** user-defined convention
+
+ScheduleWakeup, я бы вешал может фонового агента который следит что луп автопилота живой?
