@@ -49,6 +49,10 @@ SIMPLE_TERM = re.compile(r"[A-Za-z0-9]+\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 BOOLEAN_TERMS = {"AND", "NOT", "OR"}
+ROADMAP_CHECKPOINT = re.compile(
+    r"<!-- search-history-checkpoint: github_repository_search "
+    r"(?P<rows>[1-9]\d*) (?P<sha>[0-9a-f]{64}) -->\Z"
+)
 
 
 class ContractError(ValueError):
@@ -172,6 +176,17 @@ def validate_history_deltas(rows: list[list[str]]) -> None:
         previous_ranks[raw_query] = rank
 
 
+def validate_history_chronology(rows: list[list[str]]) -> None:
+    """Reject an appended observation that backdates the chronological ledger."""
+
+    previous: datetime | None = None
+    for row in rows:
+        observed_at = parse_utc_timestamp(row[0], "History observed_at")
+        if previous is not None and observed_at < previous:
+            raise ContractError("GitHub history timestamps must be nondecreasing")
+        previous = observed_at
+
+
 def load_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text())
@@ -182,6 +197,98 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ContractError(f"Expected a JSON object in {path}")
     return value
+
+
+def load_history_checkpoints(path: Path) -> list[dict[str, Any]]:
+    checkpoints = load_json(path)
+    if set(checkpoints) != {"checkpoint_version", "surfaces"}:
+        raise ContractError("History checkpoints must have the exact field set")
+    if checkpoints["checkpoint_version"] != 1:
+        raise ContractError("History checkpoint_version must be 1")
+    surface_checkpoints = checkpoints["surfaces"]
+    if not isinstance(surface_checkpoints, dict) or set(surface_checkpoints) != {
+        GITHUB_SURFACE
+    }:
+        raise ContractError("History checkpoints must define the GitHub surface")
+    github_checkpoints = surface_checkpoints[GITHUB_SURFACE]
+    if not isinstance(github_checkpoints, list) or not github_checkpoints:
+        raise ContractError("GitHub history checkpoints must be a nonempty list")
+    return github_checkpoints
+
+
+def roadmap_history_checkpoints(markdown: str) -> list[dict[str, Any]]:
+    checkpoints: list[dict[str, Any]] = []
+    for line in markdown.splitlines():
+        if "search-history-checkpoint:" not in line:
+            continue
+        match = ROADMAP_CHECKPOINT.fullmatch(line.strip())
+        if match is None:
+            raise ContractError("ROADMAP has a malformed search-history checkpoint")
+        checkpoints.append(
+            {
+                "required_prefix_rows": int(match["rows"]),
+                "sha256": match["sha"],
+            }
+        )
+    if not checkpoints:
+        raise ContractError("ROADMAP must project search-history checkpoints")
+    return checkpoints
+
+
+def validate_history_checkpoints(
+    rows: list[list[str]], checkpoints: list[dict[str, Any]]
+) -> None:
+    previous_required_rows = 0
+    for checkpoint in checkpoints:
+        if not isinstance(checkpoint, dict) or set(checkpoint) != {
+            "required_prefix_rows",
+            "sha256",
+        }:
+            raise ContractError("Every history checkpoint needs rows and SHA-256")
+        required_rows = checkpoint["required_prefix_rows"]
+        required_digest = checkpoint["sha256"]
+        if (
+            not isinstance(required_rows, int)
+            or isinstance(required_rows, bool)
+            or required_rows <= previous_required_rows
+        ):
+            raise ContractError(
+                "History checkpoint row counts must be positive and increasing"
+            )
+        if not isinstance(required_digest, str) or not SHA256.fullmatch(
+            required_digest
+        ):
+            raise ContractError("History checkpoint needs a SHA-256 digest")
+        if len(rows) < required_rows:
+            raise ContractError("Historical GitHub observations were deleted")
+        if history_digest(rows[:required_rows]) != required_digest:
+            raise ContractError("Historical GitHub observation prefix was rewritten")
+        previous_required_rows = required_rows
+
+    if len(rows) > previous_required_rows:
+        raise ContractError(
+            "Latest history checkpoint must cover every committed GitHub observation"
+        )
+
+
+def validate_trusted_history_baseline(
+    rows: list[list[str]],
+    checkpoints: list[dict[str, Any]],
+    baseline_root: Path,
+) -> None:
+    """Require the head ledger to extend the trusted base revision exactly."""
+
+    baseline_rows = github_history_rows(
+        (baseline_root / "docs" / "SEARCH_VISIBILITY.md").read_text()
+    )
+    baseline_checkpoints = load_history_checkpoints(
+        baseline_root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+    )
+    validate_history_checkpoints(baseline_rows, baseline_checkpoints)
+    if rows[: len(baseline_rows)] != baseline_rows:
+        raise ContractError("GitHub history must preserve the trusted base prefix")
+    if checkpoints[: len(baseline_checkpoints)] != baseline_checkpoints:
+        raise ContractError("History checkpoints must preserve the trusted base prefix")
 
 
 def validate_registry(
@@ -435,7 +542,7 @@ def validate_measurements(
     return activated_at, by_history_key
 
 
-def validate(root: Path) -> None:
+def validate(root: Path, baseline_root: Path | None = None) -> None:
     registry_path = root / "docs" / "SEARCH_QUERY_REGISTRY.json"
     checkpoints_path = root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
     visibility_path = root / "docs" / "SEARCH_VISIBILITY.md"
@@ -450,51 +557,15 @@ def validate(root: Path) -> None:
     compact_visibility = " ".join(visibility.split())
     rows = github_history_rows(visibility)
 
-    checkpoints = load_json(checkpoints_path)
-    if set(checkpoints) != {"checkpoint_version", "surfaces"}:
-        raise ContractError("History checkpoints must have the exact field set")
-    if checkpoints["checkpoint_version"] != 1:
-        raise ContractError("History checkpoint_version must be 1")
-    surface_checkpoints = checkpoints["surfaces"]
-    if not isinstance(surface_checkpoints, dict) or set(surface_checkpoints) != {
-        GITHUB_SURFACE
-    }:
-        raise ContractError("History checkpoints must define the GitHub surface")
-    github_checkpoints = surface_checkpoints[GITHUB_SURFACE]
-    if not isinstance(github_checkpoints, list) or not github_checkpoints:
-        raise ContractError("GitHub history checkpoints must be a nonempty list")
-
-    previous_required_rows = 0
-    for checkpoint in github_checkpoints:
-        if not isinstance(checkpoint, dict) or set(checkpoint) != {
-            "required_prefix_rows",
-            "sha256",
-        }:
-            raise ContractError("Every history checkpoint needs rows and SHA-256")
-        required_rows = checkpoint["required_prefix_rows"]
-        required_digest = checkpoint["sha256"]
-        if (
-            not isinstance(required_rows, int)
-            or isinstance(required_rows, bool)
-            or required_rows <= previous_required_rows
-        ):
-            raise ContractError(
-                "History checkpoint row counts must be positive and increasing"
-            )
-        if not isinstance(required_digest, str) or not SHA256.fullmatch(
-            required_digest
-        ):
-            raise ContractError("History checkpoint needs a SHA-256 digest")
-        if len(rows) < required_rows:
-            raise ContractError("Historical GitHub observations were deleted")
-        if history_digest(rows[:required_rows]) != required_digest:
-            raise ContractError("Historical GitHub observation prefix was rewritten")
-        previous_required_rows = required_rows
-
-    if len(rows) > previous_required_rows:
-        raise ContractError(
-            "Latest history checkpoint must cover every committed GitHub observation"
+    github_checkpoints = load_history_checkpoints(checkpoints_path)
+    validate_history_checkpoints(rows, github_checkpoints)
+    if baseline_root is not None:
+        validate_trusted_history_baseline(
+            rows,
+            github_checkpoints,
+            baseline_root,
         )
+    validate_history_chronology(rows)
     validate_history_deltas(rows)
 
     for row in rows:
@@ -565,6 +636,10 @@ def validate(root: Path) -> None:
 
     roadmap = roadmap_path.read_text()
     compact_roadmap = " ".join(roadmap.split())
+    if roadmap_history_checkpoints(roadmap) != github_checkpoints:
+        raise ContractError(
+            "ROADMAP search-history checkpoints must match the checkpoint ledger"
+        )
     for phrase in (
         (
             "machine-readable query registry, and append-only prefix checkpoints "
@@ -604,9 +679,17 @@ def main() -> None:
         type=Path,
         default=Path(__file__).resolve().parent.parent,
     )
+    parser.add_argument(
+        "--baseline-root",
+        type=Path,
+        help="Trusted base-revision tree whose ledger must remain a prefix",
+    )
     args = parser.parse_args()
     try:
-        validate(args.root.resolve())
+        validate(
+            args.root.resolve(),
+            args.baseline_root.resolve() if args.baseline_root else None,
+        )
     except (ContractError, OSError) as error:
         raise SystemExit(f"search visibility contract failed: {error}") from error
     print("Search visibility contract checks passed.")

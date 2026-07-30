@@ -316,9 +316,12 @@ step for fast feedback; placing a head-controlled script before that step would
 violate the trusted setup sequence. The authority is the required read-only
 `Workflow policy` job: it checks out the base revision, downloads the head
 revision's workflows and `docs/ROADMAP.md` as non-executable data, then runs the
-base revision's roadmap tests and checker against those inputs. A pull request
-that replaces its own checker therefore cannot replace the implementation that
-authorizes its checked roadmap markers.
+base revision's roadmap tests and checker against those inputs. Besides
+authorizing checked acceptance markers, that trusted checker requires the
+head's search-history checkpoint markers to preserve the complete base prefix;
+head-controlled CI independently binds those markers to the checkpoint ledger
+and measured rows. A pull request that replaces its own checker therefore
+cannot replace the implementation that authorizes either contract.
 
 ### Agent hook lifecycle
 
@@ -574,9 +577,12 @@ The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
 `pull_request_target` on every pull request, checks out the trusted base commit,
 downloads the head revision's workflow YAML and `docs/ROADMAP.md` through the
-read-only GitHub API, and treats them as data. It never checks out or executes
-pull-request code, so the check can remain required without path-filtered runs
-getting stuck as pending. Its checkout uses `github.sha`, which
+read-only GitHub API, and treats them as data. The base-owned roadmap checker
+also compares the head's projected search-history checkpoint sequence with the
+trusted base sequence, so removing or rewriting a prior checkpoint fails even
+if head-controlled validation is changed in the same pull request. It never
+checks out or executes pull-request code, so the check can remain required
+without path-filtered runs getting stuck as pending. Its checkout uses `github.sha`, which
 `pull_request_target` defines as the latest commit on the base branch; do not
 substitute the webhook payload's potentially stale `pull_request.base.sha`.
 Job-level trusted-ref exceptions remain a review boundary: reviewers

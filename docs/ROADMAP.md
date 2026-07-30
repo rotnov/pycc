@@ -67,6 +67,15 @@ anchor can merge.
 <!-- search-history-checkpoint: github_repository_search 108 e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->
 <!-- search-history-checkpoint: github_repository_search 130 3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->
 
+Search-history checkpoints are projected below so the base-owned
+`pull_request_target` roadmap checker can require every future head revision to
+preserve the trusted prefix. Head-controlled CI separately binds these markers
+to the checkpoint ledger and the measured rows; changing all three together
+cannot rewrite the trusted markers already present on the base branch.
+
+<!-- search-history-checkpoint: github_repository_search 108 e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->
+<!-- search-history-checkpoint: github_repository_search 130 3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->
+
 ### v0.1 acceptance checklist
 
 - [x] `fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets. <!-- roadmap-evidence: conformance-fib-mandelbrot-tier1 -->

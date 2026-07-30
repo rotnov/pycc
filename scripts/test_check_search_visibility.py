@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,8 @@ class SearchVisibilityContractTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="pycc-search-contract-")
         self.root = Path(self.temporary.name)
         (self.root / "docs").mkdir()
+        self.baseline_root = self.root / "trusted-base"
+        (self.baseline_root / "docs").mkdir(parents=True)
         for name in (
             "ROADMAP.md",
             "SEARCH_QUERY_REGISTRY.json",
@@ -41,13 +44,20 @@ class SearchVisibilityContractTests(unittest.TestCase):
             "WEBSITE.md",
         ):
             shutil.copy2(REPO_ROOT / "docs" / name, self.root / "docs" / name)
+            shutil.copy2(
+                REPO_ROOT / "docs" / name,
+                self.baseline_root / "docs" / name,
+            )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def run_checker(self) -> subprocess.CompletedProcess[str]:
+    def run_checker(self, *, trusted_baseline: bool = False) -> subprocess.CompletedProcess[str]:
+        command = [sys.executable, str(CHECKER), "--root", str(self.root)]
+        if trusted_baseline:
+            command.extend(["--baseline-root", str(self.baseline_root)])
         return subprocess.run(
-            [sys.executable, str(CHECKER), "--root", str(self.root)],
+            command,
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
@@ -75,6 +85,7 @@ class SearchVisibilityContractTests(unittest.TestCase):
     def advance_history_floor(self) -> None:
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
         rows = github_history_rows(path.read_text())
+        digest = history_digest(rows)
         checkpoint_path = (
             self.root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
         )
@@ -82,15 +93,29 @@ class SearchVisibilityContractTests(unittest.TestCase):
         checkpoints["surfaces"]["github_repository_search"].append(
             {
                 "required_prefix_rows": len(rows),
-                "sha256": history_digest(rows),
+                "sha256": digest,
             }
         )
         checkpoint_path.write_text(
             json.dumps(checkpoints, indent=2, ensure_ascii=False) + "\n"
         )
+        roadmap_path = self.root / "docs" / "ROADMAP.md"
+        roadmap = roadmap_path.read_text()
+        existing_markers = [
+            line
+            for line in roadmap.splitlines()
+            if "search-history-checkpoint:" in line
+        ]
+        self.assertTrue(existing_markers)
+        latest = existing_markers[-1]
+        marker = (
+            "<!-- search-history-checkpoint: github_repository_search "
+            f"{len(rows)} {digest} -->"
+        )
+        roadmap_path.write_text(roadmap.replace(latest, f"{latest}\n{marker}", 1))
 
-    def assert_rejected(self, expected: str) -> None:
-        result = self.run_checker()
+    def assert_rejected(self, expected: str, *, trusted_baseline: bool = False) -> None:
+        result = self.run_checker(trusted_baseline=trusted_baseline)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(expected, result.stderr)
 
@@ -175,6 +200,88 @@ class SearchVisibilityContractTests(unittest.TestCase):
         )
         self.assert_rejected("Historical GitHub observation prefix was rewritten")
 
+    def test_trusted_baseline_prevents_checkpoint_and_history_truncation(self) -> None:
+        history_path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        content = history_path.read_text()
+        rows = github_history_rows(content)
+        self.assertEqual(len(rows), 130)
+        for row in rows[108:]:
+            line = f"| {' | '.join(row)} |\n"
+            self.assertIn(line, content)
+            content = content.replace(line, "", 1)
+        history_path.write_text(content)
+
+        checkpoints_path = (
+            self.root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+        )
+        checkpoints = json.loads(checkpoints_path.read_text())
+        checkpoints["surfaces"]["github_repository_search"].pop()
+        checkpoints_path.write_text(
+            json.dumps(checkpoints, indent=2, ensure_ascii=False) + "\n"
+        )
+        roadmap_path = self.root / "docs" / "ROADMAP.md"
+        roadmap = roadmap_path.read_text()
+        final_marker = [
+            line
+            for line in roadmap.splitlines()
+            if "search-history-checkpoint:" in line
+        ][-1]
+        roadmap_path.write_text(roadmap.replace(f"{final_marker}\n", "", 1))
+
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_rejected(
+            "GitHub history must preserve the trusted base prefix",
+            trusted_baseline=True,
+        )
+
+    def test_trusted_baseline_rejects_recomputed_checkpoint_history(self) -> None:
+        history_path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        content = history_path.read_text()
+        original = (
+            "| 2026-07-24T23:02:03Z | `AI-native compiler` | >50 | — | 2 | — |"
+        )
+        mutated = (
+            "| 2026-07-24T23:02:03Z | `AI-native compiler` | >50 | — | 1 | — |"
+        )
+        self.assertIn(original, content)
+        history_path.write_text(content.replace(original, mutated, 1))
+
+        rows = github_history_rows(history_path.read_text())
+        checkpoints_path = (
+            self.root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+        )
+        checkpoints = json.loads(checkpoints_path.read_text())
+        for checkpoint in checkpoints["surfaces"]["github_repository_search"]:
+            required = checkpoint["required_prefix_rows"]
+            checkpoint["sha256"] = history_digest(rows[:required])
+        checkpoints_path.write_text(
+            json.dumps(checkpoints, indent=2, ensure_ascii=False) + "\n"
+        )
+        roadmap_path = self.root / "docs" / "ROADMAP.md"
+        roadmap = roadmap_path.read_text()
+        for checkpoint in checkpoints["surfaces"]["github_repository_search"]:
+            required = checkpoint["required_prefix_rows"]
+            marker_pattern = re.compile(
+                r"<!-- search-history-checkpoint: github_repository_search "
+                rf"{required} [0-9a-f]{{64}} -->"
+            )
+            roadmap, replacements = marker_pattern.subn(
+                "<!-- search-history-checkpoint: github_repository_search "
+                f"{required} {checkpoint['sha256']} -->",
+                roadmap,
+                count=1,
+            )
+            self.assertEqual(replacements, 1)
+        roadmap_path.write_text(roadmap)
+
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_rejected(
+            "GitHub history must preserve the trusted base prefix",
+            trusted_baseline=True,
+        )
+
     def test_registry_era_row_requires_replay_metadata(self) -> None:
         self.append_history_row(
             "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | +12 | 50 | 240 |"
@@ -218,6 +325,13 @@ class SearchVisibilityContractTests(unittest.TestCase):
         registry["registry_activated_at"] = "2026-07-30T14:14Z"
         self.write_registry(registry)
         self.assert_rejected("must be an ISO 8601 UTC timestamp")
+
+    def test_appended_history_cannot_be_backdated(self) -> None:
+        self.append_history_row(
+            "| 2026-07-25T00:00:00Z | `AI-native compiler` | >50 | — | 50 | 100 |"
+        )
+        self.advance_history_floor()
+        self.assert_rejected("GitHub history timestamps must be nondecreasing")
 
     def test_measurement_cannot_poll_a_retired_query(self) -> None:
         observed_at = "2026-07-31T00:00:00Z"
