@@ -17,7 +17,7 @@ class WorkflowPermissionsTest < Minitest::Test
   RETIRED_TRUST_ANCHOR_SHA256 =
     "3a8b56776e7d44f32759301f0691220800ee6f3184b2702d13c01a28f82ce277"
   PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
-    "8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43"
+    "6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31"
 
   def activation_candidate
     root = Pathname(__dir__).parent
@@ -365,9 +365,10 @@ class WorkflowPermissionsTest < Minitest::Test
                .compact
                .flat_map { |run| run.lines.map(&:strip) }
     assert_includes commands,
-                    "python3 -B -m unittest scripts.test_check_search_visibility_audit"
+                    "python3 -I -B scripts/test_check_search_visibility_audit.py"
     assert_includes commands, "--head-root /tmp/pr-policy-input \\"
     assert_includes commands, '--base-root "$GITHUB_WORKSPACE"'
+    assert_includes commands, "python3 -I scripts/check_search_visibility_audit.py \\"
   end
 
   def test_activation_trust_anchor_preserves_staged_search_assets

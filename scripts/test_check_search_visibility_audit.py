@@ -3,21 +3,28 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.check_search_visibility_audit import (
-    ACTIVATED_AT,
-    AuditError,
-    GITHUB_SURFACE_CONTRACT,
-    GOOGLE_SURFACE_CONTRACT,
-    history_digest,
-    history_rows,
-    validate,
+AUDIT_PATH = Path(__file__).with_name("check_search_visibility_audit.py")
+AUDIT_SPEC = importlib.util.spec_from_file_location(
+    "trusted_search_visibility_audit", AUDIT_PATH
 )
+if AUDIT_SPEC is None or AUDIT_SPEC.loader is None:
+    raise RuntimeError("could not load the trusted search visibility auditor")
+AUDIT_MODULE = importlib.util.module_from_spec(AUDIT_SPEC)
+AUDIT_SPEC.loader.exec_module(AUDIT_MODULE)
+ACTIVATED_AT = AUDIT_MODULE.ACTIVATED_AT
+AuditError = AUDIT_MODULE.AuditError
+GITHUB_SURFACE_CONTRACT = AUDIT_MODULE.GITHUB_SURFACE_CONTRACT
+GOOGLE_SURFACE_CONTRACT = AUDIT_MODULE.GOOGLE_SURFACE_CONTRACT
+history_digest = AUDIT_MODULE.history_digest
+history_rows = AUDIT_MODULE.history_rows
+validate = AUDIT_MODULE.validate
 
 
 class SearchVisibilityAuditTests(unittest.TestCase):
@@ -389,6 +396,17 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         path.write_text(path.read_text().replace(delimiter, f"{delimiter}\ninterruption"))
         with self.assertRaisesRegex(AuditError, "cannot resume"):
             validate(self.head, self.base, self.audited_at)
+
+    def test_higher_level_heading_ends_history_section(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        heading = "## GitHub repository search history\n\n"
+        for boundary in ("# Replacement section\n\n", "Replacement section\n===\n\n"):
+            with self.subTest(boundary=boundary):
+                path.write_text(
+                    self.head_visibility.replace(heading, heading + boundary, 1)
+                )
+                with self.assertRaisesRegex(AuditError, "table is incomplete"):
+                    validate(self.head, self.base, self.audited_at)
 
     def test_history_rejects_a_visible_row_without_a_leading_pipe(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"

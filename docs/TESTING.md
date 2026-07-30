@@ -402,7 +402,7 @@ activation change.
 
 The prospective search-ledger audit is staged under
 `tests/fixtures/workflow-policy-search-ledger.yml` with SHA-256
-`8636af7fe96f773f5f32d0e6e8d6d86433ceba6b509173e41cd8af138b413e43`.
+`6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31`.
 It keeps the existing read-only `pull_request_target` boundary, additionally
 downloads the head search ledger, query registry, checkpoint file, and roadmap
 as non-executable data, and runs the base-owned
@@ -430,7 +430,9 @@ only rows already present in the trusted base prefix as legacy; every append
 requires replay metadata regardless of its claimed timestamp. Once prose or a
 blank line ends the history table, a later pipe row cannot resume it. Section
 lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
-equivalent duplicate history heading cannot hide a second table. Heading
+equivalent duplicate history heading cannot hide a second table. Any later H1
+or H2, in ATX or Setext form, ends the history section; a table below a new
+top-level heading cannot remain bound to the canonical H2. Heading
 identity is compared after HTML character-reference decoding and inline-markup
 normalization without inserting intraword boundaries. Invisible Unicode format
 and mark characters are rejected after entity decoding, and Setext level-2
@@ -474,7 +476,10 @@ byte-identical to this staged base. Every repository script the successor
 workflow executes -- the three policy/audit implementations and their three
 self-test suites -- must also remain byte-identical to the trusted base. This
 prevents the activation commit from replacing any successor checker with a
-no-op that would become trusted after merge. Git blob output is normalized to
+no-op that would become trusted after merge. Both successor Python invocations
+use isolated mode; the self-test loads its byte-pinned sibling auditor by exact
+path, so new modules or package initializers in the activation tree cannot
+shadow standard-library or trusted imports. Git blob output is normalized to
 binary strings before comparison so identical UTF-8 files cannot fail solely
 because Ruby assigned different in-memory encodings. The candidate roadmap may
 still update unrelated current-status text, but the bridge extracts every

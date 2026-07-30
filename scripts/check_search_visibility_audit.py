@@ -271,7 +271,7 @@ def section(markdown: str, heading: str) -> str:
     start = matches[0][1]
     end = len(lines)
     for heading_start, _, level, _ in headings:
-        if heading_start >= start and level == 2:
+        if heading_start >= start and level <= 2:
             end = heading_start
             break
     return "\n".join(lines[start:end])
