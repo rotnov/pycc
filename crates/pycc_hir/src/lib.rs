@@ -90,6 +90,27 @@ pub enum HirExpr {
         right: Box<HirExpr>,
     },
     FString(Vec<FStringPart>),
+    /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this
+    /// lowering step's -- HIR only records the syntactic shape (D-104).
+    ListLiteral(Vec<HirExpr>),
+    /// `base[index]`, read-only (D-104 -- no subscript assignment target
+    /// exists in v0.2). Every statement that extracts an assignment/for
+    /// target rejects a non-bare-name target (see `Stmt::Assign`,
+    /// `Stmt::AnnAssign`, and `Stmt::For`'s target handling in
+    /// `lower_stmt` below) before ever calling `lower_expr` on it, so a
+    /// `Subscript` node reaches this arm only in a value (Load) position;
+    /// no separate `ExprContext` check is needed to enforce read-only-ness
+    /// here.
+    Subscript {
+        base: Box<HirExpr>,
+        index: Box<HirExpr>,
+    },
+    /// `list.append(value)`, recognized as a single dedicated node rather
+    /// than through any general method-call mechanism (D-104).
+    ListAppend {
+        list: String,
+        value: Box<HirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +145,14 @@ pub enum HirStmt {
         start: HirExpr,
         stop: HirExpr,
         step: HirExpr,
+        body: Vec<HirStmt>,
+    },
+    /// `for var in list:`, parallel to the existing `ForRange` -- desugars
+    /// to an index-counted loop starting in a later PR-10 task (D-104),
+    /// not here.
+    ForList {
+        var: String,
+        list: String,
         body: Vec<HirStmt>,
     },
     Return(Option<HirExpr>),
@@ -389,10 +418,20 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     pycc_ast::expr_range(&for_stmt.target),
                 ));
             };
+            // A bare-name iterable is `for v in some_list:` (D-104) --
+            // resolved to `Ty::List` or rejected by pycc_types, not here;
+            // HIR only records the syntactic shape.
+            if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
+                return Ok(HirStmt::ForList {
+                    var: var.id.to_string(),
+                    list: list_name.id.as_str().to_string(),
+                    body: lower_body(&for_stmt.body)?,
+                });
+            }
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
                 return Err(unsupported(
                     format!(
-                        "only `for x in range(...)` is supported so far: {:?}",
+                        "only `for x in range(...)` or `for x in <list>` is supported so far: {:?}",
                         for_stmt.iter
                     ),
                     pycc_ast::expr_range(&for_stmt.iter),
@@ -505,10 +544,50 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
             }
         },
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
+        Expr::List(list) => HirExpr::ListLiteral(
+            list.elts
+                .iter()
+                .map(lower_expr)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Expr::Subscript(sub) => HirExpr::Subscript {
+            base: Box::new(lower_expr(&sub.value)?),
+            index: Box::new(lower_expr(&sub.slice)?),
+        },
         Expr::Call(call) => {
             if !call.arguments.keywords.is_empty() {
                 return Err(unsupported(
                     "keyword call arguments are not supported yet",
+                    call.range,
+                ));
+            }
+            if let Expr::Attribute(attr) = call.func.as_ref() {
+                if attr.attr.as_str() == "append" {
+                    let Expr::Name(list_name) = attr.value.as_ref() else {
+                        return Err(unsupported(
+                            "`.append()` is only supported on a bare-name list so far",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    };
+                    let [value] = &*call.arguments.args else {
+                        return Err(unsupported(
+                            format!(
+                                "list.append() takes exactly one argument, got {}",
+                                call.arguments.args.len()
+                            ),
+                            call.range,
+                        ));
+                    };
+                    return Ok(HirExpr::ListAppend {
+                        list: list_name.id.as_str().to_string(),
+                        value: Box::new(lower_expr(value)?),
+                    });
+                }
+                return Err(unsupported(
+                    format!(
+                        "only the `.append()` method is supported so far, got `.{}(...)`",
+                        attr.attr
+                    ),
                     call.range,
                 ));
             }
@@ -705,49 +784,53 @@ mod tests {
             Span::new(13, 17),
         );
         assert_capability_error(
-            "x = [1]\n",
+            "x = (1, 2)\n",
             "expression kind not supported yet",
-            Span::new(4, 7),
+            Span::new(4, 10),
         );
     }
 
     #[test]
     fn capability_errors_propagate_through_every_supported_container() {
+        // Tuple literals (`(1, 2)`) are this table's "genuinely unhandled at
+        // every level" poison fixture -- a list literal used to fill this
+        // role (see `a_tuple_literal_expression_is_unsupported`'s own
+        // comment) until Task 7 (D-104) added list-literal lowering.
         let cases = [
             ("function body", "def _f():\n    pass\n"),
-            ("if test", "if []:\n    print(1)\n"),
+            ("if test", "if (1, 2):\n    print(1)\n"),
             ("if else body", "if True:\n    print(1)\nelse:\n    pass\n"),
-            ("while test", "while []:\n    print(1)\n"),
+            ("while test", "while (1, 2):\n    print(1)\n"),
             ("while body", "while True:\n    pass\n"),
             (
                 "one-argument range stop",
-                "for i in range([]):\n    print(i)\n",
+                "for i in range((1, 2)):\n    print(i)\n",
             ),
             (
                 "two-argument range start",
-                "for i in range([], 1):\n    print(i)\n",
+                "for i in range((1, 2), 1):\n    print(i)\n",
             ),
             (
                 "two-argument range stop",
-                "for i in range(0, []):\n    print(i)\n",
+                "for i in range(0, (1, 2)):\n    print(i)\n",
             ),
             (
                 "three-argument range start",
-                "for i in range([], 1, 1):\n    print(i)\n",
+                "for i in range((1, 2), 1, 1):\n    print(i)\n",
             ),
             (
                 "three-argument range stop",
-                "for i in range(0, [], 1):\n    print(i)\n",
+                "for i in range(0, (1, 2), 1):\n    print(i)\n",
             ),
             (
                 "three-argument range step",
-                "for i in range(0, 1, []):\n    print(i)\n",
+                "for i in range(0, 1, (1, 2)):\n    print(i)\n",
             ),
             ("for body", "for i in range(1):\n    pass\n"),
-            ("return value", "def _f():\n    return []\n"),
+            ("return value", "def _f():\n    return (1, 2)\n"),
             (
                 "elif test",
-                "if True:\n    print(1)\nelif []:\n    print(2)\n",
+                "if True:\n    print(1)\nelif (1, 2):\n    print(2)\n",
             ),
             (
                 "elif body",
@@ -757,11 +840,11 @@ mod tests {
                 "nested else body",
                 "if True:\n    print(1)\nelif True:\n    print(2)\nelse:\n    pass\n",
             ),
-            ("binary left operand", "x = [] + 1\n"),
-            ("binary right operand", "x = 1 + []\n"),
-            ("f-string interpolation", "x = f\"{[]}\"\n"),
-            ("comparison left operand", "x = [] == 1\n"),
-            ("comparison right operand", "x = 1 == []\n"),
+            ("binary left operand", "x = (1, 2) + 1\n"),
+            ("binary right operand", "x = 1 + (1, 2)\n"),
+            ("f-string interpolation", "x = f\"{(1, 2)}\"\n"),
+            ("comparison left operand", "x = (1, 2) == 1\n"),
+            ("comparison right operand", "x = 1 == (1, 2)\n"),
         ];
 
         for (container, source) in cases {
@@ -1002,7 +1085,13 @@ mod tests {
 
     #[test]
     fn non_name_callee_is_unsupported() {
-        assert_capability_error_message("foo.bar()\n", "only calling a bare name");
+        // `foo.bar()` no longer reaches this message (Task 7, D-104): a
+        // `.` callee is now checked for the `.append()` shape first, and
+        // rejected with its own dedicated message when it isn't `.append`
+        // (see `calling_a_non_append_method_is_unsupported`). This fixture
+        // instead calls the *result* of a call -- neither a bare name nor
+        // an attribute access -- to keep exercising the fallback rejection.
+        assert_capability_error_message("foo()()\n", "only calling a bare name");
     }
 
     #[test]
@@ -1151,12 +1240,15 @@ mod tests {
     }
 
     #[test]
-    fn a_list_literal_expression_is_unsupported() {
-        // No v0.1 grammar node reaches this catch-all today (every kind
-        // handled so far -- numbers, names, calls, binops, bools,
-        // comparisons -- has its own dedicated arm); a list literal is
-        // genuinely unhandled at every level and exercises the final arm.
-        assert_capability_error_message("x = [1]\n", "expression kind not supported yet");
+    fn a_tuple_literal_expression_is_unsupported() {
+        // Before Task 7 (D-104), a list literal filled this role (every
+        // other kind handled so far -- numbers, names, calls, binops,
+        // bools, comparisons -- has its own dedicated arm) as the "genuinely
+        // unhandled at every level" fixture that exercises the final catch-
+        // all arm. List literals are supported now (see
+        // `lowers_a_list_literal`), so a tuple literal -- dict/set/tuple
+        // containers are out of this PR's scope -- takes over that role.
+        assert_capability_error_message("x = (1, 2)\n", "expression kind not supported yet");
     }
 
     #[test]
@@ -1309,9 +1401,13 @@ mod tests {
 
     #[test]
     fn iterating_a_non_call_expression_is_not_supported_yet() {
+        // A list *literal* iterable is still rejected (Task 7/D-104 only
+        // added support for a bare-name iterable, i.e. `for v in some_list:`
+        // -- see `lowers_for_over_a_list_name_to_for_list`); the rejection
+        // message itself changed to mention that new bare-name-list form.
         assert_capability_error_message(
             "for i in [1, 2, 3]:\n    print(i)\n",
-            "only `for x in range(...)` is supported so far",
+            "only `for x in range(...)` or `for x in <list>` is supported so far",
         );
     }
 
@@ -1713,7 +1809,176 @@ mod tests {
     fn an_annotated_assignment_with_an_unsupported_value_returns_a_capability_error() {
         // Exercises the `lower_expr(...)?` early-return branch for
         // AnnAssign's value expression specifically.
-        assert_capability_error_message("x: int = []\n", "expression kind not supported yet");
+        assert_capability_error_message("x: int = (1, 2)\n", "expression kind not supported yet");
+    }
+
+    // -- Task 7 (D-104): list[int] frontend HIR forms --------------------
+
+    #[test]
+    fn lowers_a_list_literal() {
+        // Not a `let PATTERN = ... else { panic!(...) }` destructure -- this
+        // file's own coverage-gate lesson (see pycc_ast's documented
+        // `re_exported_grammar_types_resolve_and_have_the_expected_shape`
+        // finding) is that a hand-written panic arm is never taken on the
+        // happy path and shows up as a permanently uncovered region under
+        // D-014's 100%-regions gate. A direct `assert_eq!` against the whole
+        // expected `HirItem` avoids that without weakening the assertion.
+        let module = pycc_parser_test_helper::parse("x = [1, 2, 3]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::ListLiteral(vec![
+                    HirExpr::IntLiteral(1),
+                    HirExpr::IntLiteral(2),
+                    HirExpr::IntLiteral(3),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_read_subscript() {
+        let module = pycc_parser_test_helper::parse("x = [1, 2, 3]\ny = x[0]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Subscript {
+                    base: Box::new(HirExpr::Name("x".to_string())),
+                    index: Box::new(HirExpr::IntLiteral(0)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_append_as_a_dedicated_hir_node_not_a_generic_call() {
+        let module = pycc_parser_test_helper::parse("x = [1]\nx.append(2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListAppend {
+                list: "x".to_string(),
+                value: Box::new(HirExpr::IntLiteral(2)),
+            }))
+        );
+    }
+
+    #[test]
+    fn lowers_for_over_a_list_name_to_for_list() {
+        let module = pycc_parser_test_helper::parse("x = [1, 2, 3]\nfor v in x:\n    print(v)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ForList {
+                var: "v".to_string(),
+                list: "x".to_string(),
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("v".to_string())],
+                })],
+            })
+        );
+    }
+
+    #[test]
+    fn subscripted_type_annotation_is_still_rejected_on_purpose() {
+        // D-104: v0.2 adds no annotation-syntax support for list[T]. This test
+        // locks in that `x: list[int] = []` keeps failing today's existing
+        // "only a bare name type annotation" capability error, so a future
+        // change to `annotation_to_ty` doesn't silently start accepting this
+        // without its own deliberate decision.
+        assert_capability_error_message(
+            "x: list[int] = []\n",
+            "only a bare name type annotation is supported so far",
+        );
+    }
+
+    #[test]
+    fn an_empty_list_literal_lowers_to_an_empty_vec() {
+        let module = pycc_parser_test_helper::parse("x = []\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::ListLiteral(vec![]),
+            })]
+        );
+    }
+
+    #[test]
+    fn appending_to_a_non_bare_name_base_is_unsupported() {
+        // `.append()` recognition is restricted to a bare-name list (D-104);
+        // `a.b.append(1)` has a non-name `attr.value` (itself an attribute
+        // access), so it must be rejected rather than silently accepted.
+        assert_capability_error_message(
+            "a.b.append(1)\n",
+            "`.append()` is only supported on a bare-name list so far",
+        );
+    }
+
+    #[test]
+    fn append_with_zero_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "x.append()\n",
+            "list.append() takes exactly one argument, got 0",
+        );
+    }
+
+    #[test]
+    fn append_with_two_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "x.append(1, 2)\n",
+            "list.append() takes exactly one argument, got 2",
+        );
+    }
+
+    #[test]
+    fn calling_a_non_append_method_is_unsupported() {
+        // Any other `.method()` call is rejected before ever falling through
+        // to the bare-name-callee check below it -- this task only special-
+        // cases `.append()`, not general method dispatch (D-104).
+        assert_capability_error_message(
+            "foo.bar()\n",
+            "only the `.append()` method is supported so far, got `.bar(...)`",
+        );
+    }
+
+    // The five tests below exercise each new arm's own `?`-propagation path
+    // specifically (an inner element/base/index/argument/body expression
+    // that itself fails to lower), as opposed to every test above, which
+    // only ever supplies inner expressions that lower successfully.
+
+    #[test]
+    fn a_list_literal_with_an_unsupported_element_propagates_the_element_error() {
+        assert_capability_error_message("x = [(1, 2)]\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn a_subscript_with_an_unsupported_base_propagates_the_base_error() {
+        assert_capability_error_message("y = (1, 2)[0]\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn a_subscript_with_an_unsupported_index_propagates_the_index_error() {
+        assert_capability_error_message("y = x[(1, 2)]\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn an_append_with_an_unsupported_argument_propagates_the_argument_error() {
+        assert_capability_error_message("x.append((1, 2))\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn a_for_list_body_with_an_unsupported_statement_propagates_the_body_error() {
+        assert_capability_error_message(
+            "x = [1, 2, 3]\nfor v in x:\n    (1, 2)\n",
+            "expression kind not supported yet",
+        );
     }
 }
 
