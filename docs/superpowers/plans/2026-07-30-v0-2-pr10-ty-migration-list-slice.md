@@ -415,9 +415,9 @@ Visit each site below (line numbers are from this plan's own research pass again
 
 3. **`BinOp` result match** (~line 609-710): add an explicit catch-all arm covering `Ty::List(_) | Ty::Dict(..) | Ty::Set(_) | Ty::Tuple(_)` that panics `"pycc_codegen: binary operators are not supported on {} yet"` — no container type supports any `BinOpKind` in this plan's own scope (not even `+` for list concatenation; that's out of scope per D-104), so this arm is a pure diagnostic-message improvement over today's already-correct rejection, not new capability.
 
-4. **The `pycc_rt_int_to_str`-style conversion match** (~line 835-869): same pattern, explicit catch-all naming the type.
+4. **`emit_expr`'s `MirExpr::Call` result match** (~line 835-869; Task 5's implementer confirmed this brief's original "`pycc_rt_int_to_str`-style conversion match" label was wrong — the actual code at this line range is the `Call`-result-unpacking match, not a conversion match): same pattern, explicit catch-all naming the type.
 
-5. **`collect_module_bindings`'s inner match** (~line 1363-1384): same pattern.
+5. **`declare_module_globals`'s inner match** (~line 1363-1384; Task 5's implementer confirmed this brief's original "`collect_module_bindings`" label was wrong — `collect_module_bindings` is a different, nearby function with no `Ty` match at all; the actual code at this line range is inside `declare_module_globals`): same pattern.
 
 6. **`collect_stmt_bindings`'s allow-list filter** (~line 1308-1318, currently `matches!(ty, Ty::Int | Ty::Bool | Ty::Float | Ty::Str)`): change to `matches!(ty, Ty::Int | Ty::Bool | Ty::Float | Ty::Str | Ty::List(_))` — a `list[int]` local **does** need its binding collected (Task 11 needs this), so this specific site is not a "panic louder" fix but a real, deliberate inclusion; everything else (`Dict`/`Set`/`Tuple`) stays excluded, since PR-11 owns those.
 
