@@ -49,9 +49,11 @@ because the ledger uses a single-backtick code span to project it exactly, or a
 pipe or line separator, because the ledger uses unescaped pipes and one physical
 line per table row. An existing active or diagnostic query may make only one
 lifecycle transition: to `retired`, with a non-null retirement timestamp
-strictly after its final observation on that provider surface. Every identity,
-intent, KPI, alias, rationale, activation, and surface field remains unchanged
-during retirement.
+value. For GitHub, that timestamp must be strictly after the final history
+observation and structured measurement. The registry has no Google snapshot
+series yet, so Google retirement has only activation-order and trusted audit
+clock bounds. Every identity, intent, KPI, alias, rationale, activation, and
+surface field remains unchanged during retirement.
 
 The active GitHub product-acquisition set is:
 
