@@ -413,7 +413,10 @@ types, ranges, result-count relationships, or corpus digest are invalid. Its
 trusted clock also rejects future-dated evidence, and each timestamp/query
 pair must identify exactly one observation. Existing base measurements are an
 immutable registry prefix, and history rows are accepted only after the exact
-Markdown table header and delimiter. A table-like line without the canonical
+Markdown table header and delimiter. That header must be the first section
+content or follow a blank-line block boundary; explanatory prose may precede
+it, but cannot merge with the header into a GFM paragraph while the raw rows
+remain auditable. A table-like line without the canonical
 unindented leading pipe fails instead of becoming visible, unaudited evidence.
 Every accepted history line also has exactly one leading and one trailing
 boundary pipe, so repeated pipes cannot add an empty rendered column while the

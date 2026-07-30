@@ -470,6 +470,17 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "must follow the table delimiter"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_history_header_must_be_first_section_content(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        header = "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |"
+        for prefix in ("prose before the table\n", "  indented prose\n"):
+            with self.subTest(prefix=prefix):
+                path.write_text(
+                    self.head_visibility.replace(header, f"{prefix}{header}", 1)
+                )
+                with self.assertRaisesRegex(AuditError, "valid block boundary"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_history_table_cannot_resume_after_an_interruption(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         delimiter = "|---|---|---:|---:|---:|---:|"

@@ -395,12 +395,16 @@ def history_rows(markdown: str) -> list[list[str]]:
     saw_header = False
     saw_delimiter = False
     table_ended = False
+    header_boundary = True
     for line in section(markdown, "GitHub repository search history").splitlines():
         if not line.startswith("|"):
             if line.lstrip().startswith("|") or line.count("|") >= 5:
                 raise AuditError(
                     "GitHub history table lines must use an unindented leading pipe"
                 )
+            if not saw_header:
+                header_boundary = not line.strip()
+                continue
             if saw_header and not saw_delimiter:
                 raise AuditError("GitHub history header must be followed by its delimiter")
             if saw_delimiter:
@@ -429,6 +433,10 @@ def history_rows(markdown: str) -> list[list[str]]:
         ]:
             if saw_header:
                 raise AuditError("duplicate GitHub history header")
+            if not header_boundary:
+                raise AuditError(
+                    "GitHub history header must follow a valid block boundary"
+                )
             saw_header = True
             continue
         if len(cells) == 6 and all(re.fullmatch(r":?-+:?", cell) for cell in cells):
