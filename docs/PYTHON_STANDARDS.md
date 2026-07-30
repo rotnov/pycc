@@ -15,7 +15,11 @@ the exact diagnostic.
   `py30/` through `py314/` against CPython 3.14.6. After the v1.x gate opens,
   the Python 3.15 run covers `py30/` through `py315/` against its pinned
   current 3.15 patch, while the independent 3.14 compatibility run remains
-  required.
+  required. This describes the eventual v1.0-scale, language-level-selecting
+  harness; per [D-102](./DECISIONS.md#d-102-extend-testsconformancers-for-pr-9s-9-new-pep-fixtures-no-pycc_testkit-crate)
+  the fixtures PR-9 added live flat at `tests/fixtures/pep_NNNN_slug.py`
+  instead, run directly by `tests/conformance.rs` — the `pyXY/` tree and its
+  language-level selection do not exist yet.
 - Negative tests: `tests/diagnostics/dNNNN_slug.py` — must *fail to compile* with the documented error code.
 - Category: `syntax` · `typing` · `sem` (semantics/data model) · `import` · `rt` (runtime) — `rt`-only PEPs may need design docs instead of codegen.
 - Status: ☐ planned · ⚙ in progress · ✅ passing.
@@ -54,6 +58,12 @@ For each newly observed upstream release:
    Standards Track PEPs to the preview section; Draft, Deferred, and Rejected
    proposals are not implementation commitments.
 4. Do not flip conformance statuses by hand; CI still owns the status column.
+   [D-102](./DECISIONS.md#d-102-extend-testsconformancers-for-pr-9s-9-new-pep-fixtures-no-pycc_testkit-crate)
+   is the one accepted interim exception: no automation backs this column
+   today, so PR-9's 9 rows were flipped by hand, only after each fixture was
+   observed passing on a real, already-completed CI run across all 5 Tier-1
+   targets in both build profiles. Building the real automation remains a
+   tracked `docs/ROADMAP.md` follow-up.
 
 ## Python 3.0–3.2 (foundations)
 

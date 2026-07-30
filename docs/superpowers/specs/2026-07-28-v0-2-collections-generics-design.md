@@ -82,7 +82,7 @@ D-089 decided `Ty`'s container variants but explicitly left the generic-function
 (Full rationale — including why `--release` and the conformance harness are resequenced ahead of the v0.1 pattern's "thin slice first" — lives in `docs/DELIVERY_PLAN.md`'s new v0.2 section, committed alongside this doc.)
 
 1. **PR-8**: `--release`/LTO profile + `pycc.toml` + nbody benchmark harness (contract above — hand-unrolled, scalar-only fixture, no container dependency).
-2. **PR-9**: Real per-PEP conformance harness (`tests/conformance/pyXY/`) seeded with the 8 no-new-work PEPs above (649/749 excluded per the Update note above — not reachable at v0.2), plus PEP 526's own small bounded `Stmt::AnnAssign` addition. Whether this warrants finally building the `pycc_testkit` crate (D-018/D-037/D-085 deferred it "until there's a PEP matrix to check against" — one now exists) is this PR's own ADR to record.
+2. **PR-9**: Real per-PEP conformance harness (`tests/conformance.rs`, extended in place per [D-102](../../DECISIONS.md#d-102-extend-testsconformancers-for-pr-9s-9-new-pep-fixtures-no-pycc_testkit-crate) — no `pycc_testkit` crate, no `tests/conformance/pyXY/` tree) seeded with the 8 no-new-work PEPs above (649/749 excluded per the Update note above — not reachable at v0.2), plus PEP 526's own small bounded `Stmt::AnnAssign` addition.
 3. **PR-10**: `Ty` representation migration (D-089) + monomorphization foundation + `list[T]` end-to-end thin slice (literal, indexing, `len()`, iteration, `.append()`) + its own PEP-585 fixture.
 4. **PR-11**: `dict[K,V]`, `set[T]` (representation decision above), `tuple[...]` + the dict-insertion-order fixture.
 5. **PR-12**: Comprehensions + slicing + remaining container methods depth, across all four types + the PEP-709 fixture.
