@@ -24,7 +24,10 @@ class WorkflowPermissionsTest < Minitest::Test
     candidate = SEARCH_ACTIVATION_PATHS.to_h do |relative|
       [relative, activated_successor_executable(relative, root)]
     end
-    candidate.merge(SEARCH_GIT_ATTRIBUTES_KEY => SEARCH_GIT_ATTRIBUTES_MANIFEST)
+    candidate.merge(
+      SEARCH_GIT_ATTRIBUTES_KEY => SEARCH_GIT_ATTRIBUTES_MANIFEST,
+      SEARCH_TREE_ENTRIES_KEY => SEARCH_ACTIVATION_TREE_ENTRIES
+    )
   end
 
   def workflow(test_job = "runs-on: ubuntu-latest", trigger: "pull_request", extra_jobs: nil)
@@ -429,7 +432,7 @@ class WorkflowPermissionsTest < Minitest::Test
 
   def test_activation_compares_successor_executables_as_bytes
     candidate = activation_candidate.transform_values do |content|
-      content.dup.force_encoding(Encoding::UTF_8)
+      content.is_a?(String) ? content.dup.force_encoding(Encoding::UTF_8) : content
     end
     Dir.mktmpdir do |directory|
       anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
@@ -549,6 +552,39 @@ class WorkflowPermissionsTest < Minitest::Test
       "docs/.gitattributes"
     ].join("\0").b
     assert_equal expected, git_attributes_manifest(tree)
+  end
+
+  def test_activation_tree_metadata_is_nul_safe_and_preserves_modes
+    tree = [
+      "100644 blob #{'a' * 40}\t.github/workflows/ci.yml",
+      "100644 blob #{'b' * 40}\tdirectory\nwith-newline/.gitattributes",
+      "120000 blob #{'c' * 40}\tscripts/check_ci_permissions.rb"
+    ].join("\0") + "\0"
+    attributes, entries = activation_tree_metadata(tree)
+    assert_equal "directory\nwith-newline/.gitattributes".b, attributes
+    assert_equal "100644 blob", entries.fetch(".github/workflows/ci.yml")
+    assert_equal "120000 blob", entries.fetch("scripts/check_ci_permissions.rb")
+  end
+
+  def test_activation_trust_anchor_rejects_changed_tree_entry_modes
+    SEARCH_ACTIVATION_PATHS.each do |relative|
+      candidate = activation_candidate
+      candidate[SEARCH_TREE_ENTRIES_KEY] =
+        SEARCH_ACTIVATION_TREE_ENTRIES.merge(relative => "120000 blob")
+      Dir.mktmpdir do |directory|
+        anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+        anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+        error = assert_raises(PolicyError) do
+          validate_search_activation_transition(
+            [anchor],
+            event_name: "pull_request_target",
+            data_loader: ->(_paths) { candidate }
+          )
+        end
+        assert_match(/preserve Git tree entry 100644 blob for #{Regexp.escape(relative)}/,
+                     error.message)
+      end
+    end
   end
 
   def test_activation_trust_anchor_rejects_changed_roadmap_projection

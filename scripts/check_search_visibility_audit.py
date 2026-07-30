@@ -114,7 +114,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77"
     ),
     "SEARCH_VISIBILITY.md": (
-        "a87e3713f43419857501c0a2d5ff3482261e219cd165b8dc79d92a549d29c3ef"
+        "df8a7dad6b867876a5e95a272195fc0c6411c7258e8f1038cdb8edeb17f97d3f"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -634,10 +634,6 @@ def validate_registry(
             raise AuditError("GitHub registry raw_query cannot contain backticks")
         if surface == GITHUB_SURFACE and "|" in raw_query:
             raise AuditError("GitHub registry raw_query cannot contain pipes")
-        if surface == GITHUB_SURFACE and "  " in raw_query:
-            raise AuditError(
-                "GitHub registry raw_query cannot contain repeated ASCII spaces"
-            )
         if surface == GITHUB_SURFACE and len(raw_query.splitlines()) != 1:
             raise AuditError(
                 "GitHub registry raw_query cannot contain line separators"
@@ -651,10 +647,12 @@ def validate_registry(
                 "GitHub registry raw_query cannot contain HTML tag or comment syntax"
             )
         if surface == GITHUB_SURFACE and any(
-            unicodedata.category(character) == "Cc" for character in raw_query
+            unicodedata.category(character) in {"Cc", "Cf"}
+            for character in raw_query
         ):
             raise AuditError(
-                "GitHub registry raw_query cannot contain control characters"
+                "GitHub registry raw_query cannot contain control characters "
+                "or Unicode formatting characters"
             )
         if surface not in SEMANTIC_IDENTITY_VERSIONS:
             raise AuditError("registry query has an unsupported surface")

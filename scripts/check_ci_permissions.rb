@@ -20,17 +20,18 @@ SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
   "6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
-    "153bc8eb8b2efcc20273dac075e543e2d1ae09b1d6c9f996e78c7e401db16afc",
+    "e19a705408c8da2314572b08f4dc40c94bafd0caab96180d10cd3962c5b6be70",
   "docs/SEARCH_QUERY_REGISTRY.json" =>
     "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77",
   "docs/SEARCH_VISIBILITY.md" =>
-    "a87e3713f43419857501c0a2d5ff3482261e219cd165b8dc79d92a549d29c3ef",
+    "df8a7dad6b867876a5e95a272195fc0c6411c7258e8f1038cdb8edeb17f97d3f",
   "docs/SEARCH_VISIBILITY_CHECKPOINTS.json" =>
     "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
 }.freeze
 SEARCH_ROADMAP_PATH = "docs/ROADMAP.md"
 SEARCH_GIT_ATTRIBUTES_KEY = "\0search-activation-gitattributes"
 SEARCH_GIT_ATTRIBUTES_MANIFEST = "".b.freeze
+SEARCH_TREE_ENTRIES_KEY = "\0search-activation-tree-entries"
 SEARCH_ROADMAP_CHECKPOINTS = [
   "<!-- search-history-checkpoint: github_repository_search 108 " \
     "e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->",
@@ -66,6 +67,8 @@ ACTIVATED_POLICY_TEST_PATH = "scripts/test_check_ci_permissions.rb"
 SEARCH_ACTIVATION_PATHS =
   (STAGED_SEARCH_ACTIVATION_SHA256.keys + SEARCH_SUCCESSOR_EXECUTABLES +
     SEARCH_SUCCESSOR_INPUTS + [SEARCH_ROADMAP_PATH]).uniq.freeze
+SEARCH_ACTIVATION_TREE_ENTRIES =
+  SEARCH_ACTIVATION_PATHS.to_h { |relative| [relative, "100644 blob"] }.freeze
 TRUSTED_EVENT_AND_REF_GUARD = /\A(?:\$\{\{\s*)?github\.event_name\s*==\s*(['"])push\1\s*&&\s*github\.ref\s*==\s*(['"])refs\/heads\/main\2\s*(?:\}\})?\z/
 
 def mapping_entries(node, context)
@@ -316,6 +319,23 @@ def git_attributes_manifest(tree)
   end.sort.join("\0").b
 end
 
+def activation_tree_metadata(tree)
+  paths = []
+  selected_entries = {}
+  tree.b.split("\0").reject(&:empty?).each do |record|
+    metadata, relative = record.split("\t", 2)
+    match = /\A([0-9]{6}) ([^ ]+) [0-9a-f]+\z/.match(metadata)
+    unless match && relative
+      raise PolicyError, "candidate PR tree contains an invalid entry"
+    end
+    paths << relative
+    if SEARCH_ACTIVATION_TREE_ENTRIES.key?(relative)
+      selected_entries[relative] = "#{match[1]} #{match[2]}"
+    end
+  end
+  [git_attributes_manifest(paths.join("\0")), selected_entries]
+end
+
 def pull_request_head_data(event_path, repository_root)
   event = JSON.parse(Pathname(event_path).read)
   pull_request = event["pull_request"]
@@ -356,13 +376,15 @@ def pull_request_head_data(event_path, repository_root)
     [relative, content.b]
   end
   tree, error, result = Open3.capture3(
-    "git", "ls-tree", "-rz", "--name-only", head_sha,
+    "git", "ls-tree", "-rz", head_sha,
     chdir: repository_root.to_s
   )
   unless result.success?
     raise PolicyError, "could not inspect candidate PR tree: #{error.strip}"
   end
-  candidate[SEARCH_GIT_ATTRIBUTES_KEY] = git_attributes_manifest(tree)
+  attributes, entries = activation_tree_metadata(tree)
+  candidate[SEARCH_GIT_ATTRIBUTES_KEY] = attributes
+  candidate[SEARCH_TREE_ENTRIES_KEY] = entries
   candidate
 rescue Errno::ENOENT, JSON::ParserError => e
   raise PolicyError, "could not read pull_request_target event data: #{e.message}"
@@ -389,6 +411,17 @@ def validate_search_activation_transition(
   unless candidate[SEARCH_GIT_ATTRIBUTES_KEY] == SEARCH_GIT_ATTRIBUTES_MANIFEST
     raise PolicyError,
           "search trust-anchor activation cannot add checkout-affecting .gitattributes"
+  end
+  entries = candidate[SEARCH_TREE_ENTRIES_KEY]
+  unless entries.is_a?(Hash)
+    raise PolicyError, "search trust-anchor activation is missing Git tree entries"
+  end
+  SEARCH_ACTIVATION_TREE_ENTRIES.each do |relative, expected_entry|
+    unless entries[relative] == expected_entry
+      raise PolicyError,
+            "search trust-anchor activation must preserve Git tree entry " \
+            "#{expected_entry} for #{relative}"
+    end
   end
   STAGED_SEARCH_ACTIVATION_SHA256.each do |relative, expected_digest|
     content = candidate[relative]

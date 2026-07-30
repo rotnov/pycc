@@ -787,24 +787,6 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "cannot contain pipes"):
             validate(self.head, self.base, self.audited_at)
 
-    def test_github_registry_raw_query_rejects_repeated_ascii_spaces(self) -> None:
-        self.registry["queries"].append(
-            {
-                **self.registry["queries"][0],
-                "id": "github-diagnostic-repeated-space-query",
-                "raw_query": "python  compiler",
-                "semantic_identity": "github-repository-search-v1:bag:compiler python",
-                "intent_class": "brand",
-                "lifecycle": "diagnostic",
-                "kpi_role": "diagnostic",
-                "rationale": "Synthetic unprojectable whitespace query.",
-                "activated_at": "2026-07-31T00:00:00Z",
-            }
-        )
-        self.write_registry()
-        with self.assertRaisesRegex(AuditError, "repeated ASCII spaces"):
-            validate(self.head, self.base, self.audited_at)
-
     def test_github_registry_raw_query_rejects_line_separators(self) -> None:
         for separator in ("\n", "\r", "\u2028"):
             with self.subTest(separator=repr(separator)):
@@ -856,8 +838,22 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                     validate(self.head, self.base, self.audited_at)
                 self.registry["queries"].pop()
 
-    def test_github_registry_raw_query_rejects_control_characters(self) -> None:
-        for control in ("\x00", "\x01", "\t", "\x1f", "\x7f", "\x80", "\x9f"):
+    def test_github_registry_raw_query_rejects_control_or_formatting_characters(
+        self,
+    ) -> None:
+        for control in (
+            "\x00",
+            "\x01",
+            "\t",
+            "\x1f",
+            "\x7f",
+            "\x80",
+            "\x9f",
+            "\u200b",
+            "\u202e",
+            "\u2066",
+            "\ufeff",
+        ):
             with self.subTest(control=repr(control)):
                 self.registry["queries"].append(
                     {
