@@ -1,7 +1,7 @@
 use pycc_ast::{CmpOp, ElifElseClause, Expr, ModModule, Number, Operator, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
     Int,
     Float,
@@ -9,17 +9,40 @@ pub enum Ty {
     Str,
     None,
     Infer,
+    /// `list[T]`. Type-checking is planned to accept any scalar `T`; only
+    /// `T = Ty::Int` gets real codegen in v0.2 (D-104). Codegen rejecting
+    /// every other element type before it becomes an unhandled codegen
+    /// case is planned via a `pycc_types` diagnostic (`T0034`, per D-104 --
+    /// not yet implemented as of this commit; this variant only defines
+    /// the type representation).
+    List(Box<Ty>),
+    /// `dict[K, V]`. No v0.2 code path constructs this yet (PR-11's own
+    /// scope per `docs/DELIVERY_PLAN.md`) -- the variant exists now only
+    /// because D-089 decided `Ty`'s full recursive shape up front, so
+    /// every later PR's match arms are additive, not migratory again.
+    Dict(Box<Ty>, Box<Ty>),
+    /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
+    Set(Box<Ty>),
+    /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own scope.
+    Tuple(Vec<Ty>),
 }
 
 impl Ty {
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
-            Ty::Int => "int",
-            Ty::Float => "float",
-            Ty::Bool => "bool",
-            Ty::Str => "str",
-            Ty::None => "None",
-            Ty::Infer => "<inferred>",
+            Ty::Int => "int".to_string(),
+            Ty::Float => "float".to_string(),
+            Ty::Bool => "bool".to_string(),
+            Ty::Str => "str".to_string(),
+            Ty::None => "None".to_string(),
+            Ty::Infer => "<inferred>".to_string(),
+            Ty::List(elem) => format!("list[{}]", elem.name()),
+            Ty::Dict(key, value) => format!("dict[{}, {}]", key.name(), value.name()),
+            Ty::Set(elem) => format!("set[{}]", elem.name()),
+            Ty::Tuple(elems) => format!(
+                "tuple[{}]",
+                elems.iter().map(Ty::name).collect::<Vec<_>>().join(", ")
+            ),
         }
     }
 }
@@ -630,13 +653,48 @@ mod tests {
     }
 
     #[test]
-    fn ty_name_returns_the_python_spelling_of_every_variant() {
+    fn ty_name_returns_the_python_spelling_of_every_scalar_variant() {
+        // The four recursive container variants (List/Dict/Set/Tuple) are
+        // covered separately by `ty_name_describes_nested_container_types`
+        // below, since their expected `.name()` output depends on a nested
+        // `Ty` argument rather than being a fixed string per variant.
         assert_eq!(Ty::Int.name(), "int");
         assert_eq!(Ty::Float.name(), "float");
         assert_eq!(Ty::Bool.name(), "bool");
         assert_eq!(Ty::Str.name(), "str");
         assert_eq!(Ty::None.name(), "None");
         assert_eq!(Ty::Infer.name(), "<inferred>");
+    }
+
+    #[test]
+    fn ty_list_variant_is_structurally_comparable_and_not_copy() {
+        let a = Ty::List(Box::new(Ty::Int));
+        let b = Ty::List(Box::new(Ty::Int));
+        let c = Ty::List(Box::new(Ty::Str));
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        // `Ty` is `Clone` but deliberately not `Copy` (a `Box`/`Vec`-holding
+        // enum can't implement `Copy`), so producing a second owned value
+        // from `a` requires this explicit `.clone()` -- unlike the old flat
+        // scalar `Ty`, where an implicit copy would have made `.clone()`
+        // merely redundant rather than required. (`.clone()` alone can't
+        // prove Copy's absence at compile time -- it also compiles, just
+        // redundantly, for a `Copy` type -- so this comment documents the
+        // property rather than the assertions below enforcing it.)
+        let d = a.clone();
+        assert_eq!(a, d);
+    }
+
+    #[test]
+    fn ty_name_describes_nested_container_types() {
+        assert_eq!(Ty::Int.name(), "int");
+        assert_eq!(Ty::List(Box::new(Ty::Int)).name(), "list[int]");
+        assert_eq!(
+            Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Float)).name(),
+            "dict[str, float]"
+        );
+        assert_eq!(Ty::Set(Box::new(Ty::Bool)).name(), "set[bool]");
+        assert_eq!(Ty::Tuple(vec![Ty::Int, Ty::Str]).name(), "tuple[int, str]");
     }
 
     #[test]
@@ -1404,7 +1462,7 @@ mod tests {
                 hir.items,
                 vec![HirItem::Function {
                     name: "f".to_string(),
-                    params: vec![("x".to_string(), expected_ty)],
+                    params: vec![("x".to_string(), expected_ty.clone())],
                     return_ty: expected_ty,
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 }],
