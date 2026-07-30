@@ -43,7 +43,7 @@ jobs:
       # lowered or bypassed to make a pull request pass. tests/conformance.rs
       # (PR-6, D-078) is excluded from this measurement automatically -- test
       # code isn't part of the coverage denominator (docs/TESTING.md's "Code
-      # coverage" section) -- and its two tests are `#[ignore]`d by default,
+      # coverage" section) -- and its 11 tests are `#[ignore]`d by default,
       # so this step needs no CPython oracle at all; see the oracle-setup
       # steps and explicit `--include-ignored` run further down this job.
       - name: Hard coverage gate — 100% lines + regions (D-014)
@@ -149,7 +149,7 @@ jobs:
             exit 1
           }
 
-      # Both conformance tests are `#[ignore]`d by default (see
+      # All 11 conformance tests are `#[ignore]`d by default (see
       # tests/conformance.rs) so the coverage gate above doesn't need the
       # oracle; `--include-ignored` here is what actually runs and verifies
       # them, now that the oracle is on PATH.
@@ -363,7 +363,7 @@ jobs:
       - name: Build pycc_rt (release, for tests/nbody_bench.rs's --release build)
         run: cargo build --release -p pycc_rt
 
-      # `--include-ignored` runs tests/conformance.rs's two `#[ignore]`d
+      # `--include-ignored` runs tests/conformance.rs's 11 `#[ignore]`d
       # tests (D-078) alongside everything else, now that the oracle above
       # is on PATH.
       - name: cargo test --workspace

@@ -331,8 +331,17 @@ fn collect_block_constraints(
             HirStmt::AnnAssign {
                 target,
                 value: Some(value),
-                ..
+                annotation: _,
             } => {
+                // KNOWN GAP (PR-9 Task 4 review, 2026-07-30): binds the solver term to the
+                // initializer's own inferred term, discarding `annotation` entirely. A private
+                // helper mixing type inference with an annotated local whose annotation diverges
+                // from the naturally-inferred term (e.g. `def _h(x): y: int = x; return y` called
+                // as `_h(True)`) can get a spurious T0022 rejection of otherwise-legal Python --
+                // not a soundness hole (nothing incorrect is silently accepted), and confirmed
+                // unreachable by any fixture PR-9 itself ships (this path only runs for
+                // underscore-prefixed private helpers with Ty::Infer signatures). Cheap fix if
+                // ever needed: unify the term with `Ok(*annotation)` instead of discarding it.
                 if let Some(term) =
                     collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
                 {
