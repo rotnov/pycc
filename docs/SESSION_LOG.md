@@ -21,10 +21,15 @@ PR-8's merge-conflict/rebase overhead. Delivered via
 `superpowers:subagent-driven-development`, 10 tasks: D-102 (Task 1, the
 decision to extend `tests/conformance.rs` in place rather than build
 `pycc_testkit`, superseding D-018/D-037/D-085), a dual-profile
-debug/release fixture runner (Task 2), full end-to-end PEP 526 (variable
-annotations) support across `pycc_ast`/`pycc_hir`/`pycc_types`
-(new `T0025` diagnostic)/`pycc_mir` (new `MirStmt::NoOp`)/`pycc_codegen`
-(Tasks 3-5), 9 new conformance fixtures needing no new language feature
+debug/release fixture runner (Task 2), the bare-name subset of PEP 526
+(variable annotations, `x: int = 1` and value-less `x: int`) across the
+full pipeline — `pycc_ast`/`pycc_hir`/`pycc_types` (new `T0025`
+diagnostic)/`pycc_mir` (new `MirStmt::NoOp`)/`pycc_codegen` (Tasks 3-5).
+Deliberately out of scope, documented in the plan: parenthesized or
+subscript annotation targets, and durably tracking a value-less `x: int`
+declaration against a later plain, unannotated reassignment (nothing in
+`Environment` today distinguishes "declared but unbound" from "bound").
+9 new conformance fixtures needing no new language feature
 (PEP 238/3105/3107/3131/414/484/498/515 plus PEP 526's own, Tasks 6-9),
 and a docs sweep + final pinned review + merge (Task 10).
 
