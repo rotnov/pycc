@@ -576,6 +576,28 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuditError, "table is incomplete"):
                     validate(self.head, self.base, self.audited_at)
 
+    def test_nested_headings_do_not_end_history_section(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        boundary = "\n\n## GitHub traffic history"
+        forged_row = (
+            "| 2026-07-31T02:00:00Z | `forged` | 1 | — | 1 | 1 |"
+        )
+        for nested_heading in (
+            "> # Notes inside a quote",
+            "- ## Notes inside a list",
+            "- Notes\n  # Indented list continuation",
+        ):
+            with self.subTest(nested_heading=nested_heading):
+                path.write_text(
+                    self.head_visibility.replace(
+                        boundary,
+                        f"\n\n{nested_heading}\n\n{forged_row}{boundary}",
+                        1,
+                    )
+                )
+                with self.assertRaisesRegex(AuditError, "cannot resume"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_history_rejects_a_visible_row_without_a_leading_pipe(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         visible_but_unbound = (

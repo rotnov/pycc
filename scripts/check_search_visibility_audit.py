@@ -239,7 +239,16 @@ def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | No
     return start, " ".join(reversed(paragraph))
 
 
-def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
+def top_level_source(lines: list[str], start: int, end: int) -> bool:
+    """Return whether every source line is outside containers at column zero."""
+    return all(
+        line == line.lstrip(" \t")
+        and visible_block_content(line) == line.strip(" \t")
+        for line in lines[start:end]
+    )
+
+
+def markdown_headings(markdown: str) -> list[tuple[int, int, int, str, bool]]:
     """Return heading start, content start, level, and title for visible blocks."""
     if "<!--" in markdown or "-->" in markdown:
         raise AuditError("search visibility ledger cannot contain HTML comments")
@@ -260,7 +269,7 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
         if FENCE_START.fullmatch(content):
             raise AuditError("search visibility ledger cannot contain fenced blocks")
 
-    headings: list[tuple[int, int, int, str]] = []
+    headings: list[tuple[int, int, int, str, bool]] = []
     for index, line in enumerate(lines):
         content = visible_block_content(line)
         parsed = atx_heading(content)
@@ -269,7 +278,15 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
                 raise AuditError(
                     "search visibility headings cannot contain inline links or HTML"
                 )
-            headings.append((index, index + 1, parsed[0], parsed[1]))
+            headings.append(
+                (
+                    index,
+                    index + 1,
+                    parsed[0],
+                    parsed[1],
+                    top_level_source(lines, index, index + 1),
+                )
+            )
             continue
         underline = SETEXT_UNDERLINE.fullmatch(content)
         if underline is None:
@@ -283,7 +300,15 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
                 "search visibility headings cannot contain inline links or HTML"
             )
         level = 1 if underline.group(1).startswith("=") else 2
-        headings.append((heading_start, index + 1, level, title))
+        headings.append(
+            (
+                heading_start,
+                index + 1,
+                level,
+                title,
+                top_level_source(lines, heading_start, index + 1),
+            )
+        )
     return headings
 
 
@@ -334,8 +359,8 @@ def section(markdown: str, heading: str) -> str:
         raise AuditError(f"canonical {heading!r} heading must be top-level")
     start = matches[0][1]
     end = len(lines)
-    for heading_start, _, level, _ in headings:
-        if heading_start >= start and level <= 2:
+    for heading_start, _, level, _, top_level in headings:
+        if heading_start >= start and level <= 2 and top_level:
             end = heading_start
             break
     return "\n".join(lines[start:end])

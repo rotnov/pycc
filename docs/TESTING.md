@@ -443,8 +443,10 @@ only rows already present in the trusted base prefix as legacy; every append
 requires replay metadata regardless of its claimed timestamp. Once prose or a
 blank line ends the history table, a later pipe row cannot resume it. Section
 lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
-equivalent duplicate history heading cannot hide a second table. Any later H1
-or H2, in ATX or Setext form, ends the history section; a table below a new
+equivalent duplicate history heading cannot hide a second table. A later
+top-level H1 or H2, in ATX or Setext form, ends the history section; blockquoted,
+list-contained, and indented-continuation headings remain inside the audited
+section, so they cannot hide a resumed forged table. A table below a new
 top-level heading cannot remain bound to the canonical H2. The one canonical
 H2 itself must start at column zero and be top-level: blockquoted,
 list-contained, and indented list-continuation versions remain visible for
