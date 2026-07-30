@@ -16,6 +16,7 @@
 - Every genuinely-undecided implementation fork is recorded as its own accepted `docs/DECISIONS.md` entry with alternatives considered, exactly like every prior PR in this repo (Task 1 records two such entries before any code is touched).
 - Runtime error convention (verified in `crates/pycc_rt/src/lib.rs`, e.g. lines 350/393/583): unrecoverable runtime conditions are `panic!("pycc_rt: <description>")`, tested via `#[should_panic(expected = "...")]`. A condition a *type-checked, valid-looking* Python program can actually reach must be a proper `pycc_types` diagnostic (`Txxxx`), never a runtime panic discovered only at codegen — panics are reserved for conditions that are unreachable once type-checking has run correctly.
 - Diagnostic-code convention (verified in `docs/DIAGNOSTICS.md`): highest code in use today is `T0031`; codes are narrow and situation-specific (one code per distinct failure shape), never reused. This plan's new codes are `T0032`, `T0033`, `T0034` (assigned in Task 8/9 below — do not renumber if another PR lands a `T0032`+ first; re-check `docs/DIAGNOSTICS.md`'s highest code at the start of Task 8 and shift these three plan-local numbers up together if so).
+  - **`T0021` is deliberately reused, not freshly minted, for three of Task 8's failure paths**: the empty-list-literal (`[]`) element-type-unknown case, the non-`int` list-index case, and the `.append()` argument-type-mismatch case. This is not an oversight against the "never reused" rule above — `docs/TYPE_SYSTEM.md`'s v0.1 inference section already documents `T0021` as the general code for "an unconstrained parameter or return variable" *and* "conflicting call-site constraints," and all three of these are instances of that same existing shape (an unconstrained or conflicting type-inference variable), not a new distinct failure shape. `T0032`/`T0033`/`T0034` remain genuinely new codes for genuinely new failure shapes (heterogeneous list-literal elements, non-subscriptable value, non-`int` list element type reaching codegen).
 - The pinned `ievo:deep-reviewer` review (D-068, `docs/AGENT_TOOLING.md`) runs on the full branch diff before merge (Task 14).
 - Keep `docs/ROADMAP.md`/`docs/DELIVERY_PLAN.md`/`docs/PYTHON_STANDARDS.md`/`docs/TYPE_SYSTEM.md`/`docs/RUNTIME.md`/`docs/TESTING.md`/`docs/SPEC.md` current in the same commit as the behavior change each describes, not deferred to a trailing "docs sweep" commit that never happens.
 - v1.0 invariant (docs/SPEC.md's own "Invariants" list, item 2): "Strict types are the only mode. Untyped public API doesn't compile." This plan's own Task 1 D-104 entry records that `list[T]` is **not** annotate-able in v0.2 (no subscripted type-annotation syntax support), so every `list[int]` value in this PR's own fixture/tests must live in a **private helper** (name starts with `_`, per D-038's existing private-helper local-inference convention already used by `docs/DECISIONS.md`'s prior PRs) or at module scope, never as a public function's annotated parameter or return type.
@@ -81,7 +82,7 @@ Append immediately after D-103, using your own Step 1 call-site counts in place 
   4. **Iteration desugars to an index-counted loop, reusing `ForRange`'s existing lowering shape.** A new `HirStmt::ForList { var: String, list: String, body: Vec<HirStmt> }` (parallel structure to the existing `HirStmt::ForRange`) lowers through `pycc_mir` into a new `MirStmt::ForList { var: String, list: String, body: Vec<MirStmt> }`, which `pycc_codegen` compiles by reusing `MirStmt::ForRange`'s existing loop/branch-building basic-block infrastructure (`crates/pycc_codegen/src/lib.rs` around line 2055), parametrized over a runtime length call instead of a static bound, plus one indexed read per iteration. No user-visible iterator protocol (`__iter__`/`__next__`) is introduced.
   5. **Codegen ships `list[int]` only; every other element type stays a clean, pre-codegen diagnostic, not a runtime panic.** `Ty::List(Box<Ty>)` itself is fully general at the type-representation and type-checking level (a list of `str`, `float`, `bool`, or even a nested list type-checks correctly), but `pycc_types` rejects any `list[T]` where `T != Ty::Int` with a new diagnostic (`T0034`, "list codegen only supports `list[int]` in v0.2") **before** codegen ever runs — this keeps `pycc_codegen`'s existing "should be unreachable" panic convention (per this plan's own Global Constraints) actually true, rather than a type-checked `list[str]` program silently reaching a codegen-level Rust panic. The new runtime object (`crates/pycc_rt`) is therefore exactly one concrete type: a growable, unboxed `i64` buffer with a `PyStrObj`-shaped header (`rc: Cell<u32>` plus `len`/`cap`/data-pointer fields — no `type_id`/`flags`, following the real shipped precedent, not `docs/RUNTIME.md`'s stale, self-inconsistent spec). `docs/RUNTIME.md` itself is corrected in this plan's own Task 12 to describe what's actually built rather than repeating its pre-existing inconsistency.
 - Alternatives: build general attribute/method-call dispatch now (rejected — no other PR-10 feature needs it, and it is strictly larger than the two hand-recognized shapes `.append()`/`len()` actually require; YAGNI per this project's own D-057 precedent). Build a real iterator protocol now (rejected — same reasoning; `ForList`'s index-counted desugaring is fully suf'ficient for `list[T]` and is the only container v0.2 iterates over). Implement codegen for all scalar element types immediately (rejected — multiplies `pycc_rt`'s new runtime-object surface by 4-5x for zero benefit to this PR's own stated "thin slice" scope; each additional element type is better sized as its own later PR once list[int]'s pattern is proven end-to-end). Follow `docs/RUNTIME.md`'s existing 16-byte generic-header spec literally (rejected — it is unimplemented by every existing runtime object including `PyStrObj`, and inventing a second, more elaborate header shape used by nothing else in the runtime creates exactly the doc-vs-reality drift this project's own AGENTS.md "keep documentation honest about what exists now" rule forbids; corrected in Task 12 instead).
-- Consequences: a future PR extending `list[T]` to `str`/`float`/`bool`/nested-list elements only needs to add codegen (new `pycc_rt` runtime objects plus new `pycc_codegen` dispatch arms) — `Ty`, `pycc_types`, and `pycc_mir` need no further changes for those element types, since this plan's own type-checking and MIR-lowering tasks are written generically over any scalar `Ty`, not hardcoded to `Int`. `docs/TYPE_SYSTEM.md`'s "Generics" section describing full PEP 695 monomorphization remains the v1.0 target, unaffected by this narrower interim state.
+- Consequences: `T0034` lives in `pycc_types`, at the point a `list[T]` literal's element type is inferred (Task 8), where a real source span is naturally available for the diagnostic — not as a separate pre-codegen validation pass over already-checked MIR/HIR, which would need to reconstruct a span it may no longer have. This means a future PR extending `list[T]` to `str`/`float`/`bool`/nested-list elements needs **two** changes, not one: (a) relax or remove this specific `T0034` gate in `pycc_types` (a small, isolated check — the homogeneity-inference logic around it, and the `Subscript`/`ForList`/`ListAppend` inference it feeds, are already written generically over any scalar `Ty`, not hardcoded to `Int`, and need no changes themselves), and (b) add the new `pycc_rt` runtime object plus `pycc_codegen` dispatch arms for that element type. "Only codegen changes" would be inaccurate; `pycc_mir`'s lowering is already generic and genuinely needs no changes either way. `docs/TYPE_SYSTEM.md`'s "Generics" section describing full PEP 695 monomorphization remains the v1.0 target, unaffected by this narrower interim state.
 ```
 
 - [ ] **Step 5: Commit**
@@ -1419,34 +1420,34 @@ Wherever `MirExpr` is matched for codegen (the function handling `MirExpr::BinOp
         }
 ```
 
-- [ ] **Step 7: Add codegen for `MirStmt::ForList`, reusing `MirStmt::ForRange`'s existing loop infrastructure**
+- [ ] **Step 7: Add codegen for `MirStmt::ForList`, mirroring `MirStmt::ForRange`'s existing loop construction as its own parallel inline copy**
 
-Locate `MirStmt::ForRange`'s codegen (`crates/pycc_codegen/src/lib.rs` around line 2055 — real basic-block/loop construction). Add a parallel `MirStmt::ForList { var, list, body }` arm that builds the same loop-header/loop-body/loop-exit basic-block structure, but bounds the loop by a runtime call to `pycc_rt_int_list_len` instead of a static/computed integer bound, and prepends one indexed read (`pycc_rt_int_list_get(list_ptr, i)`, storing the result into `var`'s local slot) at the top of each iteration's body before emitting the user's own loop body:
+Locate `MirStmt::ForRange`'s codegen (`crates/pycc_codegen/src/lib.rs` around line 2055) and read its comments before touching anything: this codebase's own `ForRange` arm is a **deliberate inline copy** of `emit_body_then_branch`'s basic-block-building logic (see the comments around `crates/pycc_codegen/src/lib.rs` lines ~1226 and ~2135), not a call into a shared, reusable loop-building helper. **Do not factor this into a shared helper as part of this task.** Refactoring a 372-call-site file's existing, intentionally-duplicated control-flow logic is out of scope for a feature task and is exactly the kind of drive-by restructuring that draws review pushback on an already-large diff — add `ForList` as its own inline copy that follows the same structure `ForRange` actually uses (loop-header/loop-body/loop-exit basic blocks, `br`/`phi` wiring, etc., copied verbatim from `ForRange`'s real arm), parametrized by two differences: the loop bound comes from a runtime call to `pycc_rt_int_list_len` instead of a static/computed integer bound, and each iteration prepends one indexed read (`pycc_rt_int_list_get(list_ptr, i)`, storing the result into `var`'s local slot) before emitting the user's own loop body. Read `ForRange`'s exact current code directly — the sketch below shows the shape of what's needed, not verbatim code to paste, since the real basic-block-building calls must come from what `ForRange`'s arm actually does today:
 
 ```rust
         MirStmt::ForList { var, list, body } => {
-            let list_ptr = self.lookup_local(list, /* ... */);
+            let list_ptr = self.lookup_local(list, /* ...existing local-lookup mechanism, matching ForRange's own... */);
             let len = self.build_call(self.pycc_rt_int_list_len_fn, &[list_ptr.into()], "list_len");
-            // Reuse ForRange's existing basic-block-building helper,
-            // parametrized by `len` as the runtime-computed upper bound
-            // instead of a static one -- match this function's own
-            // existing signature for building a bounded counting loop
-            // (the same helper `ForRange`'s own arm already calls).
-            self.build_counting_loop(0, len, 1, |codegen, index_value| {
-                let element = codegen.build_call(
-                    codegen.pycc_rt_int_list_get_fn,
-                    &[list_ptr.into(), index_value.into()],
-                    "list_get",
-                );
-                codegen.store_local(var, element);
-                for stmt in body {
-                    codegen.emit_stmt(stmt, /* ... */);
-                }
-            });
+            // From here down, copy ForRange's own basic-block/loop-building
+            // code verbatim (loop-header/loop-body/loop-exit blocks, phi
+            // node, increment, branch-back), substituting `len` as the
+            // runtime-computed upper bound in place of ForRange's static
+            // one, and inserting the indexed read below as the first thing
+            // in the loop body.
+            let element = self.build_call(
+                self.pycc_rt_int_list_get_fn,
+                &[list_ptr.into(), /* current index value, from the copied loop induction variable */.into()],
+                "list_get",
+            );
+            self.store_local(var, element);
+            for stmt in body {
+                self.emit_stmt(stmt, /* ... */);
+            }
+            // ... loop increment/branch-back/exit, copied from ForRange's own arm ...
         }
 ```
 
-(The exact name of `ForRange`'s existing loop-building helper — shown here as `build_counting_loop` — must be read directly from `crates/pycc_codegen/src/lib.rs`'s real `MirStmt::ForRange` arm and reused verbatim, not invented; if `ForRange`'s own codegen is inlined rather than factored into a reusable helper, factor it into one now so both `ForRange` and `ForList` share it, rather than duplicating the loop-building basic-block logic.)
+Add a one-line comment at the top of the new `ForList` arm noting it is an intentional inline duplicate of `ForRange`'s loop-building logic, matching that arm's own existing comment convention — and record the duplication between the two arms as a follow-up in this plan's closing "Follow-ups intentionally out of this plan's scope" list (a shared loop-building helper is a reasonable future refactor once a third consumer needs the same shape, not a change to make inside this task).
 
 - [ ] **Step 8: Run the test to verify it passes**
 
@@ -1600,3 +1601,4 @@ Follow this project's own established merge gate and squash-merge convention (ma
 - General attribute/method-call dispatch beyond `.append()` — deliberately deferred by D-104.
 - A real iterator protocol (`__iter__`/`__next__`) beyond `ForList`'s index-counted desugaring — deliberately deferred by D-104.
 - The generic function type-parameter `Ty` placeholder — deliberately deferred to PR-13 by D-103.
+- A shared loop-building helper factoring out the basic-block construction now duplicated between `MirStmt::ForRange` and `MirStmt::ForList` (Task 11 Step 7) — worth doing once a third consumer needs the same counted-loop shape, deliberately not attempted inside this plan to avoid an unrelated refactor of `pycc_codegen`'s existing, intentionally-inlined `ForRange` logic during a feature task.
