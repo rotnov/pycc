@@ -54,13 +54,40 @@ saved only ~0.05% of binary size since both `toml`'s `parse` and `display`
 features depend on the same underlying `toml_edit` parser, so it did not
 address the (unrelated, since-reframed) regression theory at all.
 
-**Still open, not yet resolved this session:** the `frontend-perf-gate`
-4.4961% delta and `ubuntu-24.04-arm`'s nbody-gate near-miss history (19.92x,
-19.88x, both sub-20x, then a genuine pass) both need a fresh look once CI
-runs again on the reconciled branch — a real new predecessor/candidate pair
-now exists (D-100's merge), so the next CI run on this branch will be a
-genuinely fresh, independent measurement for both, not a replay of a sealed
-artifact.
+**Resolved once CI ran on the D-100 merge commit** (`34759559`, the genuinely
+fresh predecessor/candidate pair D-100's merge created): `frontend-perf-gate`
+passed cleanly, confirming the earlier 4.4961% reading was measurement noise
+as suspected, not a real regression from anything PR-8 changed. The
+`ubuntu-24.04-arm` nbody leg also passed. Every required job on that run
+(`build-test-coverage`, all five `native-build-test` legs, both
+`cross-compile-*` jobs, `frontend-perf-measure`/`frontend-perf-gate`,
+`ci-gate`) succeeded on the first attempt.
+
+**A second, distinct process mistake surfaced next:** D-100's own digest was
+registered only on the PR-8 branch itself, not on `main` — but
+`workflow-policy.yml`'s base-owned `audit` job runs *`main`'s own copy* of
+`scripts/check_roadmap_evidence.rb` against the PR head's `ci.yml`, so it
+correctly failed with "does not match a reviewed active-or-staged performance
+CI workflow" regardless of what PR-8's own branch contained. This is exactly
+the stage-then-activate two-phase pattern D-090/D-091/D-099 each already
+followed, which D-100's own initial Alternatives section wrongly argued could
+be skipped since everything happened inside PR-8's own branch. Fixed by
+opening a separate stage PR, [#231](https://github.com/rotnov/pycc/pull/231)
+(`chore/stage-d100-compose-d91-d99`), which registered
+`D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256` alongside active D-099 on `main`
+without touching live `ci.yml` — merged clean (all Tier-1 legs, coverage,
+cross-compile, perf gate, and the base-owned `audit` itself all passed).
+D-100's own decision text carries an appended Update note recording this
+correction, per this file's own edit-don't-rewrite policy.
+
+**Note for the next session:** `gh run rerun` on the previously-failed
+`Workflow policy` run did *not* pick up `main`'s newly-merged state — GitHub
+reuses the original run's already-resolved base-ref checkout rather than
+re-resolving it fresh. A genuinely fresh `pull_request_target` evaluation
+needs an actual new `synchronize` event (a real push to the PR-8 branch), not
+a rerun. This session pushed this same session-log update to trigger that;
+check whether `Workflow policy` passed on that push before assuming PR-8 is
+unblocked.
 
 ## 2026-07-30 — D-099 staged; byte-exact activation PR #228 open
 
