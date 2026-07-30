@@ -16,6 +16,7 @@ GITHUB_SURFACE = "github_repository_search"
 ACTIVATED_AT = "2026-07-30T14:14:24Z"
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+PROHIBITED_GITHUB_QUALIFIER = re.compile(r"(?i)(?<![A-Za-z0-9_])(?:repo|user):")
 ROADMAP_CHECKPOINT = re.compile(
     r"<!-- search-history-checkpoint: github_repository_search "
     r"(?P<rows>[1-9]\d*) (?P<sha>[0-9a-f]{64}) -->\Z"
@@ -235,6 +236,16 @@ def validate_registry(
     for query in queries:
         if not isinstance(query, dict) or not isinstance(query.get("id"), str):
             raise AuditError("registry query is malformed")
+        raw_query = query.get("raw_query")
+        if (
+            query.get("surface") == GITHUB_SURFACE
+            and (
+                not isinstance(raw_query, str)
+                or not raw_query
+                or PROHIBITED_GITHUB_QUALIFIER.search(raw_query)
+            )
+        ):
+            raise AuditError("GitHub query uses a prohibited repo: or user: qualifier")
         if query["id"] in queries_by_id:
             raise AuditError("registry query IDs must be unique")
         queries_by_id[query["id"]] = query

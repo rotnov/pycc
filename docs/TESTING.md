@@ -415,9 +415,11 @@ pair must identify exactly one observation. Existing base measurements are an
 immutable registry prefix, and history rows are accepted only after the exact
 Markdown table header and delimiter. A table-like line without the canonical
 unindented leading pipe fails instead of becoming visible, unaudited evidence.
-Its mutation suite covers each failure class before the prospective workflow
-can be activated. The fixture is not active in this staging commit. Activation
-must copy it
+GitHub query text also rejects case-insensitive `repo:` and `user:` qualifiers
+while retaining explicitly registered field and topic diagnostics. Its mutation
+suite covers each failure class before the prospective workflow can be
+activated. The fixture is not active in this staging commit. Activation must
+copy it
 byte-for-byte to `workflow-policy.yml` in a later pull request, prove the new
 required `audit` run, and retire the older roadmap-only trust-anchor digest.
 
