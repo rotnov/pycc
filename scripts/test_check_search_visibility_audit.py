@@ -262,6 +262,8 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             "> ## GitHub repository search history",
             "- ## GitHub repository search history",
             "> GitHub repository search history\n> ---",
+            "- list item\n  ## GitHub repository search history",
+            "1. list item\n   ## GitHub repository search history",
         ):
             with self.subTest(replacement=replacement):
                 path.write_text(
@@ -280,8 +282,21 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         ):
             with self.subTest(duplicate_heading=duplicate_heading):
                 path.write_text(f"{duplicate_heading}\n\n{self.head_visibility}")
-                with self.assertRaisesRegex(AuditError, "inline links or HTML"):
+                with self.assertRaisesRegex(AuditError, "HTML"):
                     validate(self.head, self.base, self.audited_at)
+
+    def test_inline_html_comment_cannot_hide_history_table(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        path.write_text(
+            self.head_visibility.replace(
+                "| Observed at (UTC) |",
+                "prefix <!--\n| Observed at (UTC) |",
+                1,
+            )
+            + "\n-->\n"
+        )
+        with self.assertRaisesRegex(AuditError, "HTML comments"):
+            validate(self.head, self.base, self.audited_at)
 
     def test_history_headings_reject_invisible_unicode(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"

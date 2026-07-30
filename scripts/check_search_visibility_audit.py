@@ -200,6 +200,8 @@ def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | No
 
 def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
     """Return heading start, content start, level, and title for visible blocks."""
+    if "<!--" in markdown or "-->" in markdown:
+        raise AuditError("search visibility ledger cannot contain HTML comments")
     lines = markdown.splitlines()
     for line in lines:
         content = visible_block_content(line)
@@ -269,7 +271,10 @@ def section(markdown: str, heading: str) -> str:
     if len(matches) != 1:
         raise AuditError(f"expected exactly one level-2 {heading!r} section")
     canonical_line = lines[matches[0][0]]
-    if visible_block_content(canonical_line) != canonical_line.strip():
+    if (
+        canonical_line != canonical_line.lstrip(" \t")
+        or visible_block_content(canonical_line) != canonical_line.strip()
+    ):
         raise AuditError(f"canonical {heading!r} heading must be top-level")
     start = matches[0][1]
     end = len(lines)
