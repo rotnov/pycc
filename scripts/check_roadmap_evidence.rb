@@ -162,13 +162,24 @@ D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
 # LLVM_VERSION, runner OS/architecture, the hosted runner image version,
 # x64-windows-static-md, and the image's vcpkg commit. Pull requests restore
 # only; an exact-key miss is saved only by a trusted push to main. The live
-# workflow is byte-identical to this reviewed fixture. D84 and the pre-D99 D91
-# digest are retired from the public allowlist; D91's changes must be composed
-# with D99 and reviewed under a new digest before PR-8 can activate them.
+# workflow is byte-identical to this reviewed fixture. D84 and the pre-D100
+# D91 digest are retired from the public allowlist; D-100 (below) composes
+# D91's changes with this decision's cache boundary under a new digest.
 D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
   "f8656c7a525fe8775f90c5afe0950b4706eb043ef6f78f6b66e1f50146fc5366"
+# D-100: staged here (this commit does not touch the live `ci.yml`) so v0.2
+# PR-8's own pull request -- which composes D-091's release-mode `pycc_rt`
+# build step and relaxed `frontend-perf-measure` manifest classification
+# with D-099's Windows vcpkg cache above, since D-099 activated first and
+# left D-091 without a live activation path of its own -- can pass this
+# base-owned `pull_request_target` audit once it changes `ci.yml` to match.
+# Staged alongside active D99 until PR-8's own merge retires D99's digest
+# (the same coexist-then-retire pattern D-090/D-091/D-099 each used).
+D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
+  "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256
+  D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256,
+  D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
