@@ -415,12 +415,14 @@ pair must identify exactly one observation. Existing base measurements are an
 immutable registry prefix, and history rows are accepted only after the exact
 Markdown table header and delimiter. A table-like line without the canonical
 unindented leading pipe fails instead of becoming visible, unaudited evidence.
-GitHub query text also rejects case-insensitive `repo:` and `user:` qualifiers
-while retaining explicitly registered field and topic diagnostics. Its mutation
-suite treats only rows already present in the trusted base prefix as legacy;
-every append requires replay metadata regardless of its claimed timestamp.
-Once prose or a blank line ends the history table, a later pipe row cannot
-resume it. This staging commit therefore also imports the 22 reviewed
+GitHub query text rejects every qualifier except an `in:description` metadata
+diagnostic or a single `topic:` diagnostic. A complete REST response must
+contain exactly `min(api_total, 50)` rows; a shorter result list cannot support
+an organic `>50` claim. The mutation suite treats only rows already present in
+the trusted base prefix as legacy; every append requires replay metadata
+regardless of its claimed timestamp. Once prose or a blank line ends the
+history table, a later pipe row cannot resume it. This staging commit therefore
+also imports the 22 reviewed
 2026-07-29/30 GitHub rows that predate the registry, making them part of the
 actual trusted base rather than granting a timestamp-based bootstrap exception.
 The suite covers each failure class before the prospective workflow can be

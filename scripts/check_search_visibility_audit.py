@@ -16,7 +16,11 @@ GITHUB_SURFACE = "github_repository_search"
 ACTIVATED_AT = "2026-07-30T14:14:24Z"
 UTC_TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-PROHIBITED_GITHUB_QUALIFIER = re.compile(r"(?i)(?<![A-Za-z0-9_])(?:repo|user):")
+GITHUB_QUALIFIER = re.compile(r"(?i)(?<![A-Za-z0-9_])([a-z][a-z0-9_-]*):")
+DESCRIPTION_DIAGNOSTIC = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])in:description(?:\s|\Z)"
+)
+TOPIC_DIAGNOSTIC = re.compile(r"(?i)topic:[a-z0-9][a-z0-9-]*\Z")
 ROADMAP_CHECKPOINT = re.compile(
     r"<!-- search-history-checkpoint: github_repository_search "
     r"(?P<rows>[1-9]\d*) (?P<sha>[0-9a-f]{64}) -->\Z"
@@ -245,15 +249,26 @@ def validate_registry(
         if not isinstance(query, dict) or not isinstance(query.get("id"), str):
             raise AuditError("registry query is malformed")
         raw_query = query.get("raw_query")
-        if (
-            query.get("surface") == GITHUB_SURFACE
-            and (
-                not isinstance(raw_query, str)
-                or not raw_query
-                or PROHIBITED_GITHUB_QUALIFIER.search(raw_query)
+        if query.get("surface") == GITHUB_SURFACE:
+            if not isinstance(raw_query, str) or not raw_query:
+                raise AuditError("GitHub query text must be a nonempty string")
+            qualifiers = [
+                match.group(1).lower()
+                for match in GITHUB_QUALIFIER.finditer(raw_query)
+            ]
+            intent_class = query.get("intent_class")
+            description_diagnostic = (
+                intent_class == "metadata_diagnostic"
+                and qualifiers == ["in"]
+                and DESCRIPTION_DIAGNOSTIC.search(raw_query) is not None
             )
-        ):
-            raise AuditError("GitHub query uses a prohibited repo: or user: qualifier")
+            topic_diagnostic = (
+                intent_class == "topic_diagnostic"
+                and qualifiers == ["topic"]
+                and TOPIC_DIAGNOSTIC.fullmatch(raw_query) is not None
+            )
+            if qualifiers and not (description_diagnostic or topic_diagnostic):
+                raise AuditError("GitHub query violates the reviewed qualifier policy")
         if query["id"] in queries_by_id:
             raise AuditError("registry query IDs must be unique")
         queries_by_id[query["id"]] = query
@@ -324,6 +339,11 @@ def validate_registry(
                 raise AuditError("measurement target_rank is outside returned results")
         if not isinstance(measurement["incomplete_results"], bool):
             raise AuditError("measurement incomplete_results must be boolean")
+        if (
+            measurement["incomplete_results"] is False
+            and returned_results != min(api_total, measurement["result_window"])
+        ):
+            raise AuditError("complete measurement returned an incomplete result window")
         corpus_digest = measurement["ordered_corpus_sha256"]
         if not isinstance(corpus_digest, str) or not SHA256.fullmatch(corpus_digest):
             raise AuditError("measurement corpus digest must be lowercase SHA-256")

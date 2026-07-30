@@ -184,22 +184,31 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "surface contract was rewritten"):
             validate(self.head, self.base, self.audited_at)
 
-    def test_github_query_rejects_repo_and_user_qualifiers(self) -> None:
+    def test_github_query_rejects_non_diagnostic_qualifiers(self) -> None:
         measurement = self.registry["measurements"][0]
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         original_row = (
             "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | +12 | 50 | 240 |"
         )
-        qualified_row = (
-            "| 2026-07-31T00:00:00Z | `repo:rotnov/pycc` | 7 | — | 50 | 240 |"
-        )
-        path.write_text(path.read_text().replace(original_row, qualified_row))
-        self.registry["queries"][0]["raw_query"] = "repo:rotnov/pycc"
-        measurement["request_parameters"]["q"] = "repo:rotnov/pycc"
-        self.write_registry()
-        self.refresh_checkpoint()
-        with self.assertRaisesRegex(AuditError, "prohibited repo: or user:"):
-            validate(self.head, self.base, self.audited_at)
+        for qualified_query in (
+            "repo:rotnov/pycc",
+            "user:rotnov",
+            "org:openai",
+            "language:python",
+            "stars:>10",
+        ):
+            with self.subTest(qualified_query=qualified_query):
+                qualified_row = (
+                    "| 2026-07-31T00:00:00Z | "
+                    f"`{qualified_query}` | 7 | — | 50 | 240 |"
+                )
+                path.write_text(self.head_visibility.replace(original_row, qualified_row))
+                self.registry["queries"][0]["raw_query"] = qualified_query
+                measurement["request_parameters"]["q"] = qualified_query
+                self.write_registry()
+                self.refresh_checkpoint()
+                with self.assertRaisesRegex(AuditError, "qualifier policy"):
+                    validate(self.head, self.base, self.audited_at)
 
     def test_registry_era_row_requires_replay_metadata(self) -> None:
         self.registry["measurements"] = []
@@ -289,6 +298,14 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 self.write_registry()
                 with self.assertRaisesRegex(AuditError, message):
                     validate(self.head, self.base, self.audited_at)
+
+    def test_complete_measurement_requires_the_complete_result_window(self) -> None:
+        measurement = self.registry["measurements"][0]
+        measurement["returned_results"] = 1
+        measurement["target_rank"] = None
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "incomplete result window"):
+            validate(self.head, self.base, self.audited_at)
 
     def test_future_observation_is_rejected(self) -> None:
         future = "9999-12-31T23:59:59Z"
