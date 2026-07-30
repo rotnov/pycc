@@ -18,7 +18,7 @@ impl Environment {
     }
 
     pub fn lookup(&self, name: &str) -> Option<Ty> {
-        self.bindings.get(name).copied()
+        self.bindings.get(name).cloned()
     }
 
     pub fn bind(&mut self, name: String, ty: Ty) {
@@ -141,7 +141,7 @@ fn root(parents: &mut [usize], var: usize) -> usize {
 fn resolved_term(term: TypeTerm, parents: &mut [usize], concrete: &[Option<Ty>]) -> Option<Ty> {
     match term {
         Ok(ty) => Some(ty),
-        Err(var) => concrete[root(parents, var)],
+        Err(var) => concrete[root(parents, var)].clone(),
     }
 }
 
@@ -166,17 +166,17 @@ fn unify_terms(
     context: &str,
 ) -> Result<bool, Diagnostic> {
     match (left, right) {
-        (Ok(left), Ok(right)) => merge_inferred_types(left, right)
+        (Ok(left), Ok(right)) => merge_inferred_types(left.clone(), right.clone())
             .map(|_| false)
             .ok_or_else(|| inference_conflict(code, context, left, right)),
         (Err(var), Ok(ty)) | (Ok(ty), Err(var)) => {
             let root = root(parents, var);
-            let merged = match concrete[root] {
-                Some(current) => merge_inferred_types(current, ty)
+            let merged = match concrete[root].clone() {
+                Some(current) => merge_inferred_types(current.clone(), ty.clone())
                     .ok_or_else(|| inference_conflict(code, context, current, ty))?,
                 None => ty,
             };
-            let changed = concrete[root] != Some(merged);
+            let changed = concrete[root] != Some(merged.clone());
             concrete[root] = Some(merged);
             Ok(changed)
         }
@@ -186,9 +186,9 @@ fn unify_terms(
             if left_root == right_root {
                 return Ok(false);
             }
-            let merged = match (concrete[left_root], concrete[right_root]) {
+            let merged = match (concrete[left_root].clone(), concrete[right_root].clone()) {
                 (Some(left), Some(right)) => Some(
-                    merge_inferred_types(left, right)
+                    merge_inferred_types(left.clone(), right.clone())
                         .ok_or_else(|| inference_conflict(code, context, left, right))?,
                 ),
                 (Some(ty), None) | (None, Some(ty)) => Some(ty),
@@ -232,7 +232,7 @@ fn collect_expr_constraints(
         HirExpr::FloatLiteral(_) => Ok(Some(Ok(Ty::Float))),
         HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
-        HirExpr::Name(name) => match env.bindings.get(name).copied() {
+        HirExpr::Name(name) => match env.bindings.get(name).cloned() {
             Some(term) => Ok(Some(term)),
             None if is_local(env.local_names, name) => Err(unbound_local(name)),
             None => Ok(None),
@@ -257,7 +257,7 @@ fn collect_expr_constraints(
             match (left, right) {
                 (Some(left), Some(right)) => {
                     let result = fresh_term(parents, concrete);
-                    binops.push((*op, left, right, result));
+                    binops.push((*op, left, right, result.clone()));
                     Ok(Some(result))
                 }
                 _ => Ok(None),
@@ -293,11 +293,11 @@ fn collect_expr_constraints(
                 // handles that case symmetrically (self-review finding,
                 // pre-merge).
                 if let Some(arg) = arg
-                    && matches!((arg, parameter), (Err(_), _) | (_, Err(_)))
+                    && matches!((&arg, parameter), (Err(_), _) | (_, Err(_)))
                 {
                     unify_terms(
-                        *parameter,
-                        arg,
+                        parameter.clone(),
+                        arg.clone(),
                         parents,
                         concrete,
                         "T0021",
@@ -305,7 +305,7 @@ fn collect_expr_constraints(
                     )?;
                 }
             }
-            Ok(Some(signature.2))
+            Ok(Some(signature.2.clone()))
         }
     }
 }
@@ -361,7 +361,7 @@ fn collect_block_constraints(
                     binops,
                     env,
                     body,
-                    return_term,
+                    return_term.clone(),
                 )?;
                 collect_block_constraints(
                     signatures,
@@ -370,7 +370,7 @@ fn collect_block_constraints(
                     binops,
                     env,
                     orelse,
-                    return_term,
+                    return_term.clone(),
                 )?;
             }
             HirStmt::While { test, body } => {
@@ -382,7 +382,7 @@ fn collect_block_constraints(
                     binops,
                     env,
                     body,
-                    return_term,
+                    return_term.clone(),
                 )?;
             }
             HirStmt::ForRange {
@@ -406,7 +406,7 @@ fn collect_block_constraints(
                         )?;
                     }
                 }
-                if let Some(existing) = env.bindings.get(var).copied() {
+                if let Some(existing) = env.bindings.get(var).cloned() {
                     unify_terms(
                         existing,
                         Ok(Ty::Int),
@@ -425,11 +425,11 @@ fn collect_block_constraints(
                     binops,
                     env,
                     body,
-                    return_term,
+                    return_term.clone(),
                 )?;
             }
             HirStmt::Return(value) => {
-                let Some(return_term) = return_term else {
+                let Some(return_term) = return_term.clone() else {
                     continue;
                 };
                 let actual = match value {
@@ -480,7 +480,7 @@ fn concrete_function_signatures(hir: &HirModule) -> Option<HashMap<String, (Vec<
         }
         signatures.insert(
             name.clone(),
-            (params.iter().map(|(_, ty)| *ty).collect(), *return_ty),
+            (params.iter().map(|(_, ty)| ty.clone()).collect(), return_ty.clone()),
         );
     }
     Some(signatures)
@@ -509,7 +509,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         }
         functions.insert(
             name.clone(),
-            (params.iter().map(|(_, ty)| *ty).collect(), *return_ty),
+            (params.iter().map(|(_, ty)| ty.clone()).collect(), return_ty.clone()),
         );
     }
     Some(Environment {
@@ -539,9 +539,9 @@ fn infer_function_signatures_with_solver(
                     params.iter().map(|(name, _)| name.clone()).collect(),
                     params
                         .iter()
-                        .map(|(_, ty)| term_for_type(*ty, &mut parents, &mut concrete))
+                        .map(|(_, ty)| term_for_type(ty.clone(), &mut parents, &mut concrete))
                         .collect(),
-                    term_for_type(*return_ty, &mut parents, &mut concrete),
+                    term_for_type(return_ty.clone(), &mut parents, &mut concrete),
                 ),
             );
         }
@@ -578,7 +578,7 @@ fn infer_function_signatures_with_solver(
             env.bindings.remove(local_name);
         }
         for (param_name, param_ty) in signature.0.iter().zip(&signature.1) {
-            env.bindings.insert(param_name.clone(), *param_ty);
+            env.bindings.insert(param_name.clone(), param_ty.clone());
         }
         collect_block_constraints(
             &signatures,
@@ -587,11 +587,11 @@ fn infer_function_signatures_with_solver(
             &mut binops,
             &mut env,
             body,
-            Some(signature.2),
+            Some(signature.2.clone()),
         )?;
         if signature.2.is_err() && !contains_return(body) {
             unify_terms(
-                signature.2,
+                signature.2.clone(),
                 Ok(Ty::None),
                 &mut parents,
                 &mut concrete,
@@ -603,14 +603,14 @@ fn infer_function_signatures_with_solver(
 
     loop {
         let mut changed = false;
-        for &(op, left_term, right_term, result_term) in &binops {
-            let left = resolved_term(left_term, &mut parents, &concrete);
-            let right = resolved_term(right_term, &mut parents, &concrete);
-            let result = resolved_term(result_term, &mut parents, &concrete);
+        for &(op, ref left_term, ref right_term, ref result_term) in &binops {
+            let left = resolved_term(left_term.clone(), &mut parents, &concrete);
+            let right = resolved_term(right_term.clone(), &mut parents, &concrete);
+            let result = resolved_term(result_term.clone(), &mut parents, &concrete);
             if let (Some(left), Some(right)) = (left, right) {
                 let result_ty = numeric_result_type(op, left, right)?;
                 changed |= unify_terms(
-                    result_term,
+                    result_term.clone(),
                     Ok(result_ty),
                     &mut parents,
                     &mut concrete,
@@ -629,7 +629,7 @@ fn infer_function_signatures_with_solver(
             // call-site constraint (D-045).
             if result == Some(Ty::Int) && op != BinOpKind::Div {
                 let left_changed = unify_terms(
-                    left_term,
+                    left_term.clone(),
                     Ok(Ty::Int),
                     &mut parents,
                     &mut concrete,
@@ -637,7 +637,7 @@ fn infer_function_signatures_with_solver(
                     "left operand of int binary expression",
                 )?;
                 let right_changed = unify_terms(
-                    right_term,
+                    right_term.clone(),
                     Ok(Ty::Int),
                     &mut parents,
                     &mut concrete,
@@ -657,7 +657,7 @@ fn infer_function_signatures_with_solver(
         let param_tys = signature
             .0
             .iter()
-            .zip(signature.1.iter().copied())
+            .zip(signature.1.iter().cloned())
             .map(|(param_name, term)| {
                 resolved_term(term, &mut parents, &concrete).ok_or_else(|| {
                     Diagnostic::error(
@@ -670,7 +670,7 @@ fn infer_function_signatures_with_solver(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let return_ty = resolved_term(signature.2, &mut parents, &concrete).ok_or_else(|| {
+        let return_ty = resolved_term(signature.2.clone(), &mut parents, &concrete).ok_or_else(|| {
             Diagnostic::error(
                 "T0021",
                 format!("cannot infer return type of private helper `{name}`; add an annotation"),
@@ -738,12 +738,12 @@ fn infer_expr_in(
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
-            numeric_result_type(*op, left_ty, right_ty)
+            numeric_result_type(*op, left_ty.clone(), right_ty.clone())
         }
         HirExpr::Compare { op: _, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
-            if numeric_or_bool_compatible(left_ty, right_ty) {
+            if numeric_or_bool_compatible(&left_ty, &right_ty) {
                 Ok(Ty::Bool)
             } else {
                 Err(Diagnostic::error(
@@ -770,7 +770,7 @@ fn infer_expr_in(
             // calls are small, so keep up to four inferred types on the stack
             // and reserve a heap vector only for wider calls.
             const INLINE_ARG_TYPES: usize = 4;
-            let mut inline_arg_tys = [Ty::Infer; INLINE_ARG_TYPES];
+            let mut inline_arg_tys: Vec<Ty> = (0..INLINE_ARG_TYPES).map(|_| Ty::Infer).collect();
             let heap_arg_tys;
             let arg_tys: &[Ty] = if args.len() <= INLINE_ARG_TYPES {
                 for (slot, arg) in inline_arg_tys.iter_mut().zip(args) {
@@ -806,7 +806,7 @@ fn infer_expr_in(
                 ));
             }
             for (i, (arg_ty, param_ty)) in arg_tys.iter().zip(param_tys.iter()).enumerate() {
-                if !is_assignable(*arg_ty, *param_ty) {
+                if !is_assignable(arg_ty, param_ty) {
                     return Err(Diagnostic::error(
                         "T0021",
                         format!(
@@ -819,13 +819,13 @@ fn infer_expr_in(
                     ));
                 }
             }
-            Ok(*return_ty)
+            Ok(return_ty.clone())
         }
     }
 }
 
-fn is_assignable(from: Ty, to: Ty) -> bool {
-    from == to || (from == Ty::Bool && to == Ty::Int) // bool is a subtype of int, TYPE_SYSTEM.md's representation table
+fn is_assignable(from: &Ty, to: &Ty) -> bool {
+    from == to || (*from == Ty::Bool && *to == Ty::Int) // bool is a subtype of int, TYPE_SYSTEM.md's representation table
 }
 
 fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnostic> {
@@ -840,12 +840,12 @@ fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnos
             ))
         };
     }
-    let as_numeric = |t: Ty| match t {
+    let as_numeric = |t: &Ty| match t {
         Ty::Bool | Ty::Int => Some(Ty::Int),
         Ty::Float => Some(Ty::Float),
         _ => None,
     };
-    match (as_numeric(left), as_numeric(right)) {
+    match (as_numeric(&left), as_numeric(&right)) {
         (Some(_), Some(_)) if op == BinOpKind::Div => Ok(Ty::Float),
         (Some(Ty::Int), Some(Ty::Int)) => Ok(Ty::Int),
         (Some(_), Some(_)) => Ok(Ty::Float),
@@ -861,9 +861,9 @@ fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnos
     }
 }
 
-fn numeric_or_bool_compatible(a: Ty, b: Ty) -> bool {
-    let is_numeric_like = |t: Ty| matches!(t, Ty::Int | Ty::Float | Ty::Bool);
-    (is_numeric_like(a) && is_numeric_like(b)) || (a == Ty::Str && b == Ty::Str)
+fn numeric_or_bool_compatible(a: &Ty, b: &Ty) -> bool {
+    let is_numeric_like = |t: &Ty| matches!(t, Ty::Int | Ty::Float | Ty::Bool);
+    (is_numeric_like(a) && is_numeric_like(b)) || (a == &Ty::Str && b == &Ty::Str)
 }
 
 fn check_range_operand(
@@ -881,7 +881,7 @@ fn check_range_operand_in(
     expr: &HirExpr,
 ) -> Result<(), Diagnostic> {
     let actual = infer_expr_in(env, local_names, expr)?;
-    if is_assignable(actual, Ty::Int) {
+    if is_assignable(&actual, &Ty::Int) {
         Ok(())
     } else {
         Err(Diagnostic::error(
@@ -894,7 +894,7 @@ fn check_range_operand_in(
 
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
     if let Some(previous) = env.lookup(target) {
-        if !is_assignable(ty, previous) {
+        if !is_assignable(&ty, &previous) {
             return Err(Diagnostic::error(
                 "T0023",
                 format!(
@@ -924,7 +924,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
         } => {
             if let Some(value) = value {
                 let inferred = infer_expr(env, value)?;
-                if !is_assignable(inferred, *annotation) {
+                if !is_assignable(&inferred, annotation) {
                     return Err(Diagnostic::error(
                         "T0025",
                         format!(
@@ -946,7 +946,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                 // `x: str = "s"`, where `is_assignable(Str, Str)` alone would
                 // wrongly accept it) could diverge from what codegen actually
                 // stores.
-                check_assignment(env, target, *annotation)?;
+                check_assignment(env, target, annotation.clone())?;
             }
             // No value: register no binding, matching CPython's own "declared, not yet
             // assigned" semantics -- collect_local_names (Step 1) already marked
@@ -1027,10 +1027,10 @@ fn check_function_in(
     let standalone_params;
     let (resolved_params, resolved_return, signature_was_registered) =
         if let Some((param_tys, return_ty)) = module_env.lookup_function(name) {
-            (param_tys.as_slice(), *return_ty, true)
+            (param_tys.as_slice(), return_ty.clone(), true)
         } else {
-            standalone_params = params.iter().map(|(_, ty)| *ty).collect::<Vec<_>>();
-            (standalone_params.as_slice(), *return_ty, false)
+            standalone_params = params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>();
+            (standalone_params.as_slice(), return_ty.clone(), false)
         };
     if resolved_params.contains(&Ty::Infer) || resolved_return == Ty::Infer {
         return Err(Diagnostic::error(
@@ -1041,13 +1041,13 @@ fn check_function_in(
     }
     let mut env = module_env.child_for_function(local_names);
     if !signature_was_registered {
-        env.bind_function(name.clone(), resolved_params.to_vec(), resolved_return);
+        env.bind_function(name.clone(), resolved_params.to_vec(), resolved_return.clone());
     }
-    for ((param_name, _), param_ty) in params.iter().zip(resolved_params.iter().copied()) {
+    for ((param_name, _), param_ty) in params.iter().zip(resolved_params.iter().cloned()) {
         env.bind(param_name.clone(), param_ty);
     }
     for stmt in body {
-        check_stmt_in_function(&mut env, local_names, stmt, resolved_return)?;
+        check_stmt_in_function(&mut env, local_names, stmt, resolved_return.clone())?;
     }
     if resolved_return != Ty::None && !block_always_returns(body) {
         return Err(Diagnostic::error(
@@ -1098,7 +1098,7 @@ fn check_stmt_in_function(
         }
         HirStmt::Return(Some(expr)) => {
             let actual = infer_expr_in(env, local_names, expr)?;
-            if !is_assignable(actual, return_ty) {
+            if !is_assignable(&actual, &return_ty) {
                 return Err(Diagnostic::error(
                     "T0022",
                     format!(
@@ -1114,17 +1114,17 @@ fn check_stmt_in_function(
         HirStmt::If { test, body, orelse } => {
             infer_expr_in(env, local_names, test)?;
             for s in body {
-                check_stmt_in_function(env, local_names, s, return_ty)?;
+                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
             }
             for s in orelse {
-                check_stmt_in_function(env, local_names, s, return_ty)?;
+                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
             }
             Ok(())
         }
         HirStmt::While { test, body } => {
             infer_expr_in(env, local_names, test)?;
             for s in body {
-                check_stmt_in_function(env, local_names, s, return_ty)?;
+                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
             }
             Ok(())
         }
@@ -1140,7 +1140,7 @@ fn check_stmt_in_function(
             check_range_operand_in(env, local_names, "step", step)?;
             check_assignment(env, var, Ty::Int)?;
             for s in body {
-                check_stmt_in_function(env, local_names, s, return_ty)?;
+                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
             }
             Ok(())
         }
@@ -1155,7 +1155,7 @@ fn check_stmt_in_function(
         } => {
             if let Some(value) = value {
                 let inferred = infer_expr_in(env, local_names, value)?;
-                if !is_assignable(inferred, *annotation) {
+                if !is_assignable(&inferred, annotation) {
                     return Err(Diagnostic::error(
                         "T0025",
                         format!(
@@ -1170,7 +1170,7 @@ fn check_stmt_in_function(
                 // through `check_assignment` so a name's first-established
                 // representation stays sticky, matching `pycc_mir`'s own
                 // `bind_variable` invariant.
-                check_assignment(env, target, *annotation)?;
+                check_assignment(env, target, annotation.clone())?;
             }
             Ok(())
         }
@@ -1202,9 +1202,9 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
             .get(name)
             .expect("every HIR function received an inferred signature");
         for ((_, param_ty), resolved_ty) in params.iter_mut().zip(resolved_params) {
-            *param_ty = *resolved_ty;
+            *param_ty = resolved_ty.clone();
         }
-        *return_ty = *resolved_return;
+        *return_ty = resolved_return.clone();
     }
 
     Ok(resolved_hir)
@@ -1226,7 +1226,7 @@ fn check_with_signatures(
             let (param_tys, return_ty) = signatures
                 .get(name)
                 .expect("every HIR function received an inferred signature");
-            env.bind_function(name.clone(), param_tys.clone(), *return_ty);
+            env.bind_function(name.clone(), param_tys.clone(), return_ty.clone());
         }
     }
     check_with_environment(hir, env, function_local_names)
@@ -4617,8 +4617,8 @@ mod tests {
         let empty_right = fresh_term(&mut parents, &mut concrete);
         assert!(
             unify_terms(
-                empty_left,
-                empty_right,
+                empty_left.clone(),
+                empty_right.clone(),
                 &mut parents,
                 &mut concrete,
                 "T0021",
@@ -4641,7 +4641,7 @@ mod tests {
         let typed_left = fresh_term(&mut parents, &mut concrete);
         let typed_right = fresh_term(&mut parents, &mut concrete);
         unify_terms(
-            typed_left,
+            typed_left.clone(),
             Ok(Ty::Bool),
             &mut parents,
             &mut concrete,
@@ -4650,7 +4650,7 @@ mod tests {
         )
         .unwrap();
         unify_terms(
-            typed_right,
+            typed_right.clone(),
             Ok(Ty::Int),
             &mut parents,
             &mut concrete,
@@ -4660,7 +4660,7 @@ mod tests {
         .unwrap();
         unify_terms(
             typed_left,
-            typed_right,
+            typed_right.clone(),
             &mut parents,
             &mut concrete,
             "T0021",
@@ -4675,7 +4675,7 @@ mod tests {
         let typed = fresh_term(&mut parents, &mut concrete);
         let empty = fresh_term(&mut parents, &mut concrete);
         unify_terms(
-            typed,
+            typed.clone(),
             Ok(Ty::Str),
             &mut parents,
             &mut concrete,
@@ -4683,13 +4683,13 @@ mod tests {
             "test",
         )
         .unwrap();
-        unify_terms(typed, empty, &mut parents, &mut concrete, "T0021", "test").unwrap();
+        unify_terms(typed, empty.clone(), &mut parents, &mut concrete, "T0021", "test").unwrap();
         assert_eq!(resolved_term(empty, &mut parents, &concrete), Some(Ty::Str));
 
         let conflicting_left = fresh_term(&mut parents, &mut concrete);
         let conflicting_right = fresh_term(&mut parents, &mut concrete);
         unify_terms(
-            conflicting_left,
+            conflicting_left.clone(),
             Ok(Ty::Int),
             &mut parents,
             &mut concrete,
@@ -4698,7 +4698,7 @@ mod tests {
         )
         .unwrap();
         unify_terms(
-            conflicting_right,
+            conflicting_right.clone(),
             Ok(Ty::Str),
             &mut parents,
             &mut concrete,
@@ -4722,7 +4722,7 @@ mod tests {
         assert!(
             unify_terms(
                 Ok(Ty::Float),
-                reversed,
+                reversed.clone(),
                 &mut parents,
                 &mut concrete,
                 "T0021",
