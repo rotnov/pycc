@@ -116,6 +116,16 @@ fn d0024_return_outside_function() {
 }
 
 #[test]
+fn d0025_annotated_assignment_mismatch() {
+    assert_diagnostic_matches_fixture("d0025_annotated_assignment_mismatch");
+}
+
+#[test]
+fn d0026_annotation_only_unbound() {
+    assert_diagnostic_matches_fixture("d0026_annotation_only_unbound");
+}
+
+#[test]
 fn cli_spec_example() {
     assert_diagnostic_matches_fixture("cli_spec_example");
 }

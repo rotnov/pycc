@@ -82,6 +82,11 @@ pub enum HirStmt {
         target: String,
         value: HirExpr,
     },
+    AnnAssign {
+        target: String,
+        annotation: Ty,
+        value: Option<HirExpr>,
+    },
     If {
         test: HirExpr,
         body: Vec<HirStmt>,
@@ -289,6 +294,40 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
             HirStmt::Assign {
                 target: name.id.as_str().to_string(),
                 value: lower_expr(&assign.value)?,
+            }
+        }
+        Stmt::AnnAssign(ann) => {
+            let Expr::Name(name) = ann.target.as_ref() else {
+                return Err(unsupported(
+                    format!(
+                        "only assigning to a bare name is supported so far: {:?}",
+                        ann.target
+                    ),
+                    pycc_ast::expr_range(&ann.target),
+                ));
+            };
+            // `ann.simple` is false either when the target isn't a bare name
+            // (already rejected above) or when a bare name target is itself
+            // parenthesized, e.g. `(x): int = 1` -- upstream's own parser
+            // sets `simple = target.is_name_expr() && !target.is_parenthesized`
+            // (verified against the pinned ruff_python_parser = "0.0.6"
+            // registry source). CPython treats a parenthesized target as not
+            // "simple" (it doesn't record a `__annotations__` entry the same
+            // way), a real semantic difference this compiler doesn't model
+            // yet -- reject explicitly instead of silently treating it the
+            // same as the unparenthesized form.
+            if !ann.simple {
+                return Err(unsupported(
+                    "a parenthesized annotated-assignment target is not supported yet",
+                    pycc_ast::expr_range(&ann.target),
+                ));
+            }
+            let annotation = annotation_to_ty(&ann.annotation)?;
+            let value = ann.value.as_deref().map(lower_expr).transpose()?;
+            HirStmt::AnnAssign {
+                target: name.id.as_str().to_string(),
+                annotation,
+                value,
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {
@@ -1538,6 +1577,85 @@ mod tests {
     #[test]
     fn an_f_string_with_a_conversion_flag_is_not_supported_yet() {
         assert_capability_error_message("x = 1\ny = f\"{x!r}\"\n", "conversion");
+    }
+
+    #[test]
+    fn lowers_an_annotated_assignment_with_a_value() {
+        let module = pycc_parser_test_helper::parse("x: int = 1\nprint(x)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![
+                HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                    target: "x".to_string(),
+                    annotation: Ty::Int,
+                    value: Some(HirExpr::IntLiteral(1)),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("x".to_string())],
+                })),
+            ]
+        );
+    }
+
+    #[test]
+    fn lowers_an_annotated_assignment_with_no_value() {
+        let module = pycc_parser_test_helper::parse("x: int\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            })]
+        );
+    }
+
+    #[test]
+    fn rejects_an_annotated_assignment_to_a_non_name_target() {
+        // Matches Stmt::Assign's own existing restriction (only a bare name
+        // target is supported so far) -- e.g. `obj.attr: int = 1` has no
+        // attribute-access support anywhere else in the compiler either.
+        assert_capability_error_message(
+            "obj.attr: int = 1\n",
+            "only assigning to a bare name is supported so far",
+        );
+    }
+
+    #[test]
+    fn rejects_a_parenthesized_annotated_assignment_target_instead_of_erasing_it() {
+        // Regression test (advisor-review finding, pre-merge): `(x): int = 1`
+        // still lowers `ann.target` to `Expr::Name("x")` -- identical to the
+        // unparenthesized `x: int = 1` -- but upstream's own parser sets
+        // `simple = false` for it (verified against the pinned
+        // ruff_python_parser = "0.0.6" registry source), a real CPython
+        // semantic difference this compiler doesn't model. An earlier draft
+        // of this arm only matched on `Expr::Name` and ignored `ann.simple`
+        // entirely, silently treating the two forms as identical instead of
+        // producing the explicit capability diagnostic this file uses for
+        // every other unmodeled AST field (see `lower_params`'s own
+        // documented self-review finding above).
+        assert_capability_error_message(
+            "(x): int = 1\n",
+            "a parenthesized annotated-assignment target is not supported yet",
+        );
+    }
+
+    #[test]
+    fn an_annotated_assignment_with_an_unsupported_annotation_returns_a_capability_error() {
+        // Exercises the `annotation_to_ty(...)?` early-return branch inside
+        // the new AnnAssign arm specifically (as opposed to the already
+        // covered function-parameter/return-annotation call sites).
+        assert_capability_error_message("x: list\n", "type annotation `list` is not supported yet");
+    }
+
+    #[test]
+    fn an_annotated_assignment_with_an_unsupported_value_returns_a_capability_error() {
+        // Exercises the `lower_expr(...)?` early-return branch for
+        // AnnAssign's value expression specifically.
+        assert_capability_error_message("x: int = []\n", "expression kind not supported yet");
     }
 }
 

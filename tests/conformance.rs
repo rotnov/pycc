@@ -69,16 +69,40 @@ fn strip_windows_newline_translation(bytes: Vec<u8>) -> Vec<u8> {
 /// the resulting binary, separately runs the pinned CPython oracle on the
 /// identical source, and returns both stdouts for the caller to diff.
 fn run_conformance_fixture(label: &str, py_path: &Path) -> (Vec<u8>, Vec<u8>) {
-    let dir = std::env::temp_dir().join(format!("pycc_conformance_{label}_{}", std::process::id()));
+    run_conformance_fixture_with_profile(label, py_path, false)
+}
+
+/// Same as `run_conformance_fixture`, but lets the caller choose the build
+/// profile. New PEP fixtures (PR-9 on) must be proven in both `--debug` and
+/// `--release` before their `docs/PYTHON_STANDARDS.md` row can flip to ✅ --
+/// `docs/TESTING.md`'s "both profiles" rule stopped having a v0.1-only
+/// exception once `--release` shipped in PR-8. `fib`/`mandelbrot` predate
+/// that rule (neither is a PEP-matrix row) and stay on the plain,
+/// `--debug`-only helper above rather than being retrofitted here.
+fn run_conformance_fixture_with_profile(
+    label: &str,
+    py_path: &Path,
+    release: bool,
+) -> (Vec<u8>, Vec<u8>) {
+    let profile = if release { "release" } else { "debug" };
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_conformance_{label}_{profile}_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join(label);
-    let status = Command::new(pycc_bin())
-        .args(["build", py_path.to_str().unwrap(), "-o", out.to_str().unwrap()])
-        .status()
-        .unwrap();
-    assert!(status.success(), "`pycc build` failed for {label}");
+    let mut build_command = Command::new(pycc_bin());
+    build_command.args(["build", py_path.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    if release {
+        build_command.arg("--release");
+    }
+    let status = build_command.status().unwrap();
+    assert!(status.success(), "`pycc build` ({profile}) failed for {label}");
     let pycc_output = Command::new(&out).output().unwrap();
-    assert!(pycc_output.status.success(), "compiled {label} binary exited non-zero");
+    assert!(
+        pycc_output.status.success(),
+        "compiled {label} binary ({profile}) exited non-zero"
+    );
 
     let cpython_output = Command::new(oracle_python_bin())
         .arg(py_path)
@@ -137,4 +161,135 @@ fn mandelbrot_ascii_matches_cpython_3_14_6_byte_for_byte() {
         pycc_stdout, cpython_stdout,
         "pycc and CPython 3.14.6 disagree on tests/fixtures/conformance_mandelbrot.py"
     );
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn run_conformance_fixture_with_profile_builds_both_debug_and_release() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance_fib.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("profile_check_debug", &fixture, false);
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("profile_check_release", &fixture, true);
+    assert_eq!(debug_pycc, debug_cpython, "debug profile must match CPython");
+    assert_eq!(release_pycc, release_cpython, "release profile must match CPython");
+    assert_eq!(
+        debug_pycc, release_pycc,
+        "debug and release builds of the same fixture must produce identical stdout"
+    );
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0526_var_annotations_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0526_var_annotations.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0526_var_annotations_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0526_var_annotations.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0526_var_annotations_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0526_var_annotations.py"
+    );
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0238_division_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0238_division.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0238_division_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0238_division.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0238_division_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0238_division.py");
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_3105_print_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_3105_print.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_3105_print_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_3105_print.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_3105_print_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_3105_print.py");
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_3107_annotations_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_3107_annotations.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_3107_annotations_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_3107_annotations.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_3107_annotations_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_3107_annotations.py");
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_3131_unicode_ids_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_3131_unicode_ids.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_3131_unicode_ids_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_3131_unicode_ids.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_3131_unicode_ids_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_3131_unicode_ids.py");
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0414_u_literal_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0414_u_literal.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0414_u_literal_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0414_u_literal.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0414_u_literal_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0414_u_literal.py");
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0484_type_hints_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0484_type_hints.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0484_type_hints_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0484_type_hints.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0484_type_hints_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0484_type_hints.py");
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0498_fstrings_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0498_fstrings.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0498_fstrings_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0498_fstrings.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0498_fstrings_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0498_fstrings.py");
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0515_underscores_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0515_underscores.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0515_underscores_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0515_underscores.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0515_underscores_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0515_underscores.py");
 }

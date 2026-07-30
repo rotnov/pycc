@@ -15,7 +15,11 @@ the exact diagnostic.
   `py30/` through `py314/` against CPython 3.14.6. After the v1.x gate opens,
   the Python 3.15 run covers `py30/` through `py315/` against its pinned
   current 3.15 patch, while the independent 3.14 compatibility run remains
-  required.
+  required. This describes the eventual v1.0-scale, language-level-selecting
+  harness; per [D-102](./DECISIONS.md#d-102-extend-testsconformancers-for-pr-9s-9-new-pep-fixtures-no-pycc_testkit-crate)
+  the fixtures PR-9 added live flat at `tests/fixtures/pep_NNNN_slug.py`
+  instead, run directly by `tests/conformance.rs` — the `pyXY/` tree and its
+  language-level selection do not exist yet.
 - Negative tests: `tests/diagnostics/dNNNN_slug.py` — must *fail to compile* with the documented error code.
 - Category: `syntax` · `typing` · `sem` (semantics/data model) · `import` · `rt` (runtime) — `rt`-only PEPs may need design docs instead of codegen.
 - Status: ☐ planned · ⚙ in progress · ✅ passing.
@@ -54,20 +58,26 @@ For each newly observed upstream release:
    Standards Track PEPs to the preview section; Draft, Deferred, and Rejected
    proposals are not implementation commitments.
 4. Do not flip conformance statuses by hand; CI still owns the status column.
+   [D-102](./DECISIONS.md#d-102-extend-testsconformancers-for-pr-9s-9-new-pep-fixtures-no-pycc_testkit-crate)
+   is the one accepted interim exception: no automation backs this column
+   today, so PR-9's 9 rows were flipped by hand, only after each fixture was
+   observed passing on a real, already-completed CI run across all 5 Tier-1
+   targets in both build profiles. Building the real automation remains a
+   tracked `docs/ROADMAP.md` follow-up.
 
 ## Python 3.0–3.2 (foundations)
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [238](https://peps.python.org/pep-0238/) | True division `/` vs `//` | sem | `py30/pep_0238_division.py` | ☐ |
+| [238](https://peps.python.org/pep-0238/) | True division `/` vs `//` | sem | `py30/pep_0238_division.py` | ✅ |
 | [3102](https://peps.python.org/pep-3102/) | Keyword-only arguments | syntax | `py30/pep_3102_kwonly.py` | ☐ |
 | [3104](https://peps.python.org/pep-3104/) | `nonlocal` | syntax | `py30/pep_3104_nonlocal.py` | ☐ |
-| [3105](https://peps.python.org/pep-3105/) | `print()` as function | syntax | `py30/pep_3105_print.py` | ☐ |
-| [3107](https://peps.python.org/pep-3107/) | Function annotations | typing | `py30/pep_3107_annotations.py` | ☐ |
+| [3105](https://peps.python.org/pep-3105/) | `print()` as function | syntax | `py30/pep_3105_print.py` | ✅ |
+| [3107](https://peps.python.org/pep-3107/) | Function annotations | typing | `py30/pep_3107_annotations.py` | ✅ |
 | [3115](https://peps.python.org/pep-3115/) | Metaclasses (`metaclass=`) | sem | `py30/pep_3115_metaclass.py` | ☐ |
 | [3119](https://peps.python.org/pep-3119/) | ABCs, `isinstance` hooks | sem | `py30/pep_3119_abc.py` | ☐ |
 | [3129](https://peps.python.org/pep-3129/) | Class decorators | syntax | `py30/pep_3129_class_deco.py` | ☐ |
-| [3131](https://peps.python.org/pep-3131/) | Non-ASCII identifiers | syntax | `py30/pep_3131_unicode_ids.py` | ☐ |
+| [3131](https://peps.python.org/pep-3131/) | Non-ASCII identifiers | syntax | `py30/pep_3131_unicode_ids.py` | ✅ |
 | [3132](https://peps.python.org/pep-3132/) | Extended unpacking `a, *b = ...` | syntax | `py30/pep_3132_unpack.py` | ☐ |
 | [3135](https://peps.python.org/pep-3135/) | Zero-argument `super()` | sem | `py30/pep_3135_super.py` | ☐ |
 | — | `str`/`bytes` split, all-new-style classes | sem | `py30/str_bytes_model.py` | ☐ |
@@ -78,7 +88,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [380](https://peps.python.org/pep-0380/) | `yield from` | syntax | `py33/pep_0380_yield_from.py` | ☐ |
 | [409](https://peps.python.org/pep-0409/) | `raise ... from None` | sem | `py33/pep_0409_from_none.py` | ☐ |
-| [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `py33/pep_0414_u_literal.py` | ☐ |
+| [414](https://peps.python.org/pep-0414/) | `u''` literals | syntax | `py33/pep_0414_u_literal.py` | ✅ |
 | [420](https://peps.python.org/pep-0420/) | Namespace packages | import | `py33/pep_0420_ns_packages.py` | ☐ |
 | [3151](https://peps.python.org/pep-3151/) | `OSError` hierarchy | sem | `py33/pep_3151_oserror.py` | ☐ |
 
@@ -100,7 +110,7 @@ For each newly observed upstream release:
 | [448](https://peps.python.org/pep-0448/) | Unpacking generalizations `*`/`**` | syntax | `py35/pep_0448_unpack_gen.py` | ☐ |
 | [461](https://peps.python.org/pep-0461/) | `%` formatting for bytes | sem | `py35/pep_0461_bytes_fmt.py` | ☐ |
 | [465](https://peps.python.org/pep-0465/) | `@` matrix-multiply operator | syntax | `py35/pep_0465_matmul.py` | ☐ |
-| [484](https://peps.python.org/pep-0484/) | **Type hints** — pycc's cornerstone | typing | `py35/pep_0484_type_hints.py` | ☐ |
+| [484](https://peps.python.org/pep-0484/) | **Type hints** — pycc's cornerstone | typing | `py35/pep_0484_type_hints.py` | ✅ |
 | [492](https://peps.python.org/pep-0492/) | `async` / `await` syntax | syntax | `py35/pep_0492_async_await.py` | ☐ |
 
 ## Python 3.6
@@ -108,10 +118,10 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [487](https://peps.python.org/pep-0487/) | `__init_subclass__`, `__set_name__` | sem | `py36/pep_0487_init_subclass.py` | ☐ |
-| [498](https://peps.python.org/pep-0498/) | f-strings | syntax | `py36/pep_0498_fstrings.py` | ☐ |
-| [515](https://peps.python.org/pep-0515/) | Underscores in numeric literals | syntax | `py36/pep_0515_underscores.py` | ☐ |
+| [498](https://peps.python.org/pep-0498/) | f-strings | syntax | `py36/pep_0498_fstrings.py` | ✅ |
+| [515](https://peps.python.org/pep-0515/) | Underscores in numeric literals | syntax | `py36/pep_0515_underscores.py` | ✅ |
 | [525](https://peps.python.org/pep-0525/) | Async generators | syntax | `py36/pep_0525_async_gen.py` | ☐ |
-| [526](https://peps.python.org/pep-0526/) | Variable annotations `x: int = 0` | typing | `py36/pep_0526_var_annotations.py` | ☐ |
+| [526](https://peps.python.org/pep-0526/) | Variable annotations `x: int = 0` | typing | `py36/pep_0526_var_annotations.py` | ✅ |
 | [530](https://peps.python.org/pep-0530/) | Async comprehensions | syntax | `py36/pep_0530_async_comp.py` | ☐ |
 
 ## Python 3.7

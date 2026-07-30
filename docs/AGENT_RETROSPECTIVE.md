@@ -28,6 +28,47 @@ never a merge gate.
 
 ---
 
+## 2026-07-30 — A digest-pinned file has no "comment-only, no functional change" exemption
+
+**What happened:** PR-9 Task 10's docs sweep edited three stale test-count
+comments in `.github/workflows/ci.yml` ("two" → "11"), then a same-day
+follow-up commit corrected "11" to "12" after the pinned reviewer caught
+the undercount. Both commits pushed clean locally but failed `audit` and
+`build-test-coverage` on CI: `scripts/check_roadmap_evidence.rb`'s D-100
+composed-workflow check hashes `ci.yml`'s exact bytes against a reviewed,
+pinned SHA-256 digest, with no carve-out for comment-only or
+"no functional change" edits — the check has no way to distinguish those
+from a substantive change, by design (AGENTS.md's CI-privilege-boundary
+section states this file is a security trust anchor for exactly this
+reason). The plan document itself (`docs/superpowers/plans/2026-07-30-v0-2-pr9-conformance-harness.md`,
+Task 10 Step 5) had explicitly called the edit "comment-only... no
+functional change" and treated that as sufficient justification — it
+wasn't.
+
+**Root cause:** treated "no functional change" as equivalent to "safe to
+edit freely," without checking whether the target file carried its own
+independent integrity gate. The digest pin is a property of the *file*,
+not of the *diff's* runtime effect.
+
+**What fixed it:** reverted both edits (`git checkout origin/main --
+.github/workflows/ci.yml`), restoring the exact pinned blob (verified via
+`git rev-parse` blob-hash equality and a clean local
+`check_roadmap_evidence.rb` + `test_check_roadmap_evidence.rb` run). The
+stale comment counts remain in `ci.yml` as a deliberately deferred
+cosmetic gap, to be fixed only by a future PR that already legitimately
+re-stages the file's digest for some functional reason.
+
+**Lesson:** before editing any file governed by a whole-file digest pin
+(check `docs/DECISIONS.md`'s D-090/091/092/099/100 lineage and
+`scripts/check_roadmap_evidence.rb` for the current list — as of this
+entry, `.github/workflows/ci.yml`), assume there is no such thing as a
+trivial edit. Either route the change through the project's existing
+stage-then-activate re-pinning process first, or don't make the edit at
+all and defer it to a PR that already pays that cost for another reason.
+"It's just a comment" is not a reason to skip this check.
+
+---
+
 ## 2026-07-29 — Whole-process wall-clock timing has no signal once the workload is a few milliseconds
 
 **What happened:** PR-8 Task 5's first pass at `tests/nbody_bench.rs`

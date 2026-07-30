@@ -69,6 +69,11 @@ pub enum MirStmt {
         target: String,
         value: MirExpr,
     },
+    /// A statement with zero runtime effect -- currently only produced by a
+    /// value-less PEP 526 annotation (`x: int`), which CPython itself does
+    /// nothing observable for either (confirmed empirically during PR-9
+    /// planning: no store, no allocation, nothing an oracle diff could see).
+    NoOp,
     If {
         test: MirExpr,
         body: Vec<MirStmt>,
@@ -202,6 +207,51 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
                 value,
             }
         }
+        HirStmt::AnnAssign {
+            target,
+            annotation,
+            value: Some(value),
+        } => {
+            let value = lower_expr(value, scopes);
+            // `pycc_types::is_assignable` accepts an annotated initializer
+            // in exactly two shapes: an exact type match, or a `bool`
+            // initializer under an `int` annotation (`bool` is an `int`
+            // subtype -- the only widening `is_assignable` allows). Unlike
+            // plain `Assign` (whose bound type and lowered value type are
+            // always the same, since both come from `value`), `pycc_types`
+            // itself binds its checker `env` to the *annotation's* type for
+            // `AnnAssign` (`check_assignment(env, target, *annotation)`,
+            // not the initializer's inferred type) specifically so a later
+            // annotated re-declaration is checked consistently -- see its
+            // own comment citing this exact invariant. D-074's "first
+            // assignment fixes a binding's representation" rule then
+            // requires this lowering to agree, or a later plain
+            // reassignment (`x: int = True; x = 5`) would silently widen
+            // into a slot still permanently sized for `bool` (confirmed
+            // empirically before this fix: the program above printed `11`,
+            // the raw tagged-int bit pattern truncated through an `i8`
+            // slot, instead of `5`). Widening the lowered value through the
+            // existing `BinOp`/`Add`/`0` path reuses codegen's
+            // already-tested `bool -> tagged int` promotion with no new MIR
+            // node or codegen arm; it is a no-op rebuild when the types
+            // already match.
+            let value = if value.ty() == *annotation {
+                value
+            } else {
+                MirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(value),
+                    right: Box::new(MirExpr::IntLiteral(0)),
+                    ty: *annotation,
+                }
+            };
+            bind_variable(scopes, target.clone(), *annotation);
+            MirStmt::Assign {
+                target: target.clone(),
+                value,
+            }
+        }
+        HirStmt::AnnAssign { value: None, .. } => MirStmt::NoOp,
         HirStmt::If { test, body, orelse } => MirStmt::If {
             test: lower_expr(test, scopes),
             body: body.iter().map(|s| lower_stmt(s, scopes)).collect(),
@@ -560,6 +610,165 @@ mod tests {
                 body: vec![MirStmt::Return(None)],
             }]
         );
+    }
+
+    #[test]
+    fn an_annotated_assignment_whose_value_type_already_matches_the_annotation_lowers_unchanged() {
+        // `x: int = 1` -- the initializer's own inferred type (`Ty::Int`)
+        // already matches the annotation, so this is `lower_stmt`'s
+        // "no widening needed" branch and `value` passes through
+        // unchanged. This case cannot by itself distinguish binding the
+        // annotation's type from binding the value's type (they're equal
+        // here) -- the sibling test below, where they differ, is what
+        // actually proves `lower_stmt` binds the annotation.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                    target: "x".to_string(),
+                    annotation: Ty::Int,
+                    value: Some(HirExpr::IntLiteral(1)),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::IntLiteral(1),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Int,
+                })),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_annotated_assignment_with_a_bool_value_under_an_int_annotation_widens_and_binds_int() {
+        // `x: int = True` -- `pycc_types::is_assignable` accepts a `bool`
+        // initializer under an `int` annotation as its one widening case,
+        // and `pycc_types` itself binds its checker `env` to `Ty::Int`
+        // (the annotation), not `Ty::Bool` (the initializer's own type) --
+        // see its own comment citing this exact invariant. `lower_stmt`
+        // must agree (D-074's "first assignment fixes a binding's
+        // representation" rule): it wraps the lowered `BoolLiteral` in a
+        // `BinOp`/`Add`/`0` node reporting `Ty::Int` (reusing codegen's
+        // already-tested `bool -> tagged int` widening, with no new MIR
+        // node or codegen arm) and binds `x` to `Ty::Int`, so a later
+        // `Name` reference -- and any later plain reassignment -- agrees.
+        // Before this fix, `lower_stmt` bound `Ty::Bool` here instead, and
+        // the divergence from `pycc_types`' `Ty::Int` silently mis-sized
+        // `x`'s eventual codegen slot (confirmed end to end:
+        // `x: int = True; x = 5; return x` printed `11`, not `5`).
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                    target: "x".to_string(),
+                    annotation: Ty::Int,
+                    value: Some(HirExpr::BoolLiteral(true)),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(MirExpr::BoolLiteral(true)),
+                        right: Box::new(MirExpr::IntLiteral(0)),
+                        ty: Ty::Int,
+                    },
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Int,
+                })),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_annotated_assignment_with_a_bool_typed_compare_value_also_widens() {
+        // The widening branch above is reachable for *any* `Ty::Bool`-typed
+        // initializer under an `int` annotation, not merely a literal
+        // `True`/`False` -- `pycc_types::is_assignable(Bool, Int)` accepts
+        // a `Compare` result, a bool-typed name, or a bool-returning call
+        // identically. This proves the same `BinOp`/`Add`/`0` wrapping
+        // triggers for a `Compare`-sourced `bool`, not only the literal
+        // case the previous test exercises.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::Compare {
+                    op: CmpOpKind::Lt,
+                    left: Box::new(HirExpr::IntLiteral(1)),
+                    right: Box::new(HirExpr::IntLiteral(2)),
+                }),
+            })],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items,
+            vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(MirExpr::Compare {
+                        op: CmpOpKind::Lt,
+                        left: Box::new(MirExpr::IntLiteral(1)),
+                        right: Box::new(MirExpr::IntLiteral(2)),
+                        ty: Ty::Bool,
+                    }),
+                    right: Box::new(MirExpr::IntLiteral(0)),
+                    ty: Ty::Int,
+                },
+            })]
+        );
+    }
+
+    #[test]
+    fn a_value_less_annotated_assignment_lowers_to_a_no_op_and_binds_nothing() {
+        // `y: int` alone has no runtime action -- CPython itself does
+        // nothing observable for it either. `lower_stmt` must produce
+        // `MirStmt::NoOp` and must NOT bind `y` in scope (matching
+        // `pycc_types`' own Task 4 choice not to bind a value-less
+        // declaration): a later read of `y` with no intervening assignment
+        // still panics via `lookup`, proving no phantom binding leaked
+        // through.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                target: "y".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            })],
+        };
+        let mir = build(&hir);
+        assert_eq!(mir.items, vec![MirItem::TopLevelStmt(MirStmt::NoOp)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "has no recorded type")]
+    fn a_value_less_annotated_assignment_does_not_bind_the_name() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::AnnAssign {
+                    target: "y".to_string(),
+                    annotation: Ty::Int,
+                    value: None,
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("y".to_string()))),
+            ],
+        };
+        build(&hir);
     }
 
     #[test]

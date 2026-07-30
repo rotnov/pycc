@@ -75,6 +75,11 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
                     names.push(target);
                 }
             }
+            HirStmt::AnnAssign { target, .. } => {
+                if !is_local(names, target) {
+                    names.push(target);
+                }
+            }
             HirStmt::If { body, orelse, .. } => {
                 collect_local_names(body, names);
                 collect_local_names(orelse, names);
@@ -323,6 +328,27 @@ fn collect_block_constraints(
                     env.bindings.entry(target.clone()).or_insert(term);
                 }
             }
+            HirStmt::AnnAssign {
+                target,
+                value: Some(value),
+                annotation: _,
+            } => {
+                // KNOWN GAP (PR-9 Task 4 review, 2026-07-30): binds the solver term to the
+                // initializer's own inferred term, discarding `annotation` entirely. A private
+                // helper mixing type inference with an annotated local whose annotation diverges
+                // from the naturally-inferred term (e.g. `def _h(x): y: int = x; return y` called
+                // as `_h(True)`) can get a spurious T0022 rejection of otherwise-legal Python --
+                // not a soundness hole (nothing incorrect is silently accepted), and confirmed
+                // unreachable by any fixture PR-9 itself ships (this path only runs for
+                // underscore-prefixed private helpers with Ty::Infer signatures). Cheap fix if
+                // ever needed: unify the term with `Ok(*annotation)` instead of discarding it.
+                if let Some(term) =
+                    collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
+                {
+                    env.bindings.entry(target.clone()).or_insert(term);
+                }
+            }
+            HirStmt::AnnAssign { value: None, .. } => {}
             HirStmt::ExprStmt(expr) => {
                 collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?;
             }
@@ -433,7 +459,7 @@ fn contains_return(body: &[HirStmt]) -> bool {
         HirStmt::Return(_) => true,
         HirStmt::If { body, orelse, .. } => contains_return(body) || contains_return(orelse),
         HirStmt::While { body, .. } | HirStmt::ForRange { body, .. } => contains_return(body),
-        HirStmt::ExprStmt(_) | HirStmt::Assign { .. } => false,
+        HirStmt::ExprStmt(_) | HirStmt::Assign { .. } | HirStmt::AnnAssign { .. } => false,
     })
 }
 
@@ -891,6 +917,42 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             let ty = infer_expr(env, value)?;
             check_assignment(env, target, ty)
         }
+        HirStmt::AnnAssign {
+            target,
+            annotation,
+            value,
+        } => {
+            if let Some(value) = value {
+                let inferred = infer_expr(env, value)?;
+                if !is_assignable(inferred, *annotation) {
+                    return Err(Diagnostic::error(
+                        "T0025",
+                        format!(
+                            "cannot assign `{}` to `{target}: {}`, initializer does not match the declared annotation",
+                            inferred.name(),
+                            annotation.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                // Route through `check_assignment` (not a raw `env.bind`) so a
+                // name's first-established representation stays sticky across
+                // an annotated re-declaration, exactly as it already does for
+                // plain `Assign` -- `pycc_mir`'s own `bind_variable` (D-040's
+                // "first assignment fixes a binding's representation"
+                // invariant) keeps the *first* recorded MIR type regardless of
+                // a later compatible reassignment, so the checker's `env` must
+                // agree or a later annotated reassignment (e.g. `x = 1` then
+                // `x: str = "s"`, where `is_assignable(Str, Str)` alone would
+                // wrongly accept it) could diverge from what codegen actually
+                // stores.
+                check_assignment(env, target, *annotation)?;
+            }
+            // No value: register no binding, matching CPython's own "declared, not yet
+            // assigned" semantics -- collect_local_names (Step 1) already marked
+            // `target` local, so a premature read still raises the existing T0021.
+            Ok(())
+        }
         HirStmt::ExprStmt(expr) => infer_expr(env, expr).map(|_| ()),
         HirStmt::If { test, body, orelse } => {
             infer_expr(env, test)?; // any type is accepted as truthy for v0.1 -- Python's own truthiness has no static type restriction
@@ -1008,6 +1070,7 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
         }
         HirStmt::ExprStmt(_)
         | HirStmt::Assign { .. }
+        | HirStmt::AnnAssign { .. }
         | HirStmt::While { .. }
         | HirStmt::ForRange { .. } => false,
     })
@@ -1084,6 +1147,32 @@ fn check_stmt_in_function(
         HirStmt::Assign { target, value } => {
             let ty = infer_expr_in(env, local_names, value)?;
             check_assignment(env, target, ty)
+        }
+        HirStmt::AnnAssign {
+            target,
+            annotation,
+            value,
+        } => {
+            if let Some(value) = value {
+                let inferred = infer_expr_in(env, local_names, value)?;
+                if !is_assignable(inferred, *annotation) {
+                    return Err(Diagnostic::error(
+                        "T0025",
+                        format!(
+                            "cannot assign `{}` to `{target}: {}`, initializer does not match the declared annotation",
+                            inferred.name(),
+                            annotation.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                // See the module-scope `check_stmt` arm's comment: route
+                // through `check_assignment` so a name's first-established
+                // representation stays sticky, matching `pycc_mir`'s own
+                // `bind_variable` invariant.
+                check_assignment(env, target, *annotation)?;
+            }
+            Ok(())
         }
         HirStmt::ExprStmt(expr) => infer_expr_in(env, local_names, expr).map(|_| ()),
     }
@@ -1393,6 +1482,159 @@ mod tests {
         };
 
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn collect_block_constraints_binds_the_initializer_term_for_an_annotated_assignment() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+        };
+        let body = vec![HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::Int,
+            value: Some(HirExpr::IntLiteral(5)),
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(env.bindings.get("y"), Some(&Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn collect_block_constraints_skips_binding_when_the_initializer_term_is_unresolved() {
+        // `unresolved_global` is neither already bound nor a declared local of
+        // this scope, so `collect_expr_constraints` returns `Ok(None)` for it
+        // (the same "punt, nothing to unify yet" case a plain `Assign` to an
+        // unresolved global would hit) -- the new `AnnAssign` arm must skip
+        // the `env.bindings` insert in that case rather than recording a
+        // binding for an unresolved term.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+        };
+        let body = vec![HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::Int,
+            value: Some(HirExpr::Name("unresolved_global".to_string())),
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(!env.bindings.contains_key("y"));
+    }
+
+    #[test]
+    fn collect_block_constraints_ignores_a_value_less_annotated_assignment() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["y"],
+        };
+        let body = vec![HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::Int,
+            value: None,
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(!env.bindings.contains_key("y"));
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_the_initializer_expression() {
+        // `z` is declared local to this scope but never bound, so
+        // `collect_expr_constraints` returns `Err(unbound_local)` for it --
+        // the `?` inside the new arm must propagate that error rather than
+        // being reachable only via the `Some`/`None` term paths above.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["z"],
+        };
+        let body = vec![HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::Int,
+            value: Some(HirExpr::Name("z".to_string())),
+        }];
+
+        let err = collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_private_helper_can_use_an_annotated_assignment_during_signature_inference() {
+        // End-to-end: an annotated assignment inside a private helper whose
+        // own signature is still `Ty::Infer` exercises the solver path
+        // (`collect_block_constraints`) as well as the later concrete
+        // re-check (`check_stmt_in_function`), not just the direct unit
+        // tests above.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::AnnAssign {
+                    target: "x".to_string(),
+                    annotation: Ty::Int,
+                    value: Some(HirExpr::IntLiteral(1)),
+                }],
+            }],
+        };
+
+        assert!(check(&hir).is_ok());
     }
 
     #[test]
@@ -1731,6 +1973,253 @@ mod tests {
                 target: "x".to_string(),
                 value: HirExpr::StringLiteral("changed".to_string()),
             },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0023");
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_annotated_assignment_with_a_matching_value_binds_the_annotation_type() {
+        // x: int = True -- bool is assignable to int (matches is_assignable's
+        // existing widening rule), and the environment should record Ty::Int
+        // (the annotation), not Ty::Bool (the initializer's own inferred type).
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::BoolLiteral(true)),
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_annotated_assignment_with_a_mismatched_value_is_t0025() {
+        let mut env = Environment::new();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::StringLiteral("nope".to_string())),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0025");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn an_annotated_assignment_propagates_an_error_from_the_initializer_expression() {
+        // The initializer itself can fail to type-check (here, referencing an
+        // undefined name) before `is_assignable` is ever consulted -- the `?`
+        // on `infer_expr` inside the new arm must propagate that error rather
+        // than being reachable only via the is_assignable mismatch path.
+        let mut env = Environment::new();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::Name("undefined".to_string())),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn an_annotation_only_declaration_does_not_bind_a_value_at_module_scope() {
+        // x: int alone must only declare x, not bind it -- collect_local_names
+        // registers `x` as local independently of this arm, so a premature
+        // read still falls through to the existing T0021 mechanism (see the
+        // function-scope regression test below for the end-to-end proof).
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn function_scope_annotated_assignment_with_a_matching_value_binds_the_annotation_type() {
+        let mut env = Environment::new();
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::BoolLiteral(true)),
+            },
+            Ty::None,
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn function_scope_annotated_assignment_with_a_mismatched_value_is_t0025() {
+        let mut env = Environment::new();
+        let err = check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::StringLiteral("nope".to_string())),
+            },
+            Ty::None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0025");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn function_scope_annotated_assignment_propagates_an_error_from_the_initializer_expression() {
+        // Same as the module-scope sibling above, but through
+        // `infer_expr_in`'s local-vs-global unbound distinction: `x` is a
+        // declared local that was never assigned, so referencing it in `y`'s
+        // initializer must propagate T0021 via the new arm's `?` rather than
+        // silently falling through to the is_assignable check.
+        let mut env = Environment::new();
+        let err = check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "y".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::Name("x".to_string())),
+            },
+            Ty::None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(env.lookup("y"), None);
+    }
+
+    #[test]
+    fn function_scope_annotation_only_declaration_does_not_bind_a_value() {
+        let mut env = Environment::new();
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+            Ty::None,
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn an_annotation_only_declaration_does_not_bind_a_value() {
+        // x: int alone must not make a later use of x succeed -- it only
+        // declares x local, it does not bind it (matching CPython's own
+        // UnboundLocalError for this exact shape, verified during planning;
+        // this end-to-end module mirrors
+        // tests/diagnostics/d0026_annotation_only_unbound.py exactly).
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "x".to_string(),
+                            annotation: Ty::Int,
+                            value: None,
+                        },
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![HirExpr::Name("x".to_string())],
+                        }),
+                    ],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "f".to_string(),
+                    args: vec![],
+                })),
+            ],
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        // Pin the exact message, not just the shared "T0021" code: this test's
+        // entire purpose is proving the value-less form reaches the
+        // *local-unbound* T0021 path (`unbound_local`), not the differently
+        // worded *undefined-name* T0021 path -- both share the same code, so
+        // only the message distinguishes them.
+        assert_eq!(err.message, "local name `x` is not bound before this use");
+    }
+
+    #[test]
+    fn an_annotated_re_declaration_that_conflicts_with_an_existing_binding_is_t0023() {
+        // `x`'s representation is fixed by its first assignment (Int) --
+        // `pycc_mir`'s own `bind_variable` keeps that first type regardless of
+        // a later compatible reassignment, so the checker must reject a later
+        // annotated re-declaration that would otherwise silently repoint `x`
+        // at an incompatible representation (here, `str`) via `is_assignable`
+        // trivially comparing the initializer to its own annotation alone.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Str,
+                value: Some(HirExpr::StringLiteral("s".to_string())),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0023");
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn function_scope_annotated_re_declaration_that_conflicts_with_an_existing_binding_is_t0023() {
+        let mut env = Environment::new();
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+            Ty::None,
+        )
+        .unwrap();
+        let err = check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Str,
+                value: Some(HirExpr::StringLiteral("s".to_string())),
+            },
+            Ty::None,
         )
         .unwrap_err();
         assert_eq!(err.code, "T0023");
@@ -2435,6 +2924,44 @@ mod tests {
         ];
 
         assert_eq!(function_local_names(&[], &body), vec!["x", "i"]);
+    }
+
+    #[test]
+    fn local_name_collection_deduplicates_annotated_assignment_targets() {
+        let body = vec![
+            HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::IntLiteral(1)),
+            },
+            HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        ];
+
+        assert_eq!(function_local_names(&[], &body), vec!["x"]);
+    }
+
+    #[test]
+    fn contains_return_treats_an_annotated_assignment_as_not_a_return() {
+        let body = vec![HirStmt::AnnAssign {
+            target: "x".to_string(),
+            annotation: Ty::Int,
+            value: Some(HirExpr::IntLiteral(1)),
+        }];
+        assert!(!contains_return(&body));
+    }
+
+    #[test]
+    fn block_always_returns_treats_an_annotated_assignment_as_not_a_return() {
+        let body = vec![HirStmt::AnnAssign {
+            target: "x".to_string(),
+            annotation: Ty::Int,
+            value: None,
+        }];
+        assert!(!block_always_returns(&body));
     }
 
     #[test]

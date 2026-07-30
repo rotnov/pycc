@@ -2,8 +2,8 @@ pub use ruff_python_ast::{
     Arguments, CmpOp, ConversionFlag, ElifElseClause, Expr, ExprBinOp, ExprBooleanLiteral,
     ExprCall, ExprCompare, ExprContext, ExprFString, ExprName, ExprNumberLiteral,
     ExprStringLiteral, ExprUnaryOp, Identifier, InterpolatedElement, InterpolatedStringElement,
-    InterpolatedStringLiteralElement, ModModule, Number, Operator, Parameters, Stmt, StmtAssign,
-    StmtExpr, StmtFor, StmtFunctionDef, StmtIf, StmtReturn, StmtWhile, UnaryOp,
+    InterpolatedStringLiteralElement, ModModule, Number, Operator, Parameters, Stmt, StmtAnnAssign,
+    StmtAssign, StmtExpr, StmtFor, StmtFunctionDef, StmtIf, StmtReturn, StmtWhile, UnaryOp,
 };
 
 /// Returns the byte range of a statement without exposing the upstream
