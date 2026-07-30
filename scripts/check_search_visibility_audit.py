@@ -34,6 +34,10 @@ RAW_HTML_BLOCK_START = re.compile(
     r"<(?:!--|/?[A-Za-z][A-Za-z0-9-]*(?=[ \t/>])|\?|![A-Z]|!\[CDATA\[)",
     re.IGNORECASE,
 )
+HTML_TAG = re.compile(
+    r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])[^<>]*>",
+    re.DOTALL,
+)
 LIST_MARKER = re.compile(r"(?:[-+*]|\d+[.)])[ \t]+(.*)\Z")
 SIMPLE_TERM = re.compile(r"[A-Za-z0-9]+\Z")
 BOOLEAN_TERMS = {"AND", "NOT", "OR"}
@@ -202,6 +206,8 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
     """Return heading start, content start, level, and title for visible blocks."""
     if "<!--" in markdown or "-->" in markdown:
         raise AuditError("search visibility ledger cannot contain HTML comments")
+    if HTML_TAG.search(markdown):
+        raise AuditError("search visibility ledger cannot contain HTML tags")
     lines = markdown.splitlines()
     for line in lines:
         content = visible_block_content(line)

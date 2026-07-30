@@ -401,7 +401,25 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 1,
             )
         )
-        with self.assertRaisesRegex(AuditError, "raw HTML blocks"):
+        with self.assertRaisesRegex(AuditError, "HTML tags"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_inline_html_container_cannot_hide_history_table(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        header = "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |"
+        next_section = "\n\n## GitHub traffic history"
+        path.write_text(
+            self.head_visibility.replace(
+                header,
+                f"prefix <details>\n{header}",
+                1,
+            ).replace(
+                next_section,
+                f"\nprefix </details>{next_section}",
+                1,
+            )
+        )
+        with self.assertRaisesRegex(AuditError, "HTML tags"):
             validate(self.head, self.base, self.audited_at)
 
     def test_history_rows_must_follow_the_table_delimiter(self) -> None:

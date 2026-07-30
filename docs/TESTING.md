@@ -438,7 +438,10 @@ list-contained, and indented list-continuation versions remain visible for
 duplicate detection but cannot own the outside table. Raw HTML comment
 delimiters are forbidden anywhere in the ledger because a multiline inline
 comment can otherwise hide the canonical table without changing its source
-rows or checkpoint. Heading
+rows or checkpoint. Raw HTML tags are likewise rejected wherever they occur,
+not only at the start of a visible line; text before `<details>` cannot bypass
+the audit and place the unchanged table in a collapsed container. Literal rank
+values such as `>50` remain valid because they are not tags. Heading
 identity is compared after HTML character-reference decoding and inline-markup
 normalization without inserting intraword boundaries. Invisible Unicode format
 and mark characters are rejected after entity decoding, and Setext level-2
