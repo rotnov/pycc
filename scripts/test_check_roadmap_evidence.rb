@@ -28,6 +28,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent /
     "tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml"
+  D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -964,11 +967,12 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d84_and_staged_d91
+  def test_tier1_workflow_authorization_contains_active_d84_and_both_staged_workflows
     assert_equal(
       [
         D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
-        D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256
+        D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256,
+        D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256
       ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
@@ -1009,6 +1013,106 @@ class RoadmapEvidenceCliTest < Minitest::Test
       D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.read,
       D91_RELAX_FRONTEND_PERF_MANIFEST_WORKFLOW_FIXTURE.to_s
     )
+  end
+
+  def test_d99_vcpkg_libxml2_cache_workflow_digest_matches_the_reviewed_fixture
+    assert_equal(
+      D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read,
+      D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.to_s
+    )
+    assert coverage_gate_present?(
+      D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read,
+      D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_d99_changes_only_the_active_d84_native_job_cache_steps
+    active = Psych.load(D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read)
+    staged = Psych.load(D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read)
+    staged.fetch("jobs")
+          .fetch("native-build-test")
+          .fetch("steps")
+          .reject! do |step|
+            [
+              "Configure vcpkg binary cache identity (Windows)",
+              "Restore vcpkg libxml2 binary cache (Windows)",
+              "Save vcpkg libxml2 binary cache (Windows main only)"
+            ].include?(step["name"])
+          end
+
+    assert_equal active, staged
+  end
+
+  def test_d99_vcpkg_cache_key_and_write_boundary_are_fail_closed
+    steps = Psych.load(D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read)
+                 .fetch("jobs")
+                 .fetch("native-build-test")
+                 .fetch("steps")
+    identity = steps.find do |step|
+      step["name"] == "Configure vcpkg binary cache identity (Windows)"
+    end
+    restore = steps.find do |step|
+      step["name"] == "Restore vcpkg libxml2 binary cache (Windows)"
+    end
+    install = steps.find do |step|
+      step["name"] == "Install libxml2 (Windows, via vcpkg, for llvm-sys's system-libs)"
+    end
+    save = steps.find do |step|
+      step["name"] == "Save vcpkg libxml2 binary cache (Windows main only)"
+    end
+
+    refute_nil identity
+    refute_nil restore
+    refute_nil install
+    refute_nil save
+    assert_operator steps.index(identity), :<, steps.index(restore)
+    assert_operator steps.index(restore), :<, steps.index(install)
+    assert_operator steps.index(install), :<, steps.index(save)
+
+    expected_action =
+      "actions/cache/%<mode>s@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+    assert_equal format(expected_action, mode: "restore"), restore.fetch("uses")
+    assert_equal format(expected_action, mode: "save"), save.fetch("uses")
+    assert_equal "runner.os == 'Windows'", identity.fetch("if")
+    assert_equal "runner.os == 'Windows'", restore.fetch("if")
+    assert_includes identity.fetch("run"),
+                    "git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD"
+    assert_includes identity.fetch("run"), "'^[0-9a-f]{40}$'"
+    assert_includes identity.fetch("run"), "$imageVersion = $env:ImageVersion"
+    assert_includes identity.fetch("run"),
+                    "'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'"
+    assert_includes identity.fetch("run"),
+                    "\"image_version=$imageVersion\" >> $env:GITHUB_OUTPUT"
+    assert_includes identity.fetch("run"),
+                    "\"VCPKG_DEFAULT_BINARY_CACHE=$cacheDir\" >> $env:GITHUB_ENV"
+
+    expected_key =
+      "vcpkg-libxml2-${{ runner.os }}-${{ runner.arch }}-" \
+      "image-${{ steps.vcpkg_cache_identity.outputs.image_version }}-" \
+      "llvm-${{ env.LLVM_VERSION }}-x64-windows-static-md-" \
+      "${{ steps.vcpkg_cache_identity.outputs.vcpkg_commit }}"
+    assert_equal expected_key, restore.fetch("with").fetch("key")
+    refute restore.fetch("with").key?("restore-keys")
+    assert_equal(
+      "${{ steps.vcpkg_cache_identity.outputs.cache_path }}",
+      restore.fetch("with").fetch("path")
+    )
+    assert_equal(
+      "runner.os == 'Windows' && github.event_name == 'push' && " \
+      "github.ref == 'refs/heads/main' && " \
+      "steps.vcpkg_libxml2_cache_restore.outputs.cache-hit != 'true'",
+      save.fetch("if")
+    )
+    assert_equal(
+      "${{ steps.vcpkg_libxml2_cache_restore.outputs.cache-primary-key }}",
+      save.fetch("with").fetch("key")
+    )
+    assert_equal restore.fetch("with").fetch("path"),
+                 save.fetch("with").fetch("path")
   end
 
   # D-091: the bench-manifest fingerprint (`[dev-dependencies]` onward) must
@@ -1376,6 +1480,48 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stdout, "Roadmap evidence policy passed."
   end
 
+  def test_public_cli_accepts_the_staged_d99_vcpkg_cache_workflow
+    stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read
+    )
+
+    assert status.success?, stderr
+    assert_includes stdout, "Roadmap evidence policy passed."
+  end
+
+  def test_public_cli_rejects_d99_cache_key_without_the_pinned_llvm_version
+    workflow = D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read.sub(
+      "-llvm-${{ env.LLVM_VERSION }}-",
+      "-llvm-unpinned-"
+    )
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr,
+                    "does not match a reviewed active-or-staged performance CI workflow"
+  end
+
+  def test_public_cli_rejects_d99_cache_key_without_the_hosted_image_version
+    workflow = D99_VCPKG_LIBXML2_CACHE_WORKFLOW_FIXTURE.read.sub(
+      "-image-${{ steps.vcpkg_cache_identity.outputs.image_version }}-",
+      "-image-unpinned-"
+    )
+
+    _stdout, stderr, status = run_checker(
+      roadmap: roadmap_with_tier1_claim(:absent),
+      workflow: workflow
+    )
+
+    refute status.success?
+    assert_includes stderr,
+                    "does not match a reviewed active-or-staged performance CI workflow"
+  end
+
   def test_public_cli_rejects_drift_in_the_active_d84_workflow
     workflow = D84_THROUGHPUT_FLOOR_WORKFLOW_FIXTURE.read.sub(
       "for round in 1 2 3 4 5; do",
@@ -1388,7 +1534,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_an_active_workflow_without_both_perf_jobs
@@ -1404,7 +1550,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_with_unchecked_tier1_claim
@@ -1414,7 +1560,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_retired_d48_without_a_tier1_claim
@@ -1424,7 +1570,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_requires_active_digest_without_a_tier1_claim
@@ -1437,7 +1583,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_the_retired_d56_workflow
@@ -1447,7 +1593,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_the_retired_d51_workflow
@@ -1457,7 +1603,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_the_retired_d62_workflow
@@ -1467,7 +1613,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_the_retired_d80_workflow
@@ -1477,7 +1623,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_public_cli_rejects_unreviewed_d56_workflow_drift
@@ -1489,7 +1635,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_paired_measurement_resolves_the_exact_pull_request_base
@@ -2144,7 +2290,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     _stdout, stderr, status = run_checker(roadmap: roadmap, workflow: workflow)
 
     refute status.success?
-    assert_includes stderr, "does not match the reviewed active D-084 performance CI workflow"
+    assert_includes stderr, "does not match a reviewed active-or-staged performance CI workflow"
   end
 
   def test_requires_the_hard_coverage_gate_while_its_roadmap_claim_is_unchecked
