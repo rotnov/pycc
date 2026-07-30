@@ -39,15 +39,18 @@ diagnostics. A diagnostic can remain useful without increasing an acquisition
 "N of M" count.
 
 The registry uses provider-specific semantic identities. GitHub's current
-version treats case, repeated whitespace, and the order of simple unquoted
-terms as equivalent while preserving repeated terms. Quoted phrases,
-qualifiers, exclusions, Boolean syntax, punctuation, and unreviewed Unicode
-remain syntax-distinct. At most one active product KPI query may use a given
+version treats case and repeated whitespace as equivalent for every query and
+also treats the order of simple unquoted terms as equivalent while preserving
+repeated terms. Quoted phrases, qualifiers, exclusions, Boolean syntax,
+punctuation, and unreviewed Unicode remain syntax-distinct after that baseline
+normalization. At most one active product KPI query may use a given
 semantic identity on one provider surface. Raw query text always remains
 append-only replay evidence. A GitHub raw query cannot contain a backtick,
 because the ledger uses a single-backtick code span to project it exactly, or a
 pipe or line separator, because the ledger uses unescaped pipes and one physical
-line per table row. An existing active or diagnostic query may make only one
+line per table row. HTML tag and comment syntax is also forbidden in raw GitHub
+queries because the fail-closed ledger parser rejects those constructs before
+reading its machine-owned Markdown table. An existing active or diagnostic query may make only one
 lifecycle transition: to `retired`, with a non-null retirement timestamp
 value. For GitHub, that timestamp must be strictly after the final history
 observation and structured measurement. The registry has no Google snapshot

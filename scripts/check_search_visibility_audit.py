@@ -101,10 +101,10 @@ BOOTSTRAP_CHECKPOINTS = [
 ]
 BOOTSTRAP_FILE_SHA256 = {
     "SEARCH_QUERY_REGISTRY.json": (
-        "aad5421200b1719c5e826b4c9ad916ca1a9a3644a64ce0c43c9534a41f106c1c"
+        "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77"
     ),
     "SEARCH_VISIBILITY.md": (
-        "f42ccbfa94428e8b9495a55199977bd49933cc7e30a17b5d3c768e55c75caf09"
+        "45005d46e7b3b532126b1727342831fec4f10e09539a279e3f9260cff78781a2"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -358,7 +358,8 @@ def semantic_identity(surface: str, raw_query: str, version: str) -> str:
         ):
             normalized = " ".join(sorted(ascii_lower(term) for term in terms))
             return f"{version}:bag:{normalized}"
-        return f"{version}:syntax:{raw_query}"
+        normalized = " ".join(ascii_lower(raw_query).split())
+        return f"{version}:syntax:{normalized}"
     if surface == GOOGLE_SURFACE:
         return f"{version}:raw:{raw_query}"
     raise AuditError(f"unsupported query surface: {surface!r}")
@@ -620,6 +621,14 @@ def validate_registry(
         if surface == GITHUB_SURFACE and len(raw_query.splitlines()) != 1:
             raise AuditError(
                 "GitHub registry raw_query cannot contain line separators"
+            )
+        if surface == GITHUB_SURFACE and (
+            "<!--" in raw_query
+            or "-->" in raw_query
+            or HTML_TAG.search(raw_query) is not None
+        ):
+            raise AuditError(
+                "GitHub registry raw_query cannot contain HTML tag or comment syntax"
             )
         if surface not in SEMANTIC_IDENTITY_VERSIONS:
             raise AuditError("registry query has an unsupported surface")

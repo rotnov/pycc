@@ -83,7 +83,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                     "surface": "github_repository_search",
                     "raw_query": "AI-native compiler",
                     "semantic_identity": (
-                        "github-repository-search-v1:syntax:AI-native compiler"
+                        "github-repository-search-v1:syntax:ai-native compiler"
                     ),
                     "semantic_identity_version": "github-repository-search-v1",
                     "intent_class": "authorship_narrative",
@@ -704,6 +704,33 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "cannot contain backticks"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_syntax_identity_normalizes_case_and_repeated_whitespace(self) -> None:
+        common = {
+            **self.registry["queries"][0],
+            "semantic_identity": (
+                "github-repository-search-v1:syntax:"
+                "ahead-of-time compiler python"
+            ),
+            "activated_at": "2026-07-31T00:00:00Z",
+        }
+        self.registry["queries"].extend(
+            [
+                {
+                    **common,
+                    "id": "github-product-ahead-of-time-python",
+                    "raw_query": "ahead-of-time compiler python",
+                },
+                {
+                    **common,
+                    "id": "github-product-ahead-of-time-python-duplicate",
+                    "raw_query": "Ahead-of-time  compiler python",
+                },
+            ]
+        )
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "semantic identity is double-counted"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_github_registry_raw_query_rejects_pipes(self) -> None:
         self.registry["queries"].append(
             {
@@ -745,6 +772,34 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 self.registry["queries"].append(query)
                 self.write_registry()
                 with self.assertRaisesRegex(AuditError, "line separators"):
+                    validate(self.head, self.base, self.audited_at)
+                self.registry["queries"].pop()
+
+    def test_github_registry_raw_query_rejects_html_syntax(self) -> None:
+        for raw_query in (
+            "python <em> compiler",
+            "python <!-- compiler",
+            "python --> compiler",
+        ):
+            with self.subTest(raw_query=raw_query):
+                self.registry["queries"].append(
+                    {
+                        **self.registry["queries"][0],
+                        "id": "github-diagnostic-html-query",
+                        "raw_query": raw_query,
+                        "semantic_identity": (
+                            "github-repository-search-v1:syntax:"
+                            + raw_query.lower()
+                        ),
+                        "intent_class": "brand",
+                        "lifecycle": "diagnostic",
+                        "kpi_role": "diagnostic",
+                        "rationale": "Synthetic unprojectable HTML query.",
+                        "activated_at": "2026-07-31T00:00:00Z",
+                    }
+                )
+                self.write_registry()
+                with self.assertRaisesRegex(AuditError, "HTML tag or comment"):
                     validate(self.head, self.base, self.audited_at)
                 self.registry["queries"].pop()
 

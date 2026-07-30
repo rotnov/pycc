@@ -424,7 +424,12 @@ parser silently strips it. Every delimiter cell has the GFM minimum of three
 hyphens, preserving the table rendering that gives the evidence its column
 meaning.
 GitHub query text rejects every qualifier except an `in:description` metadata
-diagnostic or a single `topic:` diagnostic. A complete REST response must
+diagnostic or a single `topic:` diagnostic. Syntax-sensitive identities still
+normalize ASCII case and repeated whitespace before preserving punctuation,
+phrases, qualifiers, exclusions, Boolean operators, and term order as distinct;
+active product queries cannot split one acquisition intent through spelling
+variants. Raw GitHub queries also reject HTML tag/comment forms that the
+fail-closed ledger parser cannot later project. A complete REST response must
 contain exactly `min(api_total, 50)` rows; a shorter result list cannot support
 an organic `>50` claim, and `incomplete_results=true` cannot produce any rank
 row. Both measurements and checkpoints preserve their trusted base list as an
@@ -477,7 +482,7 @@ schema validation covers the registry version, semantic
 identity versions, both surface contracts, query lifecycle/KPI/alias rules,
 one-way identity-preserving query retirement, unambiguous backtick projection,
 provider-scoped legacy-history lifecycle bounds, rejection of unprojectable raw
-pipes and line separators, and the retired `AI-native compiler` authorship
+HTML, pipes, and line separators, and the retired `AI-native compiler` authorship
 diagnostic. Google retirement remains activation/clock-bounded until the
 registry gains a Google snapshot series. This is a pinned
 bootstrap, not a timestamp exception that future rows can claim. The suite and
