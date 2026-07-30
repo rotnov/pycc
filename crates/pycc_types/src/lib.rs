@@ -297,7 +297,7 @@ fn collect_expr_constraints(
                 {
                     unify_terms(
                         parameter.clone(),
-                        arg.clone(),
+                        arg,
                         parents,
                         concrete,
                         "T0021",
@@ -738,12 +738,12 @@ fn infer_expr_in(
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
-            numeric_result_type(*op, left_ty.clone(), right_ty.clone())
+            numeric_result_type(*op, left_ty, right_ty)
         }
         HirExpr::Compare { op: _, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
-            if numeric_or_bool_compatible(&left_ty, &right_ty) {
+            if numeric_or_bool_compatible(left_ty.clone(), right_ty.clone()) {
                 Ok(Ty::Bool)
             } else {
                 Err(Diagnostic::error(
@@ -770,7 +770,7 @@ fn infer_expr_in(
             // calls are small, so keep up to four inferred types on the stack
             // and reserve a heap vector only for wider calls.
             const INLINE_ARG_TYPES: usize = 4;
-            let mut inline_arg_tys: Vec<Ty> = (0..INLINE_ARG_TYPES).map(|_| Ty::Infer).collect();
+            let mut inline_arg_tys = [const { Ty::Infer }; INLINE_ARG_TYPES];
             let heap_arg_tys;
             let arg_tys: &[Ty] = if args.len() <= INLINE_ARG_TYPES {
                 for (slot, arg) in inline_arg_tys.iter_mut().zip(args) {
@@ -806,7 +806,7 @@ fn infer_expr_in(
                 ));
             }
             for (i, (arg_ty, param_ty)) in arg_tys.iter().zip(param_tys.iter()).enumerate() {
-                if !is_assignable(arg_ty, param_ty) {
+                if !is_assignable(arg_ty.clone(), param_ty.clone()) {
                     return Err(Diagnostic::error(
                         "T0021",
                         format!(
@@ -824,8 +824,8 @@ fn infer_expr_in(
     }
 }
 
-fn is_assignable(from: &Ty, to: &Ty) -> bool {
-    from == to || (*from == Ty::Bool && *to == Ty::Int) // bool is a subtype of int, TYPE_SYSTEM.md's representation table
+fn is_assignable(from: Ty, to: Ty) -> bool {
+    from == to || (from == Ty::Bool && to == Ty::Int) // bool is a subtype of int, TYPE_SYSTEM.md's representation table
 }
 
 fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnostic> {
@@ -861,9 +861,9 @@ fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnos
     }
 }
 
-fn numeric_or_bool_compatible(a: &Ty, b: &Ty) -> bool {
+fn numeric_or_bool_compatible(a: Ty, b: Ty) -> bool {
     let is_numeric_like = |t: &Ty| matches!(t, Ty::Int | Ty::Float | Ty::Bool);
-    (is_numeric_like(a) && is_numeric_like(b)) || (a == &Ty::Str && b == &Ty::Str)
+    (is_numeric_like(&a) && is_numeric_like(&b)) || (a == Ty::Str && b == Ty::Str)
 }
 
 fn check_range_operand(
@@ -881,7 +881,7 @@ fn check_range_operand_in(
     expr: &HirExpr,
 ) -> Result<(), Diagnostic> {
     let actual = infer_expr_in(env, local_names, expr)?;
-    if is_assignable(&actual, &Ty::Int) {
+    if is_assignable(actual.clone(), Ty::Int) {
         Ok(())
     } else {
         Err(Diagnostic::error(
@@ -894,7 +894,7 @@ fn check_range_operand_in(
 
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
     if let Some(previous) = env.lookup(target) {
-        if !is_assignable(&ty, &previous) {
+        if !is_assignable(ty.clone(), previous.clone()) {
             return Err(Diagnostic::error(
                 "T0023",
                 format!(
@@ -924,7 +924,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
         } => {
             if let Some(value) = value {
                 let inferred = infer_expr(env, value)?;
-                if !is_assignable(&inferred, annotation) {
+                if !is_assignable(inferred.clone(), annotation.clone()) {
                     return Err(Diagnostic::error(
                         "T0025",
                         format!(
@@ -1098,7 +1098,7 @@ fn check_stmt_in_function(
         }
         HirStmt::Return(Some(expr)) => {
             let actual = infer_expr_in(env, local_names, expr)?;
-            if !is_assignable(&actual, &return_ty) {
+            if !is_assignable(actual.clone(), return_ty.clone()) {
                 return Err(Diagnostic::error(
                     "T0022",
                     format!(
@@ -1155,7 +1155,7 @@ fn check_stmt_in_function(
         } => {
             if let Some(value) = value {
                 let inferred = infer_expr_in(env, local_names, value)?;
-                if !is_assignable(&inferred, annotation) {
+                if !is_assignable(inferred.clone(), annotation.clone()) {
                     return Err(Diagnostic::error(
                         "T0025",
                         format!(
