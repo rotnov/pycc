@@ -407,7 +407,12 @@ It keeps the existing read-only `pull_request_target` boundary, additionally
 downloads the head search ledger, query registry, checkpoint file, and roadmap
 as non-executable data, and runs the base-owned
 `check_search_visibility_audit.py` against the checked-out base ledger. The
-fixture is not active in this staging commit. Activation must copy it
+audit rejects a rewritten history prefix, invalid checkpoints, mutable surface
+or activation contracts, incorrect rank deltas, and replay metadata whose
+types, ranges, result-count relationships, or corpus digest are invalid. Its
+mutation suite covers each failure class before the prospective workflow can
+be activated. The fixture is not active in this staging commit. Activation
+must copy it
 byte-for-byte to `workflow-policy.yml` in a later pull request, prove the new
 required `audit` run, and retire the older roadmap-only trust-anchor digest.
 

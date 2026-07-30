@@ -70,6 +70,29 @@ def parse_timestamp(value: Any, description: str) -> datetime:
     return parsed
 
 
+def require_integer(value: Any, description: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise AuditError(f"{description} must be an integer")
+    return value
+
+
+def parse_rank(value: str) -> int | None:
+    if value == ">50":
+        return None
+    if not re.fullmatch(r"[1-9]\d*", value):
+        raise AuditError("history rank must be a positive integer or >50")
+    return int(value)
+
+
+def rank_delta(previous: int | None, current: int | None, has_previous: bool) -> str:
+    if current is None or not has_previous:
+        return "—"
+    if previous is None:
+        return "new"
+    delta = previous - current
+    return f"+{delta}" if delta > 0 else str(delta)
+
+
 def history_rows(markdown: str) -> list[list[str]]:
     rows: list[list[str]] = []
     saw_header = False
@@ -210,10 +233,22 @@ def validate_registry(
     if not isinstance(measurements, list):
         raise AuditError("registry measurements must be a list")
     projected: dict[tuple[str, str], dict[str, Any]] = {}
+    snapshot_ids: set[str] = set()
     for measurement in measurements:
         if not isinstance(measurement, dict) or set(measurement) != MEASUREMENT_KEYS:
             raise AuditError("measurement has unexpected fields")
-        query = queries_by_id.get(measurement["query_id"])
+        snapshot_id = measurement["snapshot_id"]
+        if (
+            not isinstance(snapshot_id, str)
+            or not snapshot_id
+            or snapshot_id in snapshot_ids
+        ):
+            raise AuditError("measurement snapshot_id must be a unique string")
+        snapshot_ids.add(snapshot_id)
+        query_id = measurement["query_id"]
+        if not isinstance(query_id, str):
+            raise AuditError("measurement query_id must be a string")
+        query = queries_by_id.get(query_id)
         if query is None or query.get("surface") != GITHUB_SURFACE:
             raise AuditError("measurement does not reference a GitHub query")
         observed = parse_timestamp(measurement["observed_at"], "measurement observed_at")
@@ -236,10 +271,29 @@ def validate_registry(
             raise AuditError("measurement sort contract was rewritten")
         if measurement["result_window"] != 50:
             raise AuditError("measurement result window was rewritten")
+        returned_results = require_integer(
+            measurement["returned_results"], "measurement returned_results"
+        )
+        api_total = require_integer(measurement["api_total"], "measurement api_total")
+        if not 0 <= returned_results <= measurement["result_window"]:
+            raise AuditError("measurement returned_results is outside its result window")
+        if api_total < returned_results:
+            raise AuditError("measurement api_total is smaller than returned_results")
+        target_rank = measurement["target_rank"]
+        if target_rank is not None:
+            target_rank = require_integer(target_rank, "measurement target_rank")
+            if not 1 <= target_rank <= returned_results:
+                raise AuditError("measurement target_rank is outside returned results")
+        if not isinstance(measurement["incomplete_results"], bool):
+            raise AuditError("measurement incomplete_results must be boolean")
+        corpus_digest = measurement["ordered_corpus_sha256"]
+        if not isinstance(corpus_digest, str) or not SHA256.fullmatch(corpus_digest):
+            raise AuditError("measurement corpus digest must be lowercase SHA-256")
         projected[key] = measurement
 
     history_keys: set[tuple[str, str]] = set()
     previous: datetime | None = None
+    previous_ranks: dict[str, int | None] = {}
     for row in rows:
         observed = parse_timestamp(row[0], "history observed_at")
         if previous is not None and observed < previous:
@@ -248,7 +302,15 @@ def validate_registry(
         raw_query = row[1]
         if len(raw_query) < 2 or raw_query[0] != "`" or raw_query[-1] != "`":
             raise AuditError("history query must preserve backticked raw text")
-        key = (row[0], raw_query[1:-1])
+        raw_query = raw_query[1:-1]
+        current_rank = parse_rank(row[2])
+        expected_delta = rank_delta(
+            previous_ranks.get(raw_query), current_rank, raw_query in previous_ranks
+        )
+        if row[3] != expected_delta:
+            raise AuditError("history rank delta disagrees with the preceding observation")
+        previous_ranks[raw_query] = current_rank
+        key = (row[0], raw_query)
         history_keys.add(key)
         if observed < activated_at:
             continue
@@ -266,7 +328,12 @@ def validate_registry(
             or row[5] != str(measurement["api_total"])
         ):
             raise AuditError("history row disagrees with replay metadata")
-    if set(projected) != {key for key in history_keys if parse_timestamp(key[0], "history observed_at") >= activated_at}:
+    registry_era_keys = {
+        key
+        for key in history_keys
+        if parse_timestamp(key[0], "history observed_at") >= activated_at
+    }
+    if set(projected) != registry_era_keys:
         raise AuditError("registry-era measurement projection is incomplete")
 
 

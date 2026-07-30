@@ -151,6 +151,56 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "lacks trusted replay metadata"):
             validate(self.head, self.base)
 
+    def test_registry_era_row_requires_correct_rank_delta(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        path.write_text(path.read_text().replace("| 7 | +12 |", "| 7 | nonsense |"))
+        self.refresh_checkpoint()
+        with self.assertRaisesRegex(AuditError, "rank delta disagrees"):
+            validate(self.head, self.base)
+
+    def test_registry_replay_metadata_requires_valid_types_and_ranges(self) -> None:
+        mutations = {
+            "returned_results type": ("returned_results", False, "must be an integer"),
+            "returned_results range": (
+                "returned_results",
+                51,
+                "outside its result window",
+            ),
+            "api_total relationship": (
+                "api_total",
+                49,
+                "smaller than returned_results",
+            ),
+            "target_rank type": ("target_rank", False, "must be an integer"),
+            "target_rank lower bound": (
+                "target_rank",
+                0,
+                "outside returned results",
+            ),
+            "target_rank upper bound": (
+                "target_rank",
+                51,
+                "outside returned results",
+            ),
+            "incomplete_results type": (
+                "incomplete_results",
+                0,
+                "must be boolean",
+            ),
+            "corpus digest": (
+                "ordered_corpus_sha256",
+                "not-a-digest",
+                "must be lowercase SHA-256",
+            ),
+        }
+        original = dict(self.registry["measurements"][0])
+        for name, (field, value, message) in mutations.items():
+            with self.subTest(name=name):
+                self.registry["measurements"][0] = {**original, field: value}
+                self.write_registry()
+                with self.assertRaisesRegex(AuditError, message):
+                    validate(self.head, self.base)
+
     def test_empty_history_timestamp_is_rejected(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         path.write_text(
