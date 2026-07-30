@@ -20,7 +20,7 @@ SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
   "6a0c1c7280d1cadcfeec790662aca0cf5210c76aa4c9f6e2333c57a1e8db3a31"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
-    "cc74fca55d83c2c3925d4f64dfa366d5349b7ae226bd3445186c9db5428d3e14",
+    "cc995871579f3f7303143d12640f83331e871a58623a90b08112b3009febf017",
   "docs/SEARCH_QUERY_REGISTRY.json" =>
     "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77",
   "docs/SEARCH_VISIBILITY.md" =>
@@ -29,6 +29,8 @@ STAGED_SEARCH_ACTIVATION_SHA256 = {
     "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
 }.freeze
 SEARCH_ROADMAP_PATH = "docs/ROADMAP.md"
+SEARCH_ACTIVATED_TRUST_ANCHOR_PATH =
+  ".github/workflows/#{TRUST_ANCHOR_FILENAME}"
 SEARCH_GIT_ATTRIBUTES_KEY = "\0search-activation-gitattributes"
 SEARCH_GIT_ATTRIBUTES_MANIFEST = "".b.freeze
 SEARCH_TREE_ENTRIES_KEY = "\0search-activation-tree-entries"
@@ -67,8 +69,12 @@ ACTIVATED_POLICY_TEST_PATH = "scripts/test_check_ci_permissions.rb"
 SEARCH_ACTIVATION_PATHS =
   (STAGED_SEARCH_ACTIVATION_SHA256.keys + SEARCH_SUCCESSOR_EXECUTABLES +
     SEARCH_SUCCESSOR_INPUTS + [SEARCH_ROADMAP_PATH]).uniq.freeze
+SEARCH_ACTIVATION_TREE_PATHS =
+  (SEARCH_ACTIVATION_PATHS + [SEARCH_ACTIVATED_TRUST_ANCHOR_PATH]).freeze
 SEARCH_ACTIVATION_TREE_ENTRIES =
-  SEARCH_ACTIVATION_PATHS.to_h { |relative| [relative, "100644 blob"] }.freeze
+  SEARCH_ACTIVATION_TREE_PATHS.to_h do |relative|
+    [relative, "100644 blob"]
+  end.freeze
 TRUSTED_EVENT_AND_REF_GUARD = /\A(?:\$\{\{\s*)?github\.event_name\s*==\s*(['"])push\1\s*&&\s*github\.ref\s*==\s*(['"])refs\/heads\/main\2\s*(?:\}\})?\z/
 
 def mapping_entries(node, context)

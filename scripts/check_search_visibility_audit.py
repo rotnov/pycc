@@ -30,13 +30,9 @@ ROADMAP_CHECKPOINT = re.compile(
 )
 FENCE_START = re.compile(r"(?:`{3,}|~{3,})(?:[^\r\n]*)\Z")
 SETEXT_UNDERLINE = re.compile(r"(=+|-+)[ \t]*\Z")
-RAW_HTML_BLOCK_START = re.compile(
-    r"<(?:!--|/?[A-Za-z][A-Za-z0-9-]*(?=[ \t/>])|\?|![A-Z]|!\[CDATA\[)",
+RAW_HTML_START = re.compile(
+    r"(?:</?[A-Za-z][A-Za-z0-9-]*(?=[ \t\n\f/>])|<\?|<![A-Z]|<!\[CDATA\[)",
     re.IGNORECASE,
-)
-HTML_TAG = re.compile(
-    r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])[^<>]*>",
-    re.DOTALL,
 )
 LIST_MARKER = re.compile(r"(?:[-+*]|\d+[.)])[ \t]+(.*)\Z")
 SIMPLE_TERM = re.compile(r"[A-Za-z0-9]+\Z")
@@ -247,8 +243,10 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
     """Return heading start, content start, level, and title for visible blocks."""
     if "<!--" in markdown or "-->" in markdown:
         raise AuditError("search visibility ledger cannot contain HTML comments")
-    if HTML_TAG.search(markdown):
-        raise AuditError("search visibility ledger cannot contain HTML tags")
+    if RAW_HTML_START.search(markdown):
+        raise AuditError(
+            "search visibility ledger cannot contain HTML tags or raw HTML constructs"
+        )
     lines = commonmark_lines(markdown)
     for line in lines:
         content = visible_block_content(line)
@@ -261,8 +259,6 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
             )
         if FENCE_START.fullmatch(content):
             raise AuditError("search visibility ledger cannot contain fenced blocks")
-        if RAW_HTML_BLOCK_START.match(content):
-            raise AuditError("search visibility ledger cannot contain raw HTML blocks")
 
     headings: list[tuple[int, int, int, str]] = []
     for index, line in enumerate(lines):
@@ -648,10 +644,11 @@ def validate_registry(
         if surface == GITHUB_SURFACE and (
             "<!--" in raw_query
             or "-->" in raw_query
-            or HTML_TAG.search(raw_query) is not None
+            or RAW_HTML_START.search(raw_query) is not None
         ):
             raise AuditError(
-                "GitHub registry raw_query cannot contain HTML tag or comment syntax"
+                "GitHub registry raw_query cannot contain HTML tag or comment syntax, "
+                "including raw constructs"
             )
         if surface == GITHUB_SURFACE and any(
             unicodedata.category(character) in {"Cc", "Cf"}

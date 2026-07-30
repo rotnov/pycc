@@ -454,9 +454,11 @@ containment matching is used only to reject prefixed/suffixed lookalike H2s.
 Raw HTML comment
 delimiters are forbidden anywhere in the ledger because a multiline inline
 comment can otherwise hide the canonical table without changing its source
-rows or checkpoint. Raw HTML tags are likewise rejected wherever they occur,
-not only at the start of a visible line; text before `<details>` cannot bypass
-the audit and place the unchanged table in a collapsed container. Literal rank
+rows or checkpoint. Raw HTML tags and other CommonMark raw constructs are
+rejected from their opening syntax wherever they occur, without depending on
+parsing a closing `>` through quoted attributes; text before
+`<details title="<">`, processing instructions, declarations, or CDATA cannot
+bypass the audit and hide the unchanged table. Literal rank
 values such as `>50` remain valid because they are not tags. Heading
 identity is compared after HTML character-reference decoding. Inline markup
 marker characters are forbidden even intraword or entity-encoded, rather than
@@ -527,8 +529,9 @@ become trusted after merge. Both successor Python invocations use isolated
 mode; the self-test loads its byte-pinned sibling auditor by exact path, so new
 modules or package initializers in the activation tree cannot shadow
 standard-library or trusted imports. The bridge also enumerates the complete
-candidate Git tree, pins every activation input to its reviewed `100644 blob`
-entry, and requires an empty `.gitattributes` manifest, so symlinks, executable
+candidate Git tree, pins every activation input plus the newly active trust-
+anchor workflow to its reviewed `100644 blob` entry, and requires an empty
+`.gitattributes` manifest, so symlinks, executable
 mode changes, submodules, or root/nested checkout attributes cannot preserve Git
 blob bytes while changing the successor's materialized workflow, scripts, or
 fixtures. Git blob output is normalized to binary

@@ -40,8 +40,9 @@ the bound registry/ledger/checkpoint files, every unchanged successor script,
 every repository-resident self-test input, and the pinned activation-specific
 steady-state policy checker and self-test. Those two variants retire the older
 workflow digest and the one-use activation bridge. The transition also rejects
-every root or nested `.gitattributes` path and pins all activation paths to their
-reviewed regular-file Git modes, so symlinks, submodules, executable-bit changes,
+every root or nested `.gitattributes` path and pins all activation paths,
+including the newly active trust-anchor workflow itself, to their reviewed
+regular-file Git modes, so symlinks, submodules, executable-bit changes,
 or candidate checkout rules cannot change the materialized successor behind
 byte-identical Git blobs. The still-active base checker
 enforces that transition against the verified pull-request head before the

@@ -567,7 +567,7 @@ class WorkflowPermissionsTest < Minitest::Test
   end
 
   def test_activation_trust_anchor_rejects_changed_tree_entry_modes
-    SEARCH_ACTIVATION_PATHS.each do |relative|
+    SEARCH_ACTIVATION_TREE_PATHS.each do |relative|
       candidate = activation_candidate
       candidate[SEARCH_TREE_ENTRIES_KEY] =
         SEARCH_ACTIVATION_TREE_ENTRIES.merge(relative => "120000 blob")

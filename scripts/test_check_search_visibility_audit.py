@@ -480,19 +480,36 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         header = "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |"
         next_section = "\n\n## GitHub traffic history"
-        path.write_text(
-            self.head_visibility.replace(
-                header,
-                f"prefix <details>\n{header}",
-                1,
-            ).replace(
-                next_section,
-                f"\nprefix </details>{next_section}",
-                1,
-            )
-        )
-        with self.assertRaisesRegex(AuditError, "HTML tags"):
-            validate(self.head, self.base, self.audited_at)
+        for opener in ("prefix <details>", 'prefix <details title="<">'):
+            with self.subTest(opener=opener):
+                path.write_text(
+                    self.head_visibility.replace(
+                        header,
+                        f"{opener}\n{header}",
+                        1,
+                    ).replace(
+                        next_section,
+                        f"\nprefix </details>{next_section}",
+                        1,
+                    )
+                )
+                with self.assertRaisesRegex(AuditError, "HTML tags"):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_prefixed_raw_html_constructs_cannot_hide_history_table(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        header = "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |"
+        for construct in ("<?audit?>", "<!AUDIT>", "<![CDATA[audit]]>"):
+            with self.subTest(construct=construct):
+                path.write_text(
+                    self.head_visibility.replace(
+                        header,
+                        f"prefix {construct}\n\n{header}",
+                        1,
+                    )
+                )
+                with self.assertRaisesRegex(AuditError, "raw HTML constructs"):
+                    validate(self.head, self.base, self.audited_at)
 
     def test_history_rows_must_follow_the_table_delimiter(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
@@ -833,6 +850,10 @@ class SearchVisibilityAuditTests(unittest.TestCase):
     def test_github_registry_raw_query_rejects_html_syntax(self) -> None:
         for raw_query in (
             "python <em> compiler",
+            'python <details title="<"> compiler',
+            "python <?audit?> compiler",
+            "python <!AUDIT> compiler",
+            "python <![CDATA[audit]]> compiler",
             "python <!-- compiler",
             "python --> compiler",
         ):
