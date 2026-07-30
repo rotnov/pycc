@@ -69,16 +69,40 @@ fn strip_windows_newline_translation(bytes: Vec<u8>) -> Vec<u8> {
 /// the resulting binary, separately runs the pinned CPython oracle on the
 /// identical source, and returns both stdouts for the caller to diff.
 fn run_conformance_fixture(label: &str, py_path: &Path) -> (Vec<u8>, Vec<u8>) {
-    let dir = std::env::temp_dir().join(format!("pycc_conformance_{label}_{}", std::process::id()));
+    run_conformance_fixture_with_profile(label, py_path, false)
+}
+
+/// Same as `run_conformance_fixture`, but lets the caller choose the build
+/// profile. New PEP fixtures (PR-9 on) must be proven in both `--debug` and
+/// `--release` before their `docs/PYTHON_STANDARDS.md` row can flip to ✅ --
+/// `docs/TESTING.md`'s "both profiles" rule stopped having a v0.1-only
+/// exception once `--release` shipped in PR-8. `fib`/`mandelbrot` predate
+/// that rule (neither is a PEP-matrix row) and stay on the plain,
+/// `--debug`-only helper above rather than being retrofitted here.
+fn run_conformance_fixture_with_profile(
+    label: &str,
+    py_path: &Path,
+    release: bool,
+) -> (Vec<u8>, Vec<u8>) {
+    let profile = if release { "release" } else { "debug" };
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_conformance_{label}_{profile}_{}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let out = dir.join(label);
-    let status = Command::new(pycc_bin())
-        .args(["build", py_path.to_str().unwrap(), "-o", out.to_str().unwrap()])
-        .status()
-        .unwrap();
-    assert!(status.success(), "`pycc build` failed for {label}");
+    let mut build_command = Command::new(pycc_bin());
+    build_command.args(["build", py_path.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    if release {
+        build_command.arg("--release");
+    }
+    let status = build_command.status().unwrap();
+    assert!(status.success(), "`pycc build` ({profile}) failed for {label}");
     let pycc_output = Command::new(&out).output().unwrap();
-    assert!(pycc_output.status.success(), "compiled {label} binary exited non-zero");
+    assert!(
+        pycc_output.status.success(),
+        "compiled {label} binary ({profile}) exited non-zero"
+    );
 
     let cpython_output = Command::new(oracle_python_bin())
         .arg(py_path)
@@ -136,5 +160,21 @@ fn mandelbrot_ascii_matches_cpython_3_14_6_byte_for_byte() {
     assert_eq!(
         pycc_stdout, cpython_stdout,
         "pycc and CPython 3.14.6 disagree on tests/fixtures/conformance_mandelbrot.py"
+    );
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn run_conformance_fixture_with_profile_builds_both_debug_and_release() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance_fib.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("profile_check_debug", &fixture, false);
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("profile_check_release", &fixture, true);
+    assert_eq!(debug_pycc, debug_cpython, "debug profile must match CPython");
+    assert_eq!(release_pycc, release_cpython, "release profile must match CPython");
+    assert_eq!(
+        debug_pycc, release_pycc,
+        "debug and release builds of the same fixture must produce identical stdout"
     );
 }
