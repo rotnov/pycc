@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -77,6 +78,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         }
         self.write_registry()
         self.refresh_checkpoint()
+        self.audited_at = datetime(2026, 8, 1, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -121,20 +123,20 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         )
 
     def test_valid_append_passes(self) -> None:
-        validate(self.head, self.base)
+        validate(self.head, self.base, self.audited_at)
 
     def test_rewriting_trusted_history_fails(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         path.write_text(path.read_text().replace("| 19 | — |", "| 18 | — |", 1))
         self.refresh_checkpoint()
         with self.assertRaisesRegex(AuditError, "trusted base prefix"):
-            validate(self.head, self.base)
+            validate(self.head, self.base, self.audited_at)
 
     def test_registry_activation_is_immutable(self) -> None:
         self.registry["registry_activated_at"] = "2026-08-01T00:00:00Z"
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "activation timestamp is immutable"):
-            validate(self.head, self.base)
+            validate(self.head, self.base, self.audited_at)
 
     def test_github_surface_contract_is_immutable(self) -> None:
         self.registry["surfaces"]["github_repository_search"] = {
@@ -143,20 +145,20 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         }
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "surface contract was rewritten"):
-            validate(self.head, self.base)
+            validate(self.head, self.base, self.audited_at)
 
     def test_registry_era_row_requires_replay_metadata(self) -> None:
         self.registry["measurements"] = []
         self.write_registry()
         with self.assertRaisesRegex(AuditError, "lacks trusted replay metadata"):
-            validate(self.head, self.base)
+            validate(self.head, self.base, self.audited_at)
 
     def test_registry_era_row_requires_correct_rank_delta(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         path.write_text(path.read_text().replace("| 7 | +12 |", "| 7 | nonsense |"))
         self.refresh_checkpoint()
         with self.assertRaisesRegex(AuditError, "rank delta disagrees"):
-            validate(self.head, self.base)
+            validate(self.head, self.base, self.audited_at)
 
     def test_registry_replay_metadata_requires_valid_types_and_ranges(self) -> None:
         mutations = {
@@ -199,7 +201,32 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 self.registry["measurements"][0] = {**original, field: value}
                 self.write_registry()
                 with self.assertRaisesRegex(AuditError, message):
-                    validate(self.head, self.base)
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_future_observation_is_rejected(self) -> None:
+        future = "9999-12-31T23:59:59Z"
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        path.write_text(path.read_text().replace("2026-07-31T00:00:00Z", future))
+        self.registry["measurements"][0]["observed_at"] = future
+        self.write_registry()
+        self.refresh_checkpoint()
+        with self.assertRaisesRegex(AuditError, "cannot be in the future"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_duplicate_observation_key_is_rejected(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        duplicate = (
+            "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | 0 | 50 | 240 |"
+        )
+        path.write_text(
+            path.read_text().replace(
+                "\n\n## GitHub traffic history",
+                f"\n{duplicate}\n\n## GitHub traffic history",
+            )
+        )
+        self.refresh_checkpoint()
+        with self.assertRaisesRegex(AuditError, "observation keys must be unique"):
+            validate(self.head, self.base, self.audited_at)
 
     def test_empty_history_timestamp_is_rejected(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
@@ -211,7 +238,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             )
         )
         with self.assertRaisesRegex(AuditError, "history observed_at"):
-            validate(self.head, self.base)
+            validate(self.head, self.base, self.audited_at)
 
     def test_backdated_append_is_rejected(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
@@ -224,7 +251,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         )
         self.refresh_checkpoint()
         with self.assertRaisesRegex(AuditError, "timestamps must be nondecreasing"):
-            validate(self.head, self.base)
+            validate(self.head, self.base, self.audited_at)
 
 
 if __name__ == "__main__":

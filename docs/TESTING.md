@@ -410,9 +410,10 @@ as non-executable data, and runs the base-owned
 audit rejects a rewritten history prefix, invalid checkpoints, mutable surface
 or activation contracts, incorrect rank deltas, and replay metadata whose
 types, ranges, result-count relationships, or corpus digest are invalid. Its
-mutation suite covers each failure class before the prospective workflow can
-be activated. The fixture is not active in this staging commit. Activation
-must copy it
+trusted clock also rejects future-dated evidence, and each timestamp/query
+pair must identify exactly one observation. Its mutation suite covers each
+failure class before the prospective workflow can be activated. The fixture
+is not active in this staging commit. Activation must copy it
 byte-for-byte to `workflow-policy.yml` in a later pull request, prove the new
 required `audit` run, and retire the older roadmap-only trust-anchor digest.
 

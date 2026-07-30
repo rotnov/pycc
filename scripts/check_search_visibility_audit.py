@@ -204,7 +204,10 @@ def roadmap_checkpoints(head_root: Path) -> list[dict[str, Any]]:
 
 
 def validate_registry(
-    head_root: Path, rows: list[list[str]], activated_at: datetime
+    head_root: Path,
+    rows: list[list[str]],
+    activated_at: datetime,
+    audited_at: datetime,
 ) -> None:
     registry = load_object(head_root / "docs" / "SEARCH_QUERY_REGISTRY.json")
     if registry.get("registry_activated_at") != ACTIVATED_AT:
@@ -254,6 +257,8 @@ def validate_registry(
         observed = parse_timestamp(measurement["observed_at"], "measurement observed_at")
         if observed < activated_at:
             raise AuditError("measurement predates registry activation")
+        if observed > audited_at:
+            raise AuditError("measurement observed_at cannot be in the future")
         raw_query = query.get("raw_query")
         key = (measurement["observed_at"], raw_query)
         if not isinstance(raw_query, str) or key in projected:
@@ -298,6 +303,8 @@ def validate_registry(
         observed = parse_timestamp(row[0], "history observed_at")
         if previous is not None and observed < previous:
             raise AuditError("history timestamps must be nondecreasing")
+        if observed > audited_at:
+            raise AuditError("history observed_at cannot be in the future")
         previous = observed
         raw_query = row[1]
         if len(raw_query) < 2 or raw_query[0] != "`" or raw_query[-1] != "`":
@@ -311,6 +318,8 @@ def validate_registry(
             raise AuditError("history rank delta disagrees with the preceding observation")
         previous_ranks[raw_query] = current_rank
         key = (row[0], raw_query)
+        if key in history_keys:
+            raise AuditError("history observation keys must be unique")
         history_keys.add(key)
         if observed < activated_at:
             continue
@@ -337,7 +346,11 @@ def validate_registry(
         raise AuditError("registry-era measurement projection is incomplete")
 
 
-def validate(head_root: Path, base_root: Path) -> None:
+def validate(
+    head_root: Path,
+    base_root: Path,
+    audited_at: datetime | None = None,
+) -> None:
     base_rows = history_rows(
         (base_root / "docs" / "SEARCH_VISIBILITY.md").read_text()
     )
@@ -350,7 +363,9 @@ def validate(head_root: Path, base_root: Path) -> None:
     if roadmap_checkpoints(head_root) != values:
         raise AuditError("roadmap checkpoints do not match the bound ledger")
     activated_at = parse_timestamp(ACTIVATED_AT, "registry activated_at")
-    validate_registry(head_root, head_rows, activated_at)
+    if audited_at is None:
+        audited_at = datetime.now(timezone.utc)
+    validate_registry(head_root, head_rows, activated_at, audited_at)
 
 
 def main() -> None:
