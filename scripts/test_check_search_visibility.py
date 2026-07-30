@@ -19,9 +19,11 @@ CHECKER = SCRIPT_DIR / "check_search_visibility.py"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_search_visibility import (  # noqa: E402
+    ContractError,
     github_history_rows,
     history_digest,
     semantic_identity,
+    validate_history_deltas,
 )
 
 
@@ -34,6 +36,7 @@ class SearchVisibilityContractTests(unittest.TestCase):
             "ROADMAP.md",
             "SEARCH_QUERY_REGISTRY.json",
             "SEARCH_VISIBILITY.md",
+            "SEARCH_VISIBILITY_CHECKPOINTS.json",
             "SPEC.md",
             "WEBSITE.md",
         ):
@@ -72,11 +75,19 @@ class SearchVisibilityContractTests(unittest.TestCase):
     def advance_history_floor(self) -> None:
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
         rows = github_history_rows(path.read_text())
-        registry = self.registry()
-        floor = registry["history_floor"]["github_repository_search"]
-        floor["required_prefix_rows"] = len(rows)
-        floor["sha256"] = history_digest(rows)
-        self.write_registry(registry)
+        checkpoint_path = (
+            self.root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+        )
+        checkpoints = json.loads(checkpoint_path.read_text())
+        checkpoints["surfaces"]["github_repository_search"].append(
+            {
+                "required_prefix_rows": len(rows),
+                "sha256": history_digest(rows),
+            }
+        )
+        checkpoint_path.write_text(
+            json.dumps(checkpoints, indent=2, ensure_ascii=False) + "\n"
+        )
 
     def assert_rejected(self, expected: str) -> None:
         result = self.run_checker()
@@ -127,7 +138,7 @@ class SearchVisibilityContractTests(unittest.TestCase):
         )
         self.assertIn(historical, content)
         path.write_text(content.replace(historical, "", 1))
-        self.assert_rejected("Historical GitHub observations were deleted")
+        self.assert_rejected("Historical GitHub observation prefix was rewritten")
 
     def test_imported_replacement_query_rows_are_also_immutable(self) -> None:
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
@@ -138,6 +149,31 @@ class SearchVisibilityContractTests(unittest.TestCase):
         self.assertIn(historical, content)
         path.write_text(content.replace(historical, "", 1))
         self.assert_rejected("Historical GitHub observations were deleted")
+
+    def test_old_checkpoint_cannot_be_reanchored_by_a_new_digest(self) -> None:
+        path = self.root / "docs" / "SEARCH_VISIBILITY.md"
+        content = path.read_text()
+        original = (
+            "| 2026-07-24T23:02:03Z | `AI-native compiler` | >50 | — | 2 | — |"
+        )
+        mutated = (
+            "| 2026-07-24T23:02:03Z | `AI-native compiler` | >50 | — | 1 | — |"
+        )
+        self.assertIn(original, content)
+        path.write_text(content.replace(original, mutated, 1))
+
+        checkpoints_path = (
+            self.root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+        )
+        checkpoints = json.loads(checkpoints_path.read_text())
+        rows = github_history_rows(path.read_text())
+        checkpoints["surfaces"]["github_repository_search"][-1]["sha256"] = (
+            history_digest(rows)
+        )
+        checkpoints_path.write_text(
+            json.dumps(checkpoints, indent=2, ensure_ascii=False) + "\n"
+        )
+        self.assert_rejected("Historical GitHub observation prefix was rewritten")
 
     def test_registry_era_row_requires_replay_metadata(self) -> None:
         self.append_history_row(
@@ -215,16 +251,19 @@ class SearchVisibilityContractTests(unittest.TestCase):
 
     def test_unknown_rank_delta_is_non_comparable(self) -> None:
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"
-        content = path.read_text()
-        required = (
-            "| 2026-07-30T00:52:41Z | `python llvm compiler` | >50 | — | 50 | 218 |"
+        rows = github_history_rows(path.read_text())
+        row = next(
+            item
+            for item in rows
+            if item[0] == "2026-07-30T00:52:41Z"
+            and item[1] == "`python llvm compiler`"
         )
-        self.assertIn(required, content)
-        path.write_text(
-            content.replace(required, required.replace("| — |", "| 0 |"), 1)
-        )
-        self.advance_history_floor()
-        self.assert_rejected("History delta for `python llvm compiler` must be '—'")
+        row[3] = "0"
+        with self.assertRaisesRegex(
+            ContractError,
+            "History delta for `python llvm compiler` must be '—'",
+        ):
+            validate_history_deltas(rows)
 
     def test_current_interpretation_cannot_promote_retired_query(self) -> None:
         path = self.root / "docs" / "SEARCH_VISIBILITY.md"

@@ -141,7 +141,7 @@ class MetadataParser(HTMLParser):
         self.keyword_metas = []
 
     def handle_starttag(self, tag, attrs):
-        if tag in {"base", "link", "script"}:
+        if tag in {"base", "link", "meta", "script"}:
             attribute_names = [name for name, _ in attrs]
             if len(attribute_names) != len(set(attribute_names)):
                 raise SystemExit(f"Duplicate attributes are not allowed on <{tag}>")
@@ -615,6 +615,10 @@ class PageParser(HTMLParser):
         self.keyword_metas = []
 
     def handle_starttag(self, tag, attrs):
+        if tag == "meta":
+            attribute_names = [name for name, _ in attrs]
+            if len(attribute_names) != len(set(attribute_names)):
+                raise SystemExit("Duplicate attributes are not allowed on <meta>")
         attributes = dict(attrs)
         if (
             tag == "meta"

@@ -230,8 +230,9 @@ rewriting earlier responses or attributing automation traffic to SEO.
 Its machine-readable query registry separates product acquisition from brand,
 topic, competitive, and authorship diagnostics; provider-specific semantic
 identities prevent aliases from inflating query coverage. The checker protects
-the historical row prefix, allows append-only observations, and keeps retired
-authorship experiments out of the product KPI.
+each historical row prefix with an independently stored append-only checkpoint,
+allows append-only observations, and keeps retired authorship experiments out
+of the product KPI.
 The same ledger records Search Console URL Inspection, sitemap-processing, and
 performance-report states independently because none of those signals is a
 substitute for the others.

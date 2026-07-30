@@ -380,6 +380,15 @@ keyword_mutations = (
     (
         index_path,
         original_index.replace(
+            'name="description"',
+            'name="keywords" name="description"',
+            1,
+        ),
+        "landing duplicate meta name attribute",
+    ),
+    (
+        index_path,
+        original_index.replace(
             head_marker,
             '    <meta name="keywords" content="python compiler">\n' + head_marker,
             1,
@@ -403,6 +412,15 @@ keyword_mutations = (
             1,
         ),
         "evidence-page keywords metadata",
+    ),
+    (
+        ai_path,
+        original_ai.replace(
+            'name="description"',
+            'name="keywords" name="description"',
+            1,
+        ),
+        "evidence-page duplicate meta name attribute",
     ),
 )
 environment = dict(os.environ)

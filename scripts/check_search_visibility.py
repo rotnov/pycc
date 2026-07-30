@@ -437,6 +437,7 @@ def validate_measurements(
 
 def validate(root: Path) -> None:
     registry_path = root / "docs" / "SEARCH_QUERY_REGISTRY.json"
+    checkpoints_path = root / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
     visibility_path = root / "docs" / "SEARCH_VISIBILITY.md"
     roadmap_path = root / "docs" / "ROADMAP.md"
     website_path = root / "docs" / "WEBSITE.md"
@@ -449,21 +450,51 @@ def validate(root: Path) -> None:
     compact_visibility = " ".join(visibility.split())
     rows = github_history_rows(visibility)
 
-    floor = registry.get("history_floor", {}).get(GITHUB_SURFACE)
-    if not isinstance(floor, dict):
-        raise ContractError("Registry must define the GitHub history floor")
-    required_rows = floor.get("required_prefix_rows")
-    required_digest = floor.get("sha256")
-    if not isinstance(required_rows, int) or required_rows < 1:
-        raise ContractError("History floor row count must be positive")
-    if len(rows) < required_rows:
-        raise ContractError("Historical GitHub observations were deleted")
-    if len(rows) > required_rows:
+    checkpoints = load_json(checkpoints_path)
+    if set(checkpoints) != {"checkpoint_version", "surfaces"}:
+        raise ContractError("History checkpoints must have the exact field set")
+    if checkpoints["checkpoint_version"] != 1:
+        raise ContractError("History checkpoint_version must be 1")
+    surface_checkpoints = checkpoints["surfaces"]
+    if not isinstance(surface_checkpoints, dict) or set(surface_checkpoints) != {
+        GITHUB_SURFACE
+    }:
+        raise ContractError("History checkpoints must define the GitHub surface")
+    github_checkpoints = surface_checkpoints[GITHUB_SURFACE]
+    if not isinstance(github_checkpoints, list) or not github_checkpoints:
+        raise ContractError("GitHub history checkpoints must be a nonempty list")
+
+    previous_required_rows = 0
+    for checkpoint in github_checkpoints:
+        if not isinstance(checkpoint, dict) or set(checkpoint) != {
+            "required_prefix_rows",
+            "sha256",
+        }:
+            raise ContractError("Every history checkpoint needs rows and SHA-256")
+        required_rows = checkpoint["required_prefix_rows"]
+        required_digest = checkpoint["sha256"]
+        if (
+            not isinstance(required_rows, int)
+            or isinstance(required_rows, bool)
+            or required_rows <= previous_required_rows
+        ):
+            raise ContractError(
+                "History checkpoint row counts must be positive and increasing"
+            )
+        if not isinstance(required_digest, str) or not SHA256.fullmatch(
+            required_digest
+        ):
+            raise ContractError("History checkpoint needs a SHA-256 digest")
+        if len(rows) < required_rows:
+            raise ContractError("Historical GitHub observations were deleted")
+        if history_digest(rows[:required_rows]) != required_digest:
+            raise ContractError("Historical GitHub observation prefix was rewritten")
+        previous_required_rows = required_rows
+
+    if len(rows) > previous_required_rows:
         raise ContractError(
-            "History floor must cover every committed GitHub observation"
+            "Latest history checkpoint must cover every committed GitHub observation"
         )
-    if history_digest(rows[:required_rows]) != required_digest:
-        raise ContractError("Historical GitHub observation prefix was rewritten")
     validate_history_deltas(rows)
 
     for row in rows:
@@ -535,7 +566,10 @@ def validate(root: Path) -> None:
     roadmap = roadmap_path.read_text()
     compact_roadmap = " ".join(roadmap.split())
     for phrase in (
-        "machine-readable query registry separate product-acquisition positions",
+        (
+            "machine-readable query registry, and append-only prefix checkpoints "
+            "separate product-acquisition positions"
+        ),
         "retired authorship diagnostics",
     ):
         if phrase not in compact_roadmap:
@@ -556,6 +590,11 @@ def validate(root: Path) -> None:
     spec = spec_path.read_text()
     if "[SEARCH_QUERY_REGISTRY.json](./SEARCH_QUERY_REGISTRY.json)" not in spec:
         raise ContractError("SPEC.md must expose the machine-readable query registry")
+    if (
+        "[SEARCH_VISIBILITY_CHECKPOINTS.json](./SEARCH_VISIBILITY_CHECKPOINTS.json)"
+        not in spec
+    ):
+        raise ContractError("SPEC.md must expose the append-only history checkpoints")
 
 
 def main() -> None:
