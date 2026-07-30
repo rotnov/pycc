@@ -427,7 +427,8 @@ blank line ends the history table, a later pipe row cannot resume it. Section
 lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
 equivalent duplicate history heading cannot hide a second table. Heading
 identity is compared after HTML character-reference decoding and inline-markup
-normalization without inserting intraword boundaries, and Setext level-2
+normalization without inserting intraword boundaries. Invisible Unicode format
+and mark characters are rejected after entity decoding, and Setext level-2
 headings recover their complete multiline paragraph through blockquote and list
 container prefixes. Because
 this evidence file is a data ledger rather than general documentation, inline

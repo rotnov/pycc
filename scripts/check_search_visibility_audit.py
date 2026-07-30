@@ -10,6 +10,7 @@ import html
 import json
 from pathlib import Path
 import re
+import unicodedata
 from typing import Any
 
 
@@ -157,6 +158,10 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
 def rendered_heading_matches(candidate: str, expected: str) -> bool:
     """Match the canonical title after entity and inline-markup normalization."""
     rendered = html.unescape(candidate)
+    if any(unicodedata.category(character) in {"Cf", "Mn", "Me"} for character in rendered):
+        raise AuditError(
+            "search visibility headings cannot contain invisible Unicode formatting"
+        )
     rendered = rendered.translate(str.maketrans("", "", "*_~`"))
     candidate_words = re.findall(r"[A-Za-z0-9]+", rendered.casefold())
     expected_words = re.findall(r"[A-Za-z0-9]+", expected.casefold())

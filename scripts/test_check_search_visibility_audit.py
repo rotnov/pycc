@@ -169,6 +169,18 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuditError, "inline links or HTML"):
                     validate(self.head, self.base, self.audited_at)
 
+    def test_history_headings_reject_invisible_unicode(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        for duplicate_heading in (
+            "## GitHub repository search hist&#x200B;ory",
+            "## GitHub repository search hist\u200bory",
+            "## GitHub repository search hist&#x34f;ory",
+        ):
+            with self.subTest(duplicate_heading=duplicate_heading):
+                path.write_text(f"{duplicate_heading}\n\n{self.head_visibility}")
+                with self.assertRaisesRegex(AuditError, "invisible Unicode"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_setext_duplicate_history_heading_is_rejected(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         forged_section = (
