@@ -51,9 +51,38 @@ fn oracle_python_bin() -> PathBuf {
     bin
 }
 
+/// CPython's stdio layer translates `\n` to `\r\n` on Windows even when
+/// stdout is piped/redirected (D-082); `pycc_rt`'s `println!`-based `print()`
+/// never does. Duplicated from `tests/conformance.rs::strip_windows_
+/// newline_translation` rather than shared -- this file's own established
+/// convention, see `oracle_python_bin`'s doc comment above.
+fn strip_windows_newline_translation(bytes: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut iter = bytes.into_iter().peekable();
+    while let Some(byte) = iter.next() {
+        if byte == b'\r' && iter.peek() == Some(&b'\n') {
+            continue;
+        }
+        out.push(byte);
+    }
+    out
+}
+
 #[test]
 fn median_returns_the_middle_of_five_sorted_values() {
     assert_eq!(median(vec![3.0, 1.0, 2.0, 5.0, 4.0]), 3.0);
+}
+
+#[test]
+fn strip_windows_newline_translation_removes_cr_before_lf_only() {
+    let input = b"line one\r\nline two\nline three\r\n".to_vec();
+    let expected = b"line one\nline two\nline three\n".to_vec();
+    assert_eq!(strip_windows_newline_translation(input), expected);
+
+    // A lone `\r` not immediately followed by `\n` is not CPython's Windows
+    // newline translation and must be left untouched.
+    let lone_cr = b"a\rb\n".to_vec();
+    assert_eq!(strip_windows_newline_translation(lone_cr.clone()), lone_cr);
 }
 
 #[test]
@@ -64,10 +93,13 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 
 /// D-094's nbody measurement contract (design doc's own §1): same-machine
 /// paired comparison, `K = 5` runs each, ratio of medians, `--release` pycc
-/// vs. the pinned CPython 3.14.6 oracle, gate at ratio >= 20. `#[ignore]`d
-/// like `tests/conformance.rs`'s two fixtures -- genuinely slow (a full
-/// `--release` LLVM build plus ten total program executions) -- and run
-/// explicitly via `--include-ignored`, already passed workspace-wide in
+/// vs. the pinned CPython 3.14.6 oracle, gate at ratio >= 20 -- preceded by
+/// one untimed correctness check (D-097) that verifies both sides actually
+/// compute the same output before any ratio is trusted. `#[ignore]`d like
+/// `tests/conformance.rs`'s two fixtures -- genuinely slow (a full
+/// `--release` LLVM build plus twelve total program executions: one untimed
+/// correctness-check launch per side, then the ten timed launches below) --
+/// and run explicitly via `--include-ignored`, already passed workspace-wide in
 /// both `build-test-coverage` and every `native-build-test` matrix leg
 /// (`.github/workflows/ci.yml`), so no further CI test-wiring change was
 /// needed beyond D-092's own release-`pycc_rt`-build step addition there.
@@ -125,7 +157,7 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// averaged across both; taking the median (not the mean) of 5 same-block
 /// runs already blunts most of that exposure.
 #[test]
-#[ignore = "slow: builds a --release binary and runs both programs 5 times each"]
+#[ignore = "slow: builds a --release binary, verifies output equality once, then runs both programs 5 times each"]
 fn nbody_release_binary_meets_required_speedup_over_cpython() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nbody.py");
 
@@ -146,6 +178,45 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
     // burn four redundant process spawns per test run for no benefit (the
     // oracle binary and its version can't change mid-test).
     let cpython_bin = oracle_python_bin();
+
+    // One untimed correctness check before the timed loops below: a
+    // miscompile that runs successfully but computes wrong values could
+    // otherwise still pass this gate purely on speed (D-093's own
+    // "measurement with near-zero signal for what it's meant to measure"
+    // mistake, but for correctness instead of performance). This deliberately
+    // does not reuse `time_command`/`Command::status()` for the RUNS=5 timed
+    // launches below -- those must stay exactly as fast and side-effect-free
+    // as they already are, since D-095/D-096's own gate floors (12x, 15x)
+    // were measured against that exact shape; adding output capture to every
+    // timed launch would change what's being measured. `strip_windows_
+    // newline_translation` is duplicated from `tests/conformance.rs` rather
+    // than shared (this file's own established convention, see
+    // `oracle_python_bin`'s doc comment above) -- CPython's stdio layer
+    // translates `\n` to `\r\n` on Windows even when piped (D-082), which
+    // `pycc_rt`'s `println!`-based `print()` never does, so the oracle's
+    // side needs the same normalization `tests/conformance.rs` already
+    // applies before an exact byte comparison is meaningful.
+    let pycc_check_output = Command::new(&bin_path)
+        .output()
+        .expect("pycc nbody binary must spawn for the correctness check");
+    assert!(
+        pycc_check_output.status.success(),
+        "pycc nbody binary exited non-zero during the correctness check"
+    );
+    let cpython_check_output = Command::new(&cpython_bin)
+        .arg(&fixture)
+        .output()
+        .expect("cpython oracle must spawn for the correctness check");
+    assert!(
+        cpython_check_output.status.success(),
+        "cpython oracle exited non-zero during the correctness check"
+    );
+    assert_eq!(
+        pycc_check_output.stdout,
+        strip_windows_newline_translation(cpython_check_output.stdout),
+        "pycc and CPython 3.14.6 disagree on tests/fixtures/nbody.py's output -- \
+         a fast but wrong binary must not pass this speedup gate"
+    );
 
     let pycc_times: Vec<f64> = (0..RUNS)
         .map(|_| time_command(Command::new(&bin_path)))
