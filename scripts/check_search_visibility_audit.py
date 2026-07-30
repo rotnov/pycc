@@ -223,6 +223,10 @@ def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | No
                     "Setext headings cannot cross Markdown container boundaries"
                 )
             break
+        if re.search(r" {2,}\Z", lines[index]):
+            raise AuditError(
+                "search visibility headings cannot contain hard line breaks"
+            )
         content = visible_block_content(lines[index])
         if (
             not content

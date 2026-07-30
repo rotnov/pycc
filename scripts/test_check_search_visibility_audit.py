@@ -443,6 +443,20 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "exactly one level-2"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_setext_history_heading_rejects_hard_line_breaks(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        canonical = "## GitHub repository search history"
+        for replacement in (
+            "GitHub repository search  \nhistory\n---",
+            "GitHub repository search   \nhistory\n---",
+        ):
+            with self.subTest(replacement=replacement):
+                path.write_text(
+                    self.head_visibility.replace(canonical, replacement, 1)
+                )
+                with self.assertRaisesRegex(AuditError, "hard line breaks"):
+                    validate(self.head, self.base, self.audited_at)
+
     def test_multiline_setext_duplicate_history_heading_is_rejected(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         forged_table = (

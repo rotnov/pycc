@@ -20,7 +20,7 @@ SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
   "324025aaec3a3dce7bb4779901ef3d2444524c587bbcbcbb918522f95aa536d7"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
-    "16b8ce2e88cad9fbb2565dacfd0e7b69dc40e8aca7d43d31a78961905bd55a3a",
+    "8c32a283a04dcca48b4aa7331a4c73285a32adf37c6d4a410a284742d72cd4b0",
   "docs/SEARCH_QUERY_REGISTRY.json" =>
     "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77",
   "docs/SEARCH_VISIBILITY.md" =>
