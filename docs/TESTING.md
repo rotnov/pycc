@@ -428,7 +428,8 @@ lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
 equivalent duplicate history heading cannot hide a second table. Heading
 identity is compared after HTML character-reference decoding and inline-markup
 normalization without inserting intraword boundaries, and Setext level-2
-headings are recognized through blockquote and list container prefixes. Because
+headings recover their complete multiline paragraph through blockquote and list
+container prefixes. Because
 this evidence file is a data ledger rather than general documentation, inline
 links or HTML are forbidden in headings, and fenced or raw-HTML blocks are
 rejected fail-closed anywhere in the document. They cannot turn the canonical

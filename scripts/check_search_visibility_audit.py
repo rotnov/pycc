@@ -88,6 +88,35 @@ def visible_block_content(line: str) -> str:
     return content.rstrip()
 
 
+def begins_list_item(line: str) -> bool:
+    """Return whether a visible block line opens a Markdown list item."""
+    content = line.strip()
+    while content.startswith(">"):
+        content = content[1:].lstrip(" \t")
+    return LIST_MARKER.fullmatch(content) is not None
+
+
+def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | None:
+    """Recover the complete paragraph promoted by a Setext underline."""
+    paragraph: list[str] = []
+    start = underline_index
+    for index in range(underline_index - 1, -1, -1):
+        content = visible_block_content(lines[index])
+        if (
+            not content
+            or atx_heading(content) is not None
+            or SETEXT_UNDERLINE.fullmatch(content) is not None
+        ):
+            break
+        paragraph.append(content)
+        start = index
+        if begins_list_item(lines[index]):
+            break
+    if not paragraph:
+        return None
+    return start, " ".join(reversed(paragraph))
+
+
 def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
     """Return heading start, content start, level, and title for visible blocks."""
     lines = markdown.splitlines()
@@ -109,18 +138,19 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
                 )
             headings.append((index, index + 1, parsed[0], parsed[1]))
             continue
-        if not content or index + 1 >= len(lines):
+        underline = SETEXT_UNDERLINE.fullmatch(content)
+        if underline is None:
             continue
-        underline = SETEXT_UNDERLINE.fullmatch(
-            visible_block_content(lines[index + 1])
-        )
-        if underline is not None:
-            if any(character in content for character in "[]<>"):
-                raise AuditError(
-                    "search visibility headings cannot contain inline links or HTML"
-                )
-            level = 1 if underline.group(1).startswith("=") else 2
-            headings.append((index, index + 2, level, content))
+        parsed_setext = setext_title(lines, index)
+        if parsed_setext is None:
+            continue
+        heading_start, title = parsed_setext
+        if any(character in title for character in "[]<>"):
+            raise AuditError(
+                "search visibility headings cannot contain inline links or HTML"
+            )
+        level = 1 if underline.group(1).startswith("=") else 2
+        headings.append((heading_start, index + 1, level, title))
     return headings
 
 
