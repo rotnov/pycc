@@ -25,6 +25,13 @@ ROADMAP_CHECKPOINT = re.compile(
     r"<!-- search-history-checkpoint: github_repository_search "
     r"(?P<rows>[1-9]\d*) (?P<sha>[0-9a-f]{64}) -->\Z"
 )
+FENCE_START = re.compile(r"(?:`{3,}|~{3,})(?:[^\r\n]*)\Z")
+SETEXT_UNDERLINE = re.compile(r"(=+|-+)[ \t]*\Z")
+RAW_HTML_BLOCK_START = re.compile(
+    r"<(?:!--|/?[A-Za-z][A-Za-z0-9-]*(?=[ \t/>])|\?|![A-Z]|!\[CDATA\[)",
+    re.IGNORECASE,
+)
+LIST_MARKER = re.compile(r"(?:[-+*]|\d+[.)])[ \t]+(.*)\Z")
 GITHUB_SURFACE_CONTRACT = {
     "provider": "github",
     "transport": "GET /search/repositories",
@@ -65,21 +72,60 @@ def atx_heading(line: str) -> tuple[int, str] | None:
     return len(match.group(1)), content
 
 
+def visible_block_content(line: str) -> str:
+    """Remove Markdown container prefixes from one prospective block line."""
+    content = line.strip()
+    while content:
+        if content.startswith(">"):
+            content = content[1:].lstrip(" \t")
+            continue
+        marker = LIST_MARKER.fullmatch(content)
+        if marker is not None:
+            content = marker.group(1).lstrip(" \t")
+            continue
+        break
+    return content.rstrip()
+
+
+def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
+    """Return heading start, content start, level, and title for visible blocks."""
+    lines = markdown.splitlines()
+    for line in lines:
+        content = visible_block_content(line)
+        if FENCE_START.fullmatch(content):
+            raise AuditError("search visibility ledger cannot contain fenced blocks")
+        if RAW_HTML_BLOCK_START.match(content):
+            raise AuditError("search visibility ledger cannot contain raw HTML blocks")
+
+    headings: list[tuple[int, int, int, str]] = []
+    for index, line in enumerate(lines):
+        content = visible_block_content(line)
+        parsed = atx_heading(content)
+        if parsed is not None:
+            headings.append((index, index + 1, parsed[0], parsed[1]))
+            continue
+        if not content or index + 1 >= len(lines):
+            continue
+        underline = SETEXT_UNDERLINE.fullmatch(
+            visible_block_content(lines[index + 1])
+        )
+        if underline is not None:
+            level = 1 if underline.group(1).startswith("=") else 2
+            headings.append((index, index + 2, level, content))
+    return headings
+
+
 def section(markdown: str, heading: str) -> str:
     lines = markdown.splitlines()
-    matches = [
-        index
-        for index, line in enumerate(lines)
-        if atx_heading(line) == (2, heading)
-    ]
+    headings = markdown_headings(markdown)
+    matches = [item for item in headings if item[2:] == (2, heading)]
     if len(matches) != 1:
         raise AuditError(f"expected exactly one level-2 {heading!r} section")
-    start = matches[0] + 1
+    start = matches[0][1]
     end = len(lines)
-    for index in range(start, len(lines)):
-        parsed = atx_heading(lines[index])
-        if parsed is not None and parsed[0] == 2:
-            end = index
+    for heading_start, _, level, _ in headings:
+        if heading_start >= start and level == 2:
+            end = heading_start
             break
     return "\n".join(lines[start:end])
 
@@ -187,7 +233,10 @@ def checkpoints(head_root: Path, rows: list[list[str]]) -> list[dict[str, Any]]:
     )
     if set(document) != {"checkpoint_version", "surfaces"}:
         raise AuditError("checkpoint document has unexpected fields")
-    if document["checkpoint_version"] != 1:
+    checkpoint_version = require_integer(
+        document["checkpoint_version"], "checkpoint_version"
+    )
+    if checkpoint_version != 1:
         raise AuditError("checkpoint_version must be 1")
     surfaces = document["surfaces"]
     if not isinstance(surfaces, dict) or set(surfaces) != {GITHUB_SURFACE}:

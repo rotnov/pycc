@@ -142,6 +142,8 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         for duplicate_heading in (
             "## GitHub repository search history   ",
             "## GitHub repository search history ##",
+            "> ## GitHub repository search history",
+            "- ## GitHub repository search history",
         ):
             with self.subTest(duplicate_heading=duplicate_heading):
                 path.write_text(
@@ -149,6 +151,68 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(AuditError, "exactly one level-2"):
                     validate(self.head, self.base, self.audited_at)
+
+    def test_setext_duplicate_history_heading_is_rejected(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        forged_section = (
+            "GitHub repository search history\n"
+            "---\n\n"
+            "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |\n"
+            "|---|---|---:|---:|---:|---:|\n"
+            "| 2026-07-31T02:00:00Z | `forged` | 1 | — | 1 | 1 |\n\n"
+        )
+        for heading, underline in (
+            ("GitHub repository search history", "---"),
+            ("> GitHub repository search history", "> ---"),
+            ("- GitHub repository search history", "  ---"),
+        ):
+            with self.subTest(heading=heading):
+                path.write_text(
+                    forged_section.replace(
+                        "GitHub repository search history\n---",
+                        f"{heading}\n{underline}",
+                        1,
+                    )
+                    + self.head_visibility
+                )
+                with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_fenced_history_table_is_rejected(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        header = (
+            "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |\n"
+            "|---|---|---:|---:|---:|---:|\n"
+        )
+        table = header + self.head_visibility.split(header, 1)[1].split(
+            "\n\n## GitHub traffic history", 1
+        )[0]
+        for opening, closing in (
+            ("```markdown", "```"),
+            ("> ~~~markdown", "> ~~~"),
+        ):
+            with self.subTest(opening=opening):
+                path.write_text(
+                    self.head_visibility.replace(
+                        table,
+                        f"{opening}\n{table}\n{closing}",
+                    )
+                )
+                with self.assertRaisesRegex(AuditError, "fenced blocks"):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_raw_html_history_container_is_rejected(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        path.write_text(
+            self.head_visibility.replace(
+                "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |",
+                "<div>\n"
+                "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |",
+                1,
+            )
+        )
+        with self.assertRaisesRegex(AuditError, "raw HTML blocks"):
+            validate(self.head, self.base, self.audited_at)
 
     def test_history_rows_must_follow_the_table_delimiter(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
@@ -286,6 +350,14 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             self.base / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
         ).write_text(json.dumps(base_checkpoint, indent=2) + "\n")
         with self.assertRaisesRegex(AuditError, "trusted base prefix"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_checkpoint_version_rejects_json_boolean(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY_CHECKPOINTS.json"
+        document = json.loads(path.read_text())
+        document["checkpoint_version"] = True
+        path.write_text(json.dumps(document, indent=2) + "\n")
+        with self.assertRaisesRegex(AuditError, "checkpoint_version must be an integer"):
             validate(self.head, self.base, self.audited_at)
 
     def test_registry_era_row_requires_correct_rank_delta(self) -> None:

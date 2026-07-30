@@ -425,7 +425,13 @@ only rows already present in the trusted base prefix as legacy; every append
 requires replay metadata regardless of its claimed timestamp. Once prose or a
 blank line ends the history table, a later pipe row cannot resume it. Section
 lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
-equivalent duplicate history heading cannot hide a second table. This staging
+equivalent duplicate history heading cannot hide a second table, and it also
+recognizes Setext level-2 headings through blockquote and list container
+prefixes. Because this evidence file is a data ledger rather than general
+documentation, fenced and raw-HTML blocks are rejected fail-closed anywhere in
+the document; they cannot turn the canonical table into rendered code or an
+unaudited HTML surface. The checkpoint schema also requires a non-boolean JSON
+integer version before accepting version `1`. This staging
 commit therefore also imports the 22 reviewed
 2026-07-29/30 GitHub rows that predate the registry, making them part of the
 actual trusted base rather than granting a timestamp-based bootstrap exception.
