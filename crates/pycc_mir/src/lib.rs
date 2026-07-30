@@ -57,7 +57,7 @@ impl MirExpr {
             MirExpr::Name { ty, .. }
             | MirExpr::Call { ty, .. }
             | MirExpr::BinOp { ty, .. }
-            | MirExpr::Compare { ty, .. } => *ty,
+            | MirExpr::Compare { ty, .. } => ty.clone(),
         }
     }
 }
@@ -120,7 +120,7 @@ pub fn build(hir: &HirModule) -> MirModule {
             name, return_ty, ..
         } = item
         {
-            bind(&mut scopes, format!("$fn:{name}"), *return_ty);
+            bind(&mut scopes, format!("$fn:{name}"), return_ty.clone());
         }
     }
     // Lower module statements first, in source order, so the module scope is
@@ -161,7 +161,7 @@ fn lower_item(item: &HirItem, scopes: &mut Vec<HashMap<String, Ty>>) -> MirItem 
             MirItem::Function {
                 name: name.clone(),
                 params: params.clone(),
-                return_ty: *return_ty,
+                return_ty: return_ty.clone(),
                 body,
             }
         }
@@ -188,7 +188,7 @@ fn lookup(scopes: &[HashMap<String, Ty>], name: &str) -> Ty {
     scopes
         .iter()
         .rev()
-        .find_map(|scope| scope.get(name).copied())
+        .find_map(|scope| scope.get(name).cloned())
         .unwrap_or_else(|| panic!("pycc_mir: internal error: `{name}` has no recorded type -- pycc_types::check should have rejected this HIR before it reached pycc_mir"))
 }
 
@@ -242,10 +242,10 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
                     op: BinOpKind::Add,
                     left: Box::new(value),
                     right: Box::new(MirExpr::IntLiteral(0)),
-                    ty: *annotation,
+                    ty: annotation.clone(),
                 }
             };
-            bind_variable(scopes, target.clone(), *annotation);
+            bind_variable(scopes, target.clone(), annotation.clone());
             MirStmt::Assign {
                 target: target.clone(),
                 value,
