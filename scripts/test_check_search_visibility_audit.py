@@ -929,8 +929,29 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         query["retired_at"] = None
         query["kpi_role"] = "product_acquisition"
         self.write_registry()
-        with self.assertRaisesRegex(AuditError, "authorship narrative"):
+        with self.assertRaisesRegex(AuditError, "intent/KPI role"):
             validate(self.head, self.base, self.audited_at)
+
+    def test_registry_enforces_every_intent_kpi_role(self) -> None:
+        incompatible = (
+            ("product_category", "diagnostic"),
+            ("category_version", "diagnostic"),
+            ("task_output", "diagnostic"),
+            ("brand", "product_acquisition"),
+            ("metadata_diagnostic", "product_acquisition"),
+            ("topic_diagnostic", "product_acquisition"),
+            ("competitive_category", "product_acquisition"),
+            ("authorship_narrative", "product_acquisition"),
+            ("unreviewed_intent", "diagnostic"),
+        )
+        query = self.registry["queries"][0]
+        for intent_class, kpi_role in incompatible:
+            with self.subTest(intent_class=intent_class, kpi_role=kpi_role):
+                query["intent_class"] = intent_class
+                query["kpi_role"] = kpi_role
+                self.write_registry()
+                with self.assertRaisesRegex(AuditError, "intent/KPI role"):
+                    validate(self.head, self.base, self.audited_at)
 
     def test_checkpoints_preserve_the_trusted_base_prefix(self) -> None:
         base_rows = history_rows(

@@ -429,7 +429,11 @@ normalize ASCII case and repeated whitespace before preserving punctuation,
 phrases, qualifiers, exclusions, Boolean operators, and term order as distinct;
 active product queries cannot split one acquisition intent through spelling
 variants. Raw GitHub queries also reject HTML tag/comment forms that the
-fail-closed ledger parser cannot later project. A complete REST response must
+fail-closed ledger parser cannot later project. A closed intent/KPI matrix
+keeps product, category-version, and task-output queries in acquisition;
+brand, metadata, topic, and competitive queries in diagnostics; and authorship
+in excluded evidence. Unknown or crossed pairings fail before they can alter
+the KPI denominator. A complete REST response must
 contain exactly `min(api_total, 50)` rows; a shorter result list cannot support
 an organic `>50` claim, and `incomplete_results=true` cannot produce any rank
 row. Both measurements and checkpoints preserve their trusted base list as an

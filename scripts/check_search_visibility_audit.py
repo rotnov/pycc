@@ -43,6 +43,16 @@ SIMPLE_TERM = re.compile(r"[A-Za-z0-9]+\Z")
 BOOLEAN_TERMS = {"AND", "NOT", "OR"}
 LIFECYCLES = {"active", "diagnostic", "retired"}
 KPI_ROLES = {"product_acquisition", "diagnostic", "excluded"}
+INTENT_KPI_ROLES = {
+    "product_category": "product_acquisition",
+    "category_version": "product_acquisition",
+    "task_output": "product_acquisition",
+    "brand": "diagnostic",
+    "metadata_diagnostic": "diagnostic",
+    "topic_diagnostic": "diagnostic",
+    "competitive_category": "diagnostic",
+    "authorship_narrative": "excluded",
+}
 SEMANTIC_IDENTITY_VERSIONS = {
     GITHUB_SURFACE: "github-repository-search-v1",
     GOOGLE_SURFACE: "google-web-query-v1",
@@ -104,7 +114,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77"
     ),
     "SEARCH_VISIBILITY.md": (
-        "45005d46e7b3b532126b1727342831fec4f10e09539a279e3f9260cff78781a2"
+        "d6d23072a3077c512028a8608b93d0b409e6f9ab941ceef207423a8b8a416359"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -641,6 +651,9 @@ def validate_registry(
             raise AuditError("registry query lifecycle is invalid")
         if query["kpi_role"] not in KPI_ROLES:
             raise AuditError("registry query KPI role is invalid")
+        expected_kpi_role = INTENT_KPI_ROLES.get(query["intent_class"])
+        if expected_kpi_role is None or query["kpi_role"] != expected_kpi_role:
+            raise AuditError("registry query intent/KPI role combination is invalid")
         query_activated = parse_timestamp(
             query["activated_at"], f"query {query_id} activated_at"
         )
@@ -694,8 +707,6 @@ def validate_registry(
                 raise AuditError(
                     "product-acquisition query must be active or retired"
                 )
-            if query["intent_class"] == "authorship_narrative":
-                raise AuditError("authorship narrative cannot be product acquisition")
             if query["alias_of"] is not None:
                 raise AuditError("product-acquisition query cannot be an alias")
             if query["lifecycle"] == "active":

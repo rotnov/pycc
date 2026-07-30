@@ -58,6 +58,12 @@ series yet, so Google retirement has only activation-order and trusted audit
 clock bounds. Every identity, intent, KPI, alias, rationale, activation, and
 surface field remains unchanged during retirement.
 
+Intent and KPI roles use one closed compatibility matrix. `product_category`,
+`category_version`, and `task_output` are `product_acquisition`; `brand`,
+`metadata_diagnostic`, `topic_diagnostic`, and `competitive_category` are
+`diagnostic`; `authorship_narrative` is `excluded`. An unrecognized intent or
+any other pairing is invalid and cannot enter the acquisition denominator.
+
 The active GitHub product-acquisition set is:
 
 - `ahead-of-time compiler python`;
