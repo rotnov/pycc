@@ -30,7 +30,9 @@ GitHub history prefixes are staged before the trusted workflow activates. The
 registry normalizes case and repeated whitespace before deduplicating syntax-
 sensitive GitHub acquisition identities, and rejects HTML-like or Unicode
 control/formatting-bearing raw query forms that the fail-closed ledger cannot
-later project. Its closed intent/KPI matrix
+later project. Its Markdown parser uses CommonMark's exact line-ending and
+ASCII blank-line boundaries rather than Python's broader Unicode whitespace.
+Its closed intent/KPI matrix
 prevents diagnostic classes from entering the acquisition denominator. The
 prospective base-owned audit pins and validates this exact bootstrap; a later
 activation PR may enable the reviewed workflow but must preserve both markers,

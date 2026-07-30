@@ -513,12 +513,32 @@ class SearchVisibilityAuditTests(unittest.TestCase):
     def test_history_header_must_be_first_section_content(self) -> None:
         path = self.head / "docs" / "SEARCH_VISIBILITY.md"
         header = "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |"
-        for prefix in ("prose before the table\n", "  indented prose\n"):
+        for prefix in (
+            "prose before the table\n",
+            "  indented prose\n",
+            "\u00a0\n",
+            "\u2003\n",
+            "\v\n",
+            "\u2028\n",
+        ):
             with self.subTest(prefix=prefix):
                 path.write_text(
                     self.head_visibility.replace(header, f"{prefix}{header}", 1)
                 )
                 with self.assertRaisesRegex(AuditError, "valid block boundary"):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_history_rows_reject_non_commonmark_boundary_whitespace(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        header = "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |"
+        for suffix in ("\u00a0", "\u2003", "\u202f"):
+            with self.subTest(suffix=repr(suffix)):
+                path.write_text(
+                    self.head_visibility.replace(header, f"{header}{suffix}", 1)
+                )
+                with self.assertRaisesRegex(
+                    AuditError, "leading and trailing pipe"
+                ):
                     validate(self.head, self.base, self.audited_at)
 
     def test_history_table_cannot_resume_after_an_interruption(self) -> None:

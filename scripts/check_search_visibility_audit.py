@@ -141,18 +141,23 @@ class AuditError(ValueError):
     """Raised when untrusted head data violates the trusted search contract."""
 
 
+def commonmark_lines(markdown: str) -> list[str]:
+    """Split only the CR, LF, and CRLF line endings CommonMark recognizes."""
+    return markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
 def atx_heading(line: str) -> tuple[int, str] | None:
     match = re.fullmatch(r" {0,3}(#{1,6})(?:[ \t]+(.*)|[ \t]*)", line)
     if match is None:
         return None
-    content = (match.group(2) or "").strip()
-    content = re.sub(r"[ \t]+#+[ \t]*\Z", "", content).rstrip()
+    content = (match.group(2) or "").strip(" \t")
+    content = re.sub(r"[ \t]+#+[ \t]*\Z", "", content).rstrip(" \t")
     return len(match.group(1)), content
 
 
 def visible_block_content(line: str) -> str:
     """Remove Markdown container prefixes from one prospective block line."""
-    content = line.strip()
+    content = line.strip(" \t")
     while content:
         if content.startswith(">"):
             content = content[1:].lstrip(" \t")
@@ -162,12 +167,12 @@ def visible_block_content(line: str) -> str:
             content = marker.group(1).lstrip(" \t")
             continue
         break
-    return content.rstrip()
+    return content.rstrip(" \t")
 
 
 def begins_list_item(line: str) -> bool:
     """Return whether a visible block line opens a Markdown list item."""
-    content = line.strip()
+    content = line.strip(" \t")
     while content.startswith(">"):
         content = content[1:].lstrip(" \t")
     return LIST_MARKER.fullmatch(content) is not None
@@ -175,7 +180,7 @@ def begins_list_item(line: str) -> bool:
 
 def explicit_container_signature(line: str) -> tuple[str, ...]:
     """Return the quote/list markers explicitly present on one source line."""
-    content = line.strip()
+    content = line.strip(" \t")
     containers: list[str] = []
     while content:
         if content.startswith(">"):
@@ -244,7 +249,7 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
         raise AuditError("search visibility ledger cannot contain HTML comments")
     if HTML_TAG.search(markdown):
         raise AuditError("search visibility ledger cannot contain HTML tags")
-    lines = markdown.splitlines()
+    lines = commonmark_lines(markdown)
     for line in lines:
         content = visible_block_content(line)
         if has_indented_code_prefix(line) and (
@@ -314,7 +319,7 @@ def rendered_heading_matches(candidate: str, expected: str) -> bool:
 
 
 def section(markdown: str, heading: str) -> str:
-    lines = markdown.splitlines()
+    lines = commonmark_lines(markdown)
     headings = markdown_headings(markdown)
     matches = [
         item
@@ -328,7 +333,7 @@ def section(markdown: str, heading: str) -> str:
     canonical_line = lines[matches[0][0]]
     if (
         canonical_line != canonical_line.lstrip(" \t")
-        or visible_block_content(canonical_line) != canonical_line.strip()
+        or visible_block_content(canonical_line) != canonical_line.strip(" \t")
     ):
         raise AuditError(f"canonical {heading!r} heading must be top-level")
     start = matches[0][1]
@@ -413,14 +418,16 @@ def history_rows(markdown: str) -> list[list[str]]:
     saw_delimiter = False
     table_ended = False
     header_boundary = True
-    for line in section(markdown, "GitHub repository search history").splitlines():
+    for line in commonmark_lines(
+        section(markdown, "GitHub repository search history")
+    ):
         if not line.startswith("|"):
-            if line.lstrip().startswith("|") or line.count("|") >= 5:
+            if line.lstrip(" \t").startswith("|") or line.count("|") >= 5:
                 raise AuditError(
                     "GitHub history table lines must use an unindented leading pipe"
                 )
             if not saw_header:
-                header_boundary = not line.strip()
+                header_boundary = re.fullmatch(r"[ \t]*", line) is not None
                 continue
             if saw_header and not saw_delimiter:
                 raise AuditError("GitHub history header must be followed by its delimiter")
@@ -429,7 +436,7 @@ def history_rows(markdown: str) -> list[list[str]]:
             continue
         if table_ended:
             raise AuditError("GitHub history table cannot resume after an interruption")
-        stripped = line.strip()
+        stripped = line.strip(" \t")
         if (
             not stripped.endswith("|")
             or stripped.startswith("||")
@@ -439,7 +446,7 @@ def history_rows(markdown: str) -> list[list[str]]:
                 "GitHub history table lines must use exactly one leading and "
                 "trailing pipe"
             )
-        cells = [cell.strip() for cell in stripped[1:-1].split("|")]
+        cells = [cell.strip(" \t") for cell in stripped[1:-1].split("|")]
         if cells == [
             "Observed at (UTC)",
             "Exact query",
@@ -547,10 +554,10 @@ def checkpoints(head_root: Path, rows: list[list[str]]) -> list[dict[str, Any]]:
 def roadmap_checkpoints(head_root: Path) -> list[dict[str, Any]]:
     markdown = (head_root / "docs" / "ROADMAP.md").read_text()
     values: list[dict[str, Any]] = []
-    for line in markdown.splitlines():
+    for line in commonmark_lines(markdown):
         if "search-history-checkpoint:" not in line:
             continue
-        match = ROADMAP_CHECKPOINT.fullmatch(line.strip())
+        match = ROADMAP_CHECKPOINT.fullmatch(line.strip(" \t"))
         if match is None:
             raise AuditError("roadmap has a malformed search-history checkpoint")
         values.append(
