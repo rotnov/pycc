@@ -614,11 +614,31 @@ fn emit_expr<'ctx>(
                 // `pycc_hir::annotation_to_ty` rejects every annotation
                 // that isn't a bare name, so `list[int]` cannot reach
                 // codegen from real source before Task 11 teaches the
-                // frontend to parse it. Task 11 must not keep this reuse
-                // once list values become constructible -- routing a
-                // list-typed `Scalar::Str` through `incref_if_str_
-                // duplicate` or `emit_assign`'s decref path would call
-                // `pycc_rt_str_incref`/`_decref` on a non-`str` pointer.
+                // frontend to parse it.
+                //
+                // `incref_if_str_duplicate` (below `emit_expr`) is the one
+                // consumer this reuse would otherwise have silently
+                // mismatched: it dispatches on the `Scalar` variant alone,
+                // so a bare `list[T]`-typed `Name` read (this arm) would
+                // look exactly like a duplicate `str` reference and trigger
+                // a spurious `pycc_rt_str_incref` call on the list pointer.
+                // Fixed by gating `str_value_is_a_duplicate_reference` on
+                // `ty: Ty::Str` (Task 5, D-089) rather than the bare `Name`
+                // shape alone -- see that function's own doc comment.
+                // `emit_assign`'s decref path (`decref_str_slot_before_
+                // store`) was never actually at risk here: it gates on the
+                // *target*'s own static `Ty`, not the `Scalar` variant, so
+                // a `Ty::List` assignment target never reaches it.
+                //
+                // `Scalar::Str` reuse remains a general Task-11 tripwire
+                // beyond this one arm, though: `truthy` (calls
+                // `pycc_rt_str_truthy`) and `to_str` (passes the pointer to
+                // `pycc_rt_*_to_str`-family calls) would also silently
+                // mishandle a list pointer if a `Ty::List`-typed value ever
+                // reached either of them. Neither is reachable today for
+                // the same `annotation_to_ty` reason as this arm; Task 11
+                // must not assume `Scalar::Str` always means `str`
+                // everywhere once list values become constructible.
                 Ty::List(_) => {
                     let loaded = builder
                         .build_load(
@@ -1209,14 +1229,35 @@ fn emit_assign<'ctx>(
 }
 
 /// Whether evaluating `expr` produces a *duplicate* reference to an
-/// already-owned `str` (a bare variable read) rather than a fresh object
-/// owning exactly one reference from its own construction. v0.1's grammar
-/// makes this purely syntactic: every str-producing expression other than a
-/// bare `Name` (`StringLiteral`, string concatenation, a `Call`'s return
-/// value) freshly constructs its result and already owns exactly one
-/// reference (D-060, Task 7).
+/// already-owned `str` (a bare `str`-typed variable read) rather than a
+/// fresh object owning exactly one reference from its own construction.
+/// v0.1's grammar makes this purely syntactic: every str-producing
+/// expression other than a bare `Name` (`StringLiteral`, string
+/// concatenation, a `Call`'s return value) freshly constructs its result
+/// and already owns exactly one reference (D-060, Task 7).
+///
+/// Gated on `ty: Ty::Str`, not just the bare-`Name` shape (Task 5,
+/// D-089): `emit_expr`'s `Name` arm now also returns `Scalar::Str` for a
+/// `Ty::List(_)`-typed read (reusing that variant as `list[T]`'s pointer
+/// carrier until Task 11 gives it its own `Scalar` variant -- see that
+/// arm's own doc comment), which made a bare `list[T]`-typed `Name`
+/// runtime-indistinguishable from a `str`-typed one at the `Scalar`
+/// level. `incref_if_str_duplicate` below only checks the `Scalar`
+/// variant, so without this static-`Ty` gate it would call
+/// `pycc_rt_str_incref` on a list pointer too. Behavior-identical for
+/// every case reachable today: `incref_if_str_duplicate` only ever
+/// consults this function *after* confirming `scalar` is `Scalar::Str`,
+/// and before Task 5 only a `Ty::Str`-typed expression could produce
+/// that, so this gate changes nothing for any previously-reachable case
+/// -- it only closes the new list-shaped one.
 fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
-    matches!(expr, MirExpr::Name { .. })
+    matches!(
+        expr,
+        MirExpr::Name {
+            ty: pycc_mir::Ty::Str,
+            ..
+        }
+    )
 }
 
 /// Increments a `str` scalar's refcount when `source_expr` is a bare
@@ -2325,6 +2366,26 @@ mod tests {
         let context = Context::create();
         let module = context.create_module("unsupported_global");
         let bindings = BTreeMap::from([("x".to_string(), Ty::None)]);
+        let _ = declare_module_globals(&context, &module, &bindings);
+    }
+
+    #[test]
+    #[should_panic(expected = "a `dict[str, int]`-typed module binding is not supported yet")]
+    fn a_dict_typed_module_binding_has_no_storage_representation() {
+        // `Ty::None`'s `Debug` rendering ("None") happens to be identical
+        // to its `Ty::name()` rendering, so the test directly above never
+        // actually distinguished this catch-all's Task 5 (D-089) `.name()`
+        // rewrite from the old `{other:?}` format it replaced. A container
+        // type does distinguish them: `Ty::Dict(..)`'s `Debug` form is
+        // `Dict(Str, Int)`, but `.name()` renders `dict[str, int]` -- the
+        // `expected` string below would fail if `.name()` were ever
+        // reverted.
+        let context = Context::create();
+        let module = context.create_module("unsupported_dict_global");
+        let bindings = BTreeMap::from([(
+            "x".to_string(),
+            Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Int)),
+        )]);
         let _ = declare_module_globals(&context, &module, &bindings);
     }
 
@@ -4710,7 +4771,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "has no LLVM representation yet")]
+    #[should_panic(expected = "<inferred> has no LLVM representation yet")]
     fn an_infer_typed_return_value_is_not_yet_supported() {
         // `ty_to_basic_type` now implements `Int`/`Bool`/`Float`/`Str`
         // (Task 7 closed the `Str` gap this test's earlier, Task 3-era
@@ -4727,9 +4788,12 @@ mod tests {
         // return-type position.
         //
         // Task 5 (D-089) also rewrote this catch-all's whole message (not
-        // just the type-name formatting) to "has no LLVM representation
-        // yet" -- see `ty_to_basic_type_panics_clearly_for_dict`/`_tuple`
-        // below for the two new tests that pin this exact wording.
+        // just the type-name formatting) to "{name} has no LLVM
+        // representation yet" -- see `ty_to_basic_type_panics_clearly_
+        // for_dict`/`_tuple` below for the two new tests that pin this
+        // exact wording. The `expected` string here pins the rendered
+        // `<inferred>` name too (`Ty::Infer`'s own `.name()` text), not
+        // just the trailing message, for the same reason those two do.
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "f".to_string(),
@@ -4744,22 +4808,28 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "has no LLVM representation yet")]
+    #[should_panic(expected = "dict[str, int] has no LLVM representation yet")]
     fn ty_to_basic_type_panics_clearly_for_dict() {
         // Task 5 (D-089): `dict[K, V]` stays PR-11's own scope (no v0.2
         // code path constructs one), so it must still panic here -- but
         // with an honest message naming the actual type via `Ty::name()`
         // ("dict[str, int]") instead of the generic `{other:?}` Debug
-        // format this catch-all used before.
+        // format this catch-all used before. The `expected` string pins
+        // the rendered type name itself (not just the trailing "has no
+        // LLVM representation yet"), so this test would fail if `.name()`
+        // were ever reverted back to `{other:?}` (which would render
+        // `Dict(Str, Int)` instead).
         let context = Context::create();
         ty_to_basic_type(&context, Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Int)));
     }
 
     #[test]
-    #[should_panic(expected = "has no LLVM representation yet")]
+    #[should_panic(expected = "tuple[int, str] has no LLVM representation yet")]
     fn ty_to_basic_type_panics_clearly_for_tuple() {
         // Same as the `dict` test directly above, for `tuple[int, str]`
-        // (also PR-11's own scope, per `Ty::Tuple`'s own doc comment).
+        // (also PR-11's own scope, per `Ty::Tuple`'s own doc comment) --
+        // same reasoning for pinning the rendered name, not just the
+        // trailing message.
         let context = Context::create();
         ty_to_basic_type(&context, Ty::Tuple(vec![Ty::Int, Ty::Str]));
     }
@@ -4966,6 +5036,18 @@ mod tests {
         // in `pycc_rt` constructs a real list value yet (Task 11's own
         // scope), so this only proves the codegen shape is internally
         // consistent, not that the program is meaningful to run.
+        //
+        // Also the regression test for a review finding on this task's
+        // first pass: `return x` is a bare `Name` read of a `list[int]`
+        // parameter, which is exactly the shape `incref_if_str_duplicate`
+        // dispatches on -- before `str_value_is_a_duplicate_reference` was
+        // gated on `ty: Ty::Str` (see that function's own doc comment),
+        // this test's own generated object emitted a spurious call to
+        // `pycc_rt_str_incref` on the list pointer. Asserted against
+        // directly below, using the equivalently-shaped
+        // `compiles_a_function_with_a_float_parameter_and_float_return_value`
+        // above as the known-clean baseline (a bare `float`-typed `Name`
+        // return, which has never referenced any `pycc_rt_str_*` symbol).
         let mir = MirModule {
             items: vec![MirItem::Function {
                 name: "f".to_string(),
@@ -4980,6 +5062,18 @@ mod tests {
         let dir = tempfile_dir("list_int_param_and_return");
         let obj_path = dir.join("list_int_param_and_return.o");
         compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let obj_bytes = std::fs::read(&obj_path).expect("object file should be readable");
+        let references_symbol =
+            |name: &str| obj_bytes.windows(name.len()).any(|w| w == name.as_bytes());
+        assert!(
+            !references_symbol("pycc_rt_str_incref"),
+            "a list[int]-typed bare-Name read must not be treated as a duplicate str \
+             reference and incref'd as if it were one"
+        );
+        assert!(
+            !references_symbol("pycc_rt_str_decref"),
+            "a list[int]-typed value must not be decref'd as if it were str"
+        );
     }
 
     #[test]
