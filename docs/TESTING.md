@@ -429,14 +429,15 @@ equivalent duplicate history heading cannot hide a second table. Heading
 identity is compared after HTML character-reference decoding and inline-markup
 normalization without inserting intraword boundaries, and Setext level-2
 headings are recognized through blockquote and list container prefixes. Because
-this evidence file is a data ledger rather than general documentation, fenced
-and raw-HTML blocks are rejected fail-closed anywhere in the document; they
-cannot turn the canonical table into rendered code or an unaudited HTML
-surface. The checkpoint schema also requires a non-boolean JSON integer version
-before accepting version `1`. The GitHub surface and every measurement require
-exact non-boolean integers for the top-50 result window and `per_page`; Python's
-numeric equality cannot admit JSON floats such as `50.0` into authoritative
-replay data. This staging commit therefore also imports the 22 reviewed
+this evidence file is a data ledger rather than general documentation, inline
+links or HTML are forbidden in headings, and fenced or raw-HTML blocks are
+rejected fail-closed anywhere in the document. They cannot turn the canonical
+table into rendered code or an unaudited Markdown/HTML surface. The checkpoint
+schema also requires a non-boolean JSON integer version before accepting
+version `1`. The GitHub surface and every measurement require exact non-boolean
+integers for the top-50 result window and `per_page`; Python's numeric equality
+cannot admit JSON floats such as `50.0` into authoritative replay data. This
+staging commit therefore also imports the 22 reviewed
 2026-07-29/30 GitHub rows that predate the registry, making them part of the
 actual trusted base rather than granting a timestamp-based bootstrap exception.
 The suite covers each failure class before the prospective workflow can be

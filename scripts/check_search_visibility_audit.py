@@ -103,6 +103,10 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
         content = visible_block_content(line)
         parsed = atx_heading(content)
         if parsed is not None:
+            if any(character in parsed[1] for character in "[]<>"):
+                raise AuditError(
+                    "search visibility headings cannot contain inline links or HTML"
+                )
             headings.append((index, index + 1, parsed[0], parsed[1]))
             continue
         if not content or index + 1 >= len(lines):
@@ -111,6 +115,10 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str]]:
             visible_block_content(lines[index + 1])
         )
         if underline is not None:
+            if any(character in content for character in "[]<>"):
+                raise AuditError(
+                    "search visibility headings cannot contain inline links or HTML"
+                )
             level = 1 if underline.group(1).startswith("=") else 2
             headings.append((index, index + 2, level, content))
     return headings

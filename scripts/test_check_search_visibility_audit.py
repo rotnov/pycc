@@ -148,13 +148,25 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             "## **GitHub repository search history**",
             "## GitHub repository search hist**or**y",
             "## GitHub repository search hist`or`y",
-            "## [GitHub repository search history](https://example.invalid)",
         ):
             with self.subTest(duplicate_heading=duplicate_heading):
                 path.write_text(
                     f"{duplicate_heading}{forged_table}{self.head_visibility}"
                 )
                 with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_history_headings_reject_inline_links_and_html(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        for duplicate_heading in (
+            "## [GitHub repository search history](https://example.invalid)",
+            "## GitHub repository search hist[or](https://example.invalid)y",
+            "## GitHub repository search hist<em>or</em>y",
+            "## GitHub repository search hist<!-- hidden -->ory",
+        ):
+            with self.subTest(duplicate_heading=duplicate_heading):
+                path.write_text(f"{duplicate_heading}\n\n{self.head_visibility}")
+                with self.assertRaisesRegex(AuditError, "inline links or HTML"):
                     validate(self.head, self.base, self.audited_at)
 
     def test_setext_duplicate_history_heading_is_rejected(self) -> None:
