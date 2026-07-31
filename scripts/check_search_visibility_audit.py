@@ -110,7 +110,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77"
     ),
     "SEARCH_VISIBILITY.md": (
-        "df8a7dad6b867876a5e95a272195fc0c6411c7258e8f1038cdb8edeb17f97d3f"
+        "eca8682088cd43a909ce3cf13d0c4722dad7287f2d966febbc63d6a98fce5cbe"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -131,6 +131,10 @@ MEASUREMENT_KEYS = {
     "incomplete_results",
     "ordered_corpus_sha256",
 }
+INTERPRETATION_PROJECTION_HEADER = (
+    "| Exact query | Latest observed at (UTC) | Rank | Results | Total |"
+)
+INTERPRETATION_PROJECTION_DELIMITER = "|---|---|---:|---:|---:|"
 
 
 class AuditError(ValueError):
@@ -443,6 +447,47 @@ def history_rows(markdown: str) -> list[list[str]]:
 def history_digest(rows: list[list[str]]) -> str:
     payload = json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
+
+
+def latest_history_projection_lines(rows: list[list[str]]) -> list[str]:
+    """Project the latest accepted observation for every exact GitHub query."""
+    latest: dict[str, list[str]] = {}
+    for row in rows:
+        latest[history_raw_query(row[1])] = row
+    lines = [
+        INTERPRETATION_PROJECTION_HEADER,
+        INTERPRETATION_PROJECTION_DELIMITER,
+    ]
+    for raw_query in sorted(latest, key=lambda value: (ascii_lower(value), value)):
+        row = latest[raw_query]
+        lines.append(
+            f"| {row[1]} | {row[0]} | {row[2]} | {row[4]} | {row[5]} |"
+        )
+    return lines
+
+
+def validate_interpretation_projection(
+    markdown: str, rows: list[list[str]]
+) -> None:
+    """Require Current interpretation to begin with the exact latest-row view."""
+    lines = commonmark_lines(section(markdown, "Current interpretation"))
+    start = 0
+    while start < len(lines) and re.fullmatch(r"[ \t]*", lines[start]):
+        start += 1
+    expected = latest_history_projection_lines(rows)
+    if lines[start : start + len(expected)] != expected:
+        raise AuditError(
+            "Current interpretation latest-search projection disagrees with history"
+        )
+    after = start + len(expected)
+    if after < len(lines) and not re.fullmatch(r"[ \t]*", lines[after]):
+        raise AuditError(
+            "Current interpretation latest-search projection must end at a block boundary"
+        )
+    if lines.count(INTERPRETATION_PROJECTION_HEADER) != 1:
+        raise AuditError(
+            "Current interpretation must contain exactly one latest-search projection"
+        )
 
 
 def unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -890,9 +935,8 @@ def validate(
     base_rows = history_rows(
         (base_root / "docs" / "SEARCH_VISIBILITY.md").read_text()
     )
-    head_rows = history_rows(
-        (head_root / "docs" / "SEARCH_VISIBILITY.md").read_text()
-    )
+    head_visibility = (head_root / "docs" / "SEARCH_VISIBILITY.md").read_text()
+    head_rows = history_rows(head_visibility)
     if head_rows[: len(base_rows)] != base_rows:
         raise AuditError("head history must preserve the trusted base prefix")
     values = checkpoints(head_root, head_rows)
@@ -926,6 +970,7 @@ def validate(
         activated_at,
         audited_at,
     )
+    validate_interpretation_projection(head_visibility, head_rows)
 
 
 def main() -> None:

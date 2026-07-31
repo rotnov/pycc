@@ -442,7 +442,10 @@ Every accepted history line also has exactly one leading and one trailing
 boundary pipe, so repeated pipes cannot add an empty rendered column while the
 parser silently strips it. Every delimiter cell has the GFM minimum of three
 hyphens, preserving the table rendering that gives the evidence its column
-meaning.
+meaning. `Current interpretation` begins with an exact, machine-checked table
+projected from the latest accepted row for every GitHub query. A valid append,
+replay record, and checkpoint cannot merge while that public latest-state view
+still reports the previous snapshot.
 GitHub query text rejects every qualifier except an `in:description` metadata
 diagnostic or a single `topic:` diagnostic. Syntax-sensitive identities still
 normalize ASCII case and repeated whitespace before preserving punctuation,
@@ -552,9 +555,9 @@ become trusted after merge. Both successor Python invocations use isolated
 mode; the self-test loads its byte-pinned sibling auditor by exact path, so new
 modules or package initializers in the activation tree cannot shadow
 standard-library or trusted imports. The bridge also enumerates the complete
-candidate Git tree, pins every activation input plus the newly active trust-
-anchor workflow to its reviewed `100644 blob` entry, and requires an empty
-`.gitattributes` manifest, so symlinks, executable
+candidate Git tree, pins every candidate workflow plus every activation input
+to a `100644 blob` entry (including the newly active trust anchor), and requires
+an empty `.gitattributes` manifest, so symlinks, executable
 mode changes, submodules, or root/nested checkout attributes cannot preserve Git
 blob bytes while changing the successor's materialized workflow, scripts, or
 fixtures. Git blob output is normalized to binary

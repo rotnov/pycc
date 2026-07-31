@@ -631,11 +631,13 @@ class WorkflowPermissionsTest < Minitest::Test
     Dir.mktmpdir do |directory|
       anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
       anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
-      validate_search_activation_transition(
-        [anchor],
-        event_name: "pull_request_target",
-        data_loader: ->(_paths) { candidate }
-      )
+      assert_silent do
+        validate_search_activation_transition(
+          [anchor],
+          event_name: "pull_request_target",
+          data_loader: ->(_paths) { candidate }
+        )
+      end
     end
   end
 
@@ -805,12 +807,15 @@ class WorkflowPermissionsTest < Minitest::Test
     tree = [
       "100644 blob #{'a' * 40}\t.github/workflows/ci.yml",
       "100644 blob #{'b' * 40}\tdirectory\nwith-newline/.gitattributes",
-      "120000 blob #{'c' * 40}\tscripts/check_ci_permissions.rb"
+      "120000 blob #{'c' * 40}\tscripts/check_ci_permissions.rb",
+      "120000 blob #{'d' * 40}\t.github/workflows/hook-install-check.yml"
     ].join("\0") + "\0"
     attributes, entries = activation_tree_metadata(tree)
     assert_equal "directory\nwith-newline/.gitattributes".b, attributes
     assert_equal "100644 blob", entries.fetch(".github/workflows/ci.yml")
     assert_equal "120000 blob", entries.fetch("scripts/check_ci_permissions.rb")
+    assert_equal "120000 blob",
+                 entries.fetch(".github/workflows/hook-install-check.yml")
   end
 
   def test_activation_trust_anchor_rejects_changed_tree_entry_modes
@@ -831,6 +836,43 @@ class WorkflowPermissionsTest < Minitest::Test
         assert_match(/preserve Git tree entry 100644 blob for #{Regexp.escape(relative)}/,
                      error.message)
       end
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_nonregular_unselected_workflow
+    relative = ".github/workflows/hook-install-check.yml"
+    candidate = activation_candidate
+    candidate[SEARCH_TREE_ENTRIES_KEY] =
+      SEARCH_ACTIVATION_TREE_ENTRIES.merge(relative => "120000 blob")
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      error = assert_raises(PolicyError) do
+        validate_search_activation_transition(
+          [anchor],
+          event_name: "pull_request_target",
+          data_loader: ->(_paths) { candidate }
+        )
+      end
+      assert_match(/regular non-executable Git tree entries for every workflow/,
+                   error.message)
+      assert_match(/#{Regexp.escape(relative)}/, error.message)
+    end
+  end
+
+  def test_activation_trust_anchor_accepts_regular_unselected_workflow
+    candidate = activation_candidate
+    candidate[SEARCH_TREE_ENTRIES_KEY] = SEARCH_ACTIVATION_TREE_ENTRIES.merge(
+      ".github/workflows/hook-install-check.yml" => "100644 blob"
+    )
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      validate_search_activation_transition(
+        [anchor],
+        event_name: "pull_request_target",
+        data_loader: ->(_paths) { candidate }
+      )
     end
   end
 

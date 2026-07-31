@@ -304,20 +304,30 @@ later movement can be correlated without presenting correlation as causation.
 
 ## Current interpretation
 
-At the latest comparable GitHub observation, product acquisition is rank 2 of
-3 for `typed python aot compiler`, rank 12 of 17 for `python 3.14 compiler`,
-rank 8 of 11 for `ahead-of-time compiler python`, rank 19 of 28 for
-`python aot compiler`, and rank 22 of 40 for `compile python native binary`.
-The repository is absent from the complete 24-result
-`compile python to native binary` corpus and remains outside the first 50 for
-the broad `typed Python compiler` query. Those corpora and ranks are reported
-together; rank 2 of 3 is not treated as broad demand.
+| Exact query | Latest observed at (UTC) | Rank | Results | Total |
+|---|---|---:|---:|---:|
+| `ahead-of-time compiler python` | 2026-07-30T00:52:41Z | 8 | 11 | 11 |
+| `AI-native compiler` | 2026-07-25T20:21:57Z | 48 | 50 | 95 |
+| `compile python native binary` | 2026-07-30T00:52:41Z | 22 | 40 | 40 |
+| `compile python to native binary` | 2026-07-30T00:52:41Z | >50 | 24 | 24 |
+| `pycc` | 2026-07-30T00:52:41Z | >50 | 50 | 364 |
+| `python 3.14 compiler` | 2026-07-30T00:52:41Z | 12 | 17 | 17 |
+| `Python 3.14 compiler in:description` | 2026-07-25T20:21:57Z | 12 | 16 | 16 |
+| `python aot compiler` | 2026-07-30T00:52:41Z | 19 | 28 | 28 |
+| `python llvm compiler` | 2026-07-30T00:52:41Z | >50 | 50 | 218 |
+| `topic:aot-compiler` | 2026-07-30T00:52:41Z | 8 | 17 | 17 |
+| `topic:python-compiler` | 2026-07-30T00:52:41Z | 31 | 44 | 44 |
+| `typed python aot compiler` | 2026-07-30T00:52:41Z | 2 | 3 | 3 |
+| `typed Python compiler` | 2026-07-30T00:52:41Z | >50 | 50 | 326 |
 
-Brand and metadata diagnostics remain separate: `pycc` and
-`python llvm compiler` are outside the first 50, while the topic diagnostics
-are ranks 8 and 31. `AI-native compiler` is a retired authorship diagnostic and
-was intentionally not polled in the 2026-07-29/30 product series. Historical
-authorship rows remain evidence of the old experiment, not product progress.
+The table is a machine-checked projection of the latest accepted history row
+for every exact GitHub query; a new snapshot cannot merge while this view is
+stale. Product-acquisition and diagnostic corpora remain separate in the
+registry even though the projection reports them together. A high rank in a
+narrow corpus is not treated as broad demand. `AI-native compiler` remains a
+retired authorship diagnostic: its historical row is evidence of the old
+experiment, not product progress, and it is not polled in the current product
+series.
 All five canonical URLs now have positive URL Inspection evidence: the four
 pre-existing URLs were on Google at 10:29 UTC, and the live
 `/python-aot-compilers/` page was on Google at 16:43 UTC with a successful

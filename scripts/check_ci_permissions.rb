@@ -31,11 +31,11 @@ SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
   "f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
-    "5a7b693ef6dd20813063984f74354891eec593acd70c74d07a2038e6be6b35e2",
+    "dc8b8cb79b896084f0982721baa25d3321911643758008cc6c5f0f6398661ba3",
   "docs/SEARCH_QUERY_REGISTRY.json" =>
     "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77",
   "docs/SEARCH_VISIBILITY.md" =>
-    "df8a7dad6b867876a5e95a272195fc0c6411c7258e8f1038cdb8edeb17f97d3f",
+    "eca8682088cd43a909ce3cf13d0c4722dad7287f2d966febbc63d6a98fce5cbe",
   "docs/SEARCH_VISIBILITY_CHECKPOINTS.json" =>
     "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
 }.freeze
@@ -45,6 +45,8 @@ SEARCH_ACTIVATED_TRUST_ANCHOR_PATH =
 SEARCH_GIT_ATTRIBUTES_KEY = "\0search-activation-gitattributes"
 SEARCH_GIT_ATTRIBUTES_MANIFEST = "".b.freeze
 SEARCH_TREE_ENTRIES_KEY = "\0search-activation-tree-entries"
+WORKFLOW_TREE_PATH_PATTERN =
+  %r{\A\.github/workflows/[^/]+\.(?:yml|yaml)\z}n
 SEARCH_ROADMAP_CHECKPOINTS = [
   "<!-- search-history-checkpoint: github_repository_search 108 " \
     "e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->",
@@ -503,7 +505,8 @@ def activation_tree_metadata(tree)
       raise PolicyError, "candidate PR tree contains an invalid entry"
     end
     paths << relative
-    if SEARCH_ACTIVATION_TREE_ENTRIES.key?(relative)
+    if SEARCH_ACTIVATION_TREE_ENTRIES.key?(relative) ||
+       WORKFLOW_TREE_PATH_PATTERN.match?(relative.b)
       selected_entries[relative] = "#{match[1]} #{match[2]}"
     end
   end
@@ -596,6 +599,14 @@ def validate_search_activation_transition(
             "search trust-anchor activation must preserve Git tree entry " \
             "#{expected_entry} for #{relative}"
     end
+  end
+  entries.each do |relative, entry|
+    next unless WORKFLOW_TREE_PATH_PATTERN.match?(relative.b)
+    next if entry == "100644 blob"
+
+    raise PolicyError,
+          "search trust-anchor activation requires regular non-executable " \
+          "Git tree entries for every workflow: #{relative}"
   end
   STAGED_SEARCH_ACTIVATION_SHA256.each do |relative, expected_digest|
     content = candidate[relative]

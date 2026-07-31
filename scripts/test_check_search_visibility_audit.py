@@ -23,8 +23,10 @@ AuditError = AUDIT_MODULE.AuditError
 GITHUB_SURFACE_CONTRACT = AUDIT_MODULE.GITHUB_SURFACE_CONTRACT
 GITHUB_SURFACE = AUDIT_MODULE.GITHUB_SURFACE
 GOOGLE_SURFACE_CONTRACT = AUDIT_MODULE.GOOGLE_SURFACE_CONTRACT
+INTERPRETATION_PROJECTION_HEADER = AUDIT_MODULE.INTERPRETATION_PROJECTION_HEADER
 history_digest = AUDIT_MODULE.history_digest
 history_rows = AUDIT_MODULE.history_rows
+latest_history_projection_lines = AUDIT_MODULE.latest_history_projection_lines
 semantic_identity = AUDIT_MODULE.semantic_identity
 validate = AUDIT_MODULE.validate
 
@@ -131,13 +133,20 @@ class SearchVisibilityAuditTests(unittest.TestCase):
 
     @staticmethod
     def visibility(*rows: str) -> str:
-        return (
+        history = (
             "# Search Visibility Measurements\n\n"
             "## GitHub repository search history\n\n"
             "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |\n"
             "|---|---|---:|---:|---:|---:|\n"
             + "\n".join(rows)
             + "\n\n## GitHub traffic history\n"
+        )
+        projection = "\n".join(latest_history_projection_lines(history_rows(history)))
+        return (
+            history
+            + "\n## Current interpretation\n\n"
+            + projection
+            + "\n\nSynthetic interpretation for mutation tests.\n"
         )
 
     def write_registry(self) -> None:
@@ -205,6 +214,39 @@ class SearchVisibilityAuditTests(unittest.TestCase):
 
     def test_valid_append_passes(self) -> None:
         validate(self.head, self.base, self.audited_at)
+
+    def test_current_interpretation_projection_tracks_latest_rows(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        path.write_text(
+            path.read_text().replace(
+                "| 2026-07-31T00:00:00Z | `python aot compiler` | 7 | +12 | 50 | 240 |",
+                "| 2026-07-31T00:00:00Z | `python aot compiler` | 6 | +13 | 50 | 240 |",
+                1,
+            )
+        )
+        self.registry["measurements"][0]["target_rank"] = 6
+        self.write_registry()
+        self.refresh_checkpoint()
+        with self.assertRaisesRegex(AuditError, "latest-search projection"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_current_interpretation_projection_requires_block_boundary(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        path.write_text(
+            path.read_text().replace(
+                "| `python aot compiler` | 2026-07-31T00:00:00Z | 7 | 50 | 240 |\n\nSynthetic",
+                "| `python aot compiler` | 2026-07-31T00:00:00Z | 7 | 50 | 240 |\nSynthetic",
+                1,
+            )
+        )
+        with self.assertRaisesRegex(AuditError, "block boundary"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_current_interpretation_projection_cannot_be_duplicated(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        path.write_text(path.read_text() + f"\n{INTERPRETATION_PROJECTION_HEADER}\n")
+        with self.assertRaisesRegex(AuditError, "exactly one latest-search projection"):
+            validate(self.head, self.base, self.audited_at)
 
     def test_reviewed_bootstrap_passes_without_a_base_registry(self) -> None:
         self.install_reviewed_bootstrap()

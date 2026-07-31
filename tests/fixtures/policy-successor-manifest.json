@@ -9,7 +9,7 @@
     {
       "path": "scripts/check_ci_permissions.rb",
       "source_path": "scripts/check_ci_permissions.rb",
-      "sha256": "53a83a988ae06fa18da374d8582cb93488c1290b465b2504a3b0b50c1b4b6322"
+      "sha256": "12e78e5dcd8f39809ec10978efe55bdc527e14fb6079cb727b6e0af36e4f0fa5"
     },
     {
       "path": "scripts/check_replicated_paired_perf_regression.rb",
@@ -24,7 +24,7 @@
     {
       "path": "scripts/check_search_visibility_audit.py",
       "source_path": "scripts/check_search_visibility_audit.py",
-      "sha256": "5a7b693ef6dd20813063984f74354891eec593acd70c74d07a2038e6be6b35e2"
+      "sha256": "dc8b8cb79b896084f0982721baa25d3321911643758008cc6c5f0f6398661ba3"
     },
     {
       "path": "scripts/check_source_aware_perf_regression.rb",
@@ -49,7 +49,7 @@
     {
       "path": "scripts/test_check_search_visibility_audit.py",
       "source_path": "scripts/test_check_search_visibility_audit.py",
-      "sha256": "d21cc70a7a2de15f8c1fd9cd01255f374ca8c045e48bdd74dd2c3270eb82e056"
+      "sha256": "2148539a260987a69f326bf1fe13a276ccbb51b5fc264d4373572c7624c6c34d"
     },
     {
       "path": "scripts/test_check_source_aware_perf_regression.rb",

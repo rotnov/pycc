@@ -37,7 +37,9 @@ ASCII headings to end the machine-owned history section so Unicode homoglyphs
 cannot forge a second evidence owner. It permits only ATX headings and rejects
 every standalone Setext or thematic underline before section lookup, avoiding
 ambiguous lazy blockquote ancestry and title newlines that GitHub renders as
-`<br>`.
+`<br>`. The public `Current interpretation` section begins with a deterministic
+latest-row projection for every exact GitHub query, and the audit rejects an
+otherwise valid snapshot append while that projection remains stale.
 Its closed intent/KPI matrix
 prevents diagnostic classes from entering the acquisition denominator. The
 prospective base-owned audit pins and validates this exact bootstrap; a later
@@ -46,8 +48,8 @@ the bound registry/ledger/checkpoint files, every unchanged successor script,
 every repository-resident self-test input, and the pinned activation-specific
 steady-state policy checker and self-test. Those two variants retire the older
 workflow digest and the one-use activation bridge. The transition also rejects
-every root or nested `.gitattributes` path and pins all activation paths,
-including the newly active trust-anchor workflow itself, to their reviewed
+every root or nested `.gitattributes` path and pins every candidate workflow
+plus all activation inputs, including the newly active trust anchor, to
 regular-file Git modes, so symlinks, submodules, executable-bit changes,
 or candidate checkout rules cannot change the materialized successor behind
 byte-identical Git blobs. The successor repeats the `100644 blob` requirement
