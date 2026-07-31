@@ -110,11 +110,23 @@ working-tree review. Invoke the pinned deep reviewer from the digest-recorded ar
 that exact reviewer cannot be bound, the review gate is unavailable — report that and stop
 rather than substituting a weaker reviewer or skipping the loop.
 
-Verify each finding against the sources before acting on it. A finding confirmed by evidence
-gets a focused fix; a finding refuted by evidence gets its reasoning recorded, not a blind
-fix. Rerun the review after fixes whenever the previous findings may no longer describe the
-diff. The loop ends when a round reports no actionable findings. The same finding surviving
-two genuine fix attempts is a stop condition, not a reason for a third identical attempt.
+Verify each finding against the sources before acting on it — preferably by *running* the
+predicted failure, not re-deriving it: when a finding predicts a wrong diagnostic or a false
+accept, reproduce that exact prediction against the unfixed tree first, and when a finding
+says a guard is not proven necessary, disable the guard and watch the discriminating test
+fail with the predicted message. A finding confirmed by evidence gets a focused fix; a finding
+refuted by evidence gets its reasoning recorded, not a blind fix. Rerun the review after
+fixes whenever the previous findings may no longer describe the diff. The loop ends when a
+round reports no actionable findings. The same finding surviving two genuine fix attempts is
+a stop condition, not a reason for a third identical attempt.
+
+Fixes to review findings deserve the same suspicion as the original diff — often more. A fix
+made under review pressure is written against one counterexample and inherits none of the
+original design's caution: expect the loop to find real defects in its own previous round's
+fix (a cleared invariant that another consumer of the same state still needed, a flag cleared
+on one path but not its mirror), and treat a many-round loop as the process working, not
+failing. When a fix touches state shared by two invariants, name both invariants in the fix's
+comment and pin each with its own test before calling the round done.
 
 ### 6. Pull request
 
