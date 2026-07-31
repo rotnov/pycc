@@ -48,11 +48,14 @@ The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
 the AST. `pycc_hir::lower_checked` preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,
 calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. A first
-`list[int]` slice (D-104, PR-10) additionally lowers list literals, read-only
-subscript indexing (`base[index]`), a dedicated `.append()` call form, and
-`for var in <bare-name-list>:` iteration -- at the HIR layer only; type
-checking, MIR lowering, and codegen for these forms are separate, later PR-10
-tasks. Function items carry their parameter and return types, while call
+`list[int]` slice (D-104, PR-10) lowers list literals, read-only subscript
+indexing (`base[index]`), a dedicated `.append()` call form, and
+`for var in <bare-name-list>:` iteration through HIR (D-104's HIR-forms
+task), `pycc_types` type-checking including `len()`'s call-dispatch (D-104's
+type-checking task, `T0032`/`T0033`/`T0034`), and `pycc_mir` lowering (D-104's
+MIR-lowering task) -- `pycc_codegen` support is still a separate, later PR-10
+task, so `build`/`run` cannot yet compile a `list[int]` program end to end.
+Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument
 expressions; HIR does not yet assign binding identities or build and memoize a
 call graph. Syntactically valid constructs outside that implemented HIR subset

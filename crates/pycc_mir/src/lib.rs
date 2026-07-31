@@ -39,6 +39,35 @@ pub enum MirExpr {
         ty: Ty,
     },
     FString(Vec<MirFStringPart>),
+    /// `[e1, e2, ...]`. No `ty` field: `ty()` below derives
+    /// `Ty::List(Box::new(elements[0].ty()))` from the first element,
+    /// exactly like `pycc_types::infer_expr_in`'s own `HirExpr::ListLiteral`
+    /// arm derives the list's type from its elements rather than assuming
+    /// `Ty::Int`. Empirically only `Ty::List(Box::new(Ty::Int))` ever
+    /// reaches this crate today (`pycc_types`' T0034 gate rejects every
+    /// other element type at construction time -- see that gate's own
+    /// comment and its `a_for_list_loop_binds_its_variable_as_str_for_a_list_of_str`
+    /// genericity test), but deriving here -- rather than hardcoding what
+    /// today's upstream gate happens to allow -- keeps this lowering
+    /// correct on its own terms, and correct automatically if that gate is
+    /// ever relaxed, without requiring a matching `pycc_mir` change.
+    ListLiteral(Vec<MirExpr>),
+    /// `base[index]`, read-only (mirrors `HirExpr::Subscript`, D-104).
+    /// `ty()` below derives its result from `base.ty()`'s element type
+    /// (mirroring `pycc_types::infer_expr_in`'s own `Subscript` arm), for
+    /// the same reason `ListLiteral` above derives rather than hardcodes.
+    Subscript {
+        base: Box<MirExpr>,
+        index: Box<MirExpr>,
+    },
+    /// `list.append(value)` (mirrors `HirExpr::ListAppend`, D-104). `list` is
+    /// carried as the plain variable name, exactly like `HirExpr::ListAppend`
+    /// itself -- there is no sub-expression to recursively lower for it, only
+    /// for `value`.
+    ListAppend {
+        list: String,
+        value: Box<MirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,6 +87,26 @@ impl MirExpr {
             | MirExpr::Call { ty, .. }
             | MirExpr::BinOp { ty, .. }
             | MirExpr::Compare { ty, .. } => ty.clone(),
+            MirExpr::ListLiteral(elements) => {
+                let elem_ty = elements.first().map(|e| e.ty()).unwrap_or_else(|| {
+                    panic!(
+                        "pycc_mir: internal error: an empty list literal has no element type to derive -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
+                    )
+                });
+                Ty::List(Box::new(elem_ty))
+            }
+            MirExpr::Subscript { base, .. } => match base.ty() {
+                Ty::List(elem_ty) => *elem_ty,
+                other => panic!(
+                    "pycc_mir: internal error: subscript base has non-list type `{}` -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    other.name()
+                ),
+            },
+            // `.append()` always returns `None` in Python, independent of
+            // the list's element type -- a true invariant (like `Compare`'s
+            // `Bool` and `ForRange`'s `Int` above), not narrowed by any
+            // `pycc_types` gate, so this is hardcoded on purpose.
+            MirExpr::ListAppend { .. } => Ty::None,
         }
     }
 }
@@ -88,6 +137,14 @@ pub enum MirStmt {
         start: MirExpr,
         stop: MirExpr,
         step: MirExpr,
+        body: Vec<MirStmt>,
+    },
+    /// `for var in list:` (mirrors `HirStmt::ForList`, D-104). `list` is
+    /// carried as the plain variable name, exactly like `HirStmt::ForList`
+    /// itself; there is no start/stop/step to lower here, only `body`.
+    ForList {
+        var: String,
+        list: String,
         body: Vec<MirStmt>,
     },
     Return(Option<MirExpr>),
@@ -281,6 +338,34 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
                 body,
             }
         }
+        HirStmt::ForList { var, list, body } => {
+            // The loop variable's type is `list`'s element type, derived via
+            // the same `lookup` mechanism every other name reference in this
+            // file uses -- mirroring `pycc_types::check_stmt`'s own
+            // `ForList` arm (`check_assignment(env, var, *elem_ty)`), not
+            // hardcoded to `Ty::Int`. Empirically only a `Ty::List(Box::new(Ty::Int))`
+            // binding ever reaches this arm today (`pycc_types`' T0034 gate
+            // rejects every other list-element type before HIR ever
+            // constructs one -- see that gate's own comment and its
+            // `a_for_list_loop_binds_its_variable_as_str_for_a_list_of_str`
+            // genericity test), but deriving here keeps this lowering
+            // correct on its own terms rather than baking in an assumption
+            // this crate has no way to verify independently.
+            let elem_ty = match lookup(scopes, list) {
+                Ty::List(elem_ty) => *elem_ty,
+                other => panic!(
+                    "pycc_mir: internal error: `{list}` is not a list (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    other.name()
+                ),
+            };
+            bind_variable(scopes, var.clone(), elem_ty);
+            let body = body.iter().map(|s| lower_stmt(s, scopes)).collect();
+            MirStmt::ForList {
+                var: var.clone(),
+                list: list.clone(),
+                body,
+            }
+        }
         HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes))),
     }
 }
@@ -299,6 +384,15 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
             let args: Vec<MirExpr> = args.iter().map(|a| lower_expr(a, scopes)).collect();
             let ty = if callee == "print" {
                 Ty::None
+            } else if callee == "len" {
+                // `len` is a hand-recognized builtin, same as `print` above,
+                // not a user-declarable `$fn:` signature -- mirrors
+                // `pycc_types::collect_expr_constraints`'s own `callee ==
+                // "len"` arm (D-104 point 3). Without this branch, `len(lst)`
+                // falls to the `lookup` fallback below, finds no registered
+                // `$fn:len`, and panics even though `pycc_types` already
+                // accepts `len(lst)` as valid, `Ty::Int`-typed.
+                Ty::Int
             } else {
                 lookup(scopes, &format!("$fn:{callee}"))
             };
@@ -336,6 +430,17 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
                 })
                 .collect(),
         ),
+        HirExpr::ListLiteral(elements) => {
+            MirExpr::ListLiteral(elements.iter().map(|e| lower_expr(e, scopes)).collect())
+        }
+        HirExpr::Subscript { base, index } => MirExpr::Subscript {
+            base: Box::new(lower_expr(base, scopes)),
+            index: Box::new(lower_expr(index, scopes)),
+        },
+        HirExpr::ListAppend { list, value } => MirExpr::ListAppend {
+            list: list.clone(),
+            value: Box::new(lower_expr(value, scopes)),
+        },
     }
 }
 
@@ -1423,5 +1528,305 @@ mod tests {
             .ty(),
             Ty::Bool
         );
+        assert_eq!(
+            MirExpr::ListLiteral(vec![MirExpr::IntLiteral(1)]).ty(),
+            Ty::List(Box::new(Ty::Int))
+        );
+        assert_eq!(
+            MirExpr::Subscript {
+                base: Box::new(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::List(Box::new(Ty::Int)),
+                }),
+                index: Box::new(MirExpr::IntLiteral(0)),
+            }
+            .ty(),
+            Ty::Int
+        );
+        assert_eq!(
+            MirExpr::ListAppend {
+                list: "x".to_string(),
+                value: Box::new(MirExpr::IntLiteral(1)),
+            }
+            .ty(),
+            Ty::None
+        );
+    }
+
+    #[test]
+    fn lowers_list_literal_to_mir() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+            })],
+        };
+        let mir = build(&hir);
+        // Not a `let PATTERN = ... else { panic!(...) }` destructure -- this
+        // file's own coverage-gate convention (see `pycc_hir`'s equivalent
+        // `ListLiteral` test, commit 48f13e6) is that a hand-written panic
+        // arm is never taken on the happy path and shows up as a
+        // permanently uncovered region under D-014's 100%-regions gate. A
+        // direct `assert_eq!` against the whole expected `MirItem` avoids
+        // that without weakening the assertion.
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::ListLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]),
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_for_list_to_mir_for_list() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ForList {
+                    var: "v".to_string(),
+                    list: "x".to_string(),
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::Name("v".to_string())],
+                    })],
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::ForList {
+                var: "v".to_string(),
+                list: "x".to_string(),
+                body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "v".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })],
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_subscript_to_mir_recursively() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Subscript {
+                        base: Box::new(HirExpr::Name("x".to_string())),
+                        index: Box::new(HirExpr::IntLiteral(0)),
+                    },
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_list_append_to_mir_recursively() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListAppend {
+                    list: "x".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(2)),
+                })),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ListAppend {
+                list: "x".to_string(),
+                value: Box::new(MirExpr::IntLiteral(2)),
+            }))
+        );
+    }
+
+    #[test]
+    fn lowers_len_call_to_mir_with_int_type_without_panicking() {
+        // Required fix (beyond the brief): without a parallel `"len"` branch
+        // in the `HirExpr::Call` lowering arm, this would panic via
+        // `lookup`'s own "has no recorded type" message, since no `$fn:len`
+        // signature is ever registered -- even though `pycc_types` already
+        // accepts `len(lst)` as valid, `Ty::Int`-typed (D-104 point 3).
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "n".to_string(),
+                    value: HirExpr::Call {
+                        callee: "len".to_string(),
+                        args: vec![HirExpr::Name("x".to_string())],
+                    },
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "n".to_string(),
+                value: MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }],
+                    ty: Ty::Int,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn list_literal_subscript_and_for_list_derive_their_type_from_actual_elements_not_hardcoded_int()
+     {
+        // Mirrors `pycc_types`'s own genericity tests for `ListLiteral`,
+        // `Subscript`, and `ForList` (see e.g. its
+        // `a_for_list_loop_binds_its_variable_as_str_for_a_list_of_str`):
+        // this lowering must derive `ty()`/the loop variable's bound type
+        // from the list's *actual* element type, not assume `Ty::Int`.
+        // `pycc_types`'s T0034 gate means only `list[int]` ever reaches
+        // this crate from a real compiled program, but this crate's own
+        // lowering must not bake in that assumption independently of the
+        // type it actually observes -- exactly the class of bug the
+        // `AnnAssign` widening fix earlier in this file already guards
+        // against (MIR's `ty` silently diverging from what codegen must
+        // produce). Uses `str` elements specifically because they are
+        // trivially distinguishable from the `Ty::Int` a hardcoded bug
+        // would wrongly report.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::StringLiteral("a".to_string())]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Subscript {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        index: Box::new(HirExpr::IntLiteral(0)),
+                    },
+                }),
+                HirItem::TopLevelStmt(HirStmt::ForList {
+                    var: "v".to_string(),
+                    list: "xs".to_string(),
+                    body: vec![HirStmt::ExprStmt(HirExpr::Name("v".to_string()))],
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("y".to_string()))),
+            ],
+        };
+        let mir = build(&hir);
+        // `y = xs[0]` binds `y` as `Ty::Str`, derived from `xs`'s own
+        // `Ty::List(Box::new(Ty::Str))` binding (itself derived from the
+        // `StringLiteral` element), not `Ty::Int`.
+        assert_eq!(
+            mir.items[3],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Name {
+                name: "y".to_string(),
+                ty: Ty::Str,
+            }))
+        );
+        // `for v in xs:` binds `v` as `Ty::Str` too, derived from the same
+        // list, not `Ty::Int`.
+        assert_eq!(
+            mir.items[2],
+            MirItem::TopLevelStmt(MirStmt::ForList {
+                var: "v".to_string(),
+                list: "xs".to_string(),
+                body: vec![MirStmt::ExprStmt(MirExpr::Name {
+                    name: "v".to_string(),
+                    ty: Ty::Str,
+                })],
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "an empty list literal has no element type")]
+    fn an_empty_list_literals_ty_panics_with_an_internal_error() {
+        // By construction (see this module's `lookup` panic doc comment /
+        // D-057 discussion), `pycc_types::check` already rejects an empty
+        // list literal (T0021) before any HIR reaches `pycc_mir` -- this
+        // MIR node could never come from a real `check_and_resolve`
+        // success, but the panic path itself still needs direct coverage.
+        MirExpr::ListLiteral(vec![]).ty();
+    }
+
+    #[test]
+    #[should_panic(expected = "subscript base has non-list type")]
+    fn a_subscript_over_a_non_list_bases_ty_panics_with_an_internal_error() {
+        // Same reasoning as the empty-list-literal panic above: `pycc_types`
+        // already rejects a non-list subscript base (T0033) before HIR
+        // reaches `pycc_mir`, but the defensive panic path still needs
+        // direct coverage.
+        MirExpr::Subscript {
+            base: Box::new(MirExpr::IntLiteral(1)),
+            index: Box::new(MirExpr::IntLiteral(0)),
+        }
+        .ty();
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a list")]
+    fn a_for_list_loop_over_a_non_list_binding_panics_with_an_internal_error() {
+        // Same reasoning again: `pycc_types` already rejects `for v in x:`
+        // when `x` is not a list (T0033), but the defensive panic path in
+        // `lower_stmt`'s `ForList` arm still needs direct coverage.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ForList {
+                    var: "v".to_string(),
+                    list: "x".to_string(),
+                    body: vec![],
+                }),
+            ],
+        };
+        build(&hir);
     }
 }
