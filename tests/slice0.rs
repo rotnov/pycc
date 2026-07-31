@@ -465,6 +465,63 @@ fn init_leaves_pycc_toml_uncreated_when_a_late_write_fails() {
     assert!(!dir.join("pycc.toml").try_exists().unwrap());
 }
 
+/// #250: a missing host linker driver is an environment failure reported
+/// with the exit-2 invocation/environment class, not a Rust panic (exit
+/// 101 with a raw backtrace, the pre-fix behavior). `#[cfg(unix)]`: the
+/// Unix drivers resolve `cc` via `PATH`, so an empty `PATH` deterministically
+/// makes only the linker spawn fail (pycc itself is invoked by absolute
+/// path and the frontend + LLVM codegen run in-process); Windows resolves
+/// its bundled `clang.exe` from a compile-time absolute prefix (D-028),
+/// which no environment crafting can make absent. This pair (with the
+/// `run` twin below) is load-bearing for D-014: the new spawn-error
+/// region executes only in these two tests, and either alone would
+/// satisfy the gate.
+#[cfg(unix)]
+#[test]
+fn build_reports_a_missing_linker_driver_without_panicking() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_no_linker_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "no_linker.py", "print(42)\n");
+    let out = dir.join("no_linker");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .env("PATH", "/nonexistent")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error: could not run the linker driver"),
+        "expected the actionable diagnostic, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "the failure must not be a Rust panic: {stderr}"
+    );
+    assert!(!out.exists());
+}
+
+/// The `pycc run` twin: `run` funnels through the same `try_build`, so the
+/// same environment failure gets the same diagnostic and exit class.
+#[cfg(unix)]
+#[test]
+fn run_reports_a_missing_linker_driver_without_panicking() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_run_no_linker_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "no_linker_run.py", "print(42)\n");
+
+    let output = Command::new(pycc_bin())
+        .args(["run", src.to_str().unwrap()])
+        .env("PATH", "/nonexistent")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: could not run the linker driver"));
+    assert!(!stderr.contains("panicked"));
+}
+
 #[test]
 fn a_syntax_error_is_a_compile_error_exit_code_1() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_synerr_{}", std::process::id()));

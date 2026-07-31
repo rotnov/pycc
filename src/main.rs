@@ -174,7 +174,25 @@ fn try_build(path: &str, out: &str, target: Option<&str>, release: bool) -> Resu
         .arg(out);
     add_windows_system_libs(&mut cmd);
     add_linux_system_libs(&mut cmd);
-    let status = cmd.status().expect("the linker driver should run");
+    // #250: failing to *start* the driver (missing `cc`/`clang`, an
+    // unusable toolchain) is an ordinary environment failure, not a pycc
+    // invariant -- report it like the `find_pycc_rt_lib_dir` failure above
+    // (CLI_SPEC.md's exit-2 invocation/environment class) instead of
+    // panicking with a raw backtrace. Every cfg-gated `linker_command`
+    // variant funnels into this one spawn site, so the message names the
+    // exact driver that failed on this host.
+    let status = cmd.status().map_err(|e| {
+        // `to_string_lossy` without `pycc_diag::display_path`'s terminal
+        // escaping, unlike the file-path diagnostics above: the program is
+        // always one of `linker_command`'s compile-time-fixed values
+        // (`cc`, or the D-028 bundled-clang path built from
+        // `LLVM_SYS_221_PREFIX`), never user-controlled input.
+        eprintln!(
+            "error: could not run the linker driver `{}`: {e}",
+            cmd.get_program().to_string_lossy()
+        );
+        ExitCode::from(2)
+    })?;
     if status.success() {
         Ok(())
     } else {
