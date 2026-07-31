@@ -118,7 +118,11 @@ routing, and selection continues with the next survivor.
 
 Present the verified pick to an independent advisor agent in a fresh context — not the user —
 with the full justification: why it fits, why it is unblocked, why nothing in it needs the
-maintainer. The advisor's brief is to refute the selection:
+maintainer. Enumerate the complete same-priority peer set in that justification, not a curated
+shortlist — an omitted peer is the advisor's easiest legitimate kill — and avoid unverified
+superlatives: "smallest" is a claim about every peer, so either verify it against the full
+set or say "among the smallest". State collision claims per layer (code, docs, tests): "no
+code collision, likely docs conflict" survives scrutiny where "zero collision" dies. The advisor's brief is to refute the selection:
 
 - a hidden maintainer-owned decision inside the issue's completion criteria;
 - a blocker the scoring missed — an open pull request about to rewrite the same code, a
