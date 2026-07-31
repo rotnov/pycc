@@ -58,6 +58,30 @@ fn non_callable_binding(name: &str) -> Diagnostic {
     )
 }
 
+/// Looks up a bare name's already-bound type, producing the same
+/// "unbound local" vs. "not defined" distinction `HirExpr::Name` itself
+/// uses in `infer_expr_in` below. `HirStmt::ForList`'s `list` field and
+/// `HirExpr::ListAppend`'s `list` field are both plain `String`s rather
+/// than `HirExpr::Name` nodes (D-104's HIR shape), so they can't go
+/// through `infer_expr_in`'s own `Name` arm and need this helper instead.
+fn lookup_bound_name(
+    env: &Environment,
+    local_names: &[&str],
+    name: &str,
+) -> Result<Ty, Diagnostic> {
+    env.lookup(name).ok_or_else(|| {
+        if is_local(local_names, name) {
+            unbound_local(name)
+        } else {
+            Diagnostic::error(
+                "T0021",
+                format!("name `{name}` is not defined"),
+                Span::new(0, 0),
+            )
+        }
+    })
+}
+
 fn function_local_names<'a>(params: &'a [(String, Ty)], body: &'a [HirStmt]) -> Vec<&'a str> {
     let mut names = params
         .iter()
@@ -86,6 +110,12 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
             }
             HirStmt::While { body, .. } => collect_local_names(body, names),
             HirStmt::ForRange { var, body, .. } => {
+                if !is_local(names, var) {
+                    names.push(var);
+                }
+                collect_local_names(body, names);
+            }
+            HirStmt::ForList { var, body, .. } => {
                 if !is_local(names, var) {
                     names.push(var);
                 }
@@ -307,6 +337,35 @@ fn collect_expr_constraints(
             }
             Ok(Some(signature.2.clone()))
         }
+        // `TypeTerm` (`Result<Ty, usize>`) has no unification-friendly
+        // representation for `Ty::List` -- this solver only exists to infer
+        // scalar `Ty::Infer` parameters/returns of underscore-prefixed
+        // private helpers (D-045), and list homogeneity/element-type
+        // checking is `infer_expr_in`'s job, not this constraint collector's
+        // (see that function's `HirExpr::ListLiteral`/`Subscript`/
+        // `ListAppend` arms below). Recurse only to keep propagating
+        // genuine errors (e.g. an unbound local used as a list element) and
+        // otherwise report "no term produced," exactly like an unresolved
+        // `Name` or a call to an unregistered function above -- returning
+        // `Err` here for a case this solver can't actually validate would
+        // wrongly preempt `checked_function_signatures`' fallback to the
+        // real, list-aware check pass (`check_with_signatures`) that runs
+        // after this solver.
+        HirExpr::ListLiteral(elements) => {
+            for element in elements {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, element)?;
+            }
+            Ok(None)
+        }
+        HirExpr::Subscript { base, index } => {
+            collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
+            collect_expr_constraints(signatures, parents, concrete, binops, env, index)?;
+            Ok(None)
+        }
+        HirExpr::ListAppend { list: _, value } => {
+            collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            Ok(None)
+        }
     }
 }
 
@@ -428,6 +487,30 @@ fn collect_block_constraints(
                     return_term.clone(),
                 )?;
             }
+            HirStmt::ForList { var, list: _, body } => {
+                // Unlike `ForRange`, we have no concrete `Ty::Int` fact to
+                // unify the loop variable against -- this solver doesn't
+                // track a `list`-typed name's element type at all (see the
+                // `HirExpr::ListLiteral`/`Subscript`/`ListAppend` arms
+                // above). Give `var` a fresh, unconstrained term so a body
+                // reference to it doesn't spuriously fail as "not bound"
+                // (it *is* locally bound, just not solver-typed); real
+                // element-type checking happens in the second, real check
+                // pass (`check_with_signatures`).
+                if !env.bindings.contains_key(var) {
+                    let term = fresh_term(parents, concrete);
+                    env.bindings.insert(var.clone(), term);
+                }
+                collect_block_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    binops,
+                    env,
+                    body,
+                    return_term.clone(),
+                )?;
+            }
             HirStmt::Return(value) => {
                 let Some(return_term) = return_term.clone() else {
                     continue;
@@ -458,7 +541,9 @@ fn contains_return(body: &[HirStmt]) -> bool {
     body.iter().any(|stmt| match stmt {
         HirStmt::Return(_) => true,
         HirStmt::If { body, orelse, .. } => contains_return(body) || contains_return(orelse),
-        HirStmt::While { body, .. } | HirStmt::ForRange { body, .. } => contains_return(body),
+        HirStmt::While { body, .. }
+        | HirStmt::ForRange { body, .. }
+        | HirStmt::ForList { body, .. } => contains_return(body),
         HirStmt::ExprStmt(_) | HirStmt::Assign { .. } | HirStmt::AnnAssign { .. } => false,
     })
 }
@@ -821,6 +906,114 @@ fn infer_expr_in(
             }
             Ok(return_ty.clone())
         }
+        HirExpr::ListLiteral(elements) => {
+            // D-104: an empty list literal has no element to infer a type
+            // from, and v0.2 has no `list[T]` annotation syntax to recover
+            // it from instead -- reject plainly rather than letting
+            // `Ty::Infer` leak into codegen. Reuses T0021 (an unconstrained
+            // variable with no way to determine its type), not a new code
+            // -- this is that same failure shape, not a distinct one.
+            if elements.is_empty() {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    "an empty list literal's element type cannot be inferred without an annotation (list[T] annotations are not supported yet, D-104)".to_string(),
+                    Span::new(0, 0),
+                ));
+            }
+            let mut elem_ty: Option<Ty> = None;
+            for element in elements {
+                let this_ty = infer_expr_in(env, local_names, element)?;
+                match &elem_ty {
+                    None => elem_ty = Some(this_ty),
+                    Some(expected) if *expected == this_ty => {}
+                    Some(expected) => {
+                        // Exact `Ty` equality, not `is_assignable`'s
+                        // bool-is-an-int-subtype rule used elsewhere in this
+                        // file -- D-104 requires every element to share the
+                        // *exact same* `Ty`, so `[1, True]` is T0032 even
+                        // though a bare `bool` is assignable to `int`.
+                        return Err(Diagnostic::error(
+                            "T0032",
+                            format!(
+                                "list element type mismatch: expected {} (from the first element), found {}",
+                                expected.name(),
+                                this_ty.name()
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
+                }
+            }
+            let elem_ty = elem_ty.expect("checked non-empty above");
+            // This is the one place a list literal's element type becomes
+            // known with a real source construct behind it (D-104's
+            // Consequences) -- deliberately placed here rather than as a
+            // separate pre-codegen pass. Everything above this gate (the
+            // homogeneity check) is fully generic over any scalar `Ty`; a
+            // future PR widening codegen to e.g. `list[str]` only has to
+            // relax this one check.
+            if elem_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0034",
+                    format!(
+                        "list[{}] is not compiled yet (D-104) -- only list[int] is",
+                        elem_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            Ok(Ty::List(Box::new(elem_ty)))
+        }
+        HirExpr::Subscript { base, index } => {
+            let base_ty = infer_expr_in(env, local_names, base)?;
+            let index_ty = infer_expr_in(env, local_names, index)?;
+            // Reuses T0021 (an unconstrained/conflicting-constraint shape),
+            // not a new code -- a non-int index is that same "operand type
+            // mismatch" failure, not a distinct one.
+            if index_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!("list index must be `int`, found `{}`", index_ty.name()),
+                    Span::new(0, 0),
+                ));
+            }
+            match base_ty {
+                Ty::List(elem_ty) => Ok(*elem_ty),
+                other => Err(Diagnostic::error(
+                    "T0033",
+                    format!("`{}` does not support indexing", other.name()),
+                    Span::new(0, 0),
+                )),
+            }
+        }
+        HirExpr::ListAppend { list, value } => {
+            let list_ty = lookup_bound_name(env, local_names, list)?;
+            let Ty::List(elem_ty) = &list_ty else {
+                return Err(Diagnostic::error(
+                    "T0033",
+                    format!("`{}` does not support `.append()`", list_ty.name()),
+                    Span::new(0, 0),
+                ));
+            };
+            let value_ty = infer_expr_in(env, local_names, value)?;
+            // Same exact-`Ty` rule as `ListLiteral`'s homogeneity check
+            // above -- appending a `bool` to a `list[int]` is still T0021
+            // even though `is_assignable` treats bool as an int subtype
+            // elsewhere in this file. Reuses T0021 (a call-site/assignment
+            // constraint mismatch), not a new code.
+            if value_ty != **elem_ty {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!(
+                        "cannot append `{}` to a list of `{}`",
+                        value_ty.name(),
+                        elem_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            Ok(Ty::None)
+        }
     }
 }
 
@@ -987,6 +1180,29 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             }
             Ok(())
         }
+        HirStmt::ForList { var, list, body } => {
+            // Module (top-level) scope has no "local before assignment"
+            // concept the way a function body does -- every other arm here
+            // (e.g. `ExprStmt` via `infer_expr`) resolves names with an
+            // empty `local_names` slice too, so an unresolved `list` is
+            // simply "not defined," never `unbound_local`.
+            let list_ty = lookup_bound_name(env, &[], list)?;
+            let Ty::List(elem_ty) = list_ty else {
+                return Err(Diagnostic::error(
+                    "T0033",
+                    format!(
+                        "`{}` cannot be iterated with `for ... in ...` (only list[T] supports this)",
+                        list_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            };
+            check_assignment(env, var, *elem_ty)?;
+            for stmt in body {
+                check_stmt(env, stmt)?;
+            }
+            Ok(())
+        }
         HirStmt::Return(_) => Err(Diagnostic::error(
             "T0024",
             "'return' outside a function is not allowed".to_string(),
@@ -1072,7 +1288,8 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
         | HirStmt::Assign { .. }
         | HirStmt::AnnAssign { .. }
         | HirStmt::While { .. }
-        | HirStmt::ForRange { .. } => false,
+        | HirStmt::ForRange { .. }
+        | HirStmt::ForList { .. } => false,
     })
 }
 
@@ -1139,6 +1356,24 @@ fn check_stmt_in_function(
             check_range_operand_in(env, local_names, "stop", stop)?;
             check_range_operand_in(env, local_names, "step", step)?;
             check_assignment(env, var, Ty::Int)?;
+            for s in body {
+                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
+            }
+            Ok(())
+        }
+        HirStmt::ForList { var, list, body } => {
+            let list_ty = lookup_bound_name(env, local_names, list)?;
+            let Ty::List(elem_ty) = list_ty else {
+                return Err(Diagnostic::error(
+                    "T0033",
+                    format!(
+                        "`{}` cannot be iterated with `for ... in ...` (only list[T] supports this)",
+                        list_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            };
+            check_assignment(env, var, *elem_ty)?;
             for s in body {
                 check_stmt_in_function(env, local_names, s, return_ty.clone())?;
             }
@@ -1485,6 +1720,85 @@ mod tests {
     }
 
     #[test]
+    fn a_list_literal_still_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path()
+     {
+        // Any `Ty::Infer` signature anywhere in the module routes `check`
+        // through `infer_function_signatures_with_solver` first (see
+        // `checked_function_signatures`), which runs `collect_expr_constraints`
+        // over every expression in the module, including this list literal.
+        // That solver-side pass must stay lenient (`Ok(None)`, recurse only)
+        // for list forms -- confirms it doesn't wrongly reject a valid list.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                    ]),
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_heterogeneous_list_literal_is_still_rejected_when_the_solver_path_runs_first() {
+        // The load-bearing counterpart to the test above: the solver's
+        // leniency must not swallow a genuine list error -- it has to fall
+        // through to the real, list-aware check pass (`check_with_signatures`)
+        // that runs after the solver, which is what actually raises T0032.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::StringLiteral("two".to_string()),
+                    ]),
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0032");
+    }
+
+    #[test]
+    fn a_for_list_loop_still_type_checks_correctly_when_the_solver_path_runs_first() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ForList {
+                    var: "i".to_string(),
+                    list: "xs".to_string(),
+                    body: vec![],
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
     fn collect_block_constraints_binds_the_initializer_term_for_an_annotated_assignment() {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
@@ -1598,6 +1912,293 @@ mod tests {
             target: "y".to_string(),
             annotation: Ty::Int,
             value: Some(HirExpr::Name("z".to_string())),
+        }];
+
+        let err = collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_list_literal_as_unconstrained_but_recurses_into_elements() {
+        // `TypeTerm` has no unification-friendly representation for
+        // `Ty::List` -- this solver only infers scalar `Ty::Infer`
+        // parameters/returns (see the comment on this arm in
+        // `collect_expr_constraints`). It must still recurse into elements
+        // to propagate genuine errors (see the next test) rather than
+        // ignoring them outright.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+        };
+        let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_list_literal_element() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+        };
+        let expr = HirExpr::ListLiteral(vec![HirExpr::Name("missing".to_string())]);
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_subscript_as_unconstrained_but_recurses_into_base_and_index()
+    {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+        };
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::IntLiteral(1)),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_subscript_base() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+        };
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("missing".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_subscript_index() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+        };
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::IntLiteral(1)),
+            index: Box::new(HirExpr::Name("missing".to_string())),
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_list_append_as_unconstrained_but_recurses_into_value() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+        };
+        let expr = HirExpr::ListAppend {
+            list: "lst".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_list_append_value() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+        };
+        let expr = HirExpr::ListAppend {
+            list: "lst".to_string(),
+            value: Box::new(HirExpr::Name("missing".to_string())),
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_gives_a_for_list_loop_variable_a_fresh_term_when_unbound() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["i"],
+        };
+        let body = vec![HirStmt::ForList {
+            var: "i".to_string(),
+            list: "lst".to_string(),
+            body: vec![],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(env.bindings.contains_key("i"));
+    }
+
+    #[test]
+    fn collect_block_constraints_keeps_a_for_list_loop_variable_s_existing_term() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::from([("i".to_string(), Ok(Ty::Int))]),
+            local_names: &["i"],
+        };
+        let body = vec![HirStmt::ForList {
+            var: "i".to_string(),
+            list: "lst".to_string(),
+            body: vec![],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(env.bindings.get("i"), Some(&Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_for_list_loop_body() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["i", "z"],
+        };
+        let body = vec![HirStmt::ForList {
+            var: "i".to_string(),
+            list: "lst".to_string(),
+            body: vec![HirStmt::ExprStmt(HirExpr::Name("z".to_string()))],
         }];
 
         let err = collect_block_constraints(
@@ -2527,6 +3128,133 @@ mod tests {
     }
 
     #[test]
+    fn a_for_list_loop_binds_its_variable_as_the_list_element_type_and_checks_its_body() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "xs".to_string(),
+                value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+            },
+        )
+        .unwrap();
+        let stmt = HirStmt::ForList {
+            var: "i".to_string(),
+            list: "xs".to_string(),
+            body: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("i".to_string()),
+            }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("i"), Some(Ty::Int));
+        assert_eq!(env.lookup("y"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_for_list_loop_binds_its_variable_as_str_for_a_list_of_str() {
+        // Proves the `ForList` inference isn't hardcoded to `Ty::Int` --
+        // it's generic over whatever scalar element type the list actually
+        // has (see the `HirExpr::Subscript`/`ListAppend` genericity notes).
+        // Bound directly rather than via a `str` list literal: T0034 gates
+        // every non-`int` list literal at creation time, so no source-level
+        // program can ever produce a live `Ty::List(Ty::Str)` binding --
+        // this is the only way to reach this arm with one.
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Str)));
+        let stmt = HirStmt::ForList {
+            var: "i".to_string(),
+            list: "xs".to_string(),
+            body: vec![],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("i"), Some(Ty::Str));
+    }
+
+    #[test]
+    fn a_for_list_loop_over_an_undefined_list_is_rejected() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ForList {
+            var: "i".to_string(),
+            list: "undefined".to_string(),
+            body: vec![],
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not defined"));
+    }
+
+    #[test]
+    fn a_for_list_loop_over_a_non_list_value_is_rejected() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(5),
+            },
+        )
+        .unwrap();
+        let stmt = HirStmt::ForList {
+            var: "i".to_string(),
+            list: "x".to_string(),
+            body: vec![],
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("cannot be iterated"));
+    }
+
+    #[test]
+    fn a_for_list_loop_whose_body_statement_is_ill_typed_propagates_the_error() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "xs".to_string(),
+                value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+            },
+        )
+        .unwrap();
+        let stmt = HirStmt::ForList {
+            var: "i".to_string(),
+            list: "xs".to_string(),
+            body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_list_loop_rejects_a_conflicting_reassignment_of_its_variable() {
+        // `i` is already bound to `str` before the loop -- `check_assignment`
+        // itself (not the list/element-type logic above it) is what rejects
+        // rebinding it to the list's `int` element type.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "i".to_string(),
+                value: HirExpr::StringLiteral("not an int".to_string()),
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "xs".to_string(),
+                value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+            },
+        )
+        .unwrap();
+        let stmt = HirStmt::ForList {
+            var: "i".to_string(),
+            list: "xs".to_string(),
+            body: vec![],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0023");
+    }
+
+    #[test]
     fn referencing_an_assigned_name_infers_its_bound_type() {
         let mut env = Environment::new();
         check_stmt(
@@ -2659,6 +3387,250 @@ mod tests {
     fn numeric_result_type_rejects_a_hypothetical_str_operand() {
         let err = numeric_result_type(BinOpKind::Add, Ty::Bool, Ty::Str).unwrap_err();
         assert!(err.message.contains("str"));
+    }
+
+    #[test]
+    fn an_empty_list_literal_cannot_be_inferred() {
+        let env = Environment::new();
+        let err = infer_expr(&env, &HirExpr::ListLiteral(vec![])).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("empty list literal"));
+    }
+
+    #[test]
+    fn a_homogeneous_int_list_literal_infers_list_of_int() {
+        let env = Environment::new();
+        let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]);
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::List(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn a_heterogeneous_list_literal_is_rejected_as_t0032() {
+        let env = Environment::new();
+        let expr = HirExpr::ListLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::StringLiteral("two".to_string()),
+            HirExpr::IntLiteral(3),
+        ]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0032");
+        // Exact match, not a substring check: this is the same message text
+        // baked into `tests/diagnostics/d0032_heterogeneous_list_literal
+        // .expected.txt`, which can't currently run end-to-end (`pycc_mir`
+        // is still non-exhaustive against Task 7's HIR forms) -- this unit
+        // test is what actually guards that fixture's wording today.
+        assert_eq!(
+            err.message,
+            "list element type mismatch: expected int (from the first element), found str"
+        );
+    }
+
+    #[test]
+    fn a_list_literal_of_bool_and_int_is_rejected_since_homogeneity_uses_exact_ty_equality() {
+        // D-104 requires the *exact same* `Ty` for every element -- unlike
+        // `is_assignable`'s bool-is-an-int-subtype rule used elsewhere in
+        // this file, `[1, True]` is still T0032.
+        let env = Environment::new();
+        let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::BoolLiteral(true)]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0032");
+    }
+
+    #[test]
+    fn a_homogeneous_non_int_list_literal_is_rejected_as_t0034() {
+        let env = Environment::new();
+        let expr = HirExpr::ListLiteral(vec![
+            HirExpr::StringLiteral("a".to_string()),
+            HirExpr::StringLiteral("b".to_string()),
+        ]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0034");
+        // Exact match: same wording as
+        // `tests/diagnostics/d0034_list_element_type_not_int.expected.txt`
+        // (currently unrunnable end-to-end -- see the T0032 test above).
+        assert_eq!(
+            err.message,
+            "list[str] is not compiled yet (D-104) -- only list[int] is"
+        );
+    }
+
+    #[test]
+    fn a_list_literal_propagates_an_ill_typed_element_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::ListLiteral(vec![HirExpr::Name("undefined".to_string())]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn subscripting_a_list_infers_its_element_type() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn subscripting_a_list_of_str_infers_str_proving_subscript_is_not_int_specific() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Str)));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
+    }
+
+    #[test]
+    fn subscripting_with_a_non_int_index_is_rejected() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::StringLiteral("zero".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("list index must be"));
+    }
+
+    #[test]
+    fn subscripting_a_non_list_value_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        // Exact match: same wording as
+        // `tests/diagnostics/d0033_subscript_on_non_list.expected.txt`
+        // (currently unrunnable end-to-end -- see the T0032 test above).
+        assert_eq!(err.message, "`int` does not support indexing");
+    }
+
+    #[test]
+    fn subscripting_propagates_an_ill_typed_base_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("undefined".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn subscripting_propagates_an_ill_typed_index_s_error() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn appending_a_matching_value_to_a_list_infers_none() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::ListAppend {
+            list: "x".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
+    }
+
+    #[test]
+    fn appending_a_str_to_a_list_of_str_infers_none_proving_append_is_not_int_specific() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Str)));
+        let expr = HirExpr::ListAppend {
+            list: "x".to_string(),
+            value: Box::new(HirExpr::StringLiteral("a".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
+    }
+
+    #[test]
+    fn appending_to_an_undefined_name_is_rejected_as_not_defined() {
+        let env = Environment::new();
+        let expr = HirExpr::ListAppend {
+            list: "undefined".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not defined"));
+    }
+
+    #[test]
+    fn appending_to_a_local_name_read_before_assignment_is_unbound_local() {
+        // `ListAppend`'s `list` field is a plain `String`, not an
+        // `HirExpr::Name`, so it must replicate `HirExpr::Name`'s own
+        // "unbound local" vs. "not defined" distinction by hand
+        // (`lookup_bound_name`) rather than going through `infer_expr_in`'s
+        // `Name` arm.
+        let env = Environment::new();
+        let expr = HirExpr::ListAppend {
+            list: "x".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr_in(&env, &["x"], &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
+    }
+
+    #[test]
+    fn appending_to_a_non_list_value_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::ListAppend {
+            list: "x".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("does not support `.append()`"));
+    }
+
+    #[test]
+    fn appending_a_mismatched_value_type_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::ListAppend {
+            list: "x".to_string(),
+            value: Box::new(HirExpr::StringLiteral("nope".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot append"));
+    }
+
+    #[test]
+    fn appending_a_bool_to_a_list_of_int_is_rejected_since_it_uses_exact_ty_equality() {
+        // Same exact-`Ty` rule as the list-literal homogeneity check --
+        // `is_assignable`'s bool-is-an-int-subtype rule does not apply here.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::ListAppend {
+            list: "x".to_string(),
+            value: Box::new(HirExpr::BoolLiteral(true)),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn appending_propagates_an_ill_typed_value_s_error() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::ListAppend {
+            list: "x".to_string(),
+            value: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
     }
 
     #[test]
@@ -2927,6 +3899,24 @@ mod tests {
     }
 
     #[test]
+    fn local_name_collection_deduplicates_for_list_targets() {
+        let body = vec![
+            HirStmt::ForList {
+                var: "i".to_string(),
+                list: "xs".to_string(),
+                body: vec![],
+            },
+            HirStmt::ForList {
+                var: "i".to_string(),
+                list: "ys".to_string(),
+                body: vec![],
+            },
+        ];
+
+        assert_eq!(function_local_names(&[], &body), vec!["i"]);
+    }
+
+    #[test]
     fn local_name_collection_deduplicates_annotated_assignment_targets() {
         let body = vec![
             HirStmt::AnnAssign {
@@ -2960,6 +3950,29 @@ mod tests {
             target: "x".to_string(),
             annotation: Ty::Int,
             value: None,
+        }];
+        assert!(!block_always_returns(&body));
+    }
+
+    #[test]
+    fn contains_return_finds_a_return_inside_a_for_list_loop_body() {
+        let body = vec![HirStmt::ForList {
+            var: "i".to_string(),
+            list: "xs".to_string(),
+            body: vec![HirStmt::Return(Some(HirExpr::Name("i".to_string())))],
+        }];
+        assert!(contains_return(&body));
+    }
+
+    #[test]
+    fn block_always_returns_treats_a_for_list_loop_as_not_always_returning() {
+        // A `for` loop's body might never execute (an empty list), so it can
+        // never on its own guarantee a function returns -- same treatment as
+        // `ForRange` gets in this same match.
+        let body = vec![HirStmt::ForList {
+            var: "i".to_string(),
+            list: "xs".to_string(),
+            body: vec![HirStmt::Return(Some(HirExpr::Name("i".to_string())))],
         }];
         assert!(!block_always_returns(&body));
     }
@@ -3780,6 +4793,127 @@ mod tests {
     }
 
     #[test]
+    fn a_for_list_loop_binds_its_variable_as_the_list_element_type_in_a_function_body() {
+        // Direct `check_stmt_in_function` call (matching this file's own
+        // established pattern, e.g. the `AnnAssign` tests just above) rather
+        // than `check_function`: a for-loop body might never execute (an
+        // empty list), so `block_always_returns` always treats it as "does
+        // not always return" (same as `ForRange`) -- a function whose only
+        // statement is a `for` loop can never satisfy a non-`None` return
+        // type, regardless of what's inside the loop body.
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let stmt = HirStmt::ForList {
+            var: "i".to_string(),
+            list: "xs".to_string(),
+            body: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("i".to_string()),
+            }],
+        };
+        check_stmt_in_function(&mut env, &["xs", "i", "y"], &stmt, Ty::None).unwrap();
+        assert_eq!(env.lookup("i"), Some(Ty::Int));
+        assert_eq!(env.lookup("y"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_for_list_s_list_not_defined_in_a_function_body_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ForList {
+                var: "i".to_string(),
+                list: "undefined".to_string(),
+                body: vec![],
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not defined"));
+    }
+
+    #[test]
+    fn a_for_list_s_list_read_before_a_later_local_assignment_is_unbound_local() {
+        // `xs` is a declared local of this function (it's assigned further
+        // down), so reading it in the `for` clause before that assignment
+        // must be `unbound_local`, not "not defined" -- the same
+        // is_local-aware distinction `HirExpr::Name` itself makes.
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::ForList {
+                    var: "i".to_string(),
+                    list: "xs".to_string(),
+                    body: vec![],
+                },
+                HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                },
+            ],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
+    }
+
+    #[test]
+    fn a_for_list_loop_over_a_non_list_value_in_a_function_body_is_rejected() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ForList {
+                var: "i".to_string(),
+                list: "x".to_string(),
+                body: vec![],
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("cannot be iterated"));
+    }
+
+    #[test]
+    fn a_for_list_loop_whose_body_statement_is_ill_typed_in_a_function_body_propagates_the_error() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ForList {
+                var: "i".to_string(),
+                list: "xs".to_string(),
+                body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_for_list_loop_rejects_a_conflicting_reassignment_of_its_variable_in_a_function_body() {
+        // Same as the module-scope sibling above: `check_assignment` itself
+        // is what rejects rebinding an already-`str` parameter to the list's
+        // `int` element type.
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![
+                ("i".to_string(), Ty::Str),
+                ("xs".to_string(), Ty::List(Box::new(Ty::Int))),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ForList {
+                var: "i".to_string(),
+                list: "xs".to_string(),
+                body: vec![],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0023");
+    }
+
+    #[test]
     fn private_identity_signature_is_inferred_from_its_call_site_and_return() {
         let hir = HirModule {
             items: vec![
@@ -3796,6 +4930,28 @@ mod tests {
             ],
         };
         check(&hir).unwrap();
+    }
+
+    #[test]
+    fn check_and_resolve_takes_the_fast_path_for_an_already_concrete_valid_module() {
+        // Pre-existing gap noticed while chasing this task's own 100%
+        // coverage requirement: every other `check_and_resolve` test in this
+        // file uses a `Ty::Infer` signature, so `checked_function_signatures`'s
+        // fast-path *success* return (`concrete_function_signatures` is
+        // `Some` and `check_with_signatures` succeeds) was never exercised.
+        // Unrelated to this task's list-typing work, but cheap and in-scope
+        // to close here rather than leave dangling.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "identity".to_string(),
+                params: vec![("value".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+            }],
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(resolved, hir);
     }
 
     #[test]
