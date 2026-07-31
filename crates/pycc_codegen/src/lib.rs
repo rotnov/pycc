@@ -113,6 +113,17 @@ struct RtFns<'ctx> {
     print_space: FunctionValue<'ctx>,
     print_newline: FunctionValue<'ctx>,
     print_none: FunctionValue<'ctx>,
+    /// D-105's input-side boundary conversion (Task 11a): turns a
+    /// D-061-tagged `Ty::Int` into the raw, untagged `i64` `PyIntListObj`
+    /// actually stores, panicking honestly on a bigint-tagged value.
+    /// `pycc_rt`'s job rather than inline IR because it interprets the tag
+    /// bit; the reverse direction (`raw_i64_to_tagged_int`) only
+    /// *constructs* a tagged value and so stays inline here.
+    int_untag_checked: FunctionValue<'ctx>,
+    int_list_new: FunctionValue<'ctx>,
+    int_list_append: FunctionValue<'ctx>,
+    int_list_get: FunctionValue<'ctx>,
+    int_list_len: FunctionValue<'ctx>,
     trap: FunctionValue<'ctx>,
 }
 
@@ -230,6 +241,26 @@ fn declare_rt_functions<'ctx>(
         print_space: declare("pycc_rt_print_space", void_type.fn_type(&[], false)),
         print_newline: declare("pycc_rt_print_newline", void_type.fn_type(&[], false)),
         print_none: declare("pycc_rt_print_none", void_type.fn_type(&[], false)),
+        int_untag_checked: declare(
+            "pycc_rt_int_untag_checked",
+            i64_type.fn_type(&[i64_type.into()], false),
+        ),
+        int_list_new: declare("pycc_rt_int_list_new", ptr_type.fn_type(&[], false)),
+        // Returns nothing: `pycc_rt_int_list_append`'s Rust signature is
+        // `-> ()`, so this is the one new `pycc_rt_int_list_*` declaration
+        // whose call site must *not* go through `try_as_basic_value()`.
+        int_list_append: declare(
+            "pycc_rt_int_list_append",
+            void_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        int_list_get: declare(
+            "pycc_rt_int_list_get",
+            i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        int_list_len: declare(
+            "pycc_rt_int_list_len",
+            i64_type.fn_type(&[ptr_type.into()], false),
+        ),
         trap: module.add_function("llvm.trap", void_type.fn_type(&[], false), None),
     }
 }
@@ -343,14 +374,14 @@ fn to_tagged_int<'ctx>(
 /// `pycc_rt`-delegating precedent for the *interpret an existing tagged
 /// value's bits* direction.
 ///
-/// `#[allow(dead_code)]` is temporary and belongs to Task 11b: this helper's
-/// four call sites (`ListLiteral`, `Subscript`, `ListAppend`, `len()`) are
-/// that task's own scope, and until they exist an uncalled private function
-/// trips `dead_code` under CI's `cargo clippy --workspace --all-targets --
-/// -D warnings`. Task 11b must delete this attribute when it wires the
-/// callers; it is also why this function is expected to read as uncovered
-/// under D-014's gate until then.
-#[allow(dead_code)]
+/// Task 11b wired its three real call sites -- `MirExpr::Subscript`'s
+/// element result, the `len(x)` builtin's length result, and
+/// `MirStmt::ForList`'s per-iteration element read -- and removed the
+/// temporary `#[allow(dead_code)]` Task 11a needed while it had none.
+/// `ForList`'s own induction variable and its `len` loop bound are
+/// deliberately *not* among them: both are pure LLVM implementation detail,
+/// never surfaced to user code as a `Ty::Int` value, so neither is on this
+/// boundary at all (see that arm's own comment).
 fn raw_i64_to_tagged_int<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -366,6 +397,116 @@ fn raw_i64_to_tagged_int<'ctx>(
             "list_tag_or",
         )
         .expect("build_or should not fail for two i64 operands")
+}
+
+/// Extracts a `PyIntListObj` pointer from an already-evaluated operand that
+/// every upstream check says must be a `list[T]`: `len`'s argument,
+/// `MirExpr::Subscript`'s base, and `emit_list_name_read`'s named local.
+/// `what` names the offending operand for the message.
+///
+/// One shared helper rather than a `let Scalar::List(..) = .. else` at each
+/// of the three sites, for this file's established
+/// no-permanently-uncoverable-region reason (see `emit_string_literal`'s own
+/// doc comment): `Subscript`'s base in particular can only be reached with a
+/// non-list `Scalar` through deliberately self-inconsistent MIR (a
+/// `MirExpr` whose `ty()` says `list[T]` while `emit_expr` returns something
+/// else), so an inline arm there would be a region D-014's gate could never
+/// legitimately exercise. Funnelling all three through one helper makes the
+/// check genuinely covered by the site that *is* naturally reachable -- a
+/// non-list local named by `.append()`/`for`, and a non-list argument to
+/// `len` (see this file's own tests for both).
+fn expect_list_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'ctx> {
+    let Scalar::List(ptr) = scalar else {
+        panic!(
+            "pycc_codegen: internal error: {what} did not evaluate to a list -- \
+             pycc_types::check (T0033) should have rejected this before codegen"
+        )
+    };
+    ptr
+}
+
+/// D-105's input-side boundary conversion, at all three sites where a
+/// D-061-tagged `Ty::Int` crosses into `PyIntListObj`'s raw, untagged
+/// storage: `ListLiteral`'s per-element value, `ListAppend`'s value, and
+/// `Subscript`'s index. Delegates to `pycc_rt` (rather than emitting the
+/// shift inline the way `raw_i64_to_tagged_int` above does for the reverse
+/// direction) because this direction has to *interpret* the tag bit to
+/// reject a bigint-tagged value, and only `pycc_rt` interprets its own
+/// representation -- the same split `to_float`'s doc comment already
+/// establishes for `int`-to-`float`.
+fn build_untag_checked<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    tagged: IntValue<'ctx>,
+    name: &str,
+) -> IntValue<'ctx> {
+    builder
+        .build_call(rt.int_untag_checked, &[tagged.into()], name)
+        .expect("build_call should not fail for a well-formed untag")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_int_untag_checked returns a non-void i64")
+        .into_int_value()
+}
+
+/// Reads one element out of a `PyIntListObj`. Both operands and the result
+/// are on the **raw**, untagged side of D-105's boundary: callers convert
+/// on the way in (`build_untag_checked`) and on the way out
+/// (`raw_i64_to_tagged_int`) only where the value is genuinely a user-visible
+/// `Ty::Int` -- which is why `MirStmt::ForList`'s own induction variable is
+/// passed straight through here with no conversion at all.
+fn build_int_list_get<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    list_ptr: PointerValue<'ctx>,
+    raw_index: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_call(
+            rt.int_list_get,
+            &[list_ptr.into(), raw_index.into()],
+            "list_get",
+        )
+        .expect("build_call should not fail for a well-formed list read")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_int_list_get returns a non-void i64")
+        .into_int_value()
+}
+
+/// A `PyIntListObj`'s current element count, as a **raw**, untagged `i64`
+/// (D-105). The `len(x)` builtin re-tags this before handing it back as a
+/// `Ty::Int` expression value; `MirStmt::ForList` uses it directly as its
+/// own loop bound and deliberately does not.
+fn build_int_list_len<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    list_ptr: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_call(rt.int_list_len, &[list_ptr.into()], "list_len")
+        .expect("build_call should not fail for a well-formed list length read")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_int_list_len returns a non-void i64")
+        .into_int_value()
+}
+
+/// Appends one already-untagged (D-105) value to a `PyIntListObj`, shared by
+/// `MirExpr::ListLiteral`'s per-element construction and
+/// `MirExpr::ListAppend`. Returns nothing: `pycc_rt_int_list_append` is
+/// declared `void`, so unlike every other `pycc_rt_int_list_*` helper above
+/// there is no `try_as_basic_value()` result to extract.
+fn build_int_list_append<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    list_ptr: PointerValue<'ctx>,
+    raw_value: IntValue<'ctx>,
+) {
+    builder
+        .build_call(
+            rt.int_list_append,
+            &[list_ptr.into(), raw_value.into()],
+            "list_append",
+        )
+        .expect("build_call should not fail for a well-formed list append");
 }
 
 /// Applies the one representation-changing assignment conversion accepted by
@@ -964,6 +1105,40 @@ fn emit_expr<'ctx>(
                     "pycc_codegen: using print()'s result as a nested expression is not supported yet"
                 );
             }
+            // `len` is the second hand-recognized builtin (D-104 point 3),
+            // dispatched here for the same reason `print` is: it has no
+            // `user_functions` entry, so it must be claimed before the
+            // lookup below turns it into an "undefined function" panic.
+            // Mirrors `pycc_types`' own `callee == "len"` arm and
+            // `pycc_mir`'s, which already type it `Ty::Int` -- so this
+            // returns a `Scalar::Int` directly rather than falling through
+            // to the declared-return-type dispatch at the end of this arm.
+            if callee == "len" {
+                let [list_arg] = args.as_slice() else {
+                    panic!(
+                        "pycc_codegen: internal error: `len` takes exactly 1 argument, got {} \
+                         -- pycc_types::check (T0033) should have rejected this before codegen",
+                        args.len()
+                    )
+                };
+                let scalar = emit_expr(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                    list_arg,
+                );
+                let list_ptr = expect_list_pointer(scalar, "`len`'s argument");
+                // D-105 output side: the raw count becomes a user-visible
+                // `Ty::Int` expression value here (`print(len(x))`,
+                // `n = len(x)`), so it is re-tagged -- unlike
+                // `MirStmt::ForList`'s own use of the same runtime call,
+                // which keeps it raw as a private loop bound.
+                let raw_len = build_int_list_len(builder, rt, list_ptr);
+                return Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_len));
+            }
             // Unlike `emit_stmt`'s void-call arm below, there is no
             // `Result` here to propagate a clean, user-facing error
             // through -- `emit_expr` returns a `Scalar` unconditionally, so
@@ -1118,7 +1293,140 @@ fn emit_expr<'ctx>(
                 panic!("pycc_codegen: internal error: an f-string with zero parts should not be reachable")
             }))
         }
+        // `[e1, e2, ...]` (D-104): an empty `pycc_rt_int_list_new()` object
+        // followed by one `pycc_rt_int_list_append` per element, in source
+        // order. No pre-sizing call: `PyIntListObj`'s payload is a
+        // `Vec<i64>` whose own amortized-doubling `push` already handles
+        // growth (see that struct's doc comment), so a reserve entry point
+        // would be new runtime surface for no behavioral difference.
+        //
+        // D-105 input side: each element is an arbitrary `Ty::Int`
+        // expression and therefore D-061-tagged, while `PyIntListObj`
+        // stores raw untagged slots -- hence the `build_untag_checked` per
+        // element (which is also what turns a bigint-valued element into an
+        // honest runtime panic instead of a silently corrupted slot).
+        //
+        // `to_tagged_int` rather than a `let Scalar::Int(..) else` match, for
+        // the same reason `emit_expr`'s own `BinOp`/`Ty::Int` arm uses it:
+        // Python's `bool` is an `int` subtype, so widening is the correct
+        // response to a `Scalar::Bool` element rather than an error -- and
+        // its `Float`/`Str`/`List` arms already panic honestly.
+        MirExpr::ListLiteral(elements) => {
+            let list_ptr = builder
+                .build_call(rt.int_list_new, &[], "list_new")
+                .expect("build_call should not fail for a well-formed list construction")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_int_list_new returns a non-void pointer")
+                .into_pointer_value();
+            for element in elements {
+                let scalar = emit_expr(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                    element,
+                );
+                let tagged = to_tagged_int(context, builder, scalar);
+                let raw = build_untag_checked(builder, rt, tagged, "list_untag_element");
+                build_int_list_append(builder, rt, list_ptr, raw);
+            }
+            Scalar::List(list_ptr)
+        }
+        // `base[index]`, read-only (D-104 scope cut 2). Both of D-105's
+        // conversions apply here, in opposite directions: the index is a
+        // tagged `Ty::Int` expression crossing *into* the list, and the
+        // element read back out is a raw slot becoming a user-visible
+        // `Ty::Int` expression result.
+        //
+        // An out-of-range (including any negative) index is
+        // `pycc_rt_int_list_get`'s own honest runtime panic, not something
+        // this crate can check -- the index is only known at runtime.
+        MirExpr::Subscript { base, index } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let base_ptr = expect_list_pointer(base_scalar, "the subscripted value");
+            let index_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, index);
+            let tagged_index = to_tagged_int(context, builder, index_scalar);
+            let raw_index = build_untag_checked(builder, rt, tagged_index, "list_untag_index");
+            let raw_element = build_int_list_get(builder, rt, base_ptr, raw_index);
+            Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_element))
+        }
+        // `list.append(value)` (D-104 point 3). Same input-side D-105
+        // conversion as `ListLiteral`'s elements above. `list` is a plain
+        // variable name rather than a sub-expression (mirroring
+        // `HirExpr::ListAppend`), so it is read through
+        // `emit_list_name_read` instead of a recursive `emit_expr` call.
+        //
+        // Python's `list.append` evaluates to `None`; the canonical `i8 0`
+        // unit carrier this crate uses for every other `None`-valued
+        // expression is what comes back (identical to `emit_expr`'s `Call`
+        // arm's own `Ty::None` case).
+        MirExpr::ListAppend { list, value } => {
+            let list_ptr =
+                emit_list_name_read(context, builder, module, rt, user_functions, locals, list);
+            let scalar = emit_expr(context, builder, module, rt, user_functions, locals, value);
+            let tagged = to_tagged_int(context, builder, scalar);
+            let raw = build_untag_checked(builder, rt, tagged, "list_untag_appended");
+            build_int_list_append(builder, rt, list_ptr, raw);
+            Scalar::Bool(context.i8_type().const_int(0, false))
+        }
     }
+}
+
+/// Reads a `list[T]`-typed local by name. `MirExpr::ListAppend`'s `list` and
+/// `MirStmt::ForList`'s `list` both carry their list as a plain variable
+/// name rather than a sub-expression (mirroring `HirExpr::ListAppend`/
+/// `HirStmt::ForList`, D-104), so neither has a `MirExpr` to hand to
+/// `emit_expr` directly.
+///
+/// Routes the read through `emit_expr`'s own `Name` arm (via a synthetic
+/// `MirExpr::Name` carrying the slot's own recorded type) rather than
+/// loading `slot.ptr` here, so these two reads get exactly the same
+/// definite-assignment guard every other name read gets -- without it,
+/// `if flag: xs = [1]` followed by an unconditional `xs.append(2)` would
+/// dereference an uninitialized slot instead of trapping. Unlike
+/// `emit_string_literal`'s own documented removal of a synthetic-`MirExpr`
+/// round-trip, this one introduces no permanently-uncoverable arm: the
+/// non-list case goes through the shared `expect_list_pointer` above, and a
+/// non-list local is exactly the naturally reachable way to cover it (see
+/// this file's own `appending_to_a_non_list_local_is_an_internal_error`).
+#[allow(clippy::too_many_arguments)]
+fn emit_list_name_read<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    name: &str,
+) -> PointerValue<'ctx> {
+    // `let ... else`, not the `unwrap_or_else(|| panic!(..))` shape
+    // `emit_expr`'s own `Name` arm uses for the same lookup: a panicking
+    // closure compiles to its own function record, which `cargo llvm-cov`
+    // reports as an "Unexecuted instantiation" in whichever crate
+    // instantiation never reaches it (observed here for the copy the
+    // integration-test binaries link, which has no reason to construct an
+    // unbound list name). Writing the check inline keeps its counts inside
+    // the enclosing function, where they merge across instantiations.
+    let Some(slot) = locals.get(name) else {
+        panic!("pycc_codegen: internal error: `{name}` has no local slot")
+    };
+    let ty = slot.ty.clone();
+    let scalar = emit_expr(
+        context,
+        builder,
+        module,
+        rt,
+        user_functions,
+        locals,
+        &MirExpr::Name {
+            name: name.to_string(),
+            ty,
+        },
+    );
+    expect_list_pointer(scalar, &format!("`{name}`"))
 }
 
 /// Evaluates every entry in `args` (via `emit_expr`, so each argument is
@@ -1560,6 +1868,23 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                 collect_stmt_bindings(stmt, bindings);
             }
         }
+        // `Ty::Int` for the same reason `ForRange` above hardcodes it, not
+        // by analogy: a `for` target's type is the iterated element type,
+        // and `pycc_types`' T0034 gate (D-104 scope cut 5) rejects every
+        // `list[T]` but `list[int]` before codegen ever runs, so `list`'s
+        // element type is `int` for every `ForList` that can reach this
+        // crate. Deliberately not derived from `bindings[list]` instead:
+        // that entry is absent whenever `list` is a parameter, and a
+        // derived non-`int` element type would allocate a slot
+        // `emit_stmt`'s own `list[int]`-only `ForList` arm then stores a
+        // tagged `int` into. A future PR widening codegen past `list[int]`
+        // owns both halves together.
+        MirStmt::ForList { var, body, .. } => {
+            bindings.entry(var.clone()).or_insert(pycc_mir::Ty::Int);
+            for stmt in body {
+                collect_stmt_bindings(stmt, bindings);
+            }
+        }
         MirStmt::ExprStmt(_) | MirStmt::Return(_) | MirStmt::NoOp => {}
     }
 }
@@ -1605,14 +1930,31 @@ fn declare_module_globals<'ctx>(
                         .const_null()
                         .into(),
                 ),
-                // Deliberately no `Ty::List(_)` arm here even though
-                // `collect_stmt_bindings` now allow-lists `list[int]`
-                // locals (Task 5/D-089): that allow-list change only needs
-                // to cover *function*-local slots for Task 11 -- a
-                // module-level `list[int]` global stays unsupported for
-                // now, so it panics here with a clear message rather than
-                // silently getting a representation this crate doesn't
-                // back with real list runtime support yet.
+                // Identical storage to `Ty::Str` directly above: an opaque
+                // pointer, null until the first assignment stores a real
+                // `PyIntListObj` into it, with the separate `initialized`
+                // flag below (which every module global gets) trapping any
+                // read that reaches it first.
+                //
+                // Task 5 (D-089) deliberately left this arm out and let a
+                // module-level `list[int]` binding hit the catch-all below,
+                // on the grounds that no real source could construct a list
+                // value at all yet; its own report flagged the interaction
+                // for Task 11 to re-derive. Task 11b makes `x = [1, 2, 3]`
+                // constructible from real source, and D-104's first scope
+                // cut names module scope as one of the two places a
+                // `list[int]` value is expected to live -- so leaving it out
+                // now would turn that documented, supported form into an
+                // internal compiler panic. No exit-time decref accompanies
+                // it (contrast the `Ty::Str` loop in `compile_to_object`):
+                // D-106 keeps `list[T]` leak-only for v0.2.
+                pycc_mir::Ty::List(_) => (
+                    context.ptr_type(inkwell::AddressSpace::default()).into(),
+                    context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .const_null()
+                        .into(),
+                ),
                 other => panic!(
                     "pycc_codegen: a `{}`-typed module binding is not supported yet",
                     other.name()
@@ -2395,6 +2737,119 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(after_bb);
             Ok(())
         }
+        // An intentional inline duplicate of `ForRange`'s loop-building
+        // logic directly above -- exactly as that arm is itself a
+        // deliberate inline copy of `emit_body_then_branch`'s (see both
+        // their own comments). Not factored into a shared helper: the two
+        // arms differ in their bound, their induction step, and their
+        // per-iteration prologue, and this file's established position is
+        // that a third consumer, not a second, is what justifies extracting
+        // shared loop-building machinery.
+        //
+        // Three real differences from `ForRange`, all of them consequences
+        // of iterating a container rather than an arithmetic range:
+        //
+        // 1. The induction variable is a plain, raw LLVM `i64` index, never
+        //    a D-061-tagged `Ty::Int` -- so the increment is
+        //    `build_int_add`, not `pycc_rt_int_add`, and the loop test is a
+        //    plain `icmp slt`, not `pycc_rt_range_continue`. Both of those
+        //    runtime functions take *tagged* operands (D-061); calling
+        //    either with this raw counter would silently compute on the
+        //    wrong values.
+        // 2. The bound is `pycc_rt_int_list_len`, re-read on every
+        //    iteration inside the test block rather than hoisted into the
+        //    preheader. This matches CPython, whose list iterator compares
+        //    its cursor against the list's *current* length on every
+        //    `__next__` -- so `for v in xs: xs.append(v)` runs forever
+        //    there, and would terminate here if the length were hoisted.
+        // 3. Each iteration prepends one `pycc_rt_int_list_get` read.
+        //
+        // D-105 applies to exactly one value in this arm: the element read.
+        // The induction variable and the raw `len` it is compared against
+        // are private LLVM implementation detail, never exposed to user
+        // code as `Ty::Int` values, so they need neither
+        // `build_untag_checked` on the way in nor `raw_i64_to_tagged_int`
+        // on the way out. The element does need re-tagging, because `var`
+        // is an ordinary user-visible `Ty::Int` local the body may print or
+        // compute with.
+        MirStmt::ForList { var, list, body } => {
+            let function = builder.get_insert_block().unwrap().get_parent().unwrap();
+            // Read once, in the preheader, not per iteration: Python binds
+            // its iterator to the object the `for` statement evaluated, so
+            // a body-level rebinding of the same name (`xs = [9]`) must not
+            // retarget the loop.
+            let list_ptr =
+                emit_list_name_read(context, builder, module, rt, user_functions, locals, list);
+            let preheader = builder.get_insert_block().unwrap();
+
+            let test_bb = context.append_basic_block(function, "for_list_test");
+            let body_bb = context.append_basic_block(function, "for_list_body");
+            let after_bb = context.append_basic_block(function, "for_list_after");
+
+            builder
+                .build_unconditional_branch(test_bb)
+                .expect("build_unconditional_branch should not fail entering the loop test");
+            builder.position_at_end(test_bb);
+            let induction = builder
+                .build_phi(context.i64_type(), "for_list_index")
+                .expect("build_phi should not fail in a fresh loop-test block");
+            let zero = context.i64_type().const_zero();
+            induction.add_incoming(&[(&zero, preheader)]);
+            let current = induction.as_basic_value().into_int_value();
+            let len = build_int_list_len(builder, rt, list_ptr);
+            let cont = builder
+                .build_int_compare(IntPredicate::SLT, current, len, "for_list_cont")
+                .expect("build_int_compare should not fail comparing two i64 operands");
+            builder
+                .build_conditional_branch(cont, body_bb, after_bb)
+                .expect("build_conditional_branch should not fail for a well-formed i1 condition");
+
+            builder.position_at_end(body_bb);
+            // Same Python target-binding semantics `ForRange`'s own
+            // comment describes: the visible target is a separate storage
+            // slot written once per iteration, so an empty list leaves it
+            // unbound, the final target keeps the last element, and body
+            // reassignment cannot corrupt the next iteration.
+            let raw_element = build_int_list_get(builder, rt, list_ptr, current);
+            let element = raw_i64_to_tagged_int(context, builder, raw_element);
+            emit_assign(context, builder, locals, var, Scalar::Int(element));
+            emit_body(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                body,
+                expected_return_ty,
+            )?;
+            // `ForRange`'s own terminator-safety guard, for the identical
+            // reason (see that arm's comment): a `Return` inside `body`
+            // already terminated `body_bb`, and adding the increment and
+            // back-edge anyway would build a second terminator on it.
+            if builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_none()
+            {
+                let next = builder
+                    .build_int_add(
+                        current,
+                        context.i64_type().const_int(1, false),
+                        "for_list_next",
+                    )
+                    .expect("build_int_add should not fail for two i64 operands");
+                let body_end = builder.get_insert_block().unwrap();
+                induction.add_incoming(&[(&next, body_end)]);
+                builder.build_unconditional_branch(test_bb).expect(
+                    "build_unconditional_branch should not fail on a block with no terminator yet",
+                );
+            }
+
+            builder.position_at_end(after_bb);
+            Ok(())
+        }
         MirStmt::Return(value) => {
             match value {
                 Some(expr) => {
@@ -2767,8 +3222,7 @@ mod tests {
         let release_dir = tempfile_dir("release_flag_release");
         let release_obj_path = release_dir.join("release_flag_release.o");
         compile_to_object(&mir, &release_obj_path, None, true).expect("codegen should succeed");
-        let release_obj =
-            std::fs::read(&release_obj_path).expect("object file should be readable");
+        let release_obj = std::fs::read(&release_obj_path).expect("object file should be readable");
 
         assert_ne!(
             debug_obj, release_obj,
@@ -5444,6 +5898,311 @@ mod tests {
             f.verify(true),
             "storing a list[T] pointer into its own pointer-typed slot must be valid IR"
         );
+    }
+
+    /// Wraps `body` in a `None`-returning function `f` that is then called
+    /// at top level -- the shape every `list[int]` MIR fixture below needs,
+    /// since a `list[int]` binding only becomes a function-local (rather
+    /// than a module global) when its assignment lives inside a function
+    /// body. Kept as a helper because each of these tests differs only in
+    /// the statements it puts inside.
+    fn list_fixture_module(body: Vec<MirStmt>) -> MirModule {
+        MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body,
+                },
+                MirItem::TopLevelStmt(call_user_fn("f")),
+            ],
+        }
+    }
+
+    /// `xs = [1, 2, 3]` as a `MirStmt`, the prelude most of the `list[int]`
+    /// fixtures below open with.
+    fn assign_list_literal(target: &str) -> MirStmt {
+        MirStmt::Assign {
+            target: target.to_string(),
+            value: MirExpr::ListLiteral(vec![
+                MirExpr::IntLiteral(1),
+                MirExpr::IntLiteral(2),
+                MirExpr::IntLiteral(3),
+            ]),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "`len` takes exactly 1 argument, got 0")]
+    fn a_len_call_with_the_wrong_argument_count_is_an_internal_error() {
+        // `pycc_types` already rejects a mis-arity `len` call with T0033
+        // (its own `len` arm checks `arg_tys.len() != 1` before anything
+        // else), so this is hand-built malformed MIR exercising codegen's
+        // own defensive backstop -- the same convention as
+        // `referencing_a_name_with_no_bound_local_is_an_internal_error`
+        // above.
+        let mir = list_fixture_module(vec![MirStmt::ExprStmt(MirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![],
+            ty: Ty::Int,
+        })]);
+        let dir = tempfile_dir("len_wrong_arity_panics");
+        let _ = compile_to_object(&mir, &dir.join("len_wrong_arity_panics.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "`len`'s argument did not evaluate to a list")]
+    fn a_len_call_on_a_non_list_argument_is_an_internal_error() {
+        // The other half of `pycc_types`' own T0033 `len` check (a
+        // non-`list[T]` argument), and the naturally reachable cover for
+        // `expect_list_pointer`'s shared panic: `emit_expr` really does
+        // return a non-`List` scalar here, no self-inconsistent MIR needed.
+        let mir = list_fixture_module(vec![MirStmt::ExprStmt(MirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![MirExpr::IntLiteral(1)],
+            ty: Ty::Int,
+        })]);
+        let dir = tempfile_dir("len_non_list_panics");
+        let _ = compile_to_object(&mir, &dir.join("len_non_list_panics.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "`n` did not evaluate to a list")]
+    fn appending_to_a_non_list_local_is_an_internal_error() {
+        // `n = 1` then `n.append(2)`: `pycc_types` rejects this with T0033
+        // ("value does not support list operations"), so codegen only sees
+        // it as hand-built malformed MIR. Covers `emit_list_name_read`'s
+        // own use of `expect_list_pointer`, the shared check
+        // `MirStmt::ForList`'s list operand and `MirExpr::Subscript`'s base
+        // also go through.
+        let mir = list_fixture_module(vec![
+            MirStmt::Assign {
+                target: "n".to_string(),
+                value: MirExpr::IntLiteral(1),
+            },
+            MirStmt::ExprStmt(MirExpr::ListAppend {
+                list: "n".to_string(),
+                value: Box::new(MirExpr::IntLiteral(2)),
+            }),
+        ]);
+        let dir = tempfile_dir("append_to_non_list_panics");
+        let _ = compile_to_object(&mir, &dir.join("append_to_non_list_panics.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "`never_bound` has no local slot")]
+    fn iterating_a_name_with_no_local_slot_is_an_internal_error() {
+        // `for v in never_bound:` where nothing ever bound `never_bound` --
+        // `pycc_types` rejects an unbound list operand (T0033/T0021, see
+        // its `lookup_bound_name` helper), so this is codegen's own
+        // defensive backstop for `emit_list_name_read`'s slot lookup, the
+        // one branch of it `appending_to_a_non_list_local_is_an_internal_
+        // error` above does not reach.
+        let mir = list_fixture_module(vec![MirStmt::ForList {
+            var: "v".to_string(),
+            list: "never_bound".to_string(),
+            body: vec![],
+        }]);
+        let dir = tempfile_dir("for_list_unbound_name_panics");
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("for_list_unbound_name_panics.o"),
+            None,
+            false,
+        );
+    }
+
+    #[test]
+    fn a_return_inside_a_for_list_body_returns_immediately_without_looping() {
+        // The `MirStmt::ForList` counterpart of `a_return_inside_a_for_
+        // range_body_returns_immediately_without_looping` above, for the
+        // same reason: `ForList`'s arm carries its own inline copy of the
+        // terminator-safety guard, and without it the increment-and-branch-
+        // back would build a second terminator onto a block `body`'s
+        // `Return` already terminated -- IR `module.verify()` rejects.
+        // Prints "1", not "1\n2\n3\n".
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "first_of_list".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        assign_list_literal("xs"),
+                        MirStmt::ForList {
+                            var: "v".to_string(),
+                            list: "xs".to_string(),
+                            body: vec![MirStmt::Return(Some(MirExpr::Name {
+                                name: "v".to_string(),
+                                ty: Ty::Int,
+                            }))],
+                        },
+                        // Unreachable in practice (the loop always returns
+                        // on its first iteration for this non-empty list),
+                        // but required to keep this hand-built MIR
+                        // well-formed for a non-`None`-returning function --
+                        // exactly the same caveat the `ForRange` version of
+                        // this test documents.
+                        MirStmt::Return(Some(MirExpr::IntLiteral(-1))),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "first_of_list".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("for_list_return_inside_body");
+        let obj_path = dir.join("for_list_return_inside_body.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("for_list_return_inside_body");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    fn a_for_list_loop_visits_every_element_in_order() {
+        // The full `MirStmt::ForList` loop, run to completion: unlike
+        // `a_return_inside_a_for_list_body_returns_immediately_without_
+        // looping` below, this one reaches the arm's increment-and-branch-
+        // back block on every iteration and its loop test's exhaustion
+        // edge, and proves the per-iteration element read is re-tagged
+        // (D-105) rather than printed as a raw slot value -- an untagged
+        // element would print `0`/`1`/`1` here, not `1`/`2`/`3`.
+        //
+        // Kept as a `pycc_codegen` unit test even though
+        // `tests/slice1_codegen_depth.rs` covers the same behavior from
+        // real source: that suite drives the separate `pycc` binary, which
+        // links its own copy of this crate, so `cargo llvm-cov`'s
+        // per-instantiation region accounting does not let it stand in for
+        // coverage of the copy this crate's own test binary uses.
+        let mir = list_fixture_module(vec![
+            assign_list_literal("xs"),
+            MirStmt::ForList {
+                var: "v".to_string(),
+                list: "xs".to_string(),
+                body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "v".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })],
+            },
+        ]);
+        let dir = tempfile_dir("for_list_visits_every_element");
+        let obj_path = dir.join("for_list_visits_every_element.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("for_list_visits_every_element");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n2\n3\n");
+    }
+
+    #[test]
+    fn a_module_level_list_binding_gets_a_null_initialized_pointer_global() {
+        // `declare_module_globals`' `Ty::List(_)` arm: a module-scope
+        // `xs = [1, 2, 3]` (one of the two places D-104's first scope cut
+        // says a `list[int]` value may live) becomes an LLVM global rather
+        // than a function-local alloca. Task 5 (D-089) deliberately left
+        // this arm out while no real source could build a list value, and
+        // flagged re-deriving it for Task 11; without it this exact MIR
+        // panics with "a `list[int]`-typed module binding is not supported
+        // yet".
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_list_literal("xs")),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "len".to_string(),
+                        args: vec![MirExpr::Name {
+                            name: "xs".to_string(),
+                            ty: Ty::List(Box::new(Ty::Int)),
+                        }],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("module_level_list_global");
+        let obj_path = dir.join("module_level_list_global.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("module_level_list_global");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3\n");
+    }
+
+    #[test]
+    fn an_error_inside_a_for_list_body_propagates_out_of_codegen() {
+        // `MirStmt::ForList`'s arm emits its body through `emit_body`,
+        // whose `Result` it must propagate rather than swallow -- the same
+        // `?`-propagation every other body-emitting arm relies on (see
+        // `public_codegen_api_propagates_an_error_from_a_function_body` in
+        // `tests/slice1_codegen_depth.rs`). A call to an undefined function
+        // is the one failure `emit_stmt` reports as a clean `Err` instead
+        // of a panic.
+        let mir = list_fixture_module(vec![
+            assign_list_literal("xs"),
+            MirStmt::ForList {
+                var: "v".to_string(),
+                list: "xs".to_string(),
+                body: vec![call_user_fn("missing")],
+            },
+        ]);
+        let dir = tempfile_dir("for_list_body_error");
+        let error = compile_to_object(&mir, &dir.join("for_list_body_error.o"), None, false)
+            .expect_err("the undefined call inside the loop body should fail");
+        assert!(error.contains("missing"));
+    }
+
+    #[test]
+    fn a_bool_list_element_widens_to_a_tagged_int_before_it_is_stored() {
+        // `xs = [True, 1]` never reaches codegen from real source
+        // (`pycc_types` rejects a mixed literal with T0032, and an
+        // all-`bool` one with T0034), but `MirExpr::ListLiteral`'s arm
+        // deliberately routes each element through `to_tagged_int` rather
+        // than requiring a `Scalar::Int` outright -- Python's `bool` is an
+        // `int` subtype, so widening is the correct answer if a `bool`
+        // element ever does reach it, exactly as `emit_expr`'s own
+        // `BinOp`/`Ty::Int` arm already treats a `bool` operand. Prints
+        // "1", the tagged `int` value `True` widens to (the same v0.1
+        // representation deviation `a_bool_return_value_widens_to_int_when_
+        // the_function_declares_int` above pins), not "True".
+        let mir = list_fixture_module(vec![
+            MirStmt::Assign {
+                target: "xs".to_string(),
+                value: MirExpr::ListLiteral(vec![MirExpr::BoolLiteral(true)]),
+            },
+            MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Bool)),
+                    }),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                }],
+                ty: Ty::None,
+            }),
+        ]);
+        let dir = tempfile_dir("bool_list_element_widens");
+        let obj_path = dir.join("bool_list_element_widens.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("bool_list_element_widens");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
     }
 
     #[test]

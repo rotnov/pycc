@@ -726,6 +726,164 @@ fn pep_0526_annotated_assignments_compile_and_run_correctly() {
 }
 
 #[test]
+fn list_int_literal_append_index_len_and_iteration_all_work() {
+    // The v0.2 `list[int]` thin slice (D-104) end to end through the real
+    // `pycc build` CLI: literal construction, `.append()`, indexed read,
+    // `len()`, and `for`-iteration, all in one program. Inside a private
+    // helper (D-038's `_`-prefixed convention), which is one of the two
+    // places D-104's first scope cut says a `list[int]` value can live;
+    // `a_module_level_list_binding_lives_in_a_global_slot` below covers the
+    // other. Expected output verified against `python3` on this exact
+    // source.
+    let source = "\
+def _run() -> None:
+    x = [10, 20, 30]
+    x.append(40)
+    print(len(x))
+    print(x[0])
+    print(x[3])
+    for v in x:
+        print(v)
+
+_run()
+";
+    let output = build_and_run("list_int_thin_slice", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"4\n10\n40\n10\n20\n30\n40\n");
+}
+
+#[test]
+fn a_module_level_list_binding_lives_in_a_global_slot() {
+    // The other half of D-104's first scope cut ("`list[int]` values exist
+    // ... inside module scope or a private helper"): the same operations as
+    // the test above, written at module scope, where the binding becomes an
+    // LLVM global rather than a function-local alloca. Task 5's own report
+    // flagged that `declare_module_globals` had no `Ty::List(_)` arm and
+    // left re-deriving that interaction to this task -- without the arm
+    // added here, this exact program aborts the compiler with
+    // "a `list[int]`-typed module binding is not supported yet" instead of
+    // building. Also covers reading a `list[int]` global from inside a
+    // function (D-041), which a function-local list can't reach.
+    // Verified against `python3` on this exact source.
+    let source = "\
+def _total() -> int:
+    sum = 0
+    for v in xs:
+        sum = sum + v
+    return sum
+
+xs = [1, 2, 3]
+xs.append(4)
+print(len(xs))
+print(xs[2])
+print(_total())
+";
+    let output = build_and_run("list_module_global", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"4\n3\n10\n");
+}
+
+#[test]
+fn reading_a_list_global_before_it_is_assigned_traps_instead_of_dereferencing_null() {
+    // A `list[int]` module global's storage starts as a null pointer, the
+    // same as a `str` global's (see
+    // `calling_a_function_before_its_string_global_is_initialized_fails_safely`
+    // above). The `initialized` flag every module global carries is what
+    // must stop that null from ever reaching `pycc_rt_int_list_len`.
+    let source = "\
+def _size() -> int:
+    return len(later)
+
+captured = _size()
+later = [1]
+";
+    let output = build_and_run("uninitialized_list_global", source);
+    assert!(
+        !output.status.success(),
+        "an uninitialized list global must trap before a null runtime dereference"
+    );
+}
+
+#[test]
+fn iterating_a_list_rereads_its_length_each_step_like_cpython() {
+    // CPython's list iterator compares its cursor against the list's
+    // *current* length on every `__next__`, so appending inside the loop
+    // body extends the iteration. `MirStmt::ForList`'s codegen therefore
+    // calls `pycc_rt_int_list_len` inside its loop-test block rather than
+    // hoisting it into the preheader -- with the length hoisted, this
+    // program would print only "1". Output verified against `python3` on
+    // this exact source.
+    let source = "\
+def _run() -> None:
+    xs = [1]
+    for v in xs:
+        if len(xs) < 3:
+            xs.append(v + 1)
+        print(v)
+
+_run()
+";
+    let output = build_and_run("list_iteration_rereads_len", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n3\n");
+}
+
+#[test]
+fn appending_a_bigint_valued_element_fails_explicitly_instead_of_corrupting_the_slot() {
+    // D-105's own named regression: `PyIntListObj` stores raw, untagged
+    // `i64` slots with no room for a bigint, and `pycc_rt_int_add`/`_mul`
+    // promote past D-061's 63-bit smallint range on overflow -- reachable
+    // from ordinary type-checked source, as here. The decision requires
+    // this to be an honest runtime failure ("pycc_rt: list[int] does not
+    // support bigint-valued elements or indices yet") rather than a
+    // silently truncated element, and requires a real executing test of it
+    // rather than only a documented gap. Real CPython prints the exact
+    // product here; this is a documented v0.2 scope cut, not a match.
+    //
+    // The overflowing value is built by multiplication rather than written
+    // as a literal: `tag_smallint_const` rejects an out-of-tagged-range
+    // integer *literal* at compile time (bigint literals are their own
+    // separate gap), so a literal would never reach `.append()` at all.
+    // `3000000000 * 3000000000` is the same promotion
+    // `multiplication_promotes_and_float_floor_division_matches_cpython`
+    // above already pins as reaching a real bigint.
+    let source = "\
+def _run() -> None:
+    xs = [1]
+    xs.append(3000000000 * 3000000000)
+    print(xs[1])
+
+_run()
+";
+    let output = build_and_run("list_append_bigint_aborts", source);
+    assert!(
+        !output.status.success(),
+        "a bigint-valued element must fail loudly, not be truncated into a raw i64 slot"
+    );
+}
+
+#[test]
+fn an_out_of_range_index_fails_explicitly() {
+    // `pycc_rt_int_list_get`'s own bounds panic, reached through real
+    // source: the index is only known at runtime, so there is nothing
+    // `pycc_types` could have rejected. Also pins D-104's documented v0.2
+    // scope cut that a *negative* index is out of range too rather than
+    // CPython's last-element behavior.
+    let source = "\
+def _run() -> None:
+    xs = [1, 2, 3]
+    print(xs[0 - 1])
+
+_run()
+";
+    let output = build_and_run("list_index_out_of_range", source);
+    assert!(
+        !output.status.success(),
+        "a negative index is out of range in v0.2, not CPython's last element"
+    );
+}
+
+#[test]
 fn a_bool_initializer_under_an_int_annotation_widens_before_a_later_reassignment() {
     // Regression test for a cross-task divergence found and fixed while
     // implementing this task: `pycc_types` (Task 4) binds its checker
