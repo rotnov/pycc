@@ -1116,6 +1116,8 @@ git add crates/pycc_mir/src/lib.rs
 git commit -m "list[int] part 3: pycc_mir lowering for list literal, subscript, append, for-list (D-104)"
 ```
 
+**Note added during execution:** this task's actual scope grew by one required fix beyond the steps above, found by the controller before dispatch (mirroring the `len()` gap Task 8 found and fixed for `pycc_types`): `pycc_mir`'s existing `HirExpr::Call` lowering arm (`crates/pycc_mir/src/lib.rs:298-309`) special-cases `callee == "print"` to produce `Ty::None` directly, falling back to `lookup(scopes, "$fn:{callee}")` (which panics on a missing key) for every other callee. Without a parallel `callee == "len"` branch producing `Ty::Int`, `len(lst)` — already accepted by Task 8's `pycc_types` as valid — would panic during MIR lowering with `lookup`'s own internal-error message. This task's implementer added `else if callee == "len" { Ty::Int }` alongside the existing `"print"` case, plus a covering test, as part of the same commit. Task 11's own `"len"` addition (`pycc_codegen`'s call-dispatch) is unaffected by this note — codegen still needs its own arm, independent of this MIR-level fix.
+
 ---
 
 ## Task 10: `list[int]` runtime object in `pycc_rt`
