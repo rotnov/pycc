@@ -27,8 +27,9 @@ remains work in flight.
 
 The initial machine-readable query registry and both reviewed pre-registry
 GitHub history prefixes are staged before the trusted workflow activates. The
-registry normalizes case and repeated whitespace before deduplicating syntax-
-sensitive GitHub acquisition identities, and rejects HTML-like or Unicode
+registry normalizes case and repeated whitespace before classifying Boolean
+operators and deduplicating syntax-sensitive GitHub acquisition identities,
+and rejects HTML-like or Unicode
 control/formatting-bearing raw query forms that the fail-closed ledger cannot
 later project. Its Markdown parser uses CommonMark's exact line-ending and
 ASCII blank-line boundaries rather than Python's broader Unicode whitespace,

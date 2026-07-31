@@ -447,9 +447,10 @@ projected from the latest accepted row for every GitHub query. A valid append,
 replay record, and checkpoint cannot merge while that public latest-state view
 still reports the previous snapshot.
 GitHub query text rejects every qualifier except an `in:description` metadata
-diagnostic or a single `topic:` diagnostic. Syntax-sensitive identities still
-normalize ASCII case and repeated whitespace before preserving punctuation,
-phrases, qualifiers, exclusions, Boolean operators, and term order as distinct;
+diagnostic or a single `topic:` diagnostic. Syntax-sensitive identities
+normalize ASCII case and repeated whitespace before classifying Boolean
+operators and preserving punctuation, phrases, qualifiers, exclusions,
+Boolean syntax, and term order as distinct;
 active product queries cannot split one acquisition intent through spelling
 variants. Raw GitHub queries also reject HTML tag/comment forms that the
 fail-closed ledger parser cannot later project. A closed intent/KPI matrix

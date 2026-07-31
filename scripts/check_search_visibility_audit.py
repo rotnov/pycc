@@ -36,7 +36,7 @@ RAW_HTML_START = re.compile(
 )
 LIST_MARKER = re.compile(r"(?:[-+*]|\d+[.)])[ \t]+(.*)\Z")
 SIMPLE_TERM = re.compile(r"[A-Za-z0-9]+\Z")
-BOOLEAN_TERMS = {"AND", "NOT", "OR"}
+BOOLEAN_TERMS = {"and", "not", "or"}
 LIFECYCLES = {"active", "diagnostic", "retired"}
 KPI_ROLES = {"product_acquisition", "diagnostic", "excluded"}
 INTENT_KPI_ROLES = {
@@ -110,7 +110,7 @@ BOOTSTRAP_FILE_SHA256 = {
         "6f14805935905fcfc73b5ec2bb7f047cef5c5d11e6ff574bef3618cf82fedf77"
     ),
     "SEARCH_VISIBILITY.md": (
-        "eca8682088cd43a909ce3cf13d0c4722dad7287f2d966febbc63d6a98fce5cbe"
+        "b65d925acbffa0562e47e4d3fe32a376ff9453db001850fe1b92145b775c13fc"
     ),
     "SEARCH_VISIBILITY_CHECKPOINTS.json": (
         "c55b4a4f1a11025bdde26825bfe762fc243d62997edc2f72ab5725f80ded943b"
@@ -335,10 +335,12 @@ def semantic_identity(surface: str, raw_query: str, version: str) -> str:
         raise AuditError("query text must be nonempty and have no edge whitespace")
     if surface == GITHUB_SURFACE:
         terms = raw_query.split()
+        normalized_terms = [ascii_lower(term) for term in terms]
         if terms and all(
-            SIMPLE_TERM.fullmatch(term) and term not in BOOLEAN_TERMS for term in terms
+            SIMPLE_TERM.fullmatch(term) and normalized_term not in BOOLEAN_TERMS
+            for term, normalized_term in zip(terms, normalized_terms, strict=True)
         ):
-            normalized = " ".join(sorted(ascii_lower(term) for term in terms))
+            normalized = " ".join(sorted(normalized_terms))
             return f"{version}:bag:{normalized}"
         normalized = " ".join(ascii_lower(raw_query).split())
         return f"{version}:syntax:{normalized}"

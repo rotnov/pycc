@@ -971,6 +971,40 @@ class SearchVisibilityAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "semantic identity is double-counted"):
             validate(self.head, self.base, self.audited_at)
 
+    def test_boolean_identity_classifies_after_case_normalization(self) -> None:
+        version = "github-repository-search-v1"
+        expected = f"{version}:syntax:compiler and python"
+        self.assertEqual(
+            semantic_identity(GITHUB_SURFACE, "compiler AND python", version),
+            expected,
+        )
+        self.assertEqual(
+            semantic_identity(GITHUB_SURFACE, "compiler and python", version),
+            expected,
+        )
+        common = {
+            **self.registry["queries"][0],
+            "semantic_identity": expected,
+            "activated_at": "2026-07-31T00:00:00Z",
+        }
+        self.registry["queries"].extend(
+            [
+                {
+                    **common,
+                    "id": "github-product-uppercase-boolean",
+                    "raw_query": "compiler AND python",
+                },
+                {
+                    **common,
+                    "id": "github-product-lowercase-boolean",
+                    "raw_query": "compiler and python",
+                },
+            ]
+        )
+        self.write_registry()
+        with self.assertRaisesRegex(AuditError, "semantic identity is double-counted"):
+            validate(self.head, self.base, self.audited_at)
+
     def test_github_registry_raw_query_rejects_pipes(self) -> None:
         self.registry["queries"].append(
             {

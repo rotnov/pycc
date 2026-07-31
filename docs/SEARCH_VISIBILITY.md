@@ -39,9 +39,10 @@ diagnostics. A diagnostic can remain useful without increasing an acquisition
 "N of M" count.
 
 The registry uses provider-specific semantic identities. GitHub's current
-version treats case and repeated whitespace as equivalent for every query and
-also treats the order of simple unquoted terms as equivalent while preserving
-repeated terms. Quoted phrases, qualifiers, exclusions, Boolean syntax,
+version normalizes ASCII case and repeated whitespace before classifying every
+query, including Boolean operators, and also treats the order of simple
+unquoted terms as equivalent while preserving repeated terms. Quoted phrases,
+qualifiers, exclusions, Boolean syntax,
 punctuation, and unreviewed Unicode remain syntax-distinct after that baseline
 normalization. At most one active product KPI query may use a given
 semantic identity on one provider surface. Raw query text always remains
