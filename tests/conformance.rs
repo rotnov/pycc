@@ -293,3 +293,15 @@ fn pep_0515_underscores_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("pep_0515_underscores_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0515_underscores.py");
 }
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0585_builtin_generics_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0585_builtin_generics.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0585_builtin_generics_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_builtin_generics.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0585_builtin_generics_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_builtin_generics.py");
+}

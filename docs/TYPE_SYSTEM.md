@@ -62,7 +62,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 
 ## Generics
 
-- Monomorphization (Rust model): `list[int]` and `list[str]` are distinct compiled types; bounds expressed via `Protocol` constraints.
+- Monomorphization (Rust model): `list[int]` and `list[str]` are distinct compiled types; bounds expressed via `Protocol` constraints. **Current state (through PR-10, D-104):** this is the v1.0 target model, not yet fully landed — v0.2 ships real codegen for exactly `list[int]`; every other `list[T]` (`list[str]`, `list[float]`, `list[bool]`, nested `list[list[T]]`) type-checks (`Ty::List(Box<Ty>)` is already fully general) but is rejected before codegen with `T0034`, a clean diagnostic rather than a runtime panic. Full per-element-type monomorphization for `list`/`dict`/`set`/`tuple` remains the v1.0 target this section describes.
 - PEP 695 syntax (`def f[T](x: T) -> T`, `type Alias[T] = ...`) and legacy `TypeVar` both supported; PEP 696 defaults honored.
 - Variance: inferred per PEP 695 rules; containers invariant, as in the typing spec.
 - Code-size control: polymorphic-by-vtable fallback for cold generic code under `--opt-size` (compiler-internal, semantics unchanged).
