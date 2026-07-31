@@ -1810,12 +1810,13 @@ Follow this project's own established merge gate and squash-merge convention (ma
 
 **Files:**
 - Modify: `crates/pycc_hir/src/lib.rs` (the `Ty` enum definition + its doc comments, `Ty::name()`'s `Dict` arm, 2 test call sites)
-- Modify: `crates/pycc_codegen/src/lib.rs` (6 test call sites constructing `Ty::Dict`/`Ty::Tuple`, 2 comments asserting the old `Debug` rendering)
+- Modify: `crates/pycc_codegen/src/lib.rs` (5 test call sites constructing `Ty::Dict`/`Ty::Tuple`, 2 comments asserting the old `Debug` rendering)
 - Modify: `docs/DECISIONS.md` (append a `**Update:**` line to D-109's own Consequences section — append-only, do not edit D-109's existing Context/Decision/Alternatives text)
+- Modify: this plan document itself (Steps 3/4/6/9 of this Task 14 section — corrected from the originally-drafted `Box<[Ty]>` shape to `Box<Vec<Ty>>` after the former measured no size reduction; see the Step 3/5/6 correction notes inline below)
 
 **Interfaces:**
 - Consumes: the `Ty` enum from Task 2 (this task changes two of its ten variants' field shapes, not its variant list).
-- Produces: `Ty::Dict(Box<(Ty, Ty)>)` and `Ty::Tuple(Box<[Ty]>)`, replacing `Dict(Box<Ty>, Box<Ty>)` and `Tuple(Vec<Ty>)`. `List(Box<Ty>)` and `Set(Box<Ty>)` are unchanged. Every later reference to `Ty::Dict`/`Ty::Tuple`'s field shape (there are none outside this task's own 2 files, confirmed by the grep above) must use the new shape.
+- Produces: `Ty::Dict(Box<(Ty, Ty)>)` and `Ty::Tuple(Box<Vec<Ty>>)`, replacing `Dict(Box<Ty>, Box<Ty>)` and `Tuple(Vec<Ty>)`. `List(Box<Ty>)` and `Set(Box<Ty>)` are unchanged. Every later reference to `Ty::Dict`/`Ty::Tuple`'s field shape (there are none outside this task's own 2 files, confirmed by the grep above) must use the new shape. **Correction (see Step 5's own note below):** an earlier pass through this task tried `Tuple(Box<[Ty]>)` (a boxed slice) first; it measured `size_of::<Ty>() == 24`, no reduction at all, because `Box<[Ty]>` is a 16-byte fat pointer and rustc's niche-filling layout optimization doesn't apply once more than one variant carries data of a different shape — the actual fix is the double-indirection `Box<Vec<Ty>>` shown here, which keeps every dataful variant a uniform 8-byte thin pointer and measured `size_of::<Ty>() == 16`.
 
 - [ ] **Step 1: Write the failing size regression-guard test**
 
@@ -1875,11 +1876,30 @@ with:
     /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
     Set(Box<Ty>),
     /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own
-    /// scope. Boxed as a slice (D-109), not `Vec<Ty>`: this variant never
-    /// grows after construction, and `Box<[Ty]>` (a 16-byte fat pointer)
-    /// is smaller than `Vec<Ty>`'s 24-byte ptr+len+cap.
-    Tuple(Box<[Ty]>),
+    /// scope. Boxed (D-109) so every dataful variant of `Ty` is a uniform
+    /// thin (8-byte) pointer: a first attempt boxed this as `Box<[Ty]>`
+    /// (a 16-byte fat pointer -- data ptr + length), which measured
+    /// `size_of::<Ty>() == 24` bytes, no reduction at all from the
+    /// pre-fix size, because more than one variant here carries data of a
+    /// different shape (`List`/`Dict`/`Set` are already thin `Box`
+    /// pointers, `Tuple` was not), which defeats rustc's niche-filling
+    /// enum-layout optimization (the trick that makes
+    /// `size_of::<Option<Box<T>>>() == size_of::<Box<T>>()`): with no
+    /// uniform niche across all dataful variants, rustc falls back to an
+    /// explicit discriminant tag, adding a full pointer-aligned word on
+    /// top of the *largest* variant's payload. `Box<Vec<Ty>>` (a second
+    /// indirection: a thin pointer to a heap-allocated `Vec<Ty>`) closes
+    /// that gap by making every dataful variant exactly 8 bytes, which
+    /// measured `size_of::<Ty>() == 16` bytes -- a real reduction.
+    Tuple(Box<Vec<Ty>>),
 ```
+
+**Note (corrected pass):** the `Box<[Ty]>` shape above was this task's first
+attempt and is a dead end — do not repeat it. It measured `size_of::<Ty>() ==
+24`, identical to the pre-fix size, confirmed independently both in-crate and
+via a standalone `rustc` reproduction. `Box<Vec<Ty>>` is what actually shrinks
+`Ty` (measured 16 bytes), at the cost of a second pointer indirection to reach
+the tuple's elements.
 
 - [ ] **Step 4: Fix the resulting compile errors — `pycc_hir`**
 
@@ -1895,7 +1915,7 @@ with:
             Ty::Dict(kv) => format!("dict[{}, {}]", kv.0.name(), kv.1.name()),
 ```
 
-`Ty::Tuple`'s arm needs no change — `Box<[Ty]>` derefs to `[Ty]`, and `.iter()` works identically on both shapes.
+`Ty::Tuple`'s arm needs no change — `Box<Vec<Ty>>` double-derefs to `Vec<Ty>` then `[Ty]`, and `.iter()` works identically to the pre-fix shape (confirmed by building `pycc_hir` before touching this arm: it compiles unchanged).
 
 In the existing test block, replace:
 
@@ -1920,7 +1940,7 @@ with:
         );
         assert_eq!(Ty::Set(Box::new(Ty::Bool)).name(), "set[bool]");
         assert_eq!(
-            Ty::Tuple(Box::new([Ty::Int, Ty::Str])).name(),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])).name(),
             "tuple[int, str]"
         );
 ```
@@ -1933,9 +1953,27 @@ cargo test -p pycc_hir
 
 Expected: all pass, including `ty_shrinks_after_boxing_dict_and_tuple_d109`. **Report the actual measured `size_of::<Ty>()` value in your task report** (add a temporary `eprintln!("{}", std::mem::size_of::<Ty>())` inside the test if needed to observe it, then remove it — the committed test only asserts `< 24`, it does not print). Do not guess or round; the real number (likely 16, but report whatever it actually is) is required, since it decides whether this task's own remedy plausibly closes D-109's regression. **If the measured value is not smaller than 24 bytes at all (i.e., the change produced no real reduction), stop here — do not proceed to Step 6 — and report BLOCKED with the measured number**; that would mean this task's own premise is wrong and needs re-diagnosis, not further mechanical edits.
 
+**Correction, recorded after this exact contingency actually fired once:** the
+`Box<[Ty]>` shape (Steps 3/4 as originally worded above) was executed exactly
+as written and measured `size_of::<Ty>() == 24` — no reduction — confirmed
+independently in-crate and via a standalone `rustc` reproduction of the
+isomorphic old/new enum shapes. That result correctly triggered this step's
+own BLOCKED contingency (all work reverted, nothing committed, a report
+written). A second pass, using `Tuple(Box<Vec<Ty>>)` instead of
+`Tuple(Box<[Ty]>)` (this document's Steps 3/4/6/9 now reflect that corrected
+shape directly, not the original), measured `size_of::<Ty>() == 16` — a real
+reduction — and is the version that proceeded through Steps 6-9. The
+mechanism: `Box<[Ty]>` is a 16-byte fat pointer, while `List`/`Dict`/`Set`'s
+`Box<Ty>`/`Box<(Ty,Ty)>` are 8-byte thin pointers; once more than one variant
+carries data and their payload sizes differ, rustc's niche-filling
+enum-layout optimization can't collapse the discriminant, so it falls back to
+an explicit tag costing a full pointer-aligned word on top of the *largest*
+variant's payload (`8 + 16 = 24`). `Box<Vec<Ty>>` makes every dataful variant
+a uniform 8-byte thin pointer, so the same arithmetic gives `8 + 8 = 16`.
+
 - [ ] **Step 6: Fix the resulting compile errors — `pycc_codegen`**
 
-`cargo build -p pycc_codegen` first to get the compiler's own exhaustive list of errors — expect exactly 6 (the test-only construction call sites; the catch-all match arm at the binary-operator dispatch site uses `Ty::Dict(..)`/`Ty::Tuple(_)`, which are shape-agnostic patterns and need no change — confirm this compiles unchanged, do not edit that line).
+`cargo build -p pycc_codegen` first to get the compiler's own exhaustive list of errors (the catch-all match arm at the binary-operator dispatch site uses `Ty::Dict(..)`/`Ty::Tuple(_)`, which are shape-agnostic patterns and need no change — confirmed this compiles unchanged with zero errors, do not edit that line). **Correction (corrected pass, `Box<Vec<Ty>>` shape):** `cargo test -p pycc_codegen --no-run` reports exactly 8 errors across the same 5 test-only construction call sites named below (3 `Dict` sites × 2 errors each — `E0308` type mismatch plus `E0061` wrong argument count, since `Box::new(a, b)` is invalid for a 1-argument tuple variant — and 2 `Tuple` sites × 1 error each — `E0308`, `Vec<Ty>` vs the expected `Box<Vec<Ty>>`); this supersedes the original "expect exactly 6" estimate, which was written before either shape was actually compiled.
 
 Replace each of these 3 occurrences:
 
@@ -1960,13 +1998,14 @@ Replace each of these 2 occurrences:
             Ty::Tuple(vec![Ty::Int, Ty::Str]),
 ```
 
-with the boxed-slice form:
+with the boxed-`Vec` form (not a boxed slice — see the Step 3/5 correction
+notes above; `Box<Vec<Ty>>` is what actually shrinks `Ty`):
 
 ```rust
-        ty_to_basic_type(&context, Ty::Tuple(Box::new([Ty::Int, Ty::Str])));
+        ty_to_basic_type(&context, Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])));
 ```
 ```rust
-            Ty::Tuple(Box::new([Ty::Int, Ty::Str])),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])),
 ```
 
 (found at: `ty_to_basic_type_panics_clearly_for_tuple`'s direct call; `collect_stmt_bindings_excludes_dict_set_and_tuple_typed_assignment_targets`'s array literal.)
@@ -1993,10 +2032,10 @@ Expected: all green, 100.00%/100.00% coverage maintained (this task adds exactly
 
 - [ ] **Step 9: Append a D-109 update note, commit**
 
-Append to `docs/DECISIONS.md`'s existing D-109 entry, as a new line inside its Consequences bullet (do not edit any existing D-109 text — this is additive, matching the append-only convention D-095's own "**Update:**" addendum and D-109's own cross-reference note both already used):
+Append to `docs/DECISIONS.md`'s existing D-109 entry, as a new sentence inside its Consequences bullet (do not edit any existing D-109 text — this is additive, matching the append-only convention D-095's own "**Update:**" addendum and D-109's own cross-reference note both already used). **Correction (corrected pass):** the actual appended text is longer than the single-line placeholder originally sketched here, since it must also record the `Box<[Ty]>` dead end, the mechanism (niche-filling defeated by non-uniform dataful variants), and why the reduction is real and predictive specifically for `frontend-perf-gate`'s scalar-only fixture (every `Ty` value that benchmark ever constructs is a zero-sized variant, so the only channel affecting it is `Ty`'s uniform in-memory size, not container-field heap traffic) — see `docs/DECISIONS.md`'s own D-109 entry, appended to the end of its Consequences bullet, for the exact committed text:
 
 ```markdown
-**Update (Task 14):** `Ty::Dict`/`Ty::Tuple` are now boxed (`Dict(Box<(Ty, Ty)>)`, `Tuple(Box<[Ty]>)`); `size_of::<Ty>()` measured <ACTUAL NUMBER FROM STEP 5> bytes (down from 24). A fresh full CI rerun is still required to confirm `frontend-perf-gate` actually closes — a smaller `Ty` is necessary but this entry does not itself claim the regression is confirmed resolved until that rerun is observed.
+**Update (Task 14):** `Ty::Dict` is now `Dict(Box<(Ty, Ty)>)`, exactly as this decision's remedy paragraph proposed, and needed only one attempt. `Ty::Tuple` needed two: a first attempt boxed it as `Tuple(Box<[Ty]>)` (a boxed slice) and measured `size_of::<Ty>() == 24` bytes — no reduction at all — because `Box<[Ty]>` is a 16-byte fat pointer while `List`/`Dict`/`Set`'s payloads are 8-byte thin pointers, and once more than one variant carries data of differing shapes, rustc's niche-filling layout optimization can't collapse the discriminant, so it falls back to an explicit tag costing a full pointer-aligned word on top of the largest variant's payload (`8 + 16 = 24`). A second attempt, `Tuple(Box<Vec<Ty>>)`, makes every dataful variant a uniform 8-byte thin pointer, giving `8 + 8 = 16`; `size_of::<Ty>()` measured **16 bytes** (down from 24). `benches/check_bench.rs`'s fixture is scalar-only, so every `Ty` it constructs is zero-sized, never touching `List`/`Dict`/`Set`/`Tuple` — the only channel by which this change affects that benchmark is `Ty`'s uniform width, which every move/clone pays regardless of active variant, so this is a real, predictive reduction, not an analogy; it also rules out "losing `Copy`" as a competing explanation for this specific fixture, since a fieldless-variant `Clone` is just the memcpy. A fresh full CI rerun is still required to confirm `frontend-perf-gate` actually closes.
 ```
 
 ```bash

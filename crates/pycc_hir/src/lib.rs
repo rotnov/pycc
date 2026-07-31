@@ -20,11 +20,30 @@ pub enum Ty {
     /// scope per `docs/DELIVERY_PLAN.md`) -- the variant exists now only
     /// because D-089 decided `Ty`'s full recursive shape up front, so
     /// every later PR's match arms are additive, not migratory again.
-    Dict(Box<Ty>, Box<Ty>),
+    /// The key/value pair is boxed together as a single pointer (D-109 --
+    /// shrinks `Ty`'s own size, closing a real frontend-throughput
+    /// regression the original two-separate-`Box<Ty>` shape caused), not
+    /// because `dict[K,V]` needs its own codegen yet.
+    Dict(Box<(Ty, Ty)>),
     /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
     Set(Box<Ty>),
-    /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own scope.
-    Tuple(Vec<Ty>),
+    /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own
+    /// scope. Boxed (D-109) so every dataful variant of `Ty` is a uniform
+    /// thin (8-byte) pointer: a first attempt boxed this as `Box<[Ty]>`
+    /// (a 16-byte fat pointer -- data ptr + length), which measured
+    /// `size_of::<Ty>() == 24` bytes, no reduction at all from the
+    /// pre-fix size, because more than one variant here carries data of a
+    /// different shape (`List`/`Dict`/`Set` are already thin `Box`
+    /// pointers, `Tuple` was not), which defeats rustc's niche-filling
+    /// enum-layout optimization (the trick that makes
+    /// `size_of::<Option<Box<T>>>() == size_of::<Box<T>>()`): with no
+    /// uniform niche across all dataful variants, rustc falls back to an
+    /// explicit discriminant tag, adding a full pointer-aligned word on
+    /// top of the *largest* variant's payload. `Box<Vec<Ty>>` (a second
+    /// indirection: a thin pointer to a heap-allocated `Vec<Ty>`) closes
+    /// that gap by making every dataful variant exactly 8 bytes, which
+    /// measured `size_of::<Ty>() == 16` bytes -- a real reduction.
+    Tuple(Box<Vec<Ty>>),
 }
 
 impl Ty {
@@ -37,7 +56,7 @@ impl Ty {
             Ty::None => "None".to_string(),
             Ty::Infer => "<inferred>".to_string(),
             Ty::List(elem) => format!("list[{}]", elem.name()),
-            Ty::Dict(key, value) => format!("dict[{}, {}]", key.name(), value.name()),
+            Ty::Dict(kv) => format!("dict[{}, {}]", kv.0.name(), kv.1.name()),
             Ty::Set(elem) => format!("set[{}]", elem.name()),
             Ty::Tuple(elems) => format!(
                 "tuple[{}]",
@@ -776,15 +795,31 @@ mod tests {
     }
 
     #[test]
+    fn ty_shrinks_after_boxing_dict_and_tuple_d109() {
+        // D-109: before this task, size_of::<Ty>() measured 24 bytes (Vec<Ty>'s
+        // ptr+len+cap dominates). This is a real regression guard, not a vibe --
+        // it must stay strictly smaller than 24 forever, catching any future
+        // change that re-inflates Ty back to its pre-fix size.
+        assert!(
+            std::mem::size_of::<Ty>() < 24,
+            "Ty::size_of() is {} bytes -- expected a real reduction from the pre-D-109 24 bytes",
+            std::mem::size_of::<Ty>()
+        );
+    }
+
+    #[test]
     fn ty_name_describes_nested_container_types() {
         assert_eq!(Ty::Int.name(), "int");
         assert_eq!(Ty::List(Box::new(Ty::Int)).name(), "list[int]");
         assert_eq!(
-            Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Float)).name(),
+            Ty::Dict(Box::new((Ty::Str, Ty::Float))).name(),
             "dict[str, float]"
         );
         assert_eq!(Ty::Set(Box::new(Ty::Bool)).name(), "set[bool]");
-        assert_eq!(Ty::Tuple(vec![Ty::Int, Ty::Str]).name(), "tuple[int, str]");
+        assert_eq!(
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])).name(),
+            "tuple[int, str]"
+        );
     }
 
     #[test]

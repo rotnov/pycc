@@ -2979,15 +2979,12 @@ mod tests {
         // actually distinguished this catch-all's Task 5 (D-089) `.name()`
         // rewrite from the old `{other:?}` format it replaced. A container
         // type does distinguish them: `Ty::Dict(..)`'s `Debug` form is
-        // `Dict(Str, Int)`, but `.name()` renders `dict[str, int]` -- the
+        // `Dict((Str, Int))`, but `.name()` renders `dict[str, int]` -- the
         // `expected` string below would fail if `.name()` were ever
         // reverted.
         let context = Context::create();
         let module = context.create_module("unsupported_dict_global");
-        let bindings = BTreeMap::from([(
-            "x".to_string(),
-            Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Int)),
-        )]);
+        let bindings = BTreeMap::from([("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))))]);
         let _ = declare_module_globals(&context, &module, &bindings);
     }
 
@@ -5419,9 +5416,9 @@ mod tests {
         // the rendered type name itself (not just the trailing "has no
         // LLVM representation yet"), so this test would fail if `.name()`
         // were ever reverted back to `{other:?}` (which would render
-        // `Dict(Str, Int)` instead).
+        // `Dict((Str, Int))` instead).
         let context = Context::create();
-        ty_to_basic_type(&context, Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Int)));
+        ty_to_basic_type(&context, Ty::Dict(Box::new((Ty::Str, Ty::Int))));
     }
 
     #[test]
@@ -5432,7 +5429,7 @@ mod tests {
         // same reasoning for pinning the rendered name, not just the
         // trailing message.
         let context = Context::create();
-        ty_to_basic_type(&context, Ty::Tuple(vec![Ty::Int, Ty::Str]));
+        ty_to_basic_type(&context, Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])));
     }
 
     #[test]
@@ -5705,9 +5702,9 @@ mod tests {
         // scope, not this PR's -- so their bindings must NOT be collected,
         // unlike `List(_)` immediately above.
         for ty in [
-            Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Int)),
+            Ty::Dict(Box::new((Ty::Str, Ty::Int))),
             Ty::Set(Box::new(Ty::Int)),
-            Ty::Tuple(vec![Ty::Int, Ty::Str]),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])),
         ] {
             let stmt = MirStmt::Assign {
                 target: "xs".to_string(),
