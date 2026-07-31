@@ -152,7 +152,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [584](https://peps.python.org/pep-0584/) | `dict \| dict` union | sem | `py39/pep_0584_dict_union.py` | ☐ |
-| [585](https://peps.python.org/pep-0585/) | Builtin generics `list[int]` (v0.2 scope: `list[int]` only — `dict`/`set`/`tuple` generics are PR-11's own PEP-585 coverage, D-104) | typing | `py39/pep_0585_builtin_generics.py` | ☐ |
+| [585](https://peps.python.org/pep-0585/) | Builtin generics `list[int]` (v0.2 scope, D-104: `list[int]` only — `dict`/`set`/`tuple` generics are PR-11's own PEP-585 coverage per `docs/DELIVERY_PLAN.md`'s row 11) | typing | `py39/pep_0585_builtin_generics.py` | ☐ |
 | [593](https://peps.python.org/pep-0593/) | `Annotated` | typing | `py39/pep_0593_annotated.py` | ☐ |
 | [614](https://peps.python.org/pep-0614/) | Relaxed decorator grammar | syntax | `py39/pep_0614_decorators.py` | ☐ |
 | [617](https://peps.python.org/pep-0617/) | PEG parser — **pycc's grammar reference** | syntax | (covered by whole suite) | ☐ |
