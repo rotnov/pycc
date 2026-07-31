@@ -163,13 +163,44 @@ pub fn scaffold(name: Option<&str>, dir: &std::path::Path) -> std::io::Result<()
 
 /// `fs::write` with `create_new`: fails if the path already names any
 /// entry, including a dangling symlink, instead of following it (#237).
+/// When the write itself fails after `create_new` succeeded, the freshly
+/// created file is removed (best-effort), so a quota or I/O failure cannot
+/// leave behind an empty/partial `main.py` that makes the next `pycc init`
+/// refuse our own residue, or a corrupt partial `pycc.toml` -- `create_new`
+/// guarantees the entry is ours to delete (PR #253's review).
 fn write_new(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
+    write_new_in(path, contents, |file, contents| {
+        use std::io::Write;
+        file.write_all(contents)
+    })
+}
+
+/// Testable core of [`write_new`], following the same dependency-injection
+/// split as `find_pycc_rt_lib_dir`/`find_pycc_rt_lib_dir_in` in
+/// `src/main.rs`: the injected writer lets a test exercise the
+/// cleanup-on-write-failure path deterministically, which no portable
+/// filesystem setup can trigger for a real `write_all`. A plain `fn`
+/// pointer (not `impl FnOnce`) on purpose: a generic parameter would
+/// monomorphize one copy per closure, and the production copy's
+/// cleanup branch would count as uncovered under D-014's region gate even
+/// though the test copy exercises the same source.
+fn write_new_in(
+    path: &std::path::Path,
+    contents: &[u8],
+    write: fn(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)?;
-    file.write_all(contents)
+    let result = write(&mut file, contents);
+    if result.is_err() {
+        // Close the handle before removing -- Windows cannot delete an
+        // open file. Best-effort: the write error stays the reported one.
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -434,6 +465,37 @@ paths = ["tests/"]
             std::fs::read_to_string(dir.join("src").join("lib.py")).unwrap(),
             "user lib"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_new_removes_its_partial_file_when_the_write_fails() {
+        // PR #253's review: a write failure after `create_new` succeeded
+        // must not leave the freshly created entry behind. The injected
+        // failing writer is the only portable way to trigger this path.
+        let dir = std::env::temp_dir().join(format!("pycc_write_new_fail_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("partial.txt");
+
+        let err = write_new_in(&path, b"contents", |_, _| {
+            Err(std::io::Error::other("injected write failure"))
+        })
+        .expect_err("the injected write failure must propagate");
+        assert_eq!(err.to_string(), "injected write failure");
+        assert!(!path.exists(), "the partial file must be cleaned up");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_new_succeeds_and_keeps_the_file_on_a_clean_write() {
+        let dir = std::env::temp_dir().join(format!("pycc_write_new_ok_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("whole.txt");
+
+        write_new(&path, b"contents").expect("a clean write must succeed");
+        assert_eq!(std::fs::read(&path).unwrap(), b"contents");
 
         std::fs::remove_dir_all(&dir).ok();
     }

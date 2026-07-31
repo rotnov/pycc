@@ -21,7 +21,7 @@ existing `pycc.toml`, a `src` that is not a directory, or an existing
 byte-for-byte unchanged, and the scaffold writes `pycc.toml` last so a late
 failure in the `src` steps can never leave it behind (#237's regressions are
 pinned by `tests/slice0.rs`'s init suite and `src/project_config.rs`'s unit
-injections). An existing `src/` directory is not itself a conflict — only its entry type and `main.py`'s presence are checked. Both file writes use create-new semantics, so a dangling symlink at either destination fails cleanly instead of writing through it.
+injections). An existing `src/` directory is not itself a conflict — only its entry type and `main.py`'s presence are checked. Both file writes use create-new semantics, so a dangling symlink at either destination fails cleanly instead of writing through it, and a write that fails after creating its file removes that partial file again — a genuine I/O failure leaves no scaffold residue behind for a retry to trip over.
 
 `pycc version` prints one summary line; `--verbose` appends the Tier-1 target
 list, in the exact set and order of ARCHITECTURE.md's "Cross-platform (hard
