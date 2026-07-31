@@ -6139,6 +6139,49 @@ mod tests {
     }
 
     #[test]
+    fn a_for_list_loop_keeps_its_per_iteration_length_read_under_release_optimization() {
+        // `MirStmt::ForList` calls `pycc_rt_int_list_len` inside its
+        // loop-test block on purpose, so appending during iteration extends
+        // the loop exactly as CPython's list iterator does. Every other test
+        // of that decision (this file's own loop tests and
+        // `iterating_a_list_rereads_its_length_each_step_like_cpython` in
+        // `tests/slice1_codegen_depth.rs`) builds unoptimized, where nothing
+        // could hoist the call anyway -- but `--release` additionally runs
+        // LLVM's `"default<O3>"` pipeline (D-094), whose LICM pass is
+        // precisely the transform that would lift a loop-invariant-looking
+        // call out of the loop and silently restore the hoisted behavior.
+        //
+        // It does not today: `declare_rt_functions` gives the declaration no
+        // attributes, so LLVM must assume the call may write memory. That is
+        // an inference from an absence, though, and a future PR adding
+        // `readonly`/`willreturn` to these externs for performance would
+        // invalidate it with no other test noticing -- hence the same
+        // fixture compiled with `release: true`.
+        let mir = list_fixture_module(vec![
+            assign_list_literal("xs"),
+            MirStmt::ForList {
+                var: "v".to_string(),
+                list: "xs".to_string(),
+                body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "v".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })],
+            },
+        ]);
+        let dir = tempfile_dir("for_list_release");
+        let obj_path = dir.join("for_list_release.o");
+        compile_to_object(&mir, &obj_path, None, true).expect("release codegen should succeed");
+        let bin_path = dir.join("for_list_release");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n2\n3\n");
+    }
+
+    #[test]
     fn appending_to_a_list_untags_the_value_before_it_reaches_runtime_storage() {
         // `MirExpr::ListAppend`'s success path, the one new arm whose body
         // no other unit test in this file reaches (`appending_to_a_non_
