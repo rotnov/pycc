@@ -16,7 +16,11 @@ history alone, not a full narrative.
 **Authoritative checkpoint:** same branch/PR as the entry directly below
 (`feat/v0-2-pr10-ty-representation-migration` → [PR #236](https://github.com/rotnov/pycc/pull/236)).
 Commit `a6d35c8` lands Task 14 on top of the plan commit (`2a8879a`) the
-entry below left as the checkpoint.
+entry below left as the checkpoint. Since then: `2123ec6` (Task 14's own
+pinned-review follow-up), `c276262` (an independent task review's Dict
+doc-comment fix), `1420d91` (the D-109 CI-confirmation record), and
+`f4b01c6` (a merge of `origin/main`, which had advanced with an unrelated
+merged PR #238 in the meantime — auto-merged cleanly, no conflicts).
 
 **Two attempts, one dead end recorded, not silently discarded:** the
 plan's own first-drafted shape, `Ty::Tuple(Box<[Ty]>)` (a boxed slice),
@@ -55,10 +59,41 @@ timestamps and distinct replicate medians (ruling out the cached-artifact
 false-positive this same investigation hit earlier with a `--failed`-only
 rerun). `docs/DECISIONS.md`'s D-109 entry and `docs/ROADMAP.md`'s Task 14
 follow-up both carry the confirmation numbers. PR #236 is no longer
-merge-blocked by D-109. What a fresh session should pick up next: Task
-13's resumed final steps — dispatch the pinned `ievo:deep-reviewer` (D-068)
-against the full `merge-base(origin/main)..HEAD` diff, address any
-findings, then merge.
+merge-blocked by D-109.
+
+`origin/main` advanced (PR #238, `version --verbose`) while this was in
+flight; merged cleanly (`f4b01c6`, `docs/ROADMAP.md` auto-merged, no
+conflicts) to satisfy branch protection's strict up-to-date requirement.
+
+The pinned `ievo:deep-reviewer` (D-068) then ran against the full
+`merge-base(origin/main)..HEAD` diff (44 commits, ~8000 insertions) —
+this plan's own single highest-risk area (non-exhaustive `Ty`/`Scalar`
+dispatch in `pycc_codegen`) came back clean. 8 findings total, all
+doc-currency/cross-file-consistency defects at task boundaries plus one
+real code asymmetry: `.append(True)` was rejected while `xs[True]` (this
+same branch's own earlier fix) was accepted, for the identical D-086
+bool-is-int-subtype reason — confirmed via a real build, fixed to use
+`is_assignable` for symmetry. All fixed directly: `TESTING.md`/
+`DELIVERY_PLAN.md`'s stale "not yet pushed for CI"/"pending CI" wording
+(the PEP-585 row has in fact been flipped since Task 13), `SPEC.md`'s
+DECISIONS.md range (stopped at D-108, missing this PR's own D-109), the
+HIR `ListAppend` doc comment (claimed `pycc_types` rejects value-position
+`.append()` — nothing does; it surfaces as a D-072-shaped codegen panic
+instead), two stale `pycc_rt` doc comments (referenced the private
+`untag_smallint` instead of the actual public boundary helper
+`pycc_rt_int_untag_checked`, and described a bigint-corruption gap that
+helper already closes), and `DIAGNOSTICS.md`'s `T0033` row (didn't
+mention the `len()`-arity failure shape). One `note` deliberately left
+open: `PYTHON_STANDARDS.md`'s other nine `✅` rows still carry stale
+`pyXX/` fixture-path prefixes this PR's own new row doesn't — pre-existing
+drift, not introduced here; the reviewer itself called deferring it
+defensible.
+
+**Status: ready to merge.** All required checks green, all review threads
+resolved, pinned review clean. What a fresh session should pick up next
+if this session ends before merging: confirm CI is green on the latest
+pushed commit, then squash-merge PR #236 per this project's established
+convention (matching PR-6 through PR-9's own precedent).
 
 ---
 

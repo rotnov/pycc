@@ -1070,12 +1070,21 @@ fn infer_expr_in(
                 ));
             };
             let value_ty = infer_expr_in(env, local_names, value)?;
-            // Same exact-`Ty` rule as `ListLiteral`'s homogeneity check
-            // above -- appending a `bool` to a `list[int]` is still T0021
-            // even though `is_assignable` treats bool as an int subtype
-            // elsewhere in this file. Reuses T0021 (a call-site/assignment
-            // constraint mismatch), not a new code.
-            if value_ty != **elem_ty {
+            // Uses `is_assignable`, not exact `Ty` equality -- matching the
+            // `Subscript` index check above (D-086): `x = [1]; x.append(True)`
+            // is ordinary, CPython-valid Python (`bool` is an `int` subtype),
+            // and `pycc_codegen`'s `MirExpr::ListAppend` arm already routes
+            // the appended value through `to_tagged_int` (the same
+            // `Scalar::Bool`-handling conversion the index path uses)
+            // unconditionally, so there is no missing codegen capability
+            // here either. This is NOT the same question as `ListLiteral`'s
+            // own homogeneity check above (`[1, True]`'s element type is
+            // genuinely ambiguous to infer -- there is no already-known
+            // `elem_ty` to check against); `.append()` on an *already-typed*
+            // `list[int]` has no such ambiguity, so the looser
+            // `is_assignable` rule applies here, not there. Reuses T0021 (a
+            // call-site/assignment constraint mismatch), not a new code.
+            if !is_assignable(value_ty.clone(), (**elem_ty).clone()) {
                 return Err(Diagnostic::error(
                     "T0021",
                     format!(
@@ -3825,16 +3834,22 @@ mod tests {
     }
 
     #[test]
-    fn appending_a_bool_to_a_list_of_int_is_rejected_since_it_uses_exact_ty_equality() {
-        // Same exact-`Ty` rule as the list-literal homogeneity check --
-        // `is_assignable`'s bool-is-an-int-subtype rule does not apply here.
+    fn appending_a_bool_to_a_list_of_int_is_accepted_since_bool_is_an_int_subtype() {
+        // D-086, matching Subscript's own index check above: `x.append(True)`
+        // on an already-typed `list[int]` is ordinary, CPython-valid Python
+        // (`bool` is an `int` subtype) -- `is_assignable` applies here, not
+        // ListLiteral's stricter exact-equality homogeneity rule (which
+        // answers a different question: inferring an as-yet-unknown element
+        // type, not checking a value against an already-known one). Found
+        // by an automated whole-branch review (PR #236) and confirmed
+        // against a real `pycc build` before this fix.
         let mut env = Environment::new();
         env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
         let expr = HirExpr::ListAppend {
             list: "x".to_string(),
             value: Box::new(HirExpr::BoolLiteral(true)),
         };
-        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
     }
 
     #[test]

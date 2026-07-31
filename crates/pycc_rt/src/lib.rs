@@ -1128,15 +1128,14 @@ pub extern "C" fn pycc_rt_int_list_new() -> *mut PyIntListObj {
 /// `PyIntListObj`'s own doc comment). A `Ty::Int` value flowing out of
 /// ordinary codegen (`emit_expr` on a `list[int]` element expression) is
 /// D-061-tagged, so a caller crossing this boundary must call
-/// `untag_smallint` on it first, exactly once, before passing it here.
-/// **Known gap:** a bigint-tagged `Ty::Int` (one that has overflowed past
+/// `pycc_rt_int_untag_checked` on it first, exactly once, before passing
+/// it here. A bigint-tagged `Ty::Int` (one that has overflowed past
 /// D-061's 63-bit smallint range) cannot be represented by this raw `i64`
-/// slot at all -- `untag_smallint` assumes a smallint-tagged input and
-/// silently produces garbage on a bigint-tagged one. Appending such a
-/// value needs an explicit `require_smallint`-style rejection (or an
-/// honest panic) at the codegen boundary; this function itself has no way
-/// to detect or reject it, since by the time a raw `i64` reaches here the
-/// tag bit is already gone.
+/// slot at all -- `pycc_rt_int_untag_checked` rejects it with an honest
+/// panic (`"pycc_rt: list[int] does not support bigint-valued elements or
+/// indices yet"`) rather than silently producing garbage, and
+/// `pycc_codegen` calls it at every input-side boundary (D-106), so this
+/// function itself never sees a bigint-tagged value in practice.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.
@@ -1199,13 +1198,13 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 /// any caller crossing this boundary (see `PyIntListObj`'s own doc
 /// comment): `index` is a container offset, not a stored element -- it
 /// arrives as a **raw, untagged** `i64` here, so a caller with a
-/// D-061-tagged `Ty::Int` index expression must `untag_smallint` it
-/// first, exactly like `pycc_rt_int_list_append`'s `value`. The **return
+/// D-061-tagged `Ty::Int` index expression must `pycc_rt_int_untag_checked`
+/// it first, exactly like `pycc_rt_int_list_append`'s `value`. The **return
 /// value**, in contrast, is a raw stored element read straight back out --
 /// a caller that treats it as an ordinary `Ty::Int` value anywhere else in
 /// generated code (printing it, comparing it, arithmetic on it) must
-/// `tag_smallint` it first, since every other `pycc_rt_int_*` function
-/// expects a tagged operand.
+/// tag it first (`raw_i64_to_tagged_int` on the `pycc_codegen` side),
+/// since every other `pycc_rt_int_*` function expects a tagged operand.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.

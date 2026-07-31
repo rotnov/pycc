@@ -140,11 +140,19 @@ pub enum HirExpr {
     /// expression is accepted, e.g. `y = x.append(2)` or
     /// `print(x.append(1))`, even though real Python's `list.append()`
     /// always returns `None` there and a value-producing use is
-    /// meaningless. This lowering step deliberately does not judge that --
-    /// rejecting a value-position `.append()` (or any type-driven
-    /// distinction at all) is `pycc_types`' job, not this one's (see
-    /// `list_append_used_as_a_value_lowers_successfully_today` below, which
-    /// locks in today's actual behavior).
+    /// meaningless. This lowering step deliberately does not judge that
+    /// (see `list_append_used_as_a_value_lowers_successfully_today` below,
+    /// which locks in today's actual behavior). `pycc_types` doesn't reject
+    /// it either -- it type-checks `y = x.append(2)` as binding `y: None`,
+    /// same as any other `None`-typed value. `print(x.append(1))` runs and
+    /// prints `None`, matching CPython. Only `y = x.append(2)`'s
+    /// assignment path currently surfaces a problem, and even that is not
+    /// a rejection: `pycc_codegen`'s `collect_stmt_bindings` has no
+    /// `Ty::None` arm, so it hits the same internal-error panic
+    /// ("every assignment target must have a predeclared storage slot")
+    /// already accepted for `y = f()` on a `None`-returning `f` (D-072) --
+    /// a pre-existing gap this variant newly reaches, tracked as its own
+    /// issue rather than fixed here.
     ListAppend {
         list: String,
         value: Box<HirExpr>,
