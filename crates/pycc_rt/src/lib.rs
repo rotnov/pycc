@@ -998,6 +998,180 @@ pub extern "C" fn pycc_rt_print_none() {
     print!("None");
 }
 
+/// `list[int]`'s runtime object (D-104: v0.2 codegen only supports
+/// `list[int]`; any other element type stays a `pycc_types` diagnostic,
+/// T0034, never reaching codegen). Header shape follows `PyStrObj`'s real
+/// precedent (`rc: Cell<u32>` plus payload) rather than `docs/RUNTIME.md`'s
+/// stale 16-byte generic-header spec (that document's own correction is
+/// this plan's Task 12, not this task) -- `PyStrObj` is this runtime's
+/// only other heap object and it never had a `type_id`/`flags` field
+/// either.
+///
+/// No `#[repr(C)]`: exactly like `PyStrObj` (see that struct's own doc
+/// comment), `pycc_codegen` never sees anything but an opaque pointer to
+/// this type and only ever calls the `pycc_rt_int_list_*` functions below
+/// on it -- no struct ever crosses the LLVM/Rust boundary by value, so
+/// there is no ABI layout to pin down.
+///
+/// The growable payload is a safe `Cell<Vec<i64>>`, not a raw pointer with
+/// manual `std::alloc`/`realloc`/`dealloc` calls: `Vec<i64>` already gets
+/// growth, bounds-safe indexing, and (critically) its own `Drop` glue for
+/// free, the same way `PyStrObj`'s `Box<[u8]>` heap payload does. A
+/// `RefCell<Vec<i64>>` was considered and rejected -- its runtime
+/// borrow-checking panics on any overlapping borrow, a new panic mode this
+/// object's callers (future LLVM-generated code with call patterns not
+/// fully under this file's control) could trip with no relation to Python
+/// semantics. `Cell::take`/`Cell::set` avoid that: `take` moves the `Vec`
+/// out (leaving an empty one behind) without holding a borrow, the caller
+/// mutates the owned value, then `set` moves it back in -- no borrow is
+/// ever held across the mutation, so there is nothing for a runtime check
+/// to reject.
+///
+/// `pub`, not private, for the same reason `PyStrObj` is `pub`: every
+/// `pycc_rt_int_list_*` function below is a public FFI entry point
+/// returning or taking `*mut PyIntListObj`, and rustc's
+/// `private_interfaces` lint refuses a private type in a public
+/// signature. Both fields stay private, so the "opaque pointer" contract
+/// still holds for any real Rust caller.
+pub struct PyIntListObj {
+    rc: Cell<u32>,
+    items: Cell<Vec<i64>>,
+}
+
+/// Allocates a fresh, empty `PyIntListObj` with refcount `1`. Never
+/// panics -- `Vec::new()` performs no allocation -- so, per this file's
+/// established convention (see the implementation note above
+/// `pycc_rt_int_add`), this needs no private-logic/public-wrapper split:
+/// nothing here ever unwinds, so there is no abort-vs-catch distinction
+/// for a caller to trip over.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_list_new() -> *mut PyIntListObj {
+    Box::into_raw(Box::new(PyIntListObj {
+        rc: Cell::new(1),
+        items: Cell::new(Vec::new()),
+    }))
+}
+
+/// Appends `value` to the end of `list` (Python's `list.append`, D-104's
+/// v0.2 `list[int]` slice). Grows `list`'s backing `Vec` via its own
+/// amortized-doubling `push`, so this never needs to reimplement
+/// capacity-doubling by hand.
+///
+/// # Safety
+/// `list` must be a live `PyIntListObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_list_append(list: *mut PyIntListObj, value: i64) {
+    let list = unsafe { &*list };
+    let mut items = list.items.take();
+    items.push(value);
+    list.items.set(items);
+}
+
+/// # Safety (panic-across-FFI note, same rationale as `pycc_rt_int_add`'s
+/// own doc comment above)
+/// `pycc_rt_int_list_get` below is a plain `extern "C" fn`, not `extern
+/// "C-unwind"`. A panic that would otherwise unwind past its boundary is
+/// instead turned into a process abort -- correct for pycc-generated LLVM
+/// code calling it, but unsuitable for `#[should_panic]` testing directly
+/// against the public wrapper (confirmed empirically the same way
+/// `pycc_rt_float_to_str`'s own split was: see this file's tests below).
+/// This private function holds the real, freely-panicking logic; tests
+/// exercising the panic call it directly, exactly as this file's
+/// established convention already does for `int_add`/`float_to_str`.
+fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
+    let items = list.items.take();
+    let len = items.len();
+    if index < 0 || index as usize >= len {
+        // Restore the payload before panicking. Not required for
+        // correctness in this crate's actual single-shot FFI usage (a
+        // panicking `pycc_rt_int_list_get` call aborts the whole process
+        // via the wrapper below, so the object is never touched again
+        // either way) but cheap insurance against leaving `list` with an
+        // emptied-out payload for any future caller that does catch this
+        // unwind (e.g. this file's own `#[should_panic]` tests).
+        list.items.set(items);
+        panic!("pycc_rt: list index out of range");
+    }
+    let value = items[index as usize];
+    list.items.set(items);
+    value
+}
+
+/// Reads the element at `index` (Python's `list[index]`, D-104's v0.2
+/// `list[int]` slice). Panics on an out-of-range index, matching
+/// `pycc_rt`'s established "honest panic over silently wrong data"
+/// convention (see `float_to_str`'s own doc comment for the same
+/// principle applied elsewhere in this file).
+///
+/// Known v0.2 scope cut: negative indices are not supported. Real Python
+/// treats `lst[-1]` as the last element, but `pycc_types` has no way to
+/// reject a negative index at compile time (the index value is only known
+/// at runtime) -- so this panics on *any* negative index, the same
+/// "index out of range" panic as a too-large positive one. This is a
+/// deliberate, documented v0.2 gap (D-104), not a bug: it means a
+/// conformance fixture exercising this function must not use negative
+/// indexing, since that would panic here rather than matching CPython's
+/// last-element behavior.
+///
+/// # Safety
+/// `list` must be a live `PyIntListObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_list_get(list: *mut PyIntListObj, index: i64) -> i64 {
+    int_list_get(unsafe { &*list }, index)
+}
+
+/// Returns `list`'s current element count (Python's `len(list)`, D-104's
+/// v0.2 `list[int]` slice).
+///
+/// # Safety
+/// `list` must be a live `PyIntListObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_list_len(list: *mut PyIntListObj) -> i64 {
+    let list = unsafe { &*list };
+    let items = list.items.take();
+    let len = items.len() as i64;
+    list.items.set(items);
+    len
+}
+
+/// D-060-style unconditional refcounting for `list[int]`, matching
+/// `pycc_rt_str_incref`'s own convention exactly: increments `list`'s
+/// refcount by one, a no-op on a null pointer.
+///
+/// # Safety
+/// `list` must be either a null pointer or a live `PyIntListObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_list_incref(list: *mut PyIntListObj) {
+    if list.is_null() {
+        return;
+    }
+    let obj = unsafe { &*list };
+    obj.rc.set(obj.rc.get() + 1);
+}
+
+/// D-060-style unconditional refcounting for `list[int]`, matching
+/// `pycc_rt_str_decref`'s own convention exactly: decrements `list`'s
+/// refcount by one, freeing the allocation once it reaches zero (which,
+/// via `Box::from_raw`'s own drop glue, also frees the `Cell<Vec<i64>>`
+/// payload's backing buffer -- no separate manual deallocation call
+/// needed). A no-op on a null pointer, same rationale as
+/// `pycc_rt_int_list_incref` above.
+///
+/// # Safety
+/// Same as `pycc_rt_int_list_incref`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_list_decref(list: *mut PyIntListObj) {
+    if list.is_null() {
+        return;
+    }
+    let new_rc = unsafe { &*list }.rc.get() - 1;
+    if new_rc == 0 {
+        drop(unsafe { Box::from_raw(list) });
+    } else {
+        unsafe { &*list }.rc.set(new_rc);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1759,5 +1933,111 @@ mod tests {
         pycc_rt_print_space();
         pycc_rt_print_newline();
         pycc_rt_print_none();
+    }
+
+    #[test]
+    fn int_list_new_starts_empty() {
+        // Every `pycc_rt_int_list_*` function taking/dereferencing a
+        // `*mut PyIntListObj` is `unsafe extern "C"` (see their own doc
+        // comments' `# Safety` sections), matching `PyStrObj`'s own
+        // convention -- so, same as `a_short_literal_round_trips_through_
+        // the_inline_representation` above, this wraps the whole body in
+        // one `unsafe { ... }` block rather than the task brief's own
+        // unwrapped calls (a genuine compile-error bug in the brief, not
+        // a change to what the test asserts).
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            assert_eq!(pycc_rt_int_list_len(list), 0);
+            pycc_rt_int_list_decref(list);
+        }
+    }
+
+    #[test]
+    fn int_list_append_then_get_round_trips() {
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, 10);
+            pycc_rt_int_list_append(list, 20);
+            pycc_rt_int_list_append(list, 30);
+            assert_eq!(pycc_rt_int_list_len(list), 3);
+            assert_eq!(pycc_rt_int_list_get(list, 0), 10);
+            assert_eq!(pycc_rt_int_list_get(list, 1), 20);
+            assert_eq!(pycc_rt_int_list_get(list, 2), 30);
+            pycc_rt_int_list_decref(list);
+        }
+    }
+
+    #[test]
+    fn int_list_grows_past_its_initial_capacity() {
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for i in 0..1000 {
+                pycc_rt_int_list_append(list, i);
+            }
+            assert_eq!(pycc_rt_int_list_len(list), 1000);
+            assert_eq!(pycc_rt_int_list_get(list, 999), 999);
+            pycc_rt_int_list_decref(list);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: list index out of range")]
+    fn int_list_get_out_of_range_panics_honestly() {
+        // Deviation from the task brief: calls the private `int_list_get`
+        // directly, not the public `pycc_rt_int_list_get` wrapper the
+        // brief used -- the wrapper is a plain `unsafe extern "C" fn`, so
+        // a panic crossing its boundary aborts the whole test binary
+        // (`SIGABRT`) instead of unwinding into `#[should_panic]`'s own
+        // catch (see the private-logic/public-wrapper split added above,
+        // same convention as `int_add`/`pycc_rt_int_add` and
+        // `float_to_str`/`pycc_rt_float_to_str`).
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, 1);
+            int_list_get(&*list, 5);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: list index out of range")]
+    fn int_list_get_rejects_negative_indices() {
+        // D-104's documented v0.2 scope cut: unlike real Python (where
+        // `lst[-1]` is the last element), a negative index panics here
+        // exactly like an out-of-range positive one -- `pycc_types` has no
+        // way to reject a negative index at compile time, so this is
+        // pycc's actual, observable runtime behavior for `lst[-1]` today.
+        // Not something Task 12's PEP-585 conformance fixture may exercise
+        // (it would panic instead of byte-for-byte matching CPython).
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, 1);
+            int_list_get(&*list, -1);
+        }
+    }
+
+    #[test]
+    fn int_list_incref_decref_round_trip_does_not_free_early() {
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, 1);
+            pycc_rt_int_list_incref(list);
+            pycc_rt_int_list_decref(list);
+            // still alive after one incref/decref pair -- one decref remains
+            assert_eq!(pycc_rt_int_list_get(list, 0), 1);
+            pycc_rt_int_list_decref(list);
+        }
+    }
+
+    #[test]
+    fn int_list_incref_and_decref_on_a_null_pointer_are_safe_no_ops() {
+        // D-014's 100% line/region coverage gate: without this,
+        // `pycc_rt_int_list_incref`/`_decref`'s `if list.is_null()` early
+        // return is dead code, since none of the tests above ever pass a
+        // null pointer. Mirrors `PyStrObj`'s own
+        // `incref_and_decref_on_a_null_pointer_are_safe_no_ops` test above.
+        unsafe {
+            pycc_rt_int_list_incref(std::ptr::null_mut());
+            pycc_rt_int_list_decref(std::ptr::null_mut());
+        }
     }
 }
