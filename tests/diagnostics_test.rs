@@ -125,6 +125,42 @@ fn d0026_annotation_only_unbound() {
     assert_diagnostic_matches_fixture("d0026_annotation_only_unbound");
 }
 
+// #133: a module-level value binding shadows builtin and user-function call
+// lookup at every later call site. The four fixtures cover the issue's
+// completion criteria through the public `pycc check` path: a user-function
+// shadow, a builtin shadow, a call inside an annotated function body (checked
+// against the final module environment, D-041), and the private-helper
+// inference path.
+#[test]
+fn d0027_module_value_shadows_function() {
+    assert_diagnostic_matches_fixture("d0027_module_value_shadows_function");
+}
+
+#[test]
+fn d0028_module_value_shadows_builtin() {
+    assert_diagnostic_matches_fixture("d0028_module_value_shadows_builtin");
+}
+
+#[test]
+fn d0029_function_body_calls_shadowed_name() {
+    assert_diagnostic_matches_fixture("d0029_function_body_calls_shadowed_name");
+}
+
+#[test]
+fn d0030_private_helper_calls_shadowed_name() {
+    assert_diagnostic_matches_fixture("d0030_private_helper_calls_shadowed_name");
+}
+
+// D-110: the shadowed-builtin shape inside an inference-signature helper,
+// pinned through the public CLI. The mirror gate fires before the solver's
+// `print` special case; pass 3 would independently reject this shape too, so
+// this fixture pins behavior rather than discriminating the mirror (the
+// discriminating case lives in pycc_types' own unit tests).
+#[test]
+fn d0031_private_helper_calls_shadowed_builtin() {
+    assert_diagnostic_matches_fixture("d0031_private_helper_calls_shadowed_builtin");
+}
+
 #[test]
 fn cli_spec_example() {
     assert_diagnostic_matches_fixture("cli_spec_example");
