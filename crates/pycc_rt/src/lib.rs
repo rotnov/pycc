@@ -575,6 +575,54 @@ pub extern "C" fn pycc_rt_int_to_float(tagged: i64) -> f64 {
     int_to_float(tagged)
 }
 
+/// D-105: the input-side half of `PyIntListObj`'s raw/tagged boundary
+/// conversion. Takes a D-061-tagged `Ty::Int` value (an `.append()`
+/// argument, a subscript index) and returns the raw, untagged `i64`
+/// `PyIntListObj` actually stores/compares -- panicking honestly instead
+/// of silently corrupting data if `tagged` is bigint-tagged (a raw `i64`
+/// slot has no room to represent a bigint at all; this project's `pycc_rt:
+/// <description>` panic convention applies here exactly as it does
+/// everywhere else in this file).
+///
+/// Checks `is_smallint` directly rather than going through the existing
+/// private `require_smallint` wrapper -- that helper's message template
+/// ("{context} a bigint-valued `int` is not supported yet") is shaped for a
+/// gerund phrase ("comparing", "exponentiating"); this call site names
+/// `list[int]` and covers both elements and indices, which doesn't fit that
+/// template cleanly, so it states its own message directly instead of
+/// forcing an awkward fit.
+///
+/// --- Implementation note / deviation from the task brief ---------------
+///
+/// The brief's own Step 4 code makes this a single plain `extern "C" fn`,
+/// with a `#[should_panic]` test calling that same public wrapper directly
+/// for the bigint case. Per this crate's established convention (see the
+/// implementation-note comment above `int_add`, discovered empirically
+/// during Task 3, and repeated for `range_continue` and `int_to_float`): a
+/// panic that unwinds past a plain `extern "C" fn`'s own boundary is caught
+/// right there and turned into a process abort, regardless of who calls it
+/// -- including this crate's own same-binary Rust tests, which would
+/// `SIGABRT` rather than let `#[should_panic]` catch anything. This
+/// function can panic, so it gets the same split every other panicking
+/// `pycc_rt_int_*` function already has: a private, ordinary-Rust-ABI
+/// function holding the real logic, and a thin `pub extern "C"` wrapper of
+/// the exact brief-specified name and signature for Task 11b's generated
+/// code to call unchanged.
+fn int_untag_checked(tagged: i64) -> i64 {
+    if !is_smallint(tagged) {
+        panic!("pycc_rt: list[int] does not support bigint-valued elements or indices yet");
+    }
+    untag_smallint(tagged)
+}
+
+/// # Safety
+/// None -- takes no pointer, only an `i64`. (The panic-across-FFI note on
+/// `pycc_rt_int_add` applies to this wrapper as well.)
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_untag_checked(tagged: i64) -> i64 {
+    int_untag_checked(tagged)
+}
+
 /// Python true division rejects both positive and negative zero divisors.
 /// Until v0.3's exception machinery exists, a runtime panic becomes an
 /// explicit process failure at the plain-C ABI boundary.
@@ -1465,6 +1513,49 @@ mod tests {
     fn pycc_rt_int_to_float_converts_the_untagged_value() {
         assert_eq!(pycc_rt_int_to_float(tag_smallint(5)), 5.0);
         assert_eq!(pycc_rt_int_to_float(tag_smallint(-3)), -3.0);
+    }
+
+    #[test]
+    fn int_untag_checked_recovers_the_original_value() {
+        // Calls the public `extern "C"` wrapper (not the private
+        // `int_untag_checked`) on purpose: this is the non-panicking path,
+        // so no unwind ever crosses that boundary, and it is what covers
+        // the wrapper's own line -- the same split this file's `int_add`
+        // implementation note establishes for every panicking
+        // `pycc_rt_int_*` symbol.
+        for n in [0i64, 1, -1, 42, -42, i64::MAX >> 1, -(i64::MAX >> 1)] {
+            assert_eq!(pycc_rt_int_untag_checked(tag_smallint(n)), n);
+        }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "pycc_rt: list[int] does not support bigint-valued elements or indices yet"
+    )]
+    fn int_untag_checked_rejects_a_bigint_tagged_value() {
+        // A bigint-tagged value has its low bit clear (see TAG_BIT/
+        // is_smallint). `tag_bigint` itself takes a `BigIntObj`, not a bare
+        // i64 -- rather than hand-craft a bigint-tagged bit pattern from
+        // scratch, force a real overflow through the existing arithmetic
+        // path, exactly like this file's own `repeated_addition_exercises_
+        // the_general_bigint_plus_smallint_path` test already does:
+        // `i64::MAX >> 1` is exactly the largest value that still
+        // round-trips through tagging, so adding it to itself overflows and
+        // promotes via `int_add`'s own `tag_bigint` path.
+        //
+        // The setup call uses the public `pycc_rt_int_add` wrapper (that
+        // path does not panic); the assertion below calls the *private*
+        // `int_untag_checked`, because a panic unwinding past a plain
+        // `extern "C" fn`'s boundary aborts the whole test binary instead
+        // of being caught by `#[should_panic]` -- see the implementation
+        // note above `int_add`.
+        let bigint_tagged =
+            pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(i64::MAX >> 1));
+        assert!(
+            !is_smallint(bigint_tagged),
+            "test setup: expected this addition to overflow into a real bigint"
+        );
+        int_untag_checked(bigint_tagged);
     }
 
     #[test]
