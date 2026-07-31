@@ -202,14 +202,56 @@ fn run_subcommand_maps_a_signal_terminated_compiled_program_to_exit_code_101() {
     assert_eq!(output.status.code(), Some(101));
 }
 
+/// The summary line both `pycc version` forms print, built from the same
+/// manifest macros as the implementation (this integration test compiles
+/// inside the `pycc` package, so `CARGO_PKG_VERSION`/`CARGO_PKG_RUST_VERSION`
+/// resolve to identical values in both binaries and the snapshot tracks a
+/// version bump instead of rotting). "LLVM 22.1.1" is D-015's pinned contract
+/// literal on both sides -- see the version arm's own comment in
+/// `src/main.rs` for why the *installed* LLVM's truthfulness is #75's scope,
+/// not this test's.
+fn expected_version_summary_line() -> String {
+    format!(
+        "pycc {} (rustc {}, LLVM 22.1.1)\n",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_RUST_VERSION"),
+    )
+}
+
 #[test]
-fn version_flag_prints_something() {
+fn version_verbose_reports_compiler_llvm_and_tier1_targets() {
+    // #38: the predecessor test accepted any non-empty stdout, so
+    // `println!("garbage")` passed it while CLI_SPEC.md's command table
+    // promised "compiler, LLVM, target list". An exact full-stdout snapshot
+    // is the strongest mutation-resistant form: a dropped field, a missing
+    // or reordered target line, or arbitrary output all fail. The five
+    // triples and their order mirror ARCHITECTURE.md's Tier-1 table via
+    // `src/main.rs::TIER1_TARGETS`.
     let output = Command::new(pycc_bin())
         .args(["version", "--verbose"])
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(!output.stdout.is_empty());
+    let expected = format!(
+        "{}tier-1 targets:\n  x86_64-unknown-linux-gnu\n  aarch64-unknown-linux-gnu\n  \
+         x86_64-apple-darwin\n  aarch64-apple-darwin\n  x86_64-pc-windows-msvc\n",
+        expected_version_summary_line()
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+}
+
+#[test]
+fn version_without_verbose_prints_only_the_summary_line() {
+    // The bare form is undocumented surface whose behavior predates #38;
+    // this pins that the target block is `--verbose`-gated and the bare
+    // command's output stays exactly the single summary line it always
+    // printed.
+    let output = Command::new(pycc_bin()).args(["version"]).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        expected_version_summary_line()
+    );
 }
 
 #[test]
