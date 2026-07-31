@@ -400,6 +400,176 @@ while the old anchor remains, then replace the active anchor byte-for-byte from
 that fixture in a later pull request and retire the superseded digest in that
 activation change.
 
+The prospective search-ledger audit is staged under
+`tests/fixtures/workflow-policy-search-ledger.yml` with SHA-256
+`f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688`.
+It keeps the existing read-only `pull_request_target` boundary, additionally
+downloads the head search ledger, query registry, checkpoint file, and roadmap
+as non-executable data. Before materialization it requires every workflow and
+required evidence path returned by the Git tree API to be an exact
+`100644 blob`; symlinks, executable files, trees, and submodules cannot reuse
+approved bytes while breaking the next trusted checkout. The steady-state
+successor also rejects every root or nested `.gitattributes` entry on every
+pull request before checkout rules can rewrite a byte-identical workflow.
+It reads the trusted base's complete
+`tests/fixtures/policy-successor-manifest.json`, downloads every protected
+policy executable and repository input plus the candidate's proposed next
+manifest sources as non-executable `100644` data, and compares active targets
+only with the base-staged sources and SHA-256 values. A candidate manifest
+cannot authorize a target changed in that same pull request or remove any
+already protected target. Under D-103, a legitimate policy-bundle update uses two
+merges: first stage proposal files and the next complete manifest while active
+targets remain unchanged; only a later pull request may activate those bytes,
+after they are part of the trusted base. The later activation may reset each
+source to its now-active target for the next cycle. This keeps future checker,
+self-test, workflow-input, and fixture revisions under the same base-owned
+transition boundary as initial activation instead of trusting whatever code a
+pull request would make authoritative after merge. It then runs the base-owned
+`check_search_visibility_audit.py` against the checked-out base ledger. The
+audit rejects a rewritten history prefix, invalid checkpoints, mutable surface
+or activation contracts, incorrect rank deltas, and replay metadata whose
+types, ranges, result-count relationships, or corpus digest are invalid. Its
+trusted clock also rejects future-dated evidence, and each timestamp/query
+pair must identify exactly one observation. Existing base measurements are an
+immutable registry prefix, and history rows are accepted only after the exact
+Markdown table header and delimiter. That header must be the first section
+content or follow a CommonMark blank-line block boundary containing only ASCII
+spaces or tabs; explanatory prose, Unicode whitespace, and non-CommonMark line
+separators cannot merge with the header into a GFM paragraph while the raw rows
+remain auditable. A table-like line without the canonical
+unindented leading pipe fails instead of becoming visible, unaudited evidence.
+Every accepted history line also has exactly one leading and one trailing
+boundary pipe, so repeated pipes cannot add an empty rendered column while the
+parser silently strips it. Every delimiter cell has the GFM minimum of three
+hyphens, preserving the table rendering that gives the evidence its column
+meaning. `Current interpretation` begins with an exact, machine-checked table
+projected from the latest accepted row for every GitHub query. A valid append,
+replay record, and checkpoint cannot merge while that public latest-state view
+still reports the previous snapshot.
+GitHub query text rejects every qualifier except an `in:description` metadata
+diagnostic or a single `topic:` diagnostic. Syntax-sensitive identities
+normalize ASCII case and repeated whitespace before classifying Boolean
+operators and preserving punctuation, phrases, qualifiers, exclusions,
+Boolean syntax, and term order as distinct;
+active product queries cannot split one acquisition intent through spelling
+variants. Raw GitHub queries also reject HTML tag/comment forms that the
+fail-closed ledger parser cannot later project. A closed intent/KPI matrix
+keeps product, category-version, and task-output queries in acquisition;
+brand, metadata, topic, and competitive queries in diagnostics; and authorship
+in excluded evidence. Unknown or crossed pairings fail before they can alter
+the KPI denominator. A complete REST response must
+contain exactly `min(api_total, 50)` rows; a shorter result list cannot support
+an organic `>50` claim, and `incomplete_results=true` cannot produce any rank
+row. Both measurements and checkpoints preserve their trusted base list as an
+immutable prefix before new entries are accepted. The mutation suite treats
+only rows already present in the trusted base prefix as legacy; every append
+requires replay metadata regardless of its claimed timestamp. Once prose or a
+blank line ends the history table, a later pipe row cannot resume it. Section
+lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
+equivalent duplicate history heading cannot hide a second table. A later
+top-level ATX H1 or H2 ends the history section; blockquoted, list-contained,
+and indented-continuation headings remain inside the audited section, so they
+cannot hide a resumed forged table. A table below a new top-level heading
+cannot remain bound to the canonical H2. The one canonical H2 itself must start
+at column zero and be top-level: blockquoted,
+list-contained, and indented list-continuation versions remain visible for
+duplicate detection but cannot own the outside table. The sole owner must equal
+the canonical normalized word sequence; broader
+containment matching is used only to reject prefixed/suffixed lookalike H2s.
+Raw HTML comment
+delimiters are forbidden anywhere in the ledger because a multiline inline
+comment can otherwise hide the canonical table without changing its source
+rows or checkpoint. Raw HTML tags and other CommonMark raw constructs are
+rejected from their opening syntax wherever they occur, without depending on
+parsing a closing `>` through quoted attributes; text before
+`<details title="<">`, processing instructions, declarations, or CDATA cannot
+bypass the audit and hide the unchanged table. Literal rank
+values such as `>50` remain valid because they are not tags. Heading
+identity is compared after HTML character-reference decoding. Inline markup
+marker characters are forbidden even intraword or entity-encoded, rather than
+being stripped into a canonical title the renderer does not produce. After
+ATX closing-marker parsing, the canonical owner title must equal the prescribed
+plain source text exactly; punctuation, entities, backslashes, and repeated
+spaces cannot disappear through word tokenization.
+Invisible Unicode format
+and mark characters are rejected after entity decoding. Every machine-ledger
+heading is ASCII-only, so Cyrillic, Greek, and other homoglyphs cannot evade
+canonical lookalike detection. The machine ledger permits only ATX headings:
+every visible standalone Setext or thematic underline is rejected before
+section lookup, including quoted, list-contained, lazy-continuation, and nested
+forms. This fail-closed grammar avoids joining source lines across CommonMark
+container ancestry and avoids both soft and hard title newlines that GitHub
+renders as `<br>`.
+Because this evidence file is a data ledger rather than
+general documentation, inline
+links or HTML are forbidden in headings, and fenced, GitHub display-math, or
+raw-HTML blocks are rejected fail-closed anywhere in the document. They cannot
+turn the canonical table into rendered code/math or an unaudited Markdown/HTML
+surface; ATX syntax behind four-space or tab code indentation is rejected for
+the same reason. The checkpoint
+schema also requires a non-boolean JSON integer version before accepting
+version `1`. The GitHub surface and every measurement require exact non-boolean
+integers for the top-50 result window and `per_page`; Python's numeric equality
+cannot admit JSON floats such as `50.0` into authoritative replay data. This
+staging commit therefore also imports the 22 reviewed
+2026-07-29/30 GitHub rows that predate the registry, making them part of the
+actual trusted base. It stages the initial registry, both history checkpoints,
+and their roadmap projection in the same pre-activation revision. The audit's
+one-time initialization path accepts only those exact reviewed 108-row and
+130-row digests plus the byte-exact registry, ledger, and checkpoint files. Its
+schema validation covers the registry version, semantic
+identity versions, both surface contracts, query lifecycle/KPI/alias rules,
+one-way identity-preserving query retirement, unambiguous backtick projection,
+provider-scoped legacy-history lifecycle bounds, rejection of unprojectable raw
+HTML, Unicode control/formatting characters, pipes, and line separators, and the retired `AI-native compiler` authorship
+diagnostic. Google retirement remains activation/clock-bounded until the
+registry gains a Google snapshot series. This is a pinned
+bootstrap, not a timestamp exception that future rows can claim. The suite and
+a direct head-versus-`origin/main` invocation cover the real bootstrap before
+the prospective workflow can be activated. The fixture is not active in this
+staging commit. Activation must copy it byte-for-byte to
+`workflow-policy.yml` in a later pull request, prove the new
+required `audit` run, and retire the older roadmap-only trust-anchor digest.
+During that transition, the still-active roadmap-only workflow runs this
+revision's base-owned policy checker. The checker recognizes only the exact
+prospective workflow digest, fetches the event's `refs/pull/<n>/head` commit as
+Git data without checking it out or executing it, verifies the fetched SHA,
+and requires the candidate registry, ledger, and checkpoints to remain
+byte-identical to this staged base. Every repository script the successor
+workflow executes -- the three policy/audit implementations and their three
+self-test suites -- is pinned byte-for-byte. Four remain identical to the
+trusted base. The policy checker and its self-test instead use deterministic,
+exactly-once transforms: they activate only the new digest, retire the old
+digest and one-use bridge, select the active fixture, and remove transition-only
+tests. Every repository-resident input those successor self-tests read is also
+byte-pinned: the active CI workflow, all eight historical performance workflow
+fixtures, the prospective search-policy fixture, and the four performance
+checker/test files whose digests the roadmap suite verifies. Changed and missing
+mutations cover each input independently. The search-audit self-test synthesizes
+its temporary roadmap projection from the already pinned checkpoint document,
+so unrelated activation-status prose may still be updated without becoming an
+implicit executable input. The staged suite materializes that transformed pair in an isolated tree
+and runs its remaining self-tests, so the activation cannot leave a permanent
+bridge or trust both workflow generations. These D-103 constraints prevent the
+activation commit from replacing any successor checker with a no-op that would
+become trusted after merge. Both successor Python invocations use isolated
+mode; the self-test loads its byte-pinned sibling auditor by exact path, so new
+modules or package initializers in the activation tree cannot shadow
+standard-library or trusted imports. The bridge also enumerates the complete
+candidate Git tree, pins every candidate workflow plus every activation input
+to a `100644 blob` entry (including the newly active trust anchor), and requires
+an empty `.gitattributes` manifest, so symlinks, executable
+mode changes, submodules, or root/nested checkout attributes cannot preserve Git
+blob bytes while changing the successor's materialized workflow, scripts, or
+fixtures. Git blob output is normalized to binary
+strings before comparison so identical UTF-8 files cannot fail solely because
+Ruby assigned different in-memory encodings. The candidate roadmap may
+still update unrelated current-status text, but the bridge extracts every
+`search-history-checkpoint` line and requires exactly the two staged markers in
+their reviewed order, rejecting removal, rewriting, or injection. Regular
+`pull_request` CI never performs that fetch; the bridge is limited to the one
+trust-anchor activation shape.
+
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
 `pull_request_target` on every pull request, checks out the trusted base commit,

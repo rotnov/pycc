@@ -3,16 +3,32 @@
 
 require "minitest/autorun"
 require "tmpdir"
+require "fileutils"
 require_relative "check_ci_permissions"
 
 class WorkflowPermissionsTest < Minitest::Test
   ACTIVE_TRUST_ANCHOR = WORKFLOW_DIRECTORY / TRUST_ANCHOR_FILENAME
   REVIEWED_TRUST_ANCHOR_SNAPSHOT =
     Pathname(__dir__).parent / "tests/fixtures/workflow-policy-roadmap-evidence.yml"
+  PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR =
+    Pathname(__dir__).parent / "tests/fixtures/workflow-policy-search-ledger.yml"
   ACTIVE_TRUST_ANCHOR_SHA256 =
     "4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6"
   RETIRED_TRUST_ANCHOR_SHA256 =
     "3a8b56776e7d44f32759301f0691220800ee6f3184b2702d13c01a28f82ce277"
+  PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
+    "f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688"
+
+  def activation_candidate
+    root = Pathname(__dir__).parent
+    candidate = SEARCH_ACTIVATION_PATHS.to_h do |relative|
+      [relative, activated_successor_executable(relative, root)]
+    end
+    candidate.merge(
+      SEARCH_GIT_ATTRIBUTES_KEY => SEARCH_GIT_ATTRIBUTES_MANIFEST,
+      SEARCH_TREE_ENTRIES_KEY => SEARCH_ACTIVATION_TREE_ENTRIES
+    )
+  end
 
   def workflow(test_job = "runs-on: ubuntu-latest", trigger: "pull_request", extra_jobs: nil)
     lines = [
@@ -27,6 +43,27 @@ class WorkflowPermissionsTest < Minitest::Test
     lines.concat(test_job.lines(chomp: true).map { |line| "    #{line}" })
     lines.concat(extra_jobs.lines(chomp: true).map { |line| "  #{line}" }) if extra_jobs
     "#{lines.join("\n")}\n"
+  end
+
+  def write_policy_input(root, relative, content)
+    destination = root / relative
+    FileUtils.mkdir_p(destination.dirname)
+    destination.binwrite(content)
+  end
+
+  def successor_manifest(entries)
+    JSON.pretty_generate(
+      "manifest_version" => 1,
+      "targets" => entries
+    ) + "\n"
+  end
+
+  def successor_entry(target, content, source: target)
+    {
+      "path" => target,
+      "source_path" => source,
+      "sha256" => Digest::SHA256.hexdigest(content)
+    }
   end
 
   def test_accepts_read_only_pull_request_job
@@ -324,5 +361,585 @@ class WorkflowPermissionsTest < Minitest::Test
     assert_includes run_commands, "ruby scripts/test_check_roadmap_evidence.rb"
     assert_includes run_commands,
                     "ruby scripts/check_roadmap_evidence.rb /tmp/pr-policy-input"
+  end
+
+  def test_prospective_trust_anchor_audits_search_ledger_as_data
+    assert PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.file?,
+           "missing prospective search-ledger trust anchor"
+    text = PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.read
+    validate_workflow(text, PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.to_s)
+    digest = Digest::SHA256.hexdigest(text)
+    assert_equal PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR_SHA256, digest
+    assert_includes TRUST_ANCHOR_SHA256_ALLOWLIST, digest
+
+    anchor = Psych.load(text)
+    steps = anchor.fetch("jobs").fetch("audit").fetch("steps")
+    download = steps.find do |step|
+      step["name"] == "Download head policy inputs as non-executable data"
+    end
+    script = download.fetch("with").fetch("script")
+    %w[
+      docs/ROADMAP.md
+      docs/SEARCH_QUERY_REGISTRY.json
+      docs/SEARCH_VISIBILITY.md
+      docs/SEARCH_VISIBILITY_CHECKPOINTS.json
+    ].each { |path| assert_includes script, path.inspect }
+    assert_includes script,
+                    'entry.type !== "blob" || entry.mode !== "100644"'
+    assert_includes script,
+                    "Policy input is not a regular non-executable file"
+    assert_includes script, 'entry.path === ".gitattributes"'
+    assert_includes script, 'entry.path.endsWith("/.gitattributes")'
+    assert_includes script,
+                    "Head revision contains checkout-affecting .gitattributes"
+    assert_includes script, POLICY_SUCCESSOR_MANIFEST_PATH.inspect
+    assert_includes script, "Trusted policy successor manifest"
+    assert_includes script, "Candidate policy successor manifest"
+    refute_includes script, 'entry.type === "blob" && isWorkflow(entry.path)'
+    refute_includes script,
+                    'candidate.type === "blob" && candidate.path === requiredPath'
+
+    commands = steps
+               .map { |step| step["run"] }
+               .compact
+               .flat_map { |run| run.lines.map(&:strip) }
+    assert_includes commands,
+                    "python3 -I -B scripts/test_check_search_visibility_audit.py"
+    assert_includes commands, "--head-root /tmp/pr-policy-input \\"
+    assert_includes commands, '--base-root "$GITHUB_WORKSPACE"'
+    assert_includes commands, "python3 -I scripts/check_search_visibility_audit.py \\"
+    policy = steps.find { |step| step["name"] == "Audit head workflow permissions" }
+    assert_equal "/tmp/pr-policy-input",
+                 policy.fetch("env").fetch("POLICY_CANDIDATE_ROOT")
+  end
+
+  def test_steady_state_policy_accepts_an_unchanged_protected_target
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      base = root / "base"
+      candidate = root / "candidate"
+      target = "scripts/trusted.rb"
+      content = "trusted\n"
+      manifest = successor_manifest([successor_entry(target, content)])
+      [base, candidate].each do |tree|
+        write_policy_input(tree, target, content)
+        write_policy_input(tree, POLICY_SUCCESSOR_MANIFEST_PATH, manifest)
+      end
+
+      validate_policy_successor_transition(candidate, base)
+    end
+  end
+
+  def test_steady_state_policy_wrapper_requires_and_audits_candidate_root
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      base = root / "base"
+      candidate = root / "candidate"
+      target = "scripts/trusted.rb"
+      content = "trusted\n"
+      manifest = successor_manifest([successor_entry(target, content)])
+      [base, candidate].each do |tree|
+        write_policy_input(tree, target, content)
+        write_policy_input(tree, POLICY_SUCCESSOR_MANIFEST_PATH, manifest)
+      end
+      write_policy_input(
+        base,
+        SEARCH_ACTIVATED_TRUST_ANCHOR_PATH,
+        PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread
+      )
+
+      error = assert_raises(PolicyError) do
+        validate_steady_state_policy_inputs(
+          event_name: "pull_request_target",
+          candidate_root: nil,
+          repository_root: base
+        )
+      end
+      assert_match(/POLICY_CANDIDATE_ROOT/, error.message)
+      validate_steady_state_policy_inputs(
+        event_name: "pull_request_target",
+        candidate_root: candidate.to_s,
+        repository_root: base
+      )
+    end
+  end
+
+  def test_steady_state_policy_rejects_same_pr_self_authorization
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      base = root / "base"
+      candidate = root / "candidate"
+      target = "scripts/trusted.rb"
+      proposal = "tests/fixtures/policy-successors/trusted.rb"
+      trusted = "trusted\n"
+      replacement = "no-op\n"
+      base_manifest = successor_manifest([successor_entry(target, trusted)])
+      candidate_manifest = successor_manifest(
+        [successor_entry(target, replacement, source: proposal)]
+      )
+      write_policy_input(base, target, trusted)
+      write_policy_input(base, POLICY_SUCCESSOR_MANIFEST_PATH, base_manifest)
+      write_policy_input(candidate, target, replacement)
+      write_policy_input(candidate, proposal, replacement)
+      write_policy_input(
+        candidate, POLICY_SUCCESSOR_MANIFEST_PATH, candidate_manifest
+      )
+
+      error = assert_raises(PolicyError) do
+        validate_policy_successor_transition(candidate, base)
+      end
+      assert_match(/lacks a base-staged successor/, error.message)
+    end
+  end
+
+  def test_steady_state_policy_accepts_a_base_staged_successor
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      base = root / "base"
+      candidate = root / "candidate"
+      target = "scripts/trusted.rb"
+      proposal = "tests/fixtures/policy-successors/trusted.rb"
+      trusted = "trusted\n"
+      replacement = "reviewed replacement\n"
+      base_manifest = successor_manifest(
+        [successor_entry(target, replacement, source: proposal)]
+      )
+      candidate_manifest = successor_manifest(
+        [successor_entry(target, replacement)]
+      )
+      write_policy_input(base, target, trusted)
+      write_policy_input(base, proposal, replacement)
+      write_policy_input(base, POLICY_SUCCESSOR_MANIFEST_PATH, base_manifest)
+      write_policy_input(candidate, target, replacement)
+      write_policy_input(
+        candidate, POLICY_SUCCESSOR_MANIFEST_PATH, candidate_manifest
+      )
+
+      validate_policy_successor_transition(candidate, base)
+    end
+  end
+
+  def test_steady_state_policy_rejects_a_shrunk_or_invalid_next_manifest
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      base = root / "base"
+      candidate = root / "candidate"
+      first = "scripts/first.rb"
+      second = "scripts/second.rb"
+      first_content = "first\n"
+      second_content = "second\n"
+      base_manifest = successor_manifest(
+        [
+          successor_entry(first, first_content),
+          successor_entry(second, second_content)
+        ]
+      )
+      candidate_manifest = successor_manifest(
+        [successor_entry(first, first_content)]
+      )
+      [[base, first, first_content], [base, second, second_content],
+       [candidate, first, first_content]].each do |tree, relative, content|
+        write_policy_input(tree, relative, content)
+      end
+      write_policy_input(base, POLICY_SUCCESSOR_MANIFEST_PATH, base_manifest)
+      write_policy_input(
+        candidate, POLICY_SUCCESSOR_MANIFEST_PATH, candidate_manifest
+      )
+
+      error = assert_raises(PolicyError) do
+        validate_policy_successor_transition(candidate, base)
+      end
+      assert_match(/removes protected targets/, error.message)
+    end
+  end
+
+  def test_steady_state_policy_rejects_a_mismatched_candidate_proposal_digest
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      base = root / "base"
+      candidate = root / "candidate"
+      target = "scripts/trusted.rb"
+      added = "scripts/future.rb"
+      proposal = "tests/fixtures/policy-successors/future.rb"
+      trusted = "trusted\n"
+      future = "future\n"
+      base_manifest = successor_manifest([successor_entry(target, trusted)])
+      future_entry = successor_entry(added, future, source: proposal)
+      future_entry["sha256"] = "0" * 64
+      candidate_manifest = successor_manifest(
+        [successor_entry(target, trusted), future_entry]
+      )
+      [base, candidate].each do |tree|
+        write_policy_input(tree, target, trusted)
+      end
+      write_policy_input(base, POLICY_SUCCESSOR_MANIFEST_PATH, base_manifest)
+      write_policy_input(candidate, added, future)
+      write_policy_input(candidate, proposal, future)
+      write_policy_input(
+        candidate, POLICY_SUCCESSOR_MANIFEST_PATH, candidate_manifest
+      )
+
+      error = assert_raises(PolicyError) do
+        validate_policy_successor_transition(candidate, base)
+      end
+      assert_match(/source digest does not match/, error.message)
+    end
+  end
+
+  def test_policy_successor_manifest_rejects_unsafe_sources
+    ["../trusted.rb", "scripts/trusted\n.rb", "scripts/путь.rb"].each do |source|
+      text = successor_manifest(
+        [{
+          "path" => "scripts/trusted.rb",
+          "source_path" => source,
+          "sha256" => "0" * 64
+        }]
+      )
+      error = assert_raises(PolicyError) do
+        parse_policy_successor_manifest(text)
+      end
+      assert_match(/safe repository-relative path/, error.message)
+    end
+  end
+
+  def test_policy_successor_manifest_rejects_float_version_and_duplicate_keys
+    entry = successor_entry("scripts/trusted.rb", "trusted\n")
+    float_version = successor_manifest([entry]).sub(
+      '"manifest_version": 1', '"manifest_version": 1.0'
+    )
+    error = assert_raises(PolicyError) do
+      parse_policy_successor_manifest(float_version)
+    end
+    assert_match(/manifest_version must be 1/, error.message)
+
+    duplicate = successor_manifest([entry]).sub(
+      '"manifest_version": 1',
+      '"manifest_version": 1, "manifest_version": 1'
+    )
+    error = assert_raises(PolicyError) do
+      parse_policy_successor_manifest(duplicate)
+    end
+    assert_match(/duplicate JSON key/, error.message)
+  end
+
+  def test_activation_trust_anchor_preserves_staged_search_assets
+    candidate = activation_candidate
+    STAGED_SEARCH_ACTIVATION_SHA256.each do |relative, digest|
+      content = candidate.fetch(relative)
+      assert_equal digest, Digest::SHA256.hexdigest(content)
+    end
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      assert_silent do
+        validate_search_activation_transition(
+          [anchor],
+          event_name: "pull_request_target",
+          data_loader: ->(_paths) { candidate }
+        )
+      end
+    end
+  end
+
+  def test_activated_policy_retires_transition_and_passes_its_self_tests
+    root = Pathname(__dir__).parent
+    checker = activated_successor_executable(ACTIVATED_POLICY_CHECKER_PATH, root)
+    tests = activated_successor_executable(ACTIVATED_POLICY_TEST_PATH, root)
+    retired_anchor =
+      "4dc12b9c053dbc94011ba86c32c7a103" \
+      "afe223582cc94e93ff79255dc6e5b2e6"
+
+    refute_includes checker, "  #{retired_anchor}\n"
+    refute_includes checker,
+                    "  validate_search_" + "activation_transition(paths)\n"
+    assert_includes checker, "  #{SEARCH_LEDGER_TRUST_ANCHOR_SHA256}\n"
+    refute_includes tests, "\n  def activation_candidate\n"
+    refute_includes tests,
+                    "\n  def test_activation_trust_anchor_preserves_staged_search_assets\n"
+
+    Dir.mktmpdir do |directory|
+      activated_root = Pathname(directory)
+      FileUtils.mkdir_p(activated_root / "scripts")
+      FileUtils.mkdir_p(activated_root / "tests/fixtures")
+      FileUtils.mkdir_p(activated_root / ".github/workflows")
+      (activated_root / ACTIVATED_POLICY_CHECKER_PATH).binwrite(checker)
+      (activated_root / ACTIVATED_POLICY_TEST_PATH).binwrite(tests)
+      fixture = PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread
+      (activated_root / "tests/fixtures/workflow-policy-search-ledger.yml")
+        .binwrite(fixture)
+      (activated_root / ".github/workflows/workflow-policy.yml")
+        .binwrite(fixture)
+
+      stdout, stderr, status = Open3.capture3(
+        "ruby",
+        ACTIVATED_POLICY_TEST_PATH,
+        chdir: activated_root.to_s
+      )
+      assert status.success?, "#{stdout}\n#{stderr}"
+    end
+  end
+
+  def test_activation_compares_successor_executables_as_bytes
+    candidate = activation_candidate.transform_values do |content|
+      content.is_a?(String) ? content.dup.force_encoding(Encoding::UTF_8) : content
+    end
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      validate_search_activation_transition(
+        [anchor],
+        event_name: "pull_request_target",
+        data_loader: ->(_paths) { candidate }
+      )
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_changed_staged_search_assets
+    original = activation_candidate
+    STAGED_SEARCH_ACTIVATION_SHA256.each_key do |relative|
+      candidate = original.transform_values(&:dup)
+      candidate[relative] << "\nmutated\n"
+      error = nil
+      Dir.mktmpdir do |directory|
+        anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+        anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+        error = assert_raises(PolicyError) do
+          validate_search_activation_transition(
+            [anchor],
+            event_name: "pull_request_target",
+            data_loader: ->(_paths) { candidate }
+          )
+        end
+      end
+      assert_match(/preserve staged #{Regexp.escape(relative)} byte-for-byte/,
+                   error.message)
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_changed_successor_executables
+    original = activation_candidate
+    exact_assets = STAGED_SEARCH_ACTIVATION_SHA256.keys
+    (SEARCH_SUCCESSOR_EXECUTABLES - exact_assets).each do |relative|
+      candidate = original.transform_values(&:dup)
+      candidate[relative] << "\n# mutated\n"
+      Dir.mktmpdir do |directory|
+        anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+        anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+        error = assert_raises(PolicyError) do
+          validate_search_activation_transition(
+            [anchor],
+            event_name: "pull_request_target",
+            data_loader: ->(_paths) { candidate }
+          )
+        end
+        message =
+          /preserve trusted successor executable #{Regexp.escape(relative)}/
+        assert_match(message, error.message)
+      end
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_changed_or_missing_successor_inputs
+    original = activation_candidate
+    SEARCH_SUCCESSOR_INPUTS.each do |relative|
+      candidates = {
+        "changed" => original.transform_values(&:dup).tap do |candidate|
+          candidate[relative] << "\nmutated\n"
+        end,
+        "missing" => original.transform_values(&:dup).tap do |candidate|
+          candidate.delete(relative)
+        end
+      }
+      candidates.each do |mutation, candidate|
+        Dir.mktmpdir do |directory|
+          anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+          anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+          error = assert_raises(PolicyError) do
+            validate_search_activation_transition(
+              [anchor],
+              event_name: "pull_request_target",
+              data_loader: ->(_paths) { candidate }
+            )
+          end
+          message =
+            /preserve trusted successor input #{Regexp.escape(relative)}/
+          assert_match message, error.message, mutation
+        end
+      end
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_added_gitattributes_anywhere
+    candidate = activation_candidate.merge(
+      SEARCH_GIT_ATTRIBUTES_KEY => ".github/.gitattributes\0docs/.gitattributes".b
+    )
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      error = assert_raises(PolicyError) do
+        validate_search_activation_transition(
+          [anchor],
+          event_name: "pull_request_target",
+          data_loader: ->(_paths) { candidate }
+        )
+      end
+      assert_match(/cannot add checkout-affecting \.gitattributes/, error.message)
+    end
+  end
+
+  def test_git_attributes_manifest_is_nul_safe_and_complete
+    tree = [
+      "README.md",
+      "docs/.gitattributes",
+      "directory\nwith-newline/.gitattributes",
+      ".github/.gitattributes",
+      ".gitattributes.txt"
+    ].join("\0") + "\0"
+    expected = [
+      ".github/.gitattributes",
+      "directory\nwith-newline/.gitattributes",
+      "docs/.gitattributes"
+    ].join("\0").b
+    assert_equal expected, git_attributes_manifest(tree)
+  end
+
+  def test_activation_tree_metadata_is_nul_safe_and_preserves_modes
+    tree = [
+      "100644 blob #{'a' * 40}\t.github/workflows/ci.yml",
+      "100644 blob #{'b' * 40}\tdirectory\nwith-newline/.gitattributes",
+      "120000 blob #{'c' * 40}\tscripts/check_ci_permissions.rb",
+      "120000 blob #{'d' * 40}\t.github/workflows/hook-install-check.yml"
+    ].join("\0") + "\0"
+    attributes, entries = activation_tree_metadata(tree)
+    assert_equal "directory\nwith-newline/.gitattributes".b, attributes
+    assert_equal "100644 blob", entries.fetch(".github/workflows/ci.yml")
+    assert_equal "120000 blob", entries.fetch("scripts/check_ci_permissions.rb")
+    assert_equal "120000 blob",
+                 entries.fetch(".github/workflows/hook-install-check.yml")
+  end
+
+  def test_activation_trust_anchor_rejects_changed_tree_entry_modes
+    SEARCH_ACTIVATION_TREE_PATHS.each do |relative|
+      candidate = activation_candidate
+      candidate[SEARCH_TREE_ENTRIES_KEY] =
+        SEARCH_ACTIVATION_TREE_ENTRIES.merge(relative => "120000 blob")
+      Dir.mktmpdir do |directory|
+        anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+        anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+        error = assert_raises(PolicyError) do
+          validate_search_activation_transition(
+            [anchor],
+            event_name: "pull_request_target",
+            data_loader: ->(_paths) { candidate }
+          )
+        end
+        assert_match(/preserve Git tree entry 100644 blob for #{Regexp.escape(relative)}/,
+                     error.message)
+      end
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_nonregular_unselected_workflow
+    relative = ".github/workflows/hook-install-check.yml"
+    candidate = activation_candidate
+    candidate[SEARCH_TREE_ENTRIES_KEY] =
+      SEARCH_ACTIVATION_TREE_ENTRIES.merge(relative => "120000 blob")
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      error = assert_raises(PolicyError) do
+        validate_search_activation_transition(
+          [anchor],
+          event_name: "pull_request_target",
+          data_loader: ->(_paths) { candidate }
+        )
+      end
+      assert_match(/regular non-executable Git tree entries for every workflow/,
+                   error.message)
+      assert_match(/#{Regexp.escape(relative)}/, error.message)
+    end
+  end
+
+  def test_activation_trust_anchor_accepts_regular_unselected_workflow
+    candidate = activation_candidate
+    candidate[SEARCH_TREE_ENTRIES_KEY] = SEARCH_ACTIVATION_TREE_ENTRIES.merge(
+      ".github/workflows/hook-install-check.yml" => "100644 blob"
+    )
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      validate_search_activation_transition(
+        [anchor],
+        event_name: "pull_request_target",
+        data_loader: ->(_paths) { candidate }
+      )
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_changed_roadmap_projection
+    candidate = activation_candidate
+    roadmap = (Pathname(__dir__).parent / SEARCH_ROADMAP_PATH).binread
+    mutations = [
+      roadmap.sub("#{SEARCH_ROADMAP_CHECKPOINTS.first}\n", ""),
+      roadmap.sub(SEARCH_ROADMAP_CHECKPOINTS.last,
+                  SEARCH_ROADMAP_CHECKPOINTS.last.sub(" 130 ", " 129 ")),
+      roadmap.sub(SEARCH_ROADMAP_CHECKPOINTS.last,
+                  "#{SEARCH_ROADMAP_CHECKPOINTS.last}\n" \
+                  "#{SEARCH_ROADMAP_CHECKPOINTS.first}")
+    ]
+    mutations.each do |mutated_roadmap|
+      changed = candidate.merge(SEARCH_ROADMAP_PATH => mutated_roadmap)
+      Dir.mktmpdir do |directory|
+        anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+        anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+        error = assert_raises(PolicyError) do
+          validate_search_activation_transition(
+            [anchor],
+            event_name: "pull_request_target",
+            data_loader: ->(_paths) { changed }
+          )
+        end
+        assert_match(/preserve the staged roadmap checkpoint projection/,
+                     error.message)
+      end
+    end
+  end
+
+  def test_non_activation_event_does_not_fetch_staged_search_assets
+    Dir.mktmpdir do |directory|
+      anchor = Pathname(directory) / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      validate_search_activation_transition(
+        [anchor],
+        event_name: "pull_request",
+        data_loader: ->(_paths) { flunk "regular PR validation must not fetch" }
+      )
+    end
+  end
+
+  def test_activation_trust_anchor_rejects_changed_trusted_base_assets
+    candidate = activation_candidate
+    Dir.mktmpdir do |directory|
+      root = Pathname(directory)
+      anchor = root / TRUST_ANCHOR_FILENAME
+      anchor.binwrite(PROSPECTIVE_SEARCH_LEDGER_TRUST_ANCHOR.binread)
+      STAGED_SEARCH_ACTIVATION_SHA256.each_key do |relative|
+        destination = root / relative
+        FileUtils.mkdir_p(destination.dirname)
+        destination.binwrite(candidate.fetch(relative))
+      end
+      changed = root / "docs/SEARCH_VISIBILITY.md"
+      changed.binwrite(changed.binread + "\nmutated base\n")
+      error = assert_raises(PolicyError) do
+        validate_search_activation_transition(
+          [anchor],
+          event_name: "pull_request_target",
+          repository_root: root,
+          data_loader: ->(_paths) { candidate }
+        )
+      end
+      assert_match(/disagrees with trusted base docs\/SEARCH_VISIBILITY.md/,
+                   error.message)
+    end
   end
 end
