@@ -15,6 +15,26 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc clean` | drop `.pycc/` cache |
 | `pycc version --verbose` | compiler, LLVM, target list |
 
+`pycc version` prints one summary line; `--verbose` appends the Tier-1 target
+list, in the exact set and order of ARCHITECTURE.md's "Cross-platform (hard
+requirement)" table. The compiler and rustc fields come from the crate
+manifest; the LLVM field states D-015's pinned contract version.
+`tests/slice0.rs`'s two version snapshot tests enforce the output shape —
+manifest-sourced fields, the LLVM pin, and the exact target set and order;
+the version numbers in the transcript below are illustrative and track the
+manifest at build time:
+
+```text
+$ pycc version --verbose
+pycc 0.1.0 (rustc 1.97.1, LLVM 22.1.1)
+tier-1 targets:
+  x86_64-unknown-linux-gnu
+  aarch64-unknown-linux-gnu
+  x86_64-apple-darwin
+  aarch64-apple-darwin
+  x86_64-pc-windows-msvc
+```
+
 The current v0.1 slice requires at least one explicit file for `pycc check` and
 accepts multiple files in one invocation, matching the argument shape used by
 pre-commit. It checks every supplied file before exiting. Directory discovery,
