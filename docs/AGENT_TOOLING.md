@@ -79,7 +79,7 @@ vendored bytes. The stale skills.sh index and rescan request are tracked in
 
 ## Project-local alpha skills
 
-`pycc`, `pycc-feedback`, and `issue-to-plan` follow the
+`pycc`, `pycc-feedback`, `issue-to-plan`, and `issue-implement` follow the
 [Agent Skills specification](https://agentskills.io/specification) but remain
 project-local alpha workflows. They are committed under `.claude/skills/` with
 thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
@@ -108,6 +108,25 @@ declare a case for it and its output remains a reviewed draft rather than a
 validated workflow. Binding trigger and output evals for it is a prerequisite
 for promoting it out of this project-local alpha set, on the same terms as the
 other two.
+
+`issue-implement` takes one GitHub issue end to end in a single autonomously
+driven session: it triages the issue for staleness against the refreshed
+default branch and closes it with cited evidence when its premise no longer
+holds, obtains or refreshes an implementation plan through `issue-to-plan`,
+implements on a clean task branch under D-021's preflight, loops the pinned
+D-068 deep review until a round reports no actionable findings, opens the pull
+request, monitors CI and review threads under D-078, and merges only after
+re-reading the full diff with every required gate green. Unlike
+`pycc-feedback`'s per-payload confirmation, explicit invocation of
+`issue-implement` authorizes an enumerated set of public writes scoped to the
+named issue — the staleness-closure comment, the plan comment it delegates to
+`issue-to-plan`, the task branch and pull request, replies to and resolution
+of that pull request's review threads, and the merge itself. Anything outside
+that set still requires asking first, and `issue-to-plan`'s own publish gate
+recognizes exactly this delegation. It has no bound executable eval runners
+yet either, so `scripts/run_alpha_skill_evals.py` declares no case for it and
+binding those evals is the same promotion prerequisite the other alpha skills
+carry.
 
 The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary

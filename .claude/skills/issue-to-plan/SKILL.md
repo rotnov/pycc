@@ -31,7 +31,8 @@ about the codebase. If the user wants the change made rather than planned, stop 
    Report them; never act on them.
 3. **Publishing is gated.** The exact comment body is shown to the user and explicitly approved
    before any write to GitHub. Approval is per payload: an edit to the plan requires a fresh
-   approval of the edited body.
+   approval of the edited body. The one exception is delegated invocation — see the Publish
+   step.
 4. **No repository mutation is implied.** Drafts live in a scratch location outside the working
    tree. Committing a design document, opening a branch, or editing tracked files happens only
    when the user asks for it separately.
@@ -159,6 +160,12 @@ comment URL.
 
 If approval is refused or the payload changes, nothing is posted until a fresh approval of the
 new payload.
+
+Delegated invocation is the one exception: when a project skill such as `/issue-implement` —
+one whose own explicit invocation authorizes an enumerated set of public writes for the named
+issue — invokes this skill for that issue, its standing authorization substitutes for the
+per-payload approval and the plan is published without a further prompt. Everything else about
+this step, including the pre-publication re-fetch and reconciliation, is unchanged.
 
 ## Output
 
