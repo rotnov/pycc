@@ -3,13 +3,22 @@ use pycc_diag::{Diagnostic, Span};
 use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
 use pycc_hir::{BinOpKind, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Debug, Default, Clone)]
 pub struct Environment {
     bindings: HashMap<String, Ty>,
     functions: Arc<HashMap<String, (Vec<Ty>, Ty)>>,
+    /// Names whose *net* source-order top-level binding is currently a
+    /// `def` (D-110). Tracked separately from `bindings` on purpose: the
+    /// representation record in `bindings` must survive a `def` so that
+    /// D-040's sticky-representation rule (`check_assignment`) still rejects
+    /// a later incompatible value reassignment -- PR #252's round-4 review
+    /// caught a version that cleared `bindings` at a `def` and thereby let
+    /// `helper = 1; def helper(): ...; helper = "leaked"` reach codegen with
+    /// an `int`-allocated slot stored as `str`.
+    def_rebound: HashSet<String>,
 }
 
 impl Environment {
@@ -22,6 +31,9 @@ impl Environment {
     }
 
     pub fn bind(&mut self, name: String, ty: Ty) {
+        // A value assignment makes the name's net binding a value again,
+        // whatever `def`s came before it (D-110).
+        self.def_rebound.remove(name.as_str());
         self.bindings.insert(name, ty);
     }
 
@@ -118,6 +130,11 @@ type BinOpConstraint = (BinOpKind, TypeTerm, TypeTerm, TypeTerm);
 struct ConstraintEnvironment<'scope, 'hir> {
     bindings: HashMap<String, TypeTerm>,
     local_names: &'scope [&'hir str],
+    /// Mirror of `Environment::def_rebound` (D-110): names whose net
+    /// source-order module binding is a `def`, kept apart from the term
+    /// bindings for the same reason -- terms must survive a `def` for
+    /// representation purposes.
+    defs_rebound: HashSet<String>,
 }
 
 fn fresh_term(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> TypeTerm {
@@ -264,12 +281,29 @@ fn collect_expr_constraints(
             }
         }
         HirExpr::Call { callee, args } => {
+            // Mirror of `infer_expr_in`'s D-110 call-target rule (#133): an
+            // active value binding shadows builtin and function lookup. At
+            // module level `local_names` is empty and `bindings` holds the
+            // accumulated top-level assignments in source order; for a
+            // private-helper body the environment is seeded from those module
+            // globals with the helper's own local names stripped and its
+            // parameters re-inserted, so this gate sees a module binding
+            // exactly when Python's name resolution would. Binding-first
+            // ordering preserves the local diagnostics unchanged, as in
+            // `infer_expr_in`. This mirror is load-bearing on its own when
+            // the bound callee is neither `print` nor any `def`: without it,
+            // `signatures.get` misses, the call stays unresolved, and the
+            // solver dead-ends in the misleading "cannot infer return type"
+            // error *before* pass 3 ever runs. For a shadowed `print`
+            // specifically, the special case below would resolve the call
+            // and pass 3's own gate would still catch the shadowing later --
+            // there this mirror is fail-fast defense-in-depth, not the only
+            // line of defense.
+            if env.bindings.contains_key(callee) && !env.defs_rebound.contains(callee) {
+                return Err(non_callable_binding(callee));
+            }
             if is_local(env.local_names, callee) {
-                return if env.bindings.contains_key(callee) {
-                    Err(non_callable_binding(callee))
-                } else {
-                    Err(unbound_local(callee))
-                };
+                return Err(unbound_local(callee));
             }
             let mut arg_terms = Vec::with_capacity(args.len());
             for arg in args {
@@ -322,6 +356,9 @@ fn collect_block_constraints(
     for stmt in body {
         match stmt {
             HirStmt::Assign { target, value } => {
+                // A value assignment re-shadows any earlier same-named `def`
+                // (D-110), independent of the first-term-wins rule below.
+                env.defs_rebound.remove(target.as_str());
                 if let Some(term) =
                     collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
                 {
@@ -515,6 +552,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
     Some(Environment {
         bindings: HashMap::new(),
         functions: Arc::new(functions),
+        def_rebound: HashSet::new(),
     })
 }
 
@@ -551,18 +589,29 @@ fn infer_function_signatures_with_solver(
     let mut globals = ConstraintEnvironment {
         bindings: HashMap::new(),
         local_names: &[],
+        defs_rebound: HashSet::new(),
     };
     for item in &hir.items {
-        if let HirItem::TopLevelStmt(stmt) = item {
-            collect_block_constraints(
-                &signatures,
-                &mut parents,
-                &mut concrete,
-                &mut binops,
-                &mut globals,
-                std::slice::from_ref(stmt),
-                None,
-            )?;
+        match item {
+            HirItem::TopLevelStmt(stmt) => {
+                collect_block_constraints(
+                    &signatures,
+                    &mut parents,
+                    &mut concrete,
+                    &mut binops,
+                    &mut globals,
+                    std::slice::from_ref(stmt),
+                    None,
+                )?;
+            }
+            // Mirror of pass 2's source-order `def` rebinding (D-110): the
+            // `def` marks the name def-rebound in the accumulated globals
+            // (without erasing its term, which representation tracking may
+            // still need), so helper-body environments seeded from them see
+            // the net binding, not a stale shadowed primitive.
+            HirItem::Function { name, .. } => {
+                globals.defs_rebound.insert(name.clone());
+            }
         }
     }
     for (item, local_names) in hir.items.iter().zip(function_local_names) {
@@ -573,9 +622,16 @@ fn infer_function_signatures_with_solver(
         let mut env = ConstraintEnvironment {
             bindings: globals.bindings.clone(),
             local_names,
+            defs_rebound: globals.defs_rebound.clone(),
         };
         for local_name in local_names.iter().copied() {
             env.bindings.remove(local_name);
+            // A local name (parameter or body-assigned) re-binds within this
+            // body, so a stale module-level def-rebound fact must not
+            // survive for it (D-110, PR #252's round-6 review): a parameter
+            // colliding with a def-rebound module name would otherwise skip
+            // the mirror gate and be mislabeled "not bound before this use".
+            env.defs_rebound.remove(local_name);
         }
         for (param_name, param_ty) in signature.0.iter().zip(&signature.1) {
             env.bindings.insert(param_name.clone(), *param_ty);
@@ -758,14 +814,30 @@ fn infer_expr_in(
             }
         }
         HirExpr::Call { callee, args } => {
-            if is_local(local_names, callee) {
-                return if env.lookup(callee).is_some() {
-                    Err(non_callable_binding(callee))
-                } else {
-                    Err(unbound_local(callee))
-                };
+            // D-110 (#133): a call target resolves through the active value
+            // binding before any builtin or function-registry fallback -- a
+            // module `helper = 1` shadows both a same-named `def` and a
+            // builtin at every later call site, and every value binding in
+            // the current subset is a primitive, so a shadowed target is
+            // always non-callable. The gate is deliberately callee-first
+            // (before argument inference), uniform with how the local gate
+            // below always behaved. Local diagnostics are preserved exactly:
+            // a value-bound local reported `non_callable_binding` before this
+            // reordering too, and a local without a binding still falls
+            // through to `unbound_local`. In pass 3 the environment is the
+            // final module environment (D-041), so a body call is rejected
+            // when the callee is value-bound anywhere at top level -- D-110
+            // records that consequence (it rejects some later-rebind programs
+            // CPython's dynamic order would run) as deliberate; source-order
+            // visibility questions stay #22's scope.
+            if env.lookup(callee).is_some() && !env.def_rebound.contains(callee) {
+                return Err(non_callable_binding(callee));
             }
-            // Preserve the established diagnostic order by inferring every
+            if is_local(local_names, callee) {
+                return Err(unbound_local(callee));
+            }
+            // For a callee that survives D-110's binding gate above, preserve
+            // the established diagnostic order by inferring every
             // argument before validating arity or compatibility. Most Python
             // calls are small, so keep up to four inferred types on the stack
             // and reserve a heap vector only for wider calls.
@@ -893,6 +965,18 @@ fn check_range_operand_in(
 }
 
 fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), Diagnostic> {
+    // Every value assignment re-shadows a same-named `def` (D-110),
+    // including a compatible-type reassignment of a name that already has a
+    // representation record -- that branch below returns without calling
+    // `bind()`, so clearing only inside `bind()` left the def-rebound flag
+    // permanently stuck for any name with a pre-`def` binding (PR #252's
+    // round-5 review caught `helper = 1; def helper() -> int: ...;
+    // helper = 2; helper()` resolving the function where CPython raises
+    // `TypeError`). Cleared here unconditionally, matching the solver's own
+    // unconditional clearing in its Assign arm. Function bodies operate on
+    // `child_for_function` clones, so a body-local assignment clears only
+    // that body's view, never the module-level fact.
+    env.def_rebound.remove(target);
     if let Some(previous) = env.lookup(target) {
         if !is_assignable(ty, previous) {
             return Err(Diagnostic::error(
@@ -1241,9 +1325,21 @@ fn check_with_environment(
     // `env`'s bindings as module-level assignments are encountered --
     // ordinary top-level code is still checked top-to-bottom (a top-level
     // forward reference to a not-yet-assigned name is a genuine error).
+    // A `def` executes at its own position in that order and rebinds its
+    // name to the function (D-110, refined by PR #252's review): later
+    // `helper()` calls resolve the function exactly as CPython does, while
+    // a value assignment *after* the `def` shadows it again. The `def` only
+    // marks the name def-rebound -- it must NOT erase the representation
+    // record in `bindings`, which D-040's sticky-representation rule keeps
+    // consulting so an incompatible later reassignment still fails T0023.
+    // The gate therefore tests the net source-order binding, in this pass
+    // and in pass 3's final environment alike.
     for item in &hir.items {
-        if let HirItem::TopLevelStmt(stmt) = item {
-            check_stmt(&mut env, stmt)?;
+        match item {
+            HirItem::TopLevelStmt(stmt) => check_stmt(&mut env, stmt)?,
+            HirItem::Function { name, .. } => {
+                env.def_rebound.insert(name.clone());
+            }
         }
     }
     // Pass 3: check every function body against a clone of `env` as it
@@ -1491,6 +1587,7 @@ mod tests {
         let mut concrete = Vec::new();
         let mut binops = Vec::new();
         let mut env = ConstraintEnvironment {
+            defs_rebound: HashSet::new(),
             bindings: HashMap::new(),
             local_names: &[],
         };
@@ -1527,6 +1624,7 @@ mod tests {
         let mut concrete = Vec::new();
         let mut binops = Vec::new();
         let mut env = ConstraintEnvironment {
+            defs_rebound: HashSet::new(),
             bindings: HashMap::new(),
             local_names: &[],
         };
@@ -1557,6 +1655,7 @@ mod tests {
         let mut concrete = Vec::new();
         let mut binops = Vec::new();
         let mut env = ConstraintEnvironment {
+            defs_rebound: HashSet::new(),
             bindings: HashMap::new(),
             local_names: &["y"],
         };
@@ -1591,6 +1690,7 @@ mod tests {
         let mut concrete = Vec::new();
         let mut binops = Vec::new();
         let mut env = ConstraintEnvironment {
+            defs_rebound: HashSet::new(),
             bindings: HashMap::new(),
             local_names: &["z"],
         };
@@ -3154,6 +3254,592 @@ mod tests {
             err.message,
             "name `helper` is bound to a non-callable value"
         );
+    }
+
+    /// #133: a module-level value binding must shadow a same-named user
+    /// function at every later call site (CPython raises `TypeError: 'int'
+    /// object is not callable`; the pre-fix checker resolved the call
+    /// through the function registry and accepted it).
+    #[test]
+    fn a_module_value_binding_shadows_a_same_named_function_call() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    })],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "helper".to_string(),
+                    args: vec![],
+                })),
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    /// #133: the same shadowing rule covers builtins -- `print = 1` makes a
+    /// later `print()` a call on an `int`, which CPython rejects at runtime.
+    #[test]
+    fn a_module_value_binding_shadows_a_builtin_call() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "print".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![],
+                })),
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "name `print` is bound to a non-callable value");
+    }
+
+    /// #133: pass 3 checks annotated function bodies against the final
+    /// module environment (D-041), so a body call whose target is
+    /// module-bound to a value is rejected through `infer_expr_in`'s gate.
+    #[test]
+    fn an_annotated_body_call_sees_the_module_value_binding() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }),
+                HirItem::Function {
+                    name: "caller".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    /// #133: the solver path (an underscore private helper with an inferred
+    /// signature) seeds its body environment from the module globals, so
+    /// `collect_expr_constraints`'s mirrored gate rejects the same shape.
+    /// Mirrors the issue's own third reproduction end to end through
+    /// `check_and_resolve`.
+    #[test]
+    fn a_private_helper_call_sees_the_module_value_binding() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }),
+                HirItem::Function {
+                    name: "_call_helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    /// D-110's first recorded ordering consequence, pinned as deliberate: a
+    /// body call is rejected whenever the callee is value-bound anywhere at
+    /// module top level, even when the program's only call executes *before*
+    /// the rebinding in CPython's dynamic order (this exact module runs fine
+    /// under CPython: `caller()` returns 1, then `helper = 2` rebinds). Pass
+    /// 3 checks bodies against the final module environment (D-041), and
+    /// D-110 accepts the stricter-than-one-dynamic-trace rejection rather
+    /// than importing #22's execution-order model.
+    #[test]
+    fn a_rebinding_after_the_only_call_still_rejects_the_body_call() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+                HirItem::Function {
+                    name: "caller".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::Call {
+                        callee: "caller".to_string(),
+                        args: vec![],
+                    },
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }),
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    /// D-110's second recorded ordering consequence: the binding gate is
+    /// callee-first, so a shadowed callee with an additionally-invalid
+    /// argument reports the non-callable callee, not the argument's own
+    /// error -- uniform with the pre-existing local gate, though CPython's
+    /// evaluation order would surface the argument's `NameError` first.
+    #[test]
+    fn a_shadowed_callee_reports_before_its_argument_errors() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "helper".to_string(),
+                    args: vec![HirExpr::Name("undefined_name".to_string())],
+                })),
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    /// D-110's third recorded consequence: a bound value that shadows
+    /// nothing at all now reports the accurate non-callable diagnostic
+    /// instead of final validation's misleading "call to undefined function".
+    #[test]
+    fn calling_a_bound_value_that_shadows_nothing_reports_non_callable() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "x".to_string(),
+                    args: vec![],
+                })),
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "name `x` is bound to a non-callable value");
+    }
+
+    /// The discriminating case for `collect_expr_constraints`' mirror gate
+    /// (D-110): the bound callee is neither `print` nor any `def`, inside an
+    /// inference-signature helper. Without the mirror, `signatures.get`
+    /// misses, the call stays unresolved, and the solver dead-ends in
+    /// "cannot infer return type of private helper `_h`; add an annotation"
+    /// *before* pass 3 ever runs -- a misleading message, since no
+    /// annotation fixes calling an `int`. This is the one shape where the
+    /// mirror's presence changes the observable diagnostic; a shadowed
+    /// `print` would instead be resolved by the special case and caught by
+    /// pass 3's own gate later (see the mirror-gate comment).
+    #[test]
+    fn a_private_helper_calling_a_shadowed_non_function_needs_the_mirror_gate() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "x".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "name `x` is bound to a non-callable value");
+    }
+
+    /// Behavior pin for the shadowed-builtin shape inside an
+    /// inference-signature helper: the mirror gate fires before the `print`
+    /// special case, so the accurate non-callable diagnostic wins. (Pass 3
+    /// would independently reject this shape even without the mirror; the
+    /// discriminating case for the mirror itself is the test above.)
+    #[test]
+    fn a_private_helper_calling_a_shadowed_builtin_is_rejected() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "print".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "name `print` is bound to a non-callable value");
+    }
+
+    /// The round-5 blocker's pin (PR #252's review): a *compatible-type*
+    /// value reassignment after the `def` must re-shadow it, even though
+    /// `check_assignment`'s already-bound branch never calls `bind()` --
+    /// clearing the def-rebound flag only inside `bind()` left it
+    /// permanently stuck for any name with a pre-`def` binding, so this
+    /// exact module resolved the function where CPython raises `TypeError`.
+    #[test]
+    fn a_compatible_reassignment_after_the_def_shadows_it_again() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "helper".to_string(),
+                    args: vec![],
+                })),
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    /// The round-6 pin (PR #252's review): a private helper's *parameter*
+    /// that collides with a module-level def-rebound name re-binds it for
+    /// that body, so calling the parameter reports the accurate
+    /// non-callable diagnostic -- before the fix the per-function env setup
+    /// stripped the name from `bindings` but left the stale def-rebound
+    /// flag, skipping the mirror gate and mislabeling a bound parameter as
+    /// "not bound before this use".
+    #[test]
+    fn a_parameter_colliding_with_a_def_rebound_name_reports_non_callable() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+                },
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![("helper".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    /// The solver-path twin of the test above, proving the two environment
+    /// walks agree: the solver's Assign arm already cleared its def-rebound
+    /// flag unconditionally, and after the round-5 fix the `Environment`
+    /// walk does too.
+    #[test]
+    fn a_compatible_reassignment_after_the_def_shadows_it_in_the_solver_too() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }),
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "name `helper` is bound to a non-callable value"
+        );
+    }
+
+    /// The round-4 blocker's pin (PR #252's review): the `def`-rebinding
+    /// fact must NOT erase the representation record, so D-040's sticky
+    /// rule still rejects `helper = 1; def helper(): ...; helper = "leaked"`
+    /// with T0023 -- a version that cleared `bindings` at the `def` let this
+    /// program reach codegen with an `int`-allocated slot stored as `str`.
+    #[test]
+    fn a_value_reassignment_after_the_def_still_enforces_representation() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    })],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::StringLiteral("leaked".to_string()),
+                }),
+            ],
+        };
+
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0023");
+        assert_eq!(
+            err.message,
+            "cannot assign `str` to `helper`, previously inferred as `int`"
+        );
+    }
+
+    /// D-110's source-order `def` rebinding (PR #252's review caught the
+    /// initial gate rejecting this): a later `def` rebinds the name over an
+    /// earlier value binding, so the call resolves the function exactly
+    /// as CPython does (`helper = 1; def helper(): ...; helper()` prints
+    /// the function's result there).
+    #[test]
+    fn a_later_def_rebinds_over_an_earlier_value_binding() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }],
+                })),
+            ],
+        };
+
+        assert!(check(&hir).is_ok());
+    }
+
+    /// The same source-order `def` rebinding seen from a function body:
+    /// pass 3's final module environment reflects the net binding, so a
+    /// body call to a name whose value binding was cleared by a later
+    /// `def` resolves the function.
+    #[test]
+    fn a_body_call_resolves_when_a_later_def_rebinds_the_value() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+                },
+                HirItem::Function {
+                    name: "caller".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+        };
+
+        assert!(check(&hir).is_ok());
+    }
+
+    /// And from the solver path: the accumulated globals clear a value
+    /// binding when the same-named `def` follows it, so an
+    /// inference-signature helper's body resolves the function.
+    #[test]
+    fn a_private_helper_resolves_when_a_later_def_rebinds_the_value() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+                },
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Call {
+                        callee: "helper".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+        };
+
+        assert!(check_and_resolve(&hir).is_ok());
+    }
+
+    /// #133's deliberate boundary with #22: pass 2 checks top-level code in
+    /// source order, so a call *before* the shadowing assignment still
+    /// resolves the function -- the binding simply does not exist yet at
+    /// that point. Only the already-active binding shadows.
+    #[test]
+    fn a_top_level_call_before_the_shadowing_assignment_still_resolves() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    })],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "helper".to_string(),
+                    args: vec![],
+                })),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "helper".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }),
+            ],
+        };
+
+        assert!(check(&hir).is_ok());
     }
 
     #[test]

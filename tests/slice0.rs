@@ -202,6 +202,44 @@ fn run_subcommand_maps_a_signal_terminated_compiled_program_to_exit_code_101() {
     assert_eq!(output.status.code(), Some(101));
 }
 
+/// #133's backend regression: before the frontend gained the
+/// module-binding-shadows-call rule, this exact source passed `pycc check`
+/// AND compiled, and the produced binary silently called the shadowed
+/// function (printing "function") where CPython 3.14 raises
+/// `TypeError: 'int' object is not callable`. `pycc build` runs
+/// `pycc_types::check_and_resolve` before any codegen, so the frontend
+/// rejection must now stop the whole pipeline -- this pins that the
+/// observable miscompile (issue #133's first follow-up comment) can never
+/// come back through the public build path.
+#[test]
+fn build_rejects_a_module_value_binding_that_shadows_a_function_call() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_shadowed_call_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "shadowed_call.py",
+        "def helper() -> None:\n    print(\"function\")\n\nhelper = 1\nhelper()\n",
+    );
+    let out = dir.join("shadowed_call");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    // `report_build_failure` renders compile diagnostics to stderr
+    // (`eprint!`), unlike `pycc check`'s stdout rendering.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error[T0021]: name `helper` is bound to a non-callable value"),
+        "build must fail with the shadowing diagnostic, got: {stderr}"
+    );
+    assert!(
+        !out.exists(),
+        "no binary may be produced for a rejected shadowed call"
+    );
+}
+
 /// The summary line both `pycc version` forms print, built from the same
 /// manifest macros as the implementation (this integration test compiles
 /// inside the `pycc` package, so `CARGO_PKG_VERSION`/`CARGO_PKG_RUST_VERSION`
