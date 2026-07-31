@@ -92,6 +92,14 @@ Distinguish, explicitly and in the plan, between a **merge gate** (CI fails with
 convention as a gate makes the next agent do work that was never required; presenting a gate as a
 convention makes them ship a red build.
 
+The documentation-currency check has its own trap: whether a change needs a documentation
+update is decided by the owning document's granularity convention, not by whether that document
+literally mentions the changed surface. A status row that describes every command's shipped
+behavior implicitly promises to describe the one being changed; grepping for existing mentions
+of the exact output and finding none proves nothing. Reach the "no documentation impact"
+conclusion — when it is reached at all — at the convention level, and state it that way in the
+plan.
+
 ### 4. Verify empirically where verification is possible
 
 Prefer running the check to reasoning about it, and check whether the environment can run it

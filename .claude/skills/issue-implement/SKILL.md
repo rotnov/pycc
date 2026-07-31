@@ -144,6 +144,12 @@ shared runners is the standing example — gets one re-run; if it persists, trea
 investigate. If the default branch moves mid-monitoring, reconcile once; two consecutive
 failed reconciliation rounds against a moving target is a stop condition.
 
+When a push moves the head and monitoring is re-established, carry the previous checkpoint's
+comment inventory forward: a fresh watch replays every pre-existing comment as though it were
+new, and a finding already fixed and resolved re-surfacing as "new" wastes a verification
+round. Compare against the recorded baseline — comment identifiers or timestamps — before
+treating anything as new.
+
 ### 8. Merge
 
 Preconditions, all of them: every required check green including the coverage gate, zero
