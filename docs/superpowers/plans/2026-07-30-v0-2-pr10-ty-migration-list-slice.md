@@ -1036,6 +1036,8 @@ git add crates/pycc_types/src/lib.rs docs/DIAGNOSTICS.md tests/diagnostics/d0032
 git commit -m "list[int] part 2: pycc_types homogeneous-list inference, T0032/T0033/T0034 (D-104)"
 ```
 
+**Post-implementation addendum (added during Task 8, in a follow-up commit, not originally in this task's Step list):** D-104 point 3 requires `len(lst)` to type-check via a hand-recognized `"len"` arm in `pycc_types`' call dispatch, alongside the existing `"print"` special-case, at both the `collect_expr_constraints` (solver) and `infer_expr_in` (real check) sites — Task 11's own end-to-end fixture (`print(len(x))`) assumes this already type-checks by the time codegen runs. Added: exactly-one-argument + `Ty::List(_)`-argument validation (generic over any element type, matching `Subscript`/`ListAppend`/`ForList`'s existing genericity), returning `Ty::Int`; both failure shapes reuse `T0033` (`docs/DIAGNOSTICS.md`'s row broadened accordingly), with corresponding unit tests at both dispatch sites.
+
 ---
 
 ## Task 9: `list[int]` MIR lowering
@@ -1369,6 +1371,8 @@ Expected: FAIL — `HirExpr::Call { callee: "len", .. }` isn't recognized as a b
 - [ ] **Step 3: Add `"len"` as a recognized builtin call, alongside the existing `"print"` handling**
 
 `pycc_codegen`'s existing call-dispatch (`rg -n '"print"' crates/pycc_codegen/src/lib.rs` to find the exact spot, e.g. line ~805) already special-cases `callee == "print"`. Add a parallel `callee == "len"` branch there: given one `list[int]`-typed argument, emit a call to `pycc_rt_int_list_len` and return its `i64` result (declare the extern function the same way this file already declares `pycc_rt_int_list_append`/etc. — follow the exact existing pattern used for declaring any other `pycc_rt_*` extern function in this file, e.g. `pycc_rt_str_concat`).
+
+(`pycc_types`' own `"len"` type-checking arm — arity/`Ty::List(_)` validation, generic over element type, reusing `T0033` for both failure shapes — already landed in Task 8, alongside its commit implementing `T0032`/`T0033`/`T0034`. Don't go looking for it here or assume it still needs adding to `pycc_types`; this step is codegen-only.)
 
 - [ ] **Step 4: Add codegen for `MirExpr::ListLiteral`**
 

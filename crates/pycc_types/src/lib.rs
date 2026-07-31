@@ -310,6 +310,41 @@ fn collect_expr_constraints(
             if callee == "print" {
                 return Ok(Some(Ok(Ty::None)));
             }
+            if callee == "len" {
+                // D-104 point 3: `len(lst)` is a hand-recognized builtin
+                // call, same as `print` above, not a user-declarable
+                // signature. Its own return (`Ty::Int`) never depends on
+                // the list's element type, so it's always producible here
+                // regardless of whether the argument's own term has
+                // resolved yet -- unlike `ListLiteral`/`Subscript`/
+                // `ListAppend` above, there's no homogeneity-style check
+                // to defer. Only a term that is *already* a known concrete
+                // type can be validated at this point in constraint
+                // collection (union-find resolution hasn't run yet); an
+                // unresolved argument is left to the real check pass
+                // (`infer_expr_in`) below, matching this solver's existing
+                // lenient-until-known pattern.
+                if arg_terms.len() != 1 {
+                    return Err(Diagnostic::error(
+                        "T0033",
+                        format!("`len` expects exactly 1 argument, got {}", arg_terms.len()),
+                        Span::new(0, 0),
+                    ));
+                }
+                if let Some(Ok(arg_ty)) = &arg_terms[0]
+                    && !matches!(arg_ty, Ty::List(_))
+                {
+                    return Err(Diagnostic::error(
+                        "T0033",
+                        format!(
+                            "`len` expects a `list[T]` argument, got `{}`",
+                            arg_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                return Ok(Some(Ok(Ty::Int)));
+            }
             let Some(signature) = signatures.get(callee) else {
                 return Ok(None);
             };
@@ -871,6 +906,34 @@ fn infer_expr_in(
             };
             if callee == "print" {
                 return Ok(Ty::None); // print's own signature isn't user-declarable in v0.1
+            }
+            if callee == "len" {
+                // D-104 point 3: `len(lst)` is a hand-recognized builtin
+                // call, same as `print` above -- not a user-declarable
+                // signature. Generic over any scalar element type (`T0034`
+                // already gates non-`int` lists further upstream, at the
+                // point a list literal is constructed), reusing T0033 for
+                // both failure shapes (wrong arity, non-list argument) --
+                // the same "value does not support list operations" shape
+                // already established for `ForList`/`Subscript`/`ListAppend`.
+                if arg_tys.len() != 1 {
+                    return Err(Diagnostic::error(
+                        "T0033",
+                        format!("`len` expects exactly 1 argument, got {}", arg_tys.len()),
+                        Span::new(0, 0),
+                    ));
+                }
+                if !matches!(arg_tys[0], Ty::List(_)) {
+                    return Err(Diagnostic::error(
+                        "T0033",
+                        format!(
+                            "`len` expects a `list[T]` argument, got `{}`",
+                            arg_tys[0].name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                return Ok(Ty::Int);
             }
             let Some((param_tys, return_ty)) = env.lookup_function(callee) else {
                 return Err(Diagnostic::error(
@@ -2123,6 +2186,131 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_len_call_returns_int_for_a_concretely_bound_list() {
+        // `lst`'s binding is a directly concrete `TypeTerm` (`Ok(Ty::List(_))`)
+        // rather than one produced by `ListLiteral` (which always returns
+        // `Ok(None)` in this solver, per its own comment above) -- this is
+        // the only way to get a concrete `Ty::List` term to validate against
+        // at constraint-collection time.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("lst".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
+            local_names: &[],
+        };
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("lst".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn constraint_collection_len_call_defers_an_unresolved_argument_to_the_real_check_pass() {
+        // `lst`'s binding is a genuinely unresolved inference variable (a
+        // fresh term, not yet unified with anything) -- this solver can't
+        // tell yet whether it's a list, so it must not reject it here; the
+        // real check pass (`infer_expr_in`) validates it once its type is
+        // actually known.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let unresolved = fresh_term(&mut parents, &mut concrete);
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("lst".to_string(), unresolved)]),
+            local_names: &[],
+        };
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("lst".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn constraint_collection_len_call_rejects_the_wrong_arity() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+        };
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![],
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`len` expects exactly 1 argument, got 0");
+    }
+
+    #[test]
+    fn constraint_collection_len_call_rejects_a_concretely_known_non_list_argument() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+        };
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::IntLiteral(5)],
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`len` expects a `list[T]` argument, got `int`");
     }
 
     #[test]
@@ -3629,6 +3817,78 @@ mod tests {
         let expr = HirExpr::ListAppend {
             list: "x".to_string(),
             value: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn len_of_a_list_of_int_infers_int() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn len_of_a_list_of_str_infers_int_proving_len_is_not_int_specific() {
+        // Proves `len`'s own check isn't hardcoded to `Ty::Int` -- generic
+        // over any scalar element type, same discipline already applied to
+        // `Subscript`/`ListAppend`/`ForList` (D-104's own genericity claim).
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Str)));
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn len_with_no_arguments_is_rejected_as_t0033() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`len` expects exactly 1 argument, got 0");
+    }
+
+    #[test]
+    fn len_with_two_arguments_is_rejected_as_t0033() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`len` expects exactly 1 argument, got 2");
+    }
+
+    #[test]
+    fn len_of_a_non_list_value_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`len` expects a `list[T]` argument, got `int`");
+    }
+
+    #[test]
+    fn len_propagates_an_ill_typed_argument_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("undefined".to_string())],
         };
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
     }

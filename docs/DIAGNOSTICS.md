@@ -32,7 +32,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0030` | error | non-exhaustive `match` (missing cases listed) |
 | `T0031` | error | `@override` without matching base method |
 | `T0032` | error | list literal elements must all share one type |
-| `T0033` | error | value does not support list operations (subscript, `for`, or `.append()`) |
+| `T0033` | error | value does not support list operations (subscript, `for`, `.append()`, or `len()`) |
 | `T0034` | error | list codegen only supports `list[int]` in v0.2 (D-104) |
 | `O0201` | error | value used after move across scope boundary *(internal-only: never fires on legal Python — see note)* |
 | `O0301` | error | non-Shareable value crosses thread boundary without move |
