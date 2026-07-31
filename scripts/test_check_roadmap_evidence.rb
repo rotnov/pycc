@@ -34,10 +34,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D100_COMPOSED_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent /
     "tests/fixtures/d100-compose-d91-d99-ci.yml"
-  SEARCH_HISTORY_CHECKPOINT_MARKERS =
-    (Pathname(__dir__).parent / "docs/ROADMAP.md").each_line.select do |line|
-      line.include?("search-history-checkpoint:")
-    end.join
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -114,9 +110,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
       root = Pathname(directory)
       FileUtils.mkdir_p(root / "docs")
       FileUtils.mkdir_p(root / ".github/workflows")
-      unless roadmap.include?("search-history-checkpoint:")
-        roadmap = "#{SEARCH_HISTORY_CHECKPOINT_MARKERS}\n#{roadmap}"
-      end
       (root / "docs/ROADMAP.md").write(roadmap)
       (root / ".github/workflows/ci.yml").write(workflow)
       return Open3.capture3(RbConfig.ruby, CHECKER.to_s, root.to_s)
@@ -2633,24 +2626,5 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_operator commands.index("cargo build --workspace"),
                     :<,
                     commands.index("cargo test --workspace -- --include-ignored")
-  end
-
-  def test_rejects_deleting_a_trusted_search_history_checkpoint
-    repository_root = Pathname(__dir__).parent
-    roadmap = (repository_root / "docs/ROADMAP.md").read
-    marker = roadmap.each_line.select do |line|
-      line.include?("search-history-checkpoint:")
-    end.last
-    refute_nil marker
-    roadmap = roadmap.sub(marker, "")
-
-    _stdout, stderr, status = run_checker(
-      roadmap: roadmap,
-      workflow: ACTIVE_D99_VCPKG_LIBXML2_CACHE_WORKFLOW.read
-    )
-
-    refute status.success?
-    assert_includes stderr,
-                    "search-history checkpoints must preserve the trusted base prefix"
   end
 end

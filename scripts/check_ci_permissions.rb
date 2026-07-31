@@ -24,7 +24,6 @@ SAFE_PERMISSION_VALUES = %w[read none].freeze
 WORKFLOW_DIRECTORY = Pathname(".github/workflows")
 TRUST_ANCHOR_FILENAME = "workflow-policy.yml"
 TRUST_ANCHOR_SHA256_ALLOWLIST = %w[
-  4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6
   f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688
 ].freeze
 SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
@@ -664,7 +663,6 @@ end
 def main(arguments)
   paths = expand_paths(arguments)
   validate_policy_set(paths)
-  validate_search_activation_transition(paths)
   validate_steady_state_policy_inputs
   failures = []
   paths.each do |path|

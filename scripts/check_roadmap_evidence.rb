@@ -15,8 +15,6 @@ SETEXT_UNDERLINE = /\A {0,3}(?:=+|-+)[ \t]*(?:\r?\n)?\z/
 RAW_HTML_BLOCK_START =
   /\A {0,3}<(?:\/?[A-Za-z][A-Za-z0-9-]*(?=[ \t\/>])|\?|![A-Z]|!\[CDATA\[)/i
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
-SEARCH_HISTORY_CHECKPOINT_MARKER =
-  /\A\s*<!-- search-history-checkpoint: github_repository_search (?<rows>[1-9]\d*) (?<sha>[0-9a-f]{64}) -->\s*\z/
 EVIDENCE_CLAIMS = {
   "ci-tier1-cross-compile" =>
     "The five-target native CI matrix and one cross-host compilation path are live on `main`.",
@@ -1451,41 +1449,6 @@ def validate_roadmap(text)
   evidence_ids
 end
 
-def search_history_checkpoints(text)
-  checkpoints = []
-  text.each_line.with_index(1) do |line, line_number|
-    next unless line.include?("search-history-checkpoint:")
-
-    marker = SEARCH_HISTORY_CHECKPOINT_MARKER.match(line)
-    unless marker
-      raise RoadmapEvidenceError,
-            "line #{line_number}: malformed search-history checkpoint"
-    end
-    checkpoints << [Integer(marker[:rows], 10), marker[:sha]]
-  end
-  if checkpoints.empty?
-    raise RoadmapEvidenceError, "roadmap is missing search-history checkpoints"
-  end
-  unless checkpoints.each_cons(2).all? { |left, right| left.first < right.first }
-    raise RoadmapEvidenceError,
-          "search-history checkpoint row counts must be strictly increasing"
-  end
-  checkpoints
-end
-
-def validate_search_history_checkpoint_retention(root, roadmap_text)
-  head_checkpoints = search_history_checkpoints(roadmap_text)
-  trusted_root = Pathname(__dir__).parent.expand_path
-  return if root.expand_path == trusted_root
-
-  trusted_roadmap = (trusted_root / "docs/ROADMAP.md").read
-  trusted_checkpoints = search_history_checkpoints(trusted_roadmap)
-  unless head_checkpoints.first(trusted_checkpoints.length) == trusted_checkpoints
-    raise RoadmapEvidenceError,
-          "search-history checkpoints must preserve the trusted base prefix"
-  end
-end
-
 def validate_evidence(root, _evidence_ids)
   workflow = root / ".github/workflows/ci.yml"
   workflow_text = workflow.read
@@ -1506,9 +1469,7 @@ def main(arguments)
 
   root = Pathname(arguments.first || ".")
   roadmap = root / "docs/ROADMAP.md"
-  roadmap_text = roadmap.read
-  evidence_ids = validate_roadmap(roadmap_text)
-  validate_search_history_checkpoint_retention(root, roadmap_text)
+  evidence_ids = validate_roadmap(roadmap.read)
   validate_evidence(root, evidence_ids)
   puts "Roadmap evidence policy passed."
   0

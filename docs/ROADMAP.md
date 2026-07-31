@@ -25,8 +25,8 @@ remains work in flight.
 | Repository governance | Enforced | Protected `main` requires an up-to-date PR, the trusted `audit` context, resolved conversations, and the stable `ci-gate` context. That aggregate requires the coverage and Tier-1 build matrix plus the frontend measurement and isolated exact-predecessor comparison jobs. D-054 records the one-shot [#125 recovery](https://github.com/rotnov/pycc/issues/125) that merged staging [PR #119](https://github.com/rotnov/pycc/pull/119) while retaining every unaffected control; the app-bound `audit` plus `ci-gate` set was restored within seconds and grants no standing bypass. The required build runs clean-clone agent-policy validation, while the push-time [main-history audit](../.github/workflows/main-history-audit.yml) uses the pre-push checker (or its immutable reviewed bootstrap) and correlates each introduced commit with the merged-main PR whose merge commit arrived in that push. Under D-078, the external repository monitor verifies the push-controlled workflow and expected run from an explicit remote-state checkpoint, advances that checkpoint after each evaluated event, and never promotes historical documentation links into recurring poll targets; a changed workflow, missing run, or failure is release-blocking under [REPOSITORY_GOVERNANCE.md](./REPOSITORY_GOVERNANCE.md). |
 | Public evidence and discoverability | Five-page publication package with measured discovery | [`site/`](../site/) contains the canonical landing page plus commit-relative status, implemented-versus-target architecture, a source-backed Python AOT compiler comparison, and the AI-native experiment. Every human- and LLM-readable project surface now reflects the same compiler boundary as this table: `pycc check` implements the v0.1 frontend and strict checker, while `build`/`run` lower that surface through MIR, LLVM, and the native runtime with documented gaps. The status page presents the required source-aware paired performance gate independently of later delivery work, and its negative validator mutations reject loss of same-runner exact revisions, sealed predecessor timing, executable-input identity, the conditional unchanged-input telemetry rule, the changed-source hard threshold, the fixed five-run plan, or the exact ten-file evidence set. The comparison covers LPython alongside Codon, Nuitka, mypyc, and Cython, distinguishes language, artifact, runtime, and current-positioning models using official project documentation, makes no benchmark claim, and visibly warns that pycc is not a production choice today. The website validator enforces the commit-relative frontend/backend facts, those sources, LPython's alpha positioning, and the warnings alongside unique metadata, connected structured data, internal navigation, visible authorship/status disclosures, the exact sitemap set, and the landing page's exact relative stylesheet plus deferred executable script references; independent negative mutations reject superseded compiler-status copy, missing LPython or other comparison evidence, missing paired performance evidence, non-wrapping narrow footer links, inert references, foreign-subtree asset tags, suppressing or execution-changing attributes, duplicate attributes, and base-URL overrides. Fresh-page browser QA at 320 and 390 CSS pixels confirms equal document and viewport widths across the landing, status, architecture, and comparison pages; qualified prose identifiers wrap, while wide tables retain local horizontal scrolling. The Pages workflow publishes the package from `main`; its best-effort IndexNow job batch-submits every canonical sitemap URL, and a hermetic HTTP fixture exercises the real notifier success and failure paths. [`SEARCH_VISIBILITY.md`](./SEARCH_VISIBILITY.md), its machine-readable query registry, and append-only prefix checkpoints separate product-acquisition positions from brand/topic/competitive diagnostics and retired authorship diagnostics, preserve every accepted historical prefix, deduplicate provider-specific semantic aliases, and keep GitHub Search, traffic, Search Console URL/sitemap/performance states independent. All five canonical website URLs have positive Google URL Inspection evidence. The processed Search Console report for 2026-07-23 through 2026-07-26 contains 15 impressions, 2 clicks, 13.3% CTR, and average position 5.7; its only disclosed query row is `python aot compiler` with 3 impressions, 0 clicks, and average position 6.3, which is too small to treat as stable rank or demand. Its unsuccessful sitemap processing remains a separate monitored observation from both the valid public sitemap and the individual indexing evidence. |
 
-The initial machine-readable query registry and both reviewed pre-registry
-GitHub history prefixes are staged before the trusted workflow activates. The
+The machine-readable query registry and both reviewed pre-registry GitHub
+history prefixes are protected by the active trusted workflow. The
 registry normalizes case and repeated whitespace before classifying Boolean
 operators and deduplicating syntax-sensitive GitHub acquisition identities,
 and rejects HTML-like or Unicode
@@ -41,37 +41,27 @@ ambiguous lazy blockquote ancestry and title newlines that GitHub renders as
 `<br>`. The public `Current interpretation` section begins with a deterministic
 latest-row projection for every exact GitHub query, and the audit rejects an
 otherwise valid snapshot append while that projection remains stale.
-Its closed intent/KPI matrix
-prevents diagnostic classes from entering the acquisition denominator. The
-prospective base-owned audit pins and validates this exact bootstrap; a later
-activation PR may enable the reviewed workflow but must preserve both markers,
-the bound registry/ledger/checkpoint files, every unchanged successor script,
-every repository-resident self-test input, and the pinned activation-specific
-steady-state policy checker and self-test. Those two variants retire the older
-workflow digest and the one-use activation bridge. The transition also rejects
-every root or nested `.gitattributes` path and pins every candidate workflow
-plus all activation inputs, including the newly active trust anchor, to
-regular-file Git modes, so symlinks, submodules, executable-bit changes,
-or candidate checkout rules cannot change the materialized successor behind
-byte-identical Git blobs. The successor repeats the `100644 blob` requirement
+Its closed intent/KPI matrix prevents diagnostic classes from entering the
+acquisition denominator. The base-owned audit pins and validates this exact
+bootstrap, both checkpoint markers, the bound registry/ledger/checkpoint files,
+every successor script, every repository-resident self-test input, and the
+complete protected-target manifest. The activation retired the older workflow
+digest and the one-use transition bridge. The active workflow rejects every
+root or nested `.gitattributes` path and requires every candidate workflow and
+protected input to have regular-file Git mode, so symlinks, submodules,
+executable-bit changes, or checkout rules cannot change materialized bytes.
+The steady-state checker repeats the `100644 blob` requirement
 for every workflow, evidence file, policy executable, and transitive
 repository input it downloads on all later PRs, and rejects every root or
 nested `.gitattributes` entry. A complete base-staged successor manifest (D-103) binds
 future protected-bundle changes through two separate merges: one stages the
 reviewed proposal while active targets remain unchanged, and only the next may
 activate those exact bytes. A candidate cannot self-authorize or shrink that
-bundle in one pull request. The still-active base checker enforces initial
-activation against the verified pull-request head before the successor trust
-anchor can merge.
+bundle in one pull request.
 
-<!-- search-history-checkpoint: github_repository_search 108 e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->
-<!-- search-history-checkpoint: github_repository_search 130 3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->
-
-Search-history checkpoints are projected below so the base-owned
-`pull_request_target` roadmap checker can require every future head revision to
-preserve the trusted prefix. Head-controlled CI separately binds these markers
-to the checkpoint ledger and the measured rows; changing all three together
-cannot rewrite the trusted markers already present on the base branch.
+The public metadata validator also rejects unsupported HTML keyword fields and
+false or provenance-first acquisition descriptions. Product pages must explain
+the typed-Python AOT compiler before the separate AI-authorship experiment.
 
 <!-- search-history-checkpoint: github_repository_search 108 e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->
 <!-- search-history-checkpoint: github_repository_search 130 3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->
