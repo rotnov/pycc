@@ -1330,11 +1330,14 @@ git commit -m "list[int] part 4: pycc_rt PyIntListObj runtime object (D-104)"
 
 **Files:**
 - Modify: `crates/pycc_codegen/src/lib.rs`
+- Modify: `crates/pycc_rt/src/lib.rs` (one new extern "C" boundary-conversion function, per D-105 below — this task's own scope, not Task 10's, since Task 10 was explicitly scoped to shipping `PyIntListObj` itself and its brief said so)
 - Test: `tests/slice1_codegen_depth.rs` (or wherever this project's existing end-to-end compile+run tests live — confirm the exact file by checking PR-9's own Task 5 precedent, which added its `list`-adjacent tests to `tests/slice1_codegen_depth.rs`)
 
 **Interfaces:**
 - Consumes: `MirExpr::ListLiteral`/`Subscript`/`ListAppend`, `MirStmt::ForList` (Task 9); `pycc_rt`'s `PyIntListObj` extern "C" functions (Task 10); Task 5's already-updated `ty_to_basic_type` (`Ty::List(_) => ptr type`).
 - Produces: a real, compiled, runnable `list[int]` — literal construction, `.append()`, indexed read, `len()`, and `for`-iteration, all lowering to calls into Task 10's runtime functions.
+
+**Read `docs/DECISIONS.md`'s D-105 entry before starting this task.** Task 10 shipped `PyIntListObj` storing **raw, untagged `i64`** elements/indices — not D-061's tagged `Ty::Int` representation (D-061's own general rule: "never a raw untagged value"; `bool` is the one prior exception, this is the second). Every one of `pycc_rt_int_list_append`/`_get`/`_len`'s parameters and return values that this task's own code sketches below touch is on the *raw* side of that boundary; every `Scalar::Int` value this codegen crate produces or consumes elsewhere is on the *tagged* side. Piping one straight into the other without the conversions D-105 specifies silently corrupts values (a value like `10` stored raw reads back as `10`, but compared/printed/arithmetic'd elsewhere in generated code as if it were tagged `21` — wrong, not a crash). This is why Step 3 below adds a new `pycc_rt` function before any of Steps 4-8's codegen arms are written: three of Task 9/Task 5's four new `MirExpr`/`MirStmt` forms need it.
 
 - [ ] **Step 1: Write the failing end-to-end test**
 
@@ -1370,24 +1373,127 @@ cargo test --test slice1_codegen_depth list_int_literal_append_index_len_and_ite
 
 Expected: FAIL — `HirExpr::Call { callee: "len", .. }` isn't recognized as a builtin yet, and `MirExpr::ListLiteral`/`Subscript`/`ListAppend`/`MirStmt::ForList` have no codegen arm yet (this will currently panic with the honest "not yet supported" messages Task 5 added, or simply fail to compile if codegen's match is exhaustive over `MirExpr`/`MirStmt` — confirm which by running it once before writing any new code).
 
-- [ ] **Step 3: Add `"len"` as a recognized builtin call, alongside the existing `"print"` handling**
+- [ ] **Step 3: Add `pycc_rt_int_untag_checked` — the one new `pycc_rt` function D-105 requires — with its own RED/GREEN unit tests**
 
-`pycc_codegen`'s existing call-dispatch (`rg -n '"print"' crates/pycc_codegen/src/lib.rs` to find the exact spot, e.g. line ~805) already special-cases `callee == "print"`. Add a parallel `callee == "len"` branch there: given one `list[int]`-typed argument, emit a call to `pycc_rt_int_list_len` and return its `i64` result (declare the extern function the same way this file already declares `pycc_rt_int_list_append`/etc. — follow the exact existing pattern used for declaring any other `pycc_rt_*` extern function in this file, e.g. `pycc_rt_str_concat`).
+This is the input-side conversion: a D-061-tagged `Ty::Int` value about to cross into `PyIntListObj`'s raw storage (an appended element, a subscript index) must be verified smallint (not bigint-tagged) and untagged, in one step, before it reaches `pycc_rt_int_list_append`/`_get`. Per D-105, this bit-level discriminant check belongs in `pycc_rt` (this crate already reserves tag-bit interpretation to itself — see `to_float`'s doc comment on `pycc_rt_int_to_float`), not as inline LLVM IR in codegen.
 
-(`pycc_types`' own `"len"` type-checking arm — arity/`Ty::List(_)` validation, generic over element type, reusing `T0033` for both failure shapes — already landed in Task 8, alongside its commit implementing `T0032`/`T0033`/`T0034`. Don't go looking for it here or assume it still needs adding to `pycc_types`; this step is codegen-only.)
+Add to `crates/pycc_rt/src/lib.rs`, next to the other `pycc_rt_int_*` functions and reusing the existing private `is_smallint`/`untag_smallint` helpers (do not duplicate their bit logic):
 
-- [ ] **Step 4: Add codegen for `MirExpr::ListLiteral`**
+```rust
+#[test]
+fn int_untag_checked_recovers_the_original_value() {
+    for n in [0i64, 1, -1, 42, -42, i64::MAX >> 1, -(i64::MAX >> 1)] {
+        assert_eq!(pycc_rt_int_untag_checked(tag_smallint(n)), n);
+    }
+}
 
-Wherever `MirExpr` is matched for codegen (the function handling `MirExpr::BinOp`/`MirExpr::IntLiteral`/etc.), add:
+#[test]
+#[should_panic(expected = "pycc_rt: list[int] does not support bigint-valued elements or indices yet")]
+fn int_untag_checked_rejects_a_bigint_tagged_value() {
+    // A bigint-tagged value has its low bit clear (see TAG_BIT/is_smallint).
+    // `tag_bigint` itself takes a `BigIntObj`, not a bare i64 -- rather than
+    // hand-craft a bigint-tagged bit pattern from scratch, force a real
+    // overflow through the existing arithmetic path, exactly like this
+    // file's own `repeated_addition_exercises_the_general_bigint_plus_
+    // smallint_path` test already does: `i64::MAX >> 1` is exactly the
+    // largest value that still round-trips through tagging, so adding it to
+    // itself overflows and promotes via `pycc_rt_int_add`'s own `tag_bigint`
+    // path.
+    let bigint_tagged = pycc_rt_int_add(tag_smallint(i64::MAX >> 1), tag_smallint(i64::MAX >> 1));
+    assert!(!is_smallint(bigint_tagged), "test setup: expected this addition to overflow into a real bigint");
+    pycc_rt_int_untag_checked(bigint_tagged);
+}
+```
+
+Run `cargo test -p pycc_rt int_untag_checked` first to confirm RED (function doesn't exist), then implement:
+
+```rust
+/// D-105: the input-side half of `PyIntListObj`'s raw/tagged boundary
+/// conversion. Takes a D-061-tagged `Ty::Int` value (an `.append()`
+/// argument, a subscript index) and returns the raw, untagged `i64`
+/// `PyIntListObj` actually stores/compares -- panicking honestly instead
+/// of silently corrupting data if `tagged` is bigint-tagged (a raw `i64`
+/// slot has no room to represent a bigint at all; this project's `pycc_rt:
+/// <description>` panic convention applies here exactly as it does
+/// everywhere else in this file). Checks `is_smallint` directly rather
+/// than going through the existing private `require_smallint` wrapper --
+/// that helper's message template ("{context} a bigint-valued `int` is
+/// not supported yet") is shaped for a gerund phrase ("comparing",
+/// "exponentiating"); this call site names `list[int]` and covers both
+/// elements and indices, which doesn't fit that template cleanly, so it
+/// states its own message directly instead of forcing an awkward fit.
+///
+/// # Safety
+/// None -- takes no pointer, only an `i64`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_untag_checked(tagged: i64) -> i64 {
+    if !is_smallint(tagged) {
+        panic!("pycc_rt: list[int] does not support bigint-valued elements or indices yet");
+    }
+    untag_smallint(tagged)
+}
+```
+
+Run `cargo test -p pycc_rt int_untag_checked` again to confirm GREEN, then `cargo llvm-cov -p pycc_rt --fail-under-lines 100 --fail-under-regions 100` (per D-014 -- this is a new function in an already-100%-covered crate, so it must not regress that). Commit this step on its own before touching `pycc_codegen`:
+
+```bash
+git add crates/pycc_rt/src/lib.rs
+git commit -m "list[int] part 5a: pycc_rt_int_untag_checked, D-105's input-side boundary conversion"
+```
+
+- [ ] **Step 4: Add `raw_i64_to_tagged_int`, the output-side conversion, as a `pycc_codegen`-local helper (no new `pycc_rt` call needed)**
+
+The other direction of D-105's boundary -- a raw `i64` read back out of `PyIntListObj` (a `.get()`/`[i]` result, a `.len()`/`len()` result) that needs to become an ordinary tagged `Ty::Int` value -- is always safe to re-tag: Step 3's guard already proves every raw slot holds a value in `tag_smallint`'s 63-bit range (an `untag_smallint` of a valid smallint-tagged input can never itself exceed that range), and a list's element count is bounded far below it in any real run. This is the same *construct a tagged value from a value already known to be in range* direction `to_tagged_int`'s `Scalar::Bool` arm already handles inline via `build_left_shift`/`build_or` (see `crates/pycc_codegen/src/lib.rs` lines ~284-294) -- add a sibling helper next to `to_tagged_int` itself, not a new `pycc_rt` call:
+
+```rust
+/// D-105's output-side boundary conversion: tags an already-known-in-range
+/// raw `i64` (a `list[int]` element read back out, or its length) as an
+/// ordinary D-061 `Ty::Int`. Always safe -- never overflows -- because
+/// every raw value crossing this boundary already passed through
+/// `pycc_rt_int_untag_checked` (Step 3) or is a `Vec::len()` result, both
+/// of which are guaranteed within `tag_smallint`'s 63-bit range. Mirrors
+/// `to_tagged_int`'s `Scalar::Bool` arm (same shift-and-or shape), which
+/// handles the identical *construct, don't interpret* direction for a
+/// different always-in-range source.
+fn raw_i64_to_tagged_int<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    raw: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    let shifted = builder
+        .build_left_shift(raw, context.i64_type().const_int(1, false), "list_tag_shl")
+        .expect("build_left_shift should not fail for a constant shift amount");
+    builder
+        .build_or(shifted, context.i64_type().const_int(1, false), "list_tag_or")
+        .expect("build_or should not fail for two i64 operands")
+}
+```
+
+No test of its own yet -- it has no caller until Steps 6/7/8 below wire one up; D-014 coverage comes from those call sites' own tests, same as any other private helper in this file.
+
+- [ ] **Step 5: Add `"len"` as a recognized builtin call, alongside the existing `"print"` handling**
+
+`pycc_codegen`'s existing call-dispatch (`rg -n '"print"' crates/pycc_codegen/src/lib.rs` to find the exact spot, e.g. line ~805) already special-cases `callee == "print"`. Add a parallel `callee == "len"` branch there: given one `list[int]`-typed argument, emit a call to `pycc_rt_int_list_len` (declare the extern function the same way this file already declares any other `pycc_rt_*` extern function, e.g. `pycc_rt_str_concat`), then pass its raw `i64` result through **Step 4's `raw_i64_to_tagged_int`** before returning it -- this call site's result is a user-visible `Ty::Int` expression value (e.g. `print(len(x))`, or `n = len(x)`), unlike `ForList`'s own internal use of the same runtime function in Step 8 below, which never re-tags its length call at all (see that step for why).
+
+(`pycc_types`' own `"len"` type-checking arm -- arity/`Ty::List(_)` validation, generic over element type, reusing `T0033` for both failure shapes -- already landed in Task 8, alongside its commit implementing `T0032`/`T0033`/`T0034`. Don't go looking for it here or assume it still needs adding to `pycc_types`; this step is codegen-only.)
+
+- [ ] **Step 6: Add codegen for `MirExpr::ListLiteral`**
+
+Wherever `MirExpr` is matched for codegen (the function handling `MirExpr::BinOp`/`MirExpr::IntLiteral`/etc.), add. Each element's evaluated `Scalar::Int` is D-061-tagged (it came from an arbitrary sub-expression); it must go through **Step 3's `pycc_rt_int_untag_checked`** before `append` -- `list[int]`'s runtime storage is raw, per D-105:
 
 ```rust
         MirExpr::ListLiteral(elements) => {
             let list_ptr = self.build_call(self.pycc_rt_int_list_new_fn, &[], "list_new");
             for element in elements {
-                let value = self.emit_expr(element, /* ...existing params... */);
+                let tagged_value = self.emit_expr(element, /* ...existing params... */);
+                let raw_value = self.build_call(
+                    self.pycc_rt_int_untag_checked_fn,
+                    &[tagged_value.into()],
+                    "list_untag",
+                );
                 self.build_call(
                     self.pycc_rt_int_list_append_fn,
-                    &[list_ptr.into(), value.into()],
+                    &[list_ptr.into(), raw_value.into()],
                     "list_append",
                 );
             }
@@ -1395,29 +1501,44 @@ Wherever `MirExpr` is matched for codegen (the function handling `MirExpr::BinOp
         }
 ```
 
-- [ ] **Step 5: Add codegen for `MirExpr::Subscript`**
+- [ ] **Step 7: Add codegen for `MirExpr::Subscript`**
+
+Both conversions apply here, in opposite directions: `index` is a tagged `Ty::Int` expression that must be untagged-and-checked (Step 3) before calling `pycc_rt_int_list_get`; the raw `i64` it returns is a user-visible `Ty::Int` expression result (`x[0]`'s own value) that must be re-tagged (Step 4) before this arm's result is used anywhere else in generated code:
 
 ```rust
         MirExpr::Subscript { base, index } => {
             let base_ptr = self.emit_expr(base, /* ... */);
-            let index_val = self.emit_expr(index, /* ... */);
-            self.build_call(
+            let tagged_index = self.emit_expr(index, /* ... */);
+            let raw_index = self.build_call(
+                self.pycc_rt_int_untag_checked_fn,
+                &[tagged_index.into()],
+                "list_untag_index",
+            );
+            let raw_element = self.build_call(
                 self.pycc_rt_int_list_get_fn,
-                &[base_ptr.into(), index_val.into()],
+                &[base_ptr.into(), raw_index.into()],
                 "list_get",
-            )
+            );
+            raw_i64_to_tagged_int(context, builder, raw_element.into_int_value())
         }
 ```
 
-- [ ] **Step 6: Add codegen for `MirExpr::ListAppend`**
+- [ ] **Step 8: Add codegen for `MirExpr::ListAppend`**
+
+Same input-side conversion as `ListLiteral`'s element above -- `value` is a tagged `Ty::Int` expression that must be untagged-and-checked before `append`:
 
 ```rust
         MirExpr::ListAppend { list, value } => {
             let list_ptr = self.lookup_local(list, /* ...existing local-lookup mechanism... */);
-            let value_val = self.emit_expr(value, /* ... */);
+            let tagged_value = self.emit_expr(value, /* ... */);
+            let raw_value = self.build_call(
+                self.pycc_rt_int_untag_checked_fn,
+                &[tagged_value.into()],
+                "list_untag",
+            );
             self.build_call(
                 self.pycc_rt_int_list_append_fn,
-                &[list_ptr.into(), value_val.into()],
+                &[list_ptr.into(), raw_value.into()],
                 "list_append",
             );
             /* .append() returns None -- return whatever this codegen's existing
@@ -1426,26 +1547,36 @@ Wherever `MirExpr` is matched for codegen (the function handling `MirExpr::BinOp
         }
 ```
 
-- [ ] **Step 7: Add codegen for `MirStmt::ForList`, mirroring `MirStmt::ForRange`'s existing loop construction as its own parallel inline copy**
+- [ ] **Step 9: Add codegen for `MirStmt::ForList`, mirroring `MirStmt::ForRange`'s existing loop construction as its own parallel inline copy**
 
-Locate `MirStmt::ForRange`'s codegen (`crates/pycc_codegen/src/lib.rs` around line 2055) and read its comments before touching anything: this codebase's own `ForRange` arm is a **deliberate inline copy** of `emit_body_then_branch`'s basic-block-building logic (see the comments around `crates/pycc_codegen/src/lib.rs` lines ~1226 and ~2135), not a call into a shared, reusable loop-building helper. **Do not factor this into a shared helper as part of this task.** Refactoring a 372-call-site file's existing, intentionally-duplicated control-flow logic is out of scope for a feature task and is exactly the kind of drive-by restructuring that draws review pushback on an already-large diff — add `ForList` as its own inline copy that follows the same structure `ForRange` actually uses (loop-header/loop-body/loop-exit basic blocks, `br`/`phi` wiring, etc., copied verbatim from `ForRange`'s real arm), parametrized by two differences: the loop bound comes from a runtime call to `pycc_rt_int_list_len` instead of a static/computed integer bound, and each iteration prepends one indexed read (`pycc_rt_int_list_get(list_ptr, i)`, storing the result into `var`'s local slot) before emitting the user's own loop body. Read `ForRange`'s exact current code directly — the sketch below shows the shape of what's needed, not verbatim code to paste, since the real basic-block-building calls must come from what `ForRange`'s arm actually does today:
+Locate `MirStmt::ForRange`'s codegen (`crates/pycc_codegen/src/lib.rs` around line 2055) and read its comments before touching anything: this codebase's own `ForRange` arm is a **deliberate inline copy** of `emit_body_then_branch`'s basic-block-building logic (see the comments around `crates/pycc_codegen/src/lib.rs` lines ~1226 and ~2135), not a call into a shared, reusable loop-building helper. **Do not factor this into a shared helper as part of this task.** Refactoring a 372-call-site file's existing, intentionally-duplicated control-flow logic is out of scope for a feature task and is exactly the kind of drive-by restructuring that draws review pushback on an already-large diff — add `ForList` as its own inline copy that follows the same structure `ForRange` actually uses (loop-header/loop-body/loop-exit basic blocks, `br`/`phi` wiring, etc., copied verbatim from `ForRange`'s real arm), parametrized by two differences: the loop bound comes from a runtime call to `pycc_rt_int_list_len` instead of a static/computed integer bound, and each iteration prepends one indexed read (`pycc_rt_int_list_get(list_ptr, i)`, storing the result into `var`'s local slot) before emitting the user's own loop body.
+
+**Element-representation note specific to this arm (D-105):** the loop's own induction variable (`i`, running `0..len`) and the raw `len` value it's compared against are a **purely internal implementation detail** -- an LLVM counter never exposed to user code as a `Ty::Int` value -- so, unlike Step 5's standalone `len(x)` call, **neither needs `raw_i64_to_tagged_int`**, and since `i` was never tagged to begin with, it needs no `pycc_rt_int_untag_checked` call either before being passed as `pycc_rt_int_list_get`'s raw `index` parameter. The **only** conversion this arm needs is Step 4's `raw_i64_to_tagged_int` on the per-iteration element read, before storing it into `var`'s local slot -- `var` is a user-visible `Ty::Int` local that the loop body may read (`print(v)`, arithmetic, etc.), so it must hold a properly tagged value like every other `Ty::Int` local in this codebase.
+
+Read `ForRange`'s exact current code directly — the sketch below shows the shape of what's needed, not verbatim code to paste, since the real basic-block-building calls must come from what `ForRange`'s arm actually does today:
 
 ```rust
         MirStmt::ForList { var, list, body } => {
             let list_ptr = self.lookup_local(list, /* ...existing local-lookup mechanism, matching ForRange's own... */);
             let len = self.build_call(self.pycc_rt_int_list_len_fn, &[list_ptr.into()], "list_len");
+            // `len` stays raw here -- it is only ever compared against the
+            // loop's own raw induction variable, never surfaced as a
+            // `Ty::Int` value (contrast Step 5's standalone `len(x)` call,
+            // which does re-tag its result).
+            //
             // From here down, copy ForRange's own basic-block/loop-building
             // code verbatim (loop-header/loop-body/loop-exit blocks, phi
             // node, increment, branch-back), substituting `len` as the
             // runtime-computed upper bound in place of ForRange's static
             // one, and inserting the indexed read below as the first thing
             // in the loop body.
-            let element = self.build_call(
+            let raw_element = self.build_call(
                 self.pycc_rt_int_list_get_fn,
-                &[list_ptr.into(), /* current index value, from the copied loop induction variable */.into()],
+                &[list_ptr.into(), /* current index value, from the copied loop induction variable -- already raw, no untagging needed */.into()],
                 "list_get",
             );
-            self.store_local(var, element);
+            let tagged_element = raw_i64_to_tagged_int(context, builder, raw_element.into_int_value());
+            self.store_local(var, tagged_element);
             for stmt in body {
                 self.emit_stmt(stmt, /* ... */);
             }
@@ -1455,19 +1586,21 @@ Locate `MirStmt::ForRange`'s codegen (`crates/pycc_codegen/src/lib.rs` around li
 
 Add a one-line comment at the top of the new `ForList` arm noting it is an intentional inline duplicate of `ForRange`'s loop-building logic, matching that arm's own existing comment convention — and record the duplication between the two arms as a follow-up in this plan's closing "Follow-ups intentionally out of this plan's scope" list (a shared loop-building helper is a reasonable future refactor once a third consumer needs the same shape, not a change to make inside this task).
 
-- [ ] **Step 8: Run the test to verify it passes**
+- [ ] **Step 10: Run the tests to verify everything passes**
 
 ```bash
+cargo test -p pycc_rt int_untag_checked
 cargo test --test slice1_codegen_depth list_int_literal_append_index_len_and_iteration_all_work
 cargo build --workspace
 cargo test --workspace
+cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
 ```
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add crates/pycc_codegen/src/lib.rs tests/slice1_codegen_depth.rs
-git commit -m "list[int] part 5: pycc_codegen for literal/append/index/len/for-list, real end-to-end run (D-104)"
+git commit -m "list[int] part 5b: pycc_codegen for literal/append/index/len/for-list, D-105 boundary conversions, real end-to-end run (D-104)"
 ```
 
 ---
