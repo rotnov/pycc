@@ -28,21 +28,26 @@ pub enum Ty {
     /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
     Set(Box<Ty>),
     /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own
-    /// scope. Boxed (D-109) so every dataful variant of `Ty` is a uniform
-    /// thin (8-byte) pointer: a first attempt boxed this as `Box<[Ty]>`
-    /// (a 16-byte fat pointer -- data ptr + length), which measured
-    /// `size_of::<Ty>() == 24` bytes, no reduction at all from the
-    /// pre-fix size, because more than one variant here carries data of a
-    /// different shape (`List`/`Dict`/`Set` are already thin `Box`
-    /// pointers, `Tuple` was not), which defeats rustc's niche-filling
-    /// enum-layout optimization (the trick that makes
-    /// `size_of::<Option<Box<T>>>() == size_of::<Box<T>>()`): with no
-    /// uniform niche across all dataful variants, rustc falls back to an
-    /// explicit discriminant tag, adding a full pointer-aligned word on
-    /// top of the *largest* variant's payload. `Box<Vec<Ty>>` (a second
-    /// indirection: a thin pointer to a heap-allocated `Vec<Ty>`) closes
-    /// that gap by making every dataful variant exactly 8 bytes, which
-    /// measured `size_of::<Ty>() == 16` bytes -- a real reduction.
+    /// scope. Boxed (D-109) as `Box<Vec<Ty>>` -- a second indirection: a
+    /// thin (8-byte) pointer to a heap-allocated `Vec<Ty>` -- not as
+    /// `Box<[Ty]>` (a 16-byte fat pointer: data ptr + length), which was
+    /// tried first and measured `size_of::<Ty>() == 24`, no reduction at
+    /// all from the pre-fix size (confirmed independently in-crate and
+    /// via a standalone `rustc` reproduction). `Box<Vec<Ty>>` measured
+    /// `size_of::<Ty>() == 16` instead (`align_of::<Ty>()` stayed `8` in
+    /// every configuration measured). The most plausible explanation is
+    /// that rustc's niche-filling enum-layout optimization (the trick
+    /// behind `size_of::<Option<Box<T>>>() == size_of::<Box<T>>()`) needs
+    /// every dataful variant to share a uniform pointer shape to collapse
+    /// the discriminant for free -- `Box<[Ty]>`'s fat pointer broke that
+    /// uniformity against `List`/`Dict`/`Set`'s thin ones, `Box<Vec<Ty>>`
+    /// restores it -- but this project has not independently re-derived
+    /// rustc's exact layout algorithm against every configuration (in
+    /// particular, the pre-fix shape already had non-uniform dataful
+    /// variant sizes yet still measured 24, not the 32 bytes a naive
+    /// "tag plus largest payload" rule would predict). Treat the measured
+    /// numbers above as the authoritative facts and this paragraph's
+    /// mechanism as a plausible, not proven, explanation.
     Tuple(Box<Vec<Ty>>),
 }
 

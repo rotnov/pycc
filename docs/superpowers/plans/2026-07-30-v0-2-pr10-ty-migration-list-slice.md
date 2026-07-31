@@ -1876,21 +1876,26 @@ with:
     /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
     Set(Box<Ty>),
     /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own
-    /// scope. Boxed (D-109) so every dataful variant of `Ty` is a uniform
-    /// thin (8-byte) pointer: a first attempt boxed this as `Box<[Ty]>`
-    /// (a 16-byte fat pointer -- data ptr + length), which measured
-    /// `size_of::<Ty>() == 24` bytes, no reduction at all from the
-    /// pre-fix size, because more than one variant here carries data of a
-    /// different shape (`List`/`Dict`/`Set` are already thin `Box`
-    /// pointers, `Tuple` was not), which defeats rustc's niche-filling
-    /// enum-layout optimization (the trick that makes
-    /// `size_of::<Option<Box<T>>>() == size_of::<Box<T>>()`): with no
-    /// uniform niche across all dataful variants, rustc falls back to an
-    /// explicit discriminant tag, adding a full pointer-aligned word on
-    /// top of the *largest* variant's payload. `Box<Vec<Ty>>` (a second
-    /// indirection: a thin pointer to a heap-allocated `Vec<Ty>`) closes
-    /// that gap by making every dataful variant exactly 8 bytes, which
-    /// measured `size_of::<Ty>() == 16` bytes -- a real reduction.
+    /// scope. Boxed (D-109) as `Box<Vec<Ty>>` -- a second indirection: a
+    /// thin (8-byte) pointer to a heap-allocated `Vec<Ty>` -- not as
+    /// `Box<[Ty]>` (a 16-byte fat pointer: data ptr + length), which was
+    /// tried first and measured `size_of::<Ty>() == 24`, no reduction at
+    /// all from the pre-fix size (confirmed independently in-crate and
+    /// via a standalone `rustc` reproduction). `Box<Vec<Ty>>` measured
+    /// `size_of::<Ty>() == 16` instead (`align_of::<Ty>()` stayed `8` in
+    /// every configuration measured). The most plausible explanation is
+    /// that rustc's niche-filling enum-layout optimization (the trick
+    /// behind `size_of::<Option<Box<T>>>() == size_of::<Box<T>>()`) needs
+    /// every dataful variant to share a uniform pointer shape to collapse
+    /// the discriminant for free -- `Box<[Ty]>`'s fat pointer broke that
+    /// uniformity against `List`/`Dict`/`Set`'s thin ones, `Box<Vec<Ty>>`
+    /// restores it -- but this project has not independently re-derived
+    /// rustc's exact layout algorithm against every configuration (in
+    /// particular, the pre-fix shape already had non-uniform dataful
+    /// variant sizes yet still measured 24, not the 32 bytes a naive
+    /// "tag plus largest payload" rule would predict). Treat the measured
+    /// numbers above as the authoritative facts and this paragraph's
+    /// mechanism as a plausible, not proven, explanation.
     Tuple(Box<Vec<Ty>>),
 ```
 
@@ -1898,8 +1903,14 @@ with:
 attempt and is a dead end — do not repeat it. It measured `size_of::<Ty>() ==
 24`, identical to the pre-fix size, confirmed independently both in-crate and
 via a standalone `rustc` reproduction. `Box<Vec<Ty>>` is what actually shrinks
-`Ty` (measured 16 bytes), at the cost of a second pointer indirection to reach
-the tuple's elements.
+`Ty` (measured 16 bytes, `align_of::<Ty>()` unchanged at 8), at the cost of a
+second pointer indirection to reach the tuple's elements. **Caution about the
+"why":** the niche-filling explanation in the doc comment above is a plausible
+hypothesis, not an independently re-derived proof — this same task's own
+pre-fix measurement (non-uniform dataful variant sizes, still 24 bytes with no
+added tag) doesn't fit a naive "tag plus largest payload" rule either, so
+don't cite that mechanism as settled fact in a future task without actually
+checking rustc's layout algorithm.
 
 - [ ] **Step 4: Fix the resulting compile errors — `pycc_hir`**
 
@@ -1961,15 +1972,24 @@ isomorphic old/new enum shapes. That result correctly triggered this step's
 own BLOCKED contingency (all work reverted, nothing committed, a report
 written). A second pass, using `Tuple(Box<Vec<Ty>>)` instead of
 `Tuple(Box<[Ty]>)` (this document's Steps 3/4/6/9 now reflect that corrected
-shape directly, not the original), measured `size_of::<Ty>() == 16` — a real
-reduction — and is the version that proceeded through Steps 6-9. The
-mechanism: `Box<[Ty]>` is a 16-byte fat pointer, while `List`/`Dict`/`Set`'s
-`Box<Ty>`/`Box<(Ty,Ty)>` are 8-byte thin pointers; once more than one variant
-carries data and their payload sizes differ, rustc's niche-filling
-enum-layout optimization can't collapse the discriminant, so it falls back to
-an explicit tag costing a full pointer-aligned word on top of the *largest*
-variant's payload (`8 + 16 = 24`). `Box<Vec<Ty>>` makes every dataful variant
-a uniform 8-byte thin pointer, so the same arithmetic gives `8 + 8 = 16`.
+shape directly, not the original), measured `size_of::<Ty>() == 16`
+(`align_of::<Ty>()` stayed `8` in both configurations, and in the pre-fix
+shape) — a real reduction — and is the version that proceeded through Steps
+6-9. The most plausible mechanism: `Box<[Ty]>` is a 16-byte fat pointer, while
+`List`/`Dict`/`Set`'s `Box<Ty>`/`Box<(Ty,Ty)>` are 8-byte thin pointers; once
+more than one variant carries data and their payload sizes differ, rustc's
+niche-filling enum-layout optimization can't collapse the discriminant, so it
+falls back to an explicit tag costing a full pointer-aligned word on top of
+the *largest* variant's payload (`8 + 16 = 24`). `Box<Vec<Ty>>` makes every
+dataful variant a uniform 8-byte thin pointer, so the same arithmetic gives
+`8 + 8 = 16`. **This mechanism is not independently proven, only plausible**:
+the pre-fix shape (`List` 8B, `Dict` 16B as two separate `Box<Ty>` fields,
+`Set` 8B, `Tuple` 24B as `Vec<Ty>`) already had non-uniform dataful variant
+sizes yet measured 24 with *no* added tag — a naive "tag plus largest
+payload" rule would put that at 32, not 24. Treat the measured `size_of`/
+`align_of` numbers as the authoritative facts; treat the niche-filling
+explanation as a plausible hypothesis a future task should verify against
+rustc's actual layout algorithm before relying on it as a predictive rule.
 
 - [ ] **Step 6: Fix the resulting compile errors — `pycc_codegen`**
 
@@ -2035,7 +2055,7 @@ Expected: all green, 100.00%/100.00% coverage maintained (this task adds exactly
 Append to `docs/DECISIONS.md`'s existing D-109 entry, as a new sentence inside its Consequences bullet (do not edit any existing D-109 text — this is additive, matching the append-only convention D-095's own "**Update:**" addendum and D-109's own cross-reference note both already used). **Correction (corrected pass):** the actual appended text is longer than the single-line placeholder originally sketched here, since it must also record the `Box<[Ty]>` dead end, the mechanism (niche-filling defeated by non-uniform dataful variants), and why the reduction is real and predictive specifically for `frontend-perf-gate`'s scalar-only fixture (every `Ty` value that benchmark ever constructs is a zero-sized variant, so the only channel affecting it is `Ty`'s uniform in-memory size, not container-field heap traffic) — see `docs/DECISIONS.md`'s own D-109 entry, appended to the end of its Consequences bullet, for the exact committed text:
 
 ```markdown
-**Update (Task 14):** `Ty::Dict` is now `Dict(Box<(Ty, Ty)>)`, exactly as this decision's remedy paragraph proposed, and needed only one attempt. `Ty::Tuple` needed two: a first attempt boxed it as `Tuple(Box<[Ty]>)` (a boxed slice) and measured `size_of::<Ty>() == 24` bytes — no reduction at all — because `Box<[Ty]>` is a 16-byte fat pointer while `List`/`Dict`/`Set`'s payloads are 8-byte thin pointers, and once more than one variant carries data of differing shapes, rustc's niche-filling layout optimization can't collapse the discriminant, so it falls back to an explicit tag costing a full pointer-aligned word on top of the largest variant's payload (`8 + 16 = 24`). A second attempt, `Tuple(Box<Vec<Ty>>)`, makes every dataful variant a uniform 8-byte thin pointer, giving `8 + 8 = 16`; `size_of::<Ty>()` measured **16 bytes** (down from 24). `benches/check_bench.rs`'s fixture is scalar-only, so every `Ty` it constructs is zero-sized, never touching `List`/`Dict`/`Set`/`Tuple` — the only channel by which this change affects that benchmark is `Ty`'s uniform width, which every move/clone pays regardless of active variant, so this is a real, predictive reduction, not an analogy; it also rules out "losing `Copy`" as a competing explanation for this specific fixture, since a fieldless-variant `Clone` is just the memcpy. A fresh full CI rerun is still required to confirm `frontend-perf-gate` actually closes.
+**Update (Task 14):** `Ty::Dict` is now `Dict(Box<(Ty, Ty)>)`, exactly as this decision's remedy paragraph proposed, and needed only one attempt. `Ty::Tuple` needed two: a first attempt boxed it as `Tuple(Box<[Ty]>)` (a boxed slice) and measured `size_of::<Ty>() == 24` bytes — no reduction at all from the pre-fix size — confirmed independently both in-crate and via a standalone `rustc` reproduction of the isomorphic enum shape; this was a genuine dead end, not a measurement error. A second attempt, `Tuple(Box<Vec<Ty>>)` (a second indirection: a thin pointer to a heap-allocated `Vec<Ty>`), measured `size_of::<Ty>() == 16` bytes (down from 24), confirmed the same way; `align_of::<Ty>()` stayed `8` in both configurations and in the pre-fix shape. The most plausible explanation is that `Box<[Ty]>` (a 16-byte fat pointer: data pointer + length) broke a uniform-thin-pointer shape that `List`/`Dict`/`Set`'s `Box<Ty>`/`Box<(Ty, Ty)>` (8-byte thin pointers each) already had, defeating rustc's niche-filling layout optimization (the mechanism that makes `size_of::<Option<Box<T>>>() == size_of::<Box<T>>()`) and forcing a full explicit discriminant tag on top of the largest variant's payload; `Box<Vec<Ty>>` restores that uniformity. This project has **not** independently re-derived rustc's exact layout algorithm well enough to state that as a proven universal rule, though — this entry's own pre-fix measurement (`Ty` already had non-uniform dataful variant sizes: `List` 8B, `Dict` 16B as two separate `Box<Ty>` fields, `Set` 8B, `Tuple` 24B as `Vec<Ty>`) still measured 24 bytes with *no* added discriminant tag, which a naive "tag plus largest payload" rule would instead put at 32. The measured `size_of`/`align_of` numbers above are the authoritative facts this decision relies on; the niche-filling explanation is offered as the most plausible mechanism, not an independently proven one. Separately, and independent of the exact mechanism: this is a real, predictive reduction for `frontend-perf-gate`'s own fixture specifically, not just a smaller number in the abstract — `benches/check_bench.rs`'s fixture is scalar-only, so every `Ty` value it ever constructs is one of the six zero-sized variants (`Int`/`Float`/`Bool`/`Str`/`None`/`Infer`) — it never constructs a `List`/`Dict`/`Set`/`Tuple` value and so never triggers a `Box::clone()` heap allocation regardless of container field shape. The only channel by which this change can affect that benchmark is `Ty`'s uniform in-memory size, which every move or clone of a `Ty::Int` pays regardless of which variant is actually active (Rust enums are fixed-size across all variants) — so 24→16 bytes is a real reduction in that benchmark's own copy cost, not a hopeful analogy from an unrelated code path. This also rules out, for this specific benchmark, the competing hypothesis (raised during the first, blocked attempt at this task) that `Ty` losing `Copy` rather than its byte width is the real driver of the regression: for a fieldless variant like `Ty::Int`, `Clone` literally is the memcpy, so there is no additional non-`Copy` cost beyond the width itself on this fixture's own hot path. This entry still does not claim `frontend-perf-gate` is confirmed closed — a smaller `Ty` is necessary but a fresh full CI rerun (not `--failed`-only) observing genuinely new `frontend-perf-measure` timestamps and replicate medians is required before that determination can be made, exactly as this decision's own remedy paragraph already said.
 ```
 
 ```bash

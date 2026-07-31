@@ -11,6 +11,44 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-07-31 — v0.2 PR-10: Task 14 landed (`Ty` boxing, corrected shape); fresh CI rerun still outstanding
+
+**Authoritative checkpoint:** same branch/PR as the entry directly below
+(`feat/v0-2-pr10-ty-representation-migration` → [PR #236](https://github.com/rotnov/pycc/pull/236)).
+Commit `a6d35c8` lands Task 14 on top of the plan commit (`2a8879a`) the
+entry below left as the checkpoint.
+
+**Two attempts, one dead end recorded, not silently discarded:** the
+plan's own first-drafted shape, `Ty::Tuple(Box<[Ty]>)` (a boxed slice),
+was executed exactly as planned and measured `size_of::<Ty>() == 24` —
+no reduction at all from the pre-fix size, confirmed independently
+in-crate and via a standalone `rustc` reproduction. Per the task's own
+explicit contingency for this outcome, that attempt was reverted in full
+(nothing committed) and reported BLOCKED. A corrected shape,
+`Ty::Tuple(Box<Vec<Ty>>)` (a second pointer indirection instead of a fat
+pointer), measured `size_of::<Ty>() == 16` (`align_of::<Ty>()` unchanged
+at 8) — a real reduction — and is what actually landed. `Ty::Dict` is
+`Dict(Box<(Ty, Ty)>)` as originally planned; it needed only the one
+attempt. `docs/DECISIONS.md`'s D-109 entry, this plan's own Task 14
+section, and `docs/ROADMAP.md`'s Task 14 follow-up paragraph all carry
+this correction, including an explicit caution that the niche-filling
+"why" is a plausible hypothesis, not an independently re-derived proof
+(the pre-fix shape's own 24-byte measurement doesn't fit a naive
+"tag plus largest payload" rule either, so a future session shouldn't
+cite that mechanism as settled fact without checking rustc's actual
+layout algorithm).
+
+**Status: Task 14's code has landed; the fresh CI rerun has not.** PR
+#236 stays open and unmerged until a fresh full `frontend-perf-gate`
+rerun (not `--failed`-only, with genuinely new `frontend-perf-measure`
+timestamps and replicate medians) is observed passing — a smaller `Ty`
+is necessary for that but does not by itself confirm it, and this commit
+does not claim otherwise. That rerun, plus Task 13's resumed final merge
+step (pinned `ievo:deep-reviewer` pass on the full branch diff), is what
+a fresh session should pick up next.
+
+---
+
 ## 2026-07-31 — v0.2 PR-10: confirmed self-inflicted `frontend-perf-gate` regression (D-109), fixing as Task 14 on this same branch
 
 **Authoritative checkpoint:** [PR #236](https://github.com/rotnov/pycc/pull/236)
