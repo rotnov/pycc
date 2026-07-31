@@ -1031,9 +1031,20 @@ fn infer_expr_in(
             let base_ty = infer_expr_in(env, local_names, base)?;
             let index_ty = infer_expr_in(env, local_names, index)?;
             // Reuses T0021 (an unconstrained/conflicting-constraint shape),
-            // not a new code -- a non-int index is that same "operand type
-            // mismatch" failure, not a distinct one.
-            if index_ty != Ty::Int {
+            // not a new code -- a non-int-compatible index is that same
+            // "operand type mismatch" failure, not a distinct one.
+            //
+            // Uses `is_assignable`, not exact `Ty` equality: D-086 already
+            // established that `bool` is accepted wherever `int` is expected
+            // at an operand boundary (mirroring `is_assignable`'s own
+            // existing param/assignment rule), and indexing is exactly that
+            // kind of boundary -- `xs[True]` is ordinary, CPython-valid
+            // Python (`bool` is an `int` subtype, PEP 285), not a type
+            // error. `pycc_codegen`'s `to_tagged_int` already has a
+            // `Scalar::Bool` arm reached unconditionally by every subscript
+            // index, so this was a pure over-rejection in the type checker,
+            // not a missing codegen capability.
+            if !is_assignable(index_ty.clone(), Ty::Int) {
                 return Err(Diagnostic::error(
                     "T0021",
                     format!("list index must be `int`, found `{}`", index_ty.name()),
@@ -3668,6 +3679,22 @@ mod tests {
             index: Box::new(HirExpr::IntLiteral(0)),
         };
         assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
+    }
+
+    #[test]
+    fn subscripting_with_a_bool_index_is_accepted_since_bool_is_an_int_subtype() {
+        // D-086: `bool` is accepted wherever `int` is expected at an operand
+        // boundary (mirroring `is_assignable`'s existing param/assignment
+        // rule) -- `xs[True]` is ordinary, CPython-valid Python (PEP 285),
+        // not a type error. Found by an automated PR review (PR #236) and
+        // confirmed against a real `pycc build` before this fix.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::BoolLiteral(true)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
     }
 
     #[test]
