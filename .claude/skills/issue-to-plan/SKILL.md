@@ -49,8 +49,11 @@ Record, before anything else:
 
 Open pull requests matter for two reasons that recur in this repository: they consume shared
 numbering space (decision-log entries, migration ordering), and they may already be changing the
-files the plan targets. Check both. Re-fetch immediately before publishing, and reconcile if
-anything moved.
+files the plan targets. Check both, and check them again immediately before publishing — an open
+pull request's head moves during a planning session, and with it the range of numbers it claims
+and the set of files it touches. When a number is derived from an open pull request, publish it
+as indicative and tell the reader to re-resolve it at pull-request-open time rather than trusting
+the plan's figure.
 
 ### 2. Read the issue, then refute it
 
@@ -88,12 +91,28 @@ Distinguish, explicitly and in the plan, between a **merge gate** (CI fails with
 convention as a gate makes the next agent do work that was never required; presenting a gate as a
 convention makes them ship a red build.
 
-### 4. Verify empirically where verification is cheap
+### 4. Verify empirically where verification is possible
 
-Prefer running the check to reasoning about it. When the check is not runnable in the current
-environment, say so in the plan, give the exact command that would settle it, and mark the
-conclusion as derived rather than observed. Never present a derived conclusion as an observed
-one.
+Prefer running the check to reasoning about it, and check whether the environment can run it
+before concluding that it cannot — a missing toolchain is often already installed and merely
+absent from the environment the command inherits.
+
+Two techniques repeatedly pay for themselves here:
+
+- **Reproduce a gate rather than reading about it.** A gate's real behaviour is often narrower
+  than its prose suggests, and a constraint the plan invents costs the implementer more than a
+  constraint it misses. When reproducing a CI check locally, replicate its *preparation* steps
+  too: a check run without the builds that precede it in the workflow reports failures that have
+  nothing to do with the change, and mistaking those for real ones sends the plan sideways.
+- **Prototype the risky mechanism in a throwaway project.** When the plan recommends a system
+  call, an API interaction, or a library composition that the repository does not already use,
+  a few dozen lines outside the working tree settle whether it actually behaves as documented,
+  and the resulting numbers and edge cases become concrete rules in the plan instead of caveats.
+
+When a check is genuinely not runnable, say so in the plan, give the exact command that would
+settle it, and mark the conclusion as derived rather than observed. Never present a derived
+conclusion as an observed one — and when both a derivation and a measurement are available,
+publish the measurement and keep the derivation as corroboration.
 
 ### 5. Draft the plan
 
