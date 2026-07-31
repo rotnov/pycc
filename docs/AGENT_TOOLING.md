@@ -79,7 +79,8 @@ vendored bytes. The stale skills.sh index and rescan request are tracked in
 
 ## Project-local alpha skills
 
-`pycc`, `pycc-feedback`, `issue-to-plan`, and `issue-implement` follow the
+`pycc`, `pycc-feedback`, `issue-to-plan`, `issue-implement`, and
+`issue-select` follow the
 [Agent Skills specification](https://agentskills.io/specification) but remain
 project-local alpha workflows. They are committed under `.claude/skills/` with
 thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
@@ -127,6 +128,19 @@ recognizes exactly this delegation. It has no bound executable eval runners
 yet either, so `scripts/run_alpha_skill_evals.py` declares no case for it and
 binding those evals is the same promotion prerequisite the other alpha skills
 carry.
+
+`issue-select` chooses the next issue for an autonomous end-to-end run and
+performs no public writes itself: it inventories the full open issue list,
+screens for staleness (routing provable closures through `issue-implement`'s
+evidence-gated triage), screens blockers (dependency on another issue,
+roadmap/delivery-plan mismatch, open-pull-request collision, maintainer-only
+authority), scores the survivors, verifies the top candidate's premise still
+reproduces, and challenges the pick with an independent adversarial advisor
+in a fresh context instead of escalating "does this need the maintainer?" to
+the user. With a standing autopilot directive it hands the selection to
+`issue-implement`, whose enumerated write authorization covers the run from
+that point. Like the other two issue skills it has no bound executable eval
+runners yet, with the same promotion prerequisite.
 
 The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary
