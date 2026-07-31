@@ -853,6 +853,72 @@ for v in xs:
 }
 
 #[test]
+fn list_targets_keep_the_last_element_and_ignore_body_reassignment() {
+    // The `MirStmt::ForList` counterpart of
+    // `range_targets_keep_the_last_element_and_ignore_body_reassignment_for_iteration`
+    // above. `ForList`'s arm is a deliberate inline duplicate of
+    // `ForRange`'s loop-building logic rather than shared code, so that
+    // test protects none of these properties here: the loop target is a
+    // storage slot written once per iteration, so it survives the loop
+    // holding the last element, and reassigning it inside the body cannot
+    // disturb the next iteration (which reads its value from the hidden
+    // index, not from the slot). `ForRange`'s third property -- an empty
+    // sequence leaving the target unbound -- has no `list` counterpart to
+    // test: `pycc_types` rejects an empty list literal outright, and v0.2
+    // has no way to empty a non-empty one. Output verified against
+    // `python3` on this exact source.
+    let source = "\
+xs = [1, 2, 3]
+for i in xs:
+    print(i)
+print(i)
+for k in xs:
+    print(k)
+    k = 99
+print(k)
+";
+    let output = build_and_run("list_target_lifetime", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n3\n3\n1\n2\n3\n99\n");
+}
+
+#[test]
+fn printing_a_list_stops_the_build_with_an_honest_unsupported_message() {
+    // v0.2 has no `str(list)`, and `pycc_types` type-checks `print(xs)` for
+    // any argument type at all -- so this program passes `pycc check` and
+    // then stops in codegen (D-106). Asserts the honest message rather than
+    // only the failure, since the whole point of D-106's `Scalar::List`
+    // split was to replace silently handing a `PyIntListObj` pointer to a
+    // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
+    // `docs/ARCHITECTURE.md` records the same gap.
+    let source = "\
+def _run() -> None:
+    xs = [1, 2]
+    print(xs)
+
+_run()
+";
+    let dir = std::env::temp_dir().join(format!("pycc_slice1_print_list_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, "print_list.py", source);
+    let output = Command::new(pycc_bin())
+        .args([
+            "build",
+            src.to_str().unwrap(),
+            "-o",
+            dir.join("print_list").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "`print(xs)` must not build");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("string conversion of a list[T] value is not supported yet"),
+        "expected the honest unsupported-conversion message, got: {stderr}"
+    );
+}
+
+#[test]
 fn appending_a_bigint_valued_element_fails_explicitly_instead_of_corrupting_the_slot() {
     // D-105's own named regression: `PyIntListObj` stores raw, untagged
     // `i64` slots with no room for a bigint, and `pycc_rt_int_add`/`_mul`
@@ -884,6 +950,16 @@ _run()
         !output.status.success(),
         "a bigint-valued element must fail loudly, not be truncated into a raw i64 slot"
     );
+    // D-105 requires specifically an *honest panic*, not merely a failure --
+    // asserting the message is what distinguishes it from a segfault or any
+    // other abort that a missing guard could also produce. `pycc_rt`'s panic
+    // handler writes this to stderr before the `extern "C"` boundary turns
+    // the unwind into a process abort.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not support bigint-valued elements or indices"),
+        "expected pycc_rt's honest bigint message, got: {stderr}"
+    );
 }
 
 #[test]
@@ -904,6 +980,11 @@ _run()
     assert!(
         !output.status.success(),
         "a negative index is out of range in v0.2, not CPython's last element"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("list index out of range"),
+        "expected pycc_rt's honest bounds message, got: {stderr}"
     );
 }
 

@@ -2778,6 +2778,14 @@ fn emit_stmt<'ctx>(
             // its iterator to the object the `for` statement evaluated, so
             // a body-level rebinding of the same name (`xs = [9]`) must not
             // retarget the loop.
+            //
+            // That makes `list_ptr` a *borrowed* reference held across
+            // arbitrary body code without an incref, which is sound only
+            // because D-106 keeps `list[T]` leak-only in v0.2 -- nothing
+            // frees a list. Whichever future PR wires D-106's own
+            // reassignment-cleanup site must give this read an incref/decref
+            // pair at the same time, or exactly the rebinding shape above
+            // would free the object out from under the loop.
             let list_ptr =
                 emit_list_name_read(context, builder, module, rt, user_functions, locals, list);
             let preheader = builder.get_insert_block().unwrap();
@@ -2807,9 +2815,16 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(body_bb);
             // Same Python target-binding semantics `ForRange`'s own
             // comment describes: the visible target is a separate storage
-            // slot written once per iteration, so an empty list leaves it
-            // unbound, the final target keeps the last element, and body
-            // reassignment cannot corrupt the next iteration.
+            // slot written once per iteration, so the final target keeps
+            // the last element and body reassignment cannot corrupt the
+            // next iteration (both pinned by
+            // `list_targets_keep_the_last_element_and_ignore_body_reassignment`
+            // in `tests/slice1_codegen_depth.rs`). `ForRange`'s third
+            // property -- an empty sequence leaving the target unbound --
+            // holds here structurally for the same reason, but unlike
+            // `range(0)` it is unreachable from real source: `pycc_types`
+            // rejects an empty list literal (T0021, no inferable element
+            // type) and v0.2 has no `pop`/`del` to empty a list afterwards.
             let raw_element = build_int_list_get(builder, rt, list_ptr, current);
             let element = raw_i64_to_tagged_int(context, builder, raw_element);
             emit_assign(context, builder, locals, var, Scalar::Int(element));
@@ -5427,8 +5442,10 @@ mod tests {
         // (added by Task 5, D-089; retargeted from the `Scalar::Str` reuse
         // onto `Scalar::List` by Task 11a, D-106) -- same hand-built-
         // `StorageSlot` convention as `reading_an_unresolved_infer_typed_
-        // local_is_an_internal_error` above, since no `MirExpr` can
-        // construct a `list[T]` value yet (Task 11b's own scope).
+        // local_is_an_internal_error` above: hand-building the slot is what
+        // lets one `emit_expr` call read a `list[int]` local and the next
+        // read a `str` one, with nothing else in the fixture to confuse
+        // which variant came from which.
         //
         // D-106's entire point is that a `list[T]` pointer must stop being
         // *indistinguishable* from a `str` pointer at the `Scalar` level,
@@ -5566,10 +5583,12 @@ mod tests {
         // alternative this replaces was `pycc_rt_str_truthy` reading a
         // `PyIntListObj` as a `PyStrObj`.
         //
-        // Calls `truthy` directly with a hand-built `Scalar::List`, the
-        // same convention this file's other "otherwise-unconstructible
-        // `Scalar`" tests use, because Task 11b (not this task) is what
-        // teaches `emit_expr` to build a list value from real MIR.
+        // Calls `truthy` directly with a hand-built `Scalar::List` rather
+        // than compiling `if xs:` from real MIR: this pins the panic to
+        // `truthy` itself, where a future `bool(list)` implementation would
+        // land, instead of to whichever caller happens to reach it first.
+        // (`docs/ARCHITECTURE.md` records the same gap as user-visible
+        // behavior -- `if xs:` type-checks and then stops codegen here.)
         let context = Context::create();
         let (_module, rt) = list_scalar_panic_fixture(&context);
         let builder = context.create_builder();
@@ -5609,9 +5628,12 @@ mod tests {
         // as `T0021` long before codegen. Hence the "internal error"
         // wording (matching this function's own neighbouring `Float`/`Str`
         // arms) rather than the "not supported yet" feature-gap wording
-        // `truthy`/`to_str` use. Exercised directly, since no MIR --
-        // malformed or otherwise -- can construct a `list[T]` operand until
-        // Task 11b.
+        // `truthy`/`to_str` use. Exercised by calling `to_tagged_int`
+        // directly, since a list operand cannot reach it through any MIR --
+        // `emit_expr`'s `BinOp` arm claims a `Ty::List` result with its own
+        // container-specific panic first (see
+        // `a_list_result_binop_is_not_yet_supported` below), so no
+        // arithmetic shape gets this far.
         let context = Context::create();
         let builder = context.create_builder();
         let ptr = context
@@ -5732,19 +5754,21 @@ mod tests {
     #[test]
     fn compiles_a_function_with_a_list_int_parameter_and_list_int_return_value() {
         // `def f(x: list[int]) -> list[int]: return x` -- no real source
-        // program can produce this shape yet (`pycc_hir::annotation_to_ty`
-        // rejects every annotation but a bare name, so `list[int]` cannot
-        // reach codegen from real source before Task 11), but Task 5
+        // program can produce this shape (`pycc_hir::annotation_to_ty`
+        // rejects every annotation but a bare name, and D-104's first scope
+        // cut keeps it that way for v0.2, so an annotated `list[int]`
+        // parameter or return type never reaches codegen), but Task 5
         // (D-089) requires this MIR shape to compile *cleanly* rather than
         // panic: `ty_to_basic_type`'s `List(_)` arm (parameter type, and
         // transitively the return type via `compile_to_object`'s `fn_type`
         // delegation) and `emit_expr`'s `Name` arm's `List(_)` arm must
         // agree on the same pointer representation, or `module.verify()`
         // inside `compile_to_object` would reject the mismatched IR.
-        // Deliberately does not link or run the resulting object: nothing
-        // in `pycc_rt` constructs a real list value yet (Task 11's own
-        // scope), so this only proves the codegen shape is internally
-        // consistent, not that the program is meaningful to run.
+        // Deliberately does not link or run the resulting object: `f` is
+        // never called, and no caller could construct the annotated
+        // `list[int]` argument it wants, so this only proves the codegen
+        // shape is internally consistent, not that the program is
+        // meaningful to run.
         //
         // Also the regression test for a review finding on this task's
         // first pass: `return x` is a bare `Name` read of a `list[int]`
@@ -5798,8 +5822,9 @@ mod tests {
         // disagreed with `ty_to_basic_type`'s parameter type, LLVM would
         // reject the call instruction outright.
         //
-        // Same not-linked, not-run caveat as the test above: no real list
-        // value exists to pass at runtime until Task 11b, so this proves the
+        // Same not-linked, not-run caveat as the test above: neither `f`
+        // nor `g` is ever called, and their annotated `list[int]`
+        // parameters are unreachable from real source, so this proves the
         // codegen shape only. The `pycc_rt_str_*` assertion carries over for
         // the same reason -- a `list[int]` argument is a bare `Name` read,
         // the exact shape `incref_if_str_duplicate` dispatches on, and
@@ -5855,12 +5880,13 @@ mod tests {
     #[test]
     fn assigning_a_list_value_stores_the_raw_pointer() {
         // Covers `emit_assign`'s `Scalar::List` arm, the third member of
-        // Task 11a's pass-through bucket (D-106) and the one shape neither
-        // end-to-end test above reaches: no `MirExpr` can construct a
-        // `list[T]` value to assign until Task 11b, so this calls
+        // Task 11a's pass-through bucket (D-106), in isolation: it calls
         // `emit_assign` directly with a hand-built `Scalar::List` and a
-        // hand-built `StorageSlot`, the same convention as the
-        // `Scalar::List` defensive-panic tests above.
+        // hand-built `StorageSlot` so the store instruction itself is what
+        // `f.verify(true)` judges, with no surrounding list construction to
+        // fail first. (`xs = [1, 2, 3]` reaches this same arm through real
+        // MIR in the list tests further below; this one pins the store's IR
+        // shape rather than the program's output.)
         //
         // `f.verify(true)` is the real assertion: `ty_to_basic_type`
         // allocated this slot as a pointer, so a `store` of anything but a
