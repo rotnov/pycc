@@ -305,7 +305,9 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 path.write_text(
                     self.head_visibility.replace(canonical, replacement, 1)
                 )
-                with self.assertRaisesRegex(AuditError, "must be top-level"):
+                with self.assertRaisesRegex(
+                    AuditError, "must be top-level|Setext underlines"
+                ):
                     validate(self.head, self.base, self.audited_at)
 
     def test_canonical_history_heading_must_match_exactly(self) -> None:
@@ -427,8 +429,16 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(
                     AuditError,
-                    "exactly one level-2|container boundaries|line breaks",
+                    "exactly one level-2|Setext underlines",
                 ):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_standalone_setext_or_thematic_underline_is_rejected(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        for underline in ("---", "===", "> ---", "- ---"):
+            with self.subTest(underline=underline):
+                path.write_text(self.head_visibility + "\n" + underline + "\n")
+                with self.assertRaisesRegex(AuditError, "Setext underlines"):
                     validate(self.head, self.base, self.audited_at)
 
     def test_setext_title_stops_at_container_boundary(self) -> None:
@@ -441,7 +451,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 1,
             )
         )
-        with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+        with self.assertRaisesRegex(AuditError, "Setext underlines"):
             validate(self.head, self.base, self.audited_at)
 
     def test_setext_title_preserves_lazy_blockquote_ancestry(self) -> None:
@@ -464,7 +474,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(
                     AuditError,
-                    "exactly one level-2|container boundaries|line breaks",
+                    "Setext underlines",
                 ):
                     validate(self.head, self.base, self.audited_at)
 
@@ -478,7 +488,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 1,
             )
         )
-        with self.assertRaisesRegex(AuditError, "line breaks"):
+        with self.assertRaisesRegex(AuditError, "Setext underlines"):
             validate(self.head, self.base, self.audited_at)
 
     def test_setext_history_heading_rejects_hard_line_breaks(self) -> None:
@@ -492,7 +502,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 path.write_text(
                     self.head_visibility.replace(canonical, replacement, 1)
                 )
-                with self.assertRaisesRegex(AuditError, "hard line breaks"):
+                with self.assertRaisesRegex(AuditError, "Setext underlines"):
                     validate(self.head, self.base, self.audited_at)
 
     def test_multiline_setext_duplicate_history_heading_is_rejected(self) -> None:
@@ -513,7 +523,7 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(
                     AuditError,
-                    "exactly one level-2|container boundaries|line breaks",
+                    "Setext underlines",
                 ):
                     validate(self.head, self.base, self.audited_at)
 
@@ -665,7 +675,9 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                 path.write_text(
                     self.head_visibility.replace(heading, heading + boundary, 1)
                 )
-                with self.assertRaisesRegex(AuditError, "table is incomplete"):
+                with self.assertRaisesRegex(
+                    AuditError, "table is incomplete|Setext underlines"
+                ):
                     validate(self.head, self.base, self.audited_at)
 
     def test_nested_headings_do_not_end_history_section(self) -> None:

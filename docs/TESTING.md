@@ -447,11 +447,11 @@ requires replay metadata regardless of its claimed timestamp. Once prose or a
 blank line ends the history table, a later pipe row cannot resume it. Section
 lookup normalizes CommonMark ATX whitespace and closing hashes so a visually
 equivalent duplicate history heading cannot hide a second table. A later
-top-level H1 or H2, in ATX or Setext form, ends the history section; blockquoted,
-list-contained, and indented-continuation headings remain inside the audited
-section, so they cannot hide a resumed forged table. A table below a new
-top-level heading cannot remain bound to the canonical H2. The one canonical
-H2 itself must start at column zero and be top-level: blockquoted,
+top-level ATX H1 or H2 ends the history section; blockquoted, list-contained,
+and indented-continuation headings remain inside the audited section, so they
+cannot hide a resumed forged table. A table below a new top-level heading
+cannot remain bound to the canonical H2. The one canonical H2 itself must start
+at column zero and be top-level: blockquoted,
 list-contained, and indented list-continuation versions remain visible for
 duplicate detection but cannot own the outside table. The sole owner must equal
 the canonical normalized word sequence; broader
@@ -468,31 +468,25 @@ values such as `>50` remain valid because they are not tags. Heading
 identity is compared after HTML character-reference decoding. Inline markup
 marker characters are forbidden even intraword or entity-encoded, rather than
 being stripped into a canonical title the renderer does not produce. After
-ATX closing-marker or Setext paragraph parsing, the canonical owner title must
-equal the prescribed plain source text exactly; punctuation, entities,
-backslashes, and repeated spaces cannot disappear through word tokenization.
+ATX closing-marker parsing, the canonical owner title must equal the prescribed
+plain source text exactly; punctuation, entities, backslashes, and repeated
+spaces cannot disappear through word tokenization.
 Invisible Unicode format
 and mark characters are rejected after entity decoding. Every machine-ledger
 heading is ASCII-only, so Cyrillic, Greek, and other homoglyphs cannot evade
-canonical lookalike detection. Setext level-2
-paragraph recovery stops when the explicit quote/list container signature
-changes; text from a top-level paragraph cannot be joined to a blockquoted
-underline to forge the canonical title. Ambiguous list-contained Setext shapes
-fail closed instead of being partially normalized. Setext recovery preserves
-omitted blockquote prefixes across contiguous CommonMark lazy-continuation
-lines only until their explicit ancestry is recovered, so a blockquoted
-duplicate cannot disappear at an unprefixed title line. GitHub renders even a
-soft title newline as `<br>`, so every multiline Setext heading is rejected
-after ancestry recovery; two-or-more-space hard breaks are rejected earlier,
-before trailing-whitespace normalization can erase that rendered boundary.
+canonical lookalike detection. The machine ledger permits only ATX headings:
+every visible standalone Setext or thematic underline is rejected before
+section lookup, including quoted, list-contained, lazy-continuation, and nested
+forms. This fail-closed grammar avoids joining source lines across CommonMark
+container ancestry and avoids both soft and hard title newlines that GitHub
+renders as `<br>`.
 Because this evidence file is a data ledger rather than
 general documentation, inline
 links or HTML are forbidden in headings, and fenced, GitHub display-math, or
 raw-HTML blocks are rejected fail-closed anywhere in the document. They cannot
 turn the canonical table into rendered code/math or an unaudited Markdown/HTML
-surface; ATX/Setext
-heading syntax behind four-space or tab code indentation is rejected for the
-same reason. The checkpoint
+surface; ATX syntax behind four-space or tab code indentation is rejected for
+the same reason. The checkpoint
 schema also requires a non-boolean JSON integer version before accepting
 version `1`. The GitHub surface and every measurement require exact non-boolean
 integers for the top-50 result window and `per_page`; Python's numeric equality

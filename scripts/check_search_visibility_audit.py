@@ -166,32 +166,6 @@ def visible_block_content(line: str) -> str:
     return content.rstrip(" \t")
 
 
-def begins_list_item(line: str) -> bool:
-    """Return whether a visible block line opens a Markdown list item."""
-    content = line.strip(" \t")
-    while content.startswith(">"):
-        content = content[1:].lstrip(" \t")
-    return LIST_MARKER.fullmatch(content) is not None
-
-
-def explicit_container_signature(line: str) -> tuple[str, ...]:
-    """Return the quote/list markers explicitly present on one source line."""
-    content = line.strip(" \t")
-    containers: list[str] = []
-    while content:
-        if content.startswith(">"):
-            containers.append("quote")
-            content = content[1:].lstrip(" \t")
-            continue
-        marker = LIST_MARKER.fullmatch(content)
-        if marker is not None:
-            containers.append("list")
-            content = marker.group(1).lstrip(" \t")
-            continue
-        break
-    return tuple(containers)
-
-
 def has_indented_code_prefix(line: str) -> bool:
     """Detect code indentation after the supported block containers."""
     content = line
@@ -208,57 +182,6 @@ def has_indented_code_prefix(line: str) -> bool:
             content = content[list_item.end() :]
             continue
         return content.startswith("\t") or content.startswith("    ")
-
-
-def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | None:
-    """Recover the complete paragraph promoted by a Setext underline."""
-    paragraph: list[str] = []
-    start = underline_index
-    container = explicit_container_signature(lines[underline_index])
-    used_lazy_container = False
-    saw_explicit_container = False
-    for index in range(underline_index - 1, -1, -1):
-        line_container = explicit_container_signature(lines[index])
-        if line_container != container:
-            missing_container = container[len(line_container) :]
-            lazy_blockquote = (
-                not saw_explicit_container
-                and len(line_container) < len(container)
-                and container[: len(line_container)] == line_container
-                and all(marker == "quote" for marker in missing_container)
-            )
-            if lazy_blockquote:
-                used_lazy_container = True
-            elif begins_list_item(lines[index]):
-                raise AuditError(
-                    "Setext headings cannot cross Markdown container boundaries"
-                )
-            else:
-                break
-        else:
-            saw_explicit_container = True
-        if re.search(r" {2,}\Z", lines[index]):
-            raise AuditError(
-                "search visibility headings cannot contain hard line breaks"
-            )
-        content = visible_block_content(lines[index])
-        if (
-            not content
-            or atx_heading(content) is not None
-            or SETEXT_UNDERLINE.fullmatch(content) is not None
-        ):
-            break
-        paragraph.append(content)
-        start = index
-        if begins_list_item(lines[index]):
-            break
-    if not paragraph or (used_lazy_container and not saw_explicit_container):
-        return None
-    if len(paragraph) > 1:
-        raise AuditError(
-            "search visibility Setext headings cannot contain line breaks"
-        )
-    return start, " ".join(reversed(paragraph))
 
 
 def top_level_source(lines: list[str], start: int, end: int) -> bool:
@@ -288,6 +211,10 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str, bool]]:
             raise AuditError(
                 "search visibility headings cannot use indented code blocks"
             )
+        if SETEXT_UNDERLINE.fullmatch(content) is not None:
+            raise AuditError(
+                "search visibility ledger cannot contain Setext underlines"
+            )
         if FENCE_START.fullmatch(content):
             raise AuditError("search visibility ledger cannot contain fenced blocks")
         if content == "$$":
@@ -314,27 +241,6 @@ def markdown_headings(markdown: str) -> list[tuple[int, int, int, str, bool]]:
                 )
             )
             continue
-        underline = SETEXT_UNDERLINE.fullmatch(content)
-        if underline is None:
-            continue
-        parsed_setext = setext_title(lines, index)
-        if parsed_setext is None:
-            continue
-        heading_start, title = parsed_setext
-        if any(character in title for character in "[]<>"):
-            raise AuditError(
-                "search visibility headings cannot contain inline links or HTML"
-            )
-        level = 1 if underline.group(1).startswith("=") else 2
-        headings.append(
-            (
-                heading_start,
-                index + 1,
-                level,
-                title,
-                top_level_source(lines, heading_start, index + 1),
-            )
-        )
     return headings
 
 
