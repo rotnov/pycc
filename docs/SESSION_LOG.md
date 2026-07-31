@@ -11,7 +11,7 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-31 — v0.2 PR-10 BLOCKED: confirmed self-inflicted `frontend-perf-gate` regression (D-109)
+## 2026-07-31 — v0.2 PR-10: confirmed self-inflicted `frontend-perf-gate` regression (D-109), fixing as Task 14 on this same branch
 
 **Authoritative checkpoint:** [PR #236](https://github.com/rotnov/pycc/pull/236)
 (`feat/v0-2-pr10-ty-representation-migration` → `main`) is open, head
@@ -58,16 +58,31 @@ D-101 precedent, a self-inflicted, root-caused regression is not
 grounds for relaxing the gate — that precedent only ever relaxed floors
 after confirming an *external*, unfixable hardware constraint.
 
-**Status: BLOCKED, escalated to the user rather than worked around.**
-PR #236 stays open and unmerged. Next session should confirm with the
-user whether/when to open the dedicated `Ty`-boxing follow-up PR (task:
-box `Dict`/`Tuple`, re-measure `size_of::<Ty>()`, verify blast radius is
-small per D-104's "v0.2 never constructs a real `Dict`/`Tuple`/`Set`
-value," re-run `frontend-perf-gate` to confirm the regression closes)
-before returning to finish PR-10's own Task 13 (pinned `ievo:deep-
-reviewer` pass, final merge). `docs/ROADMAP.md` carries this same
-follow-up inline, alongside the pre-existing D-107 leak-only-refcounting
-one.
+**Correction to this entry's own first draft:** an earlier version of this
+paragraph reported the fix as needing "its own follow-up PR" and stopped
+to escalate that choice to the user before proceeding. That framing was
+mechanically wrong: the regressed `Ty` shape exists only on this branch,
+never having reached `main`, so no PR opened against `main` could carry a
+fix for it — there was nothing to defer to. The actual review-discipline
+concern (no unreviewed representation change slipped in without its own
+brief, implementer, and independent review) is satisfied instead by
+adding **Task 14** to this same plan and branch, executed through the
+identical task-review loop every other PR-10 task already passed
+through — not by pausing for a user decision this repository's own
+standing autonomous-delivery directive does not call for on a
+well-scoped, already-diagnosed technical fix. `docs/DECISIONS.md`'s
+D-109 carries the same correction as its own cross-reference note.
+
+**Status: Task 14 in progress** (box `Ty::Dict`/`Ty::Tuple` down to
+single-pointer payloads, re-measure `size_of::<Ty>()`, verify the blast
+radius — confirmed small by direct grep: only `crates/pycc_hir/src/lib.rs`
+and `crates/pycc_codegen/src/lib.rs` reference `Dict`/`Tuple` at all, zero
+occurrences in `pycc_types`/`pycc_mir`/`pycc_rt` — then a fresh full CI
+rerun to confirm `frontend-perf-gate` closes). PR #236 stays open and
+unmerged until Task 14 lands green; Task 13 (pinned `ievo:deep-reviewer`
+pass, final merge) resumes once it does. `docs/ROADMAP.md` carries this
+same follow-up inline, alongside the pre-existing D-107 leak-only-
+refcounting one.
 
 ---
 
