@@ -8,6 +8,20 @@ use pycc_diag::Diagnostic;
 use std::path::Path;
 use std::process::ExitCode;
 
+/// The five Tier-1 targets, in ARCHITECTURE.md's own "Cross-platform (hard
+/// requirement)" table order (Linux, macOS, Windows; x86_64 before aarch64
+/// within each OS pair). `pycc version --verbose` reports this list per
+/// CLI_SPEC.md's command table; nothing else in the codebase enumerates
+/// Tier-1 at runtime, so this constant is that table's only code mirror and
+/// changes only when the table does.
+const TIER1_TARGETS: [&str; 5] = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+];
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
@@ -32,8 +46,30 @@ fn main() -> ExitCode {
             }
         }
         Command::Run { path } => run(&path),
-        Command::Version { .. } => {
-            println!("pycc 0.1.0 (rustc 1.97.1, LLVM 22.1.1)");
+        Command::Version { verbose } => {
+            // `pycc {version}` and `rustc {rust-version}` come from the
+            // manifest (`CARGO_PKG_VERSION`, `CARGO_PKG_RUST_VERSION`) so the
+            // line can't silently rot when either bumps; the repository keeps
+            // `rust-version` in lockstep with `rust-toolchain.toml`. "LLVM
+            // 22.1.1" stays a literal deliberately: it states D-015's pinned
+            // contract value, and whether the *installed* LLVM actually
+            // matches that pin is #75's open scope, not this line's job.
+            println!(
+                "pycc {} (rustc {}, LLVM 22.1.1)",
+                env!("CARGO_PKG_VERSION"),
+                env!("CARGO_PKG_RUST_VERSION"),
+            );
+            if verbose {
+                // CLI_SPEC.md's `pycc version --verbose` row promises the
+                // target list; the set and order mirror the one authoritative
+                // Tier-1 table in ARCHITECTURE.md ("Cross-platform (hard
+                // requirement)"), which has no runtime representation
+                // anywhere else in the codebase.
+                println!("tier-1 targets:");
+                for target in TIER1_TARGETS {
+                    println!("  {target}");
+                }
+            }
             ExitCode::SUCCESS
         }
         Command::Check {
