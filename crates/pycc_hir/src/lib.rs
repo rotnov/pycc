@@ -20,10 +20,13 @@ pub enum Ty {
     /// scope per `docs/DELIVERY_PLAN.md`) -- the variant exists now only
     /// because D-089 decided `Ty`'s full recursive shape up front, so
     /// every later PR's match arms are additive, not migratory again.
-    /// The key/value pair is boxed together as a single pointer (D-109 --
-    /// shrinks `Ty`'s own size, closing a real frontend-throughput
-    /// regression the original two-separate-`Box<Ty>` shape caused), not
-    /// because `dict[K,V]` needs its own codegen yet.
+    /// The key/value pair is boxed together as a single pointer (D-109):
+    /// this variant was not itself the dominant contributor to `Ty`'s
+    /// pre-fix 24-byte size (`Tuple(Vec<Ty>)` was), but once `Tuple`
+    /// shrinks to a single 8-byte pointer too, `Dict`'s original
+    /// two-separate-`Box<Ty>` shape (16 bytes) would become the new
+    /// ceiling -- boxing it avoids that, not because `dict[K,V]` needs
+    /// its own codegen yet.
     Dict(Box<(Ty, Ty)>),
     /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
     Set(Box<Ty>),
