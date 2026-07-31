@@ -402,13 +402,29 @@ activation change.
 
 The prospective search-ledger audit is staged under
 `tests/fixtures/workflow-policy-search-ledger.yml` with SHA-256
-`324025aaec3a3dce7bb4779901ef3d2444524c587bbcbcbb918522f95aa536d7`.
+`f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688`.
 It keeps the existing read-only `pull_request_target` boundary, additionally
 downloads the head search ledger, query registry, checkpoint file, and roadmap
 as non-executable data. Before materialization it requires every workflow and
 required evidence path returned by the Git tree API to be an exact
 `100644 blob`; symlinks, executable files, trees, and submodules cannot reuse
-approved bytes while breaking the next trusted checkout. It then runs the base-owned
+approved bytes while breaking the next trusted checkout. The steady-state
+successor also rejects every root or nested `.gitattributes` entry on every
+pull request before checkout rules can rewrite a byte-identical workflow.
+It reads the trusted base's complete
+`tests/fixtures/policy-successor-manifest.json`, downloads every protected
+policy executable and repository input plus the candidate's proposed next
+manifest sources as non-executable `100644` data, and compares active targets
+only with the base-staged sources and SHA-256 values. A candidate manifest
+cannot authorize a target changed in that same pull request or remove any
+already protected target. A legitimate policy-bundle update therefore uses two
+merges: first stage proposal files and the next complete manifest while active
+targets remain unchanged; only a later pull request may activate those bytes,
+after they are part of the trusted base. The later activation may reset each
+source to its now-active target for the next cycle. This keeps future checker,
+self-test, workflow-input, and fixture revisions under the same base-owned
+transition boundary as initial activation instead of trusting whatever code a
+pull request would make authoritative after merge. It then runs the base-owned
 `check_search_visibility_audit.py` against the checked-out base ledger. The
 audit rejects a rewritten history prefix, invalid checkpoints, mutable surface
 or activation contracts, incorrect rank deltas, and replay metadata whose

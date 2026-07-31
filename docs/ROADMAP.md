@@ -51,9 +51,15 @@ including the newly active trust-anchor workflow itself, to their reviewed
 regular-file Git modes, so symlinks, submodules, executable-bit changes,
 or candidate checkout rules cannot change the materialized successor behind
 byte-identical Git blobs. The successor repeats the `100644 blob` requirement
-for every workflow and evidence file it downloads on all later PRs. The
-still-active base checker enforces that transition against the verified
-pull-request head before the successor trust anchor can merge.
+for every workflow, evidence file, policy executable, and transitive
+repository input it downloads on all later PRs, and rejects every root or
+nested `.gitattributes` entry. A complete base-staged successor manifest binds
+future protected-bundle changes through two separate merges: one stages the
+reviewed proposal while active targets remain unchanged, and only the next may
+activate those exact bytes. A candidate cannot self-authorize or shrink that
+bundle in one pull request. The still-active base checker enforces initial
+activation against the verified pull-request head before the successor trust
+anchor can merge.
 
 <!-- search-history-checkpoint: github_repository_search 108 e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433 -->
 <!-- search-history-checkpoint: github_repository_search 130 3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5 -->

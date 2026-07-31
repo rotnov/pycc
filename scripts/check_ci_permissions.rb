@@ -9,15 +9,26 @@ require "open3"
 
 class PolicyError < StandardError; end
 
+class StrictJsonObject < Hash
+  def []=(key, value)
+    if key?(key)
+      raise PolicyError,
+            "policy successor manifest contains duplicate JSON key #{key.inspect}"
+    end
+
+    super
+  end
+end
+
 SAFE_PERMISSION_VALUES = %w[read none].freeze
 WORKFLOW_DIRECTORY = Pathname(".github/workflows")
 TRUST_ANCHOR_FILENAME = "workflow-policy.yml"
 TRUST_ANCHOR_SHA256_ALLOWLIST = %w[
   4dc12b9c053dbc94011ba86c32c7a103afe223582cc94e93ff79255dc6e5b2e6
-  324025aaec3a3dce7bb4779901ef3d2444524c587bbcbcbb918522f95aa536d7
+  f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688
 ].freeze
 SEARCH_LEDGER_TRUST_ANCHOR_SHA256 =
-  "324025aaec3a3dce7bb4779901ef3d2444524c587bbcbcbb918522f95aa536d7"
+  "f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688"
 STAGED_SEARCH_ACTIVATION_SHA256 = {
   "scripts/check_search_visibility_audit.py" =>
     "5a7b693ef6dd20813063984f74354891eec593acd70c74d07a2038e6be6b35e2",
@@ -64,11 +75,18 @@ SEARCH_SUCCESSOR_INPUTS = %w[
   tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml
   tests/fixtures/workflow-policy-search-ledger.yml
 ].freeze
+POLICY_SUCCESSOR_MANIFEST_PATH =
+  "tests/fixtures/policy-successor-manifest.json"
+POLICY_SUCCESSOR_PROPOSAL_PREFIX =
+  "tests/fixtures/policy-successors/"
+POLICY_SUCCESSOR_TARGETS =
+  (SEARCH_SUCCESSOR_EXECUTABLES + SEARCH_SUCCESSOR_INPUTS).sort.freeze
 ACTIVATED_POLICY_CHECKER_PATH = "scripts/check_ci_permissions.rb"
 ACTIVATED_POLICY_TEST_PATH = "scripts/test_check_ci_permissions.rb"
 SEARCH_ACTIVATION_PATHS =
   (STAGED_SEARCH_ACTIVATION_SHA256.keys + SEARCH_SUCCESSOR_EXECUTABLES +
-    SEARCH_SUCCESSOR_INPUTS + [SEARCH_ROADMAP_PATH]).uniq.freeze
+    SEARCH_SUCCESSOR_INPUTS + [POLICY_SUCCESSOR_MANIFEST_PATH,
+                               SEARCH_ROADMAP_PATH]).uniq.freeze
 SEARCH_ACTIVATION_TREE_PATHS =
   (SEARCH_ACTIVATION_PATHS + [SEARCH_ACTIVATED_TRUST_ANCHOR_PATH]).freeze
 SEARCH_ACTIVATION_TREE_ENTRIES =
@@ -319,6 +337,156 @@ def activated_successor_executable(relative, repository_root)
   end
 end
 
+def policy_repository_path(value, context)
+  unless value.is_a?(String) && !value.empty? && value.bytesize <= 512 &&
+         !value.start_with?("/") && !value.include?("\\") &&
+         !value.include?("\0") && value.match?(/\A[A-Za-z0-9._\/-]+\z/)
+    raise PolicyError, "#{context} must be a safe repository-relative path"
+  end
+  segments = value.split("/", -1)
+  if segments.any? { |segment| segment.empty? || %w[. ..].include?(segment) }
+    raise PolicyError, "#{context} must be a safe repository-relative path"
+  end
+  value
+end
+
+def parse_policy_successor_manifest(text, context = "policy successor manifest")
+  document = JSON.parse(text, object_class: StrictJsonObject)
+  unless document.is_a?(Hash) && document.keys.sort == %w[manifest_version targets]
+    raise PolicyError, "#{context} must contain exactly manifest_version and targets"
+  end
+  unless document["manifest_version"].instance_of?(Integer) &&
+         document["manifest_version"] == 1
+    raise PolicyError, "#{context} manifest_version must be 1"
+  end
+  targets = document["targets"]
+  unless targets.is_a?(Array) && !targets.empty? && targets.length <= 64
+    raise PolicyError, "#{context} targets must contain between 1 and 64 entries"
+  end
+
+  parsed = {}
+  targets.each_with_index do |entry, index|
+    entry_context = "#{context} target #{index}"
+    unless entry.is_a?(Hash) && entry.keys.sort == %w[path sha256 source_path]
+      raise PolicyError,
+            "#{entry_context} must contain exactly path, sha256, and source_path"
+    end
+    target = policy_repository_path(entry["path"], "#{entry_context} path")
+    source = policy_repository_path(
+      entry["source_path"], "#{entry_context} source_path"
+    )
+    unless source == target || source.start_with?(POLICY_SUCCESSOR_PROPOSAL_PREFIX)
+      raise PolicyError,
+            "#{entry_context} source_path must equal its target or use the proposal directory"
+    end
+    digest = entry["sha256"]
+    unless digest.is_a?(String) && digest.match?(/\A[0-9a-f]{64}\z/)
+      raise PolicyError, "#{entry_context} sha256 must be lowercase SHA-256"
+    end
+    raise PolicyError, "#{context} repeats target #{target}" if parsed.key?(target)
+
+    parsed[target] = { "source_path" => source, "sha256" => digest }
+  end
+  parsed
+rescue JSON::ParserError => e
+  raise PolicyError, "#{context} is not valid JSON: #{e.message}"
+end
+
+def regular_policy_input(root, relative, context)
+  path = root / relative
+  unless path.exist? && !path.symlink? && path.lstat.file?
+    raise PolicyError, "#{context} is missing regular file #{relative}"
+  end
+  path.binread
+end
+
+def expected_activated_policy_successor_manifest(repository_root)
+  POLICY_SUCCESSOR_TARGETS.to_h do |relative|
+    content = if SEARCH_SUCCESSOR_EXECUTABLES.include?(relative)
+                activated_successor_executable(relative, repository_root)
+              else
+                regular_policy_input(
+                  repository_root, relative, "trusted activation source"
+                )
+              end
+    [relative, {
+      "source_path" => relative,
+      "sha256" => Digest::SHA256.hexdigest(content)
+    }]
+  end
+end
+
+def validate_policy_successor_transition(candidate_root, repository_root)
+  base_text = regular_policy_input(
+    repository_root,
+    POLICY_SUCCESSOR_MANIFEST_PATH,
+    "trusted policy successor manifest"
+  )
+  candidate_text = regular_policy_input(
+    candidate_root,
+    POLICY_SUCCESSOR_MANIFEST_PATH,
+    "candidate policy successor manifest"
+  )
+  base_manifest = parse_policy_successor_manifest(base_text, "trusted policy successor manifest")
+  candidate_manifest = parse_policy_successor_manifest(
+    candidate_text, "candidate policy successor manifest"
+  )
+
+  missing_targets = base_manifest.keys - candidate_manifest.keys
+  unless missing_targets.empty?
+    raise PolicyError,
+          "candidate policy successor manifest removes protected targets: " \
+          "#{missing_targets.sort.join(', ')}"
+  end
+
+  base_manifest.each do |target, entry|
+    expected = regular_policy_input(
+      repository_root, entry.fetch("source_path"), "trusted policy successor source"
+    )
+    unless Digest::SHA256.hexdigest(expected) == entry.fetch("sha256")
+      raise PolicyError,
+            "trusted policy successor source digest does not match for #{target}"
+    end
+    candidate = regular_policy_input(
+      candidate_root, target, "candidate protected policy target"
+    )
+    unless candidate == expected
+      raise PolicyError,
+            "candidate protected policy target #{target} lacks a base-staged successor"
+    end
+  end
+
+  candidate_manifest.each do |target, entry|
+    regular_policy_input(
+      candidate_root, target, "candidate policy successor target"
+    )
+    source = regular_policy_input(
+      candidate_root, entry.fetch("source_path"), "candidate policy successor source"
+    )
+    unless Digest::SHA256.hexdigest(source) == entry.fetch("sha256")
+      raise PolicyError,
+            "candidate policy successor source digest does not match for #{target}"
+    end
+  end
+end
+
+def validate_steady_state_policy_inputs(
+  event_name: ENV["GITHUB_EVENT_NAME"],
+  candidate_root: ENV["POLICY_CANDIDATE_ROOT"],
+  repository_root: Pathname(__dir__).parent
+)
+  base_anchor = repository_root / SEARCH_ACTIVATED_TRUST_ANCHOR_PATH
+  return unless base_anchor.file?
+  return unless Digest::SHA256.file(base_anchor).hexdigest ==
+                SEARCH_LEDGER_TRUST_ANCHOR_SHA256
+  return unless event_name == "pull_request_target"
+  if candidate_root.nil? || candidate_root.empty?
+    raise PolicyError, "steady-state policy audit is missing POLICY_CANDIDATE_ROOT"
+  end
+
+  validate_policy_successor_transition(Pathname(candidate_root), repository_root)
+end
+
 def git_attributes_manifest(tree)
   tree.b.split("\0").reject(&:empty?).select do |relative|
     File.basename(relative) == ".gitattributes"
@@ -472,12 +640,21 @@ def validate_search_activation_transition(
             "input #{relative} byte-for-byte"
     end
   end
+  manifest = candidate[POLICY_SUCCESSOR_MANIFEST_PATH]
+  unless manifest.is_a?(String) &&
+         parse_policy_successor_manifest(
+           manifest, "search activation policy successor manifest"
+         ) == expected_activated_policy_successor_manifest(repository_root)
+    raise PolicyError,
+          "search trust-anchor activation must preserve the complete steady-state successor manifest"
+  end
 end
 
 def main(arguments)
   paths = expand_paths(arguments)
   validate_policy_set(paths)
   validate_search_activation_transition(paths)
+  validate_steady_state_policy_inputs
   failures = []
   paths.each do |path|
     begin

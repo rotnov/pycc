@@ -25,6 +25,8 @@ jobs:
             const path = require("path");
             const output = "/tmp/pr-policy-input";
             const workflowOutput = path.join(output, ".github", "workflows");
+            const manifestPath =
+              "tests/fixtures/policy-successor-manifest.json";
             fs.mkdirSync(workflowOutput, { recursive: true });
 
             const { data: tree } = await github.rest.git.getTree({
@@ -35,6 +37,15 @@ jobs:
             });
             if (tree.truncated) {
               throw new Error("Head tree response was truncated");
+            }
+            const checkoutAttributes = tree.tree.filter((entry) =>
+              entry.path === ".gitattributes" ||
+              entry.path.endsWith("/.gitattributes")
+            );
+            if (checkoutAttributes.length !== 0) {
+              throw new Error(
+                "Head revision contains checkout-affecting .gitattributes"
+              );
             }
 
             const workflowDirectory = ".github/workflows/";
@@ -82,6 +93,7 @@ jobs:
                 content,
                 { flag: "wx" }
               );
+              return content;
             };
 
             for (const entry of workflows) {
@@ -91,19 +103,79 @@ jobs:
               );
             }
 
-            for (const requiredPath of [
-              "docs/ROADMAP.md",
-              "docs/SEARCH_QUERY_REGISTRY.json",
-              "docs/SEARCH_VISIBILITY.md",
-              "docs/SEARCH_VISIBILITY_CHECKPOINTS.json",
-            ]) {
+            const findEntry = (requiredPath) => {
               const entry = tree.tree.find((candidate) =>
                 candidate.path === requiredPath
               );
               if (!entry) {
                 throw new Error(`Head revision is missing ${requiredPath}`);
               }
-              await writeBlob(entry, path.join(output, requiredPath));
+              return entry;
+            };
+            const manifestContent = await writeBlob(
+              findEntry(manifestPath),
+              path.join(output, manifestPath)
+            );
+            const parseManifestPaths = (content, description) => {
+              let document;
+              try {
+                document = JSON.parse(content.toString("utf8"));
+              } catch (error) {
+                throw new Error(`${description} is not valid JSON: ${error.message}`);
+              }
+              if (!Array.isArray(document.targets) ||
+                  document.targets.length < 1 ||
+                  document.targets.length > 64) {
+                throw new Error(`${description} has an invalid target count`);
+              }
+              const safePath = (value) => {
+                if (typeof value !== "string" || value.length === 0 ||
+                    value.length > 512 || value.startsWith("/") ||
+                    value.includes("\\") || value.includes("\0") ||
+                    /[^A-Za-z0-9._/-]/.test(value)) {
+                  return false;
+                }
+                return value.split("/").every((part) =>
+                  part.length > 0 && part !== "." && part !== ".."
+                );
+              };
+              const result = [];
+              for (const target of document.targets) {
+                for (const key of ["path", "source_path"]) {
+                  if (!target || !safePath(target[key])) {
+                    throw new Error(`${description} has an unsafe ${key}`);
+                  }
+                  result.push(target[key]);
+                }
+              }
+              return result;
+            };
+            const trustedManifest = fs.readFileSync(manifestPath);
+            const protectedPaths = new Set([
+              "docs/ROADMAP.md",
+              "docs/SEARCH_QUERY_REGISTRY.json",
+              "docs/SEARCH_VISIBILITY.md",
+              "docs/SEARCH_VISIBILITY_CHECKPOINTS.json",
+              ...parseManifestPaths(
+                trustedManifest, "Trusted policy successor manifest"
+              ),
+              ...parseManifestPaths(
+                manifestContent, "Candidate policy successor manifest"
+              ),
+            ]);
+            const downloadedPaths = new Set([
+              manifestPath,
+              ...workflows.map((entry) => entry.path),
+            ]);
+            for (const requiredPath of protectedPaths) {
+              if (downloadedPaths.has(requiredPath)) {
+                continue;
+              }
+              await writeBlob(
+                findEntry(requiredPath),
+                path.join(output, requiredPath)
+              );
+              downloadedPaths.add(requiredPath);
             }
 
       - name: Test trusted checker
@@ -113,6 +185,8 @@ jobs:
           python3 -I -B scripts/test_check_search_visibility_audit.py
 
       - name: Audit head workflow permissions
+        env:
+          POLICY_CANDIDATE_ROOT: /tmp/pr-policy-input
         run: ruby scripts/check_ci_permissions.rb /tmp/pr-policy-input/.github/workflows
 
       - name: Audit head roadmap evidence

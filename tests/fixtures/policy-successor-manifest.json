@@ -1,0 +1,105 @@
+{
+  "manifest_version": 1,
+  "targets": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "source_path": ".github/workflows/ci.yml",
+      "sha256": "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
+    },
+    {
+      "path": "scripts/check_ci_permissions.rb",
+      "source_path": "scripts/check_ci_permissions.rb",
+      "sha256": "53a83a988ae06fa18da374d8582cb93488c1290b465b2504a3b0b50c1b4b6322"
+    },
+    {
+      "path": "scripts/check_replicated_paired_perf_regression.rb",
+      "source_path": "scripts/check_replicated_paired_perf_regression.rb",
+      "sha256": "d296e48859b1813685f06244c6d401119de57ec1842fe7c47d8ecbbdb1318c06"
+    },
+    {
+      "path": "scripts/check_roadmap_evidence.rb",
+      "source_path": "scripts/check_roadmap_evidence.rb",
+      "sha256": "f7e5b618b5801d0ea07fcd354cdfbbcdf341bdfeb3c6c0b06c62c4b209682f97"
+    },
+    {
+      "path": "scripts/check_search_visibility_audit.py",
+      "source_path": "scripts/check_search_visibility_audit.py",
+      "sha256": "5a7b693ef6dd20813063984f74354891eec593acd70c74d07a2038e6be6b35e2"
+    },
+    {
+      "path": "scripts/check_source_aware_perf_regression.rb",
+      "source_path": "scripts/check_source_aware_perf_regression.rb",
+      "sha256": "55ce7259ff164a43a98187cb7b611794a8417dc3dfddf3f4fb689776ab83adcb"
+    },
+    {
+      "path": "scripts/test_check_ci_permissions.rb",
+      "source_path": "scripts/test_check_ci_permissions.rb",
+      "sha256": "c6120dcd5ac39dba7335aeadc675cfc80312a1936fc8c4b24499ea416707c163"
+    },
+    {
+      "path": "scripts/test_check_replicated_paired_perf_regression.rb",
+      "source_path": "scripts/test_check_replicated_paired_perf_regression.rb",
+      "sha256": "bdda7c21cf96d35ee00af6893493b9f84025b35998e5a4bcba88019604757b10"
+    },
+    {
+      "path": "scripts/test_check_roadmap_evidence.rb",
+      "source_path": "scripts/test_check_roadmap_evidence.rb",
+      "sha256": "03db12e8529ff32c2c200f66da10b171102201f0234fdaa6efa6cabea85d44b6"
+    },
+    {
+      "path": "scripts/test_check_search_visibility_audit.py",
+      "source_path": "scripts/test_check_search_visibility_audit.py",
+      "sha256": "d21cc70a7a2de15f8c1fd9cd01255f374ca8c045e48bdd74dd2c3270eb82e056"
+    },
+    {
+      "path": "scripts/test_check_source_aware_perf_regression.rb",
+      "source_path": "scripts/test_check_source_aware_perf_regression.rb",
+      "sha256": "b5ccd35af90dcff6f9fff30ec9075ab9d780694fc9941954913f5bd4407b2b34"
+    },
+    {
+      "path": "tests/fixtures/d100-compose-d91-d99-ci.yml",
+      "source_path": "tests/fixtures/d100-compose-d91-d99-ci.yml",
+      "sha256": "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
+    },
+    {
+      "path": "tests/fixtures/d51-paired-ci.yml",
+      "source_path": "tests/fixtures/d51-paired-ci.yml",
+      "sha256": "4b1d11afba108745a2bc375e3447d92ecde843376c3bea95ab32f76b3fc53249"
+    },
+    {
+      "path": "tests/fixtures/d56-source-aware-ci.yml",
+      "source_path": "tests/fixtures/d56-source-aware-ci.yml",
+      "sha256": "c696da18f4f8b876d4398c43f94fe574e870579badd84cf579fbe91fbd9d7b4b"
+    },
+    {
+      "path": "tests/fixtures/d62-replicated-paired-ci.yml",
+      "source_path": "tests/fixtures/d62-replicated-paired-ci.yml",
+      "sha256": "a5135f7a8ebe2b0c0924ad026612ef9c90ade105c9a4fd484f803e10cf5b5c8d"
+    },
+    {
+      "path": "tests/fixtures/d80-conformance-oracle-ci.yml",
+      "source_path": "tests/fixtures/d80-conformance-oracle-ci.yml",
+      "sha256": "17611d861d10c34d6ccebbf21bc82d8dfaf006b969bb2fe1e12d57b9e9c81234"
+    },
+    {
+      "path": "tests/fixtures/d84-throughput-floor-ci.yml",
+      "source_path": "tests/fixtures/d84-throughput-floor-ci.yml",
+      "sha256": "d0e01df560e32fcd51b6092a8c75dfe4ac270137838907711b37cf043278b516"
+    },
+    {
+      "path": "tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml",
+      "source_path": "tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml",
+      "sha256": "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
+    },
+    {
+      "path": "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml",
+      "source_path": "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml",
+      "sha256": "f8656c7a525fe8775f90c5afe0950b4706eb043ef6f78f6b66e1f50146fc5366"
+    },
+    {
+      "path": "tests/fixtures/workflow-policy-search-ledger.yml",
+      "source_path": "tests/fixtures/workflow-policy-search-ledger.yml",
+      "sha256": "f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688"
+    }
+  ]
+}
