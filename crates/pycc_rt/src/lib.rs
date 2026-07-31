@@ -575,7 +575,7 @@ pub extern "C" fn pycc_rt_int_to_float(tagged: i64) -> f64 {
     int_to_float(tagged)
 }
 
-/// D-105: the input-side half of `PyIntListObj`'s raw/tagged boundary
+/// D-106: the input-side half of `PyIntListObj`'s raw/tagged boundary
 /// conversion. Takes a D-061-tagged `Ty::Int` value (an `.append()`
 /// argument, a subscript index) and returns the raw, untagged `i64`
 /// `PyIntListObj` actually stores/compares -- panicking honestly instead
@@ -1046,7 +1046,7 @@ pub extern "C" fn pycc_rt_print_none() {
     print!("None");
 }
 
-/// `list[int]`'s runtime object (D-104: v0.2 codegen only supports
+/// `list[int]`'s runtime object (D-105: v0.2 codegen only supports
 /// `list[int]`; any other element type stays a `pycc_types` diagnostic,
 /// T0034, never reaching codegen). Header shape follows `PyStrObj`'s real
 /// precedent (`rc: Cell<u32>` plus payload) rather than `docs/RUNTIME.md`'s
@@ -1095,7 +1095,7 @@ pub extern "C" fn pycc_rt_print_none() {
 /// SIMD-friendly"), the same kind of narrow, justified exception D-061's
 /// own consequences section already grants `bool` (its own untagged `i8`
 /// representation). This is reconciled with its codegen consumer
-/// (Task 11a/11b, D-105) -- see the `# Element representation` note on
+/// (Task 11a/11b, D-106) -- see the `# Element representation` note on
 /// `pycc_rt_int_list_append`/`_get`/`_len` below for the exact tag/untag
 /// conversions a caller crossing this boundary performs, and the known
 /// bigint gap that follows from it.
@@ -1118,7 +1118,7 @@ pub extern "C" fn pycc_rt_int_list_new() -> *mut PyIntListObj {
     }))
 }
 
-/// Appends `value` to the end of `list` (Python's `list.append`, D-104's
+/// Appends `value` to the end of `list` (Python's `list.append`, D-105's
 /// v0.2 `list[int]` slice). Grows `list`'s backing `Vec` via its own
 /// amortized-doubling `push`, so this never needs to reimplement
 /// capacity-doubling by hand.
@@ -1178,7 +1178,7 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
     value
 }
 
-/// Reads the element at `index` (Python's `list[index]`, D-104's v0.2
+/// Reads the element at `index` (Python's `list[index]`, D-105's v0.2
 /// `list[int]` slice). Panics on an out-of-range index, matching
 /// `pycc_rt`'s established "honest panic over silently wrong data"
 /// convention (see `float_to_str`'s own doc comment for the same
@@ -1189,7 +1189,7 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 /// reject a negative index at compile time (the index value is only known
 /// at runtime) -- so this panics on *any* negative index, the same
 /// "index out of range" panic as a too-large positive one. This is a
-/// deliberate, documented v0.2 gap (D-107), not a bug: it means a
+/// deliberate, documented v0.2 gap (D-108), not a bug: it means a
 /// conformance fixture exercising this function must not use negative
 /// indexing, since that would panic here rather than matching CPython's
 /// last-element behavior.
@@ -1214,7 +1214,7 @@ pub unsafe extern "C" fn pycc_rt_int_list_get(list: *mut PyIntListObj, index: i6
     int_list_get(unsafe { &*list }, index)
 }
 
-/// Returns `list`'s current element count (Python's `len(list)`, D-104's
+/// Returns `list`'s current element count (Python's `len(list)`, D-105's
 /// v0.2 `list[int]` slice).
 ///
 /// # Element representation
@@ -2149,7 +2149,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "pycc_rt: list index out of range")]
     fn int_list_get_rejects_negative_indices() {
-        // D-107's documented v0.2 scope cut: unlike real Python (where
+        // D-108's documented v0.2 scope cut: unlike real Python (where
         // `lst[-1]` is the last element), a negative index panics here
         // exactly like an out-of-range positive one -- `pycc_types` has no
         // way to reject a negative index at compile time, so this is

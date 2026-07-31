@@ -52,7 +52,7 @@ pub enum MirExpr {
     /// correct on its own terms, and correct automatically if that gate is
     /// ever relaxed, without requiring a matching `pycc_mir` change.
     ListLiteral(Vec<MirExpr>),
-    /// `base[index]`, read-only (mirrors `HirExpr::Subscript`, D-104).
+    /// `base[index]`, read-only (mirrors `HirExpr::Subscript`, D-105).
     /// `ty()` below derives its result from `base.ty()`'s element type
     /// (mirroring `pycc_types::infer_expr_in`'s own `Subscript` arm), for
     /// the same reason `ListLiteral` above derives rather than hardcodes.
@@ -60,7 +60,7 @@ pub enum MirExpr {
         base: Box<MirExpr>,
         index: Box<MirExpr>,
     },
-    /// `list.append(value)` (mirrors `HirExpr::ListAppend`, D-104). `list` is
+    /// `list.append(value)` (mirrors `HirExpr::ListAppend`, D-105). `list` is
     /// carried as the plain variable name, exactly like `HirExpr::ListAppend`
     /// itself -- there is no sub-expression to recursively lower for it, only
     /// for `value`.
@@ -139,7 +139,7 @@ pub enum MirStmt {
         step: MirExpr,
         body: Vec<MirStmt>,
     },
-    /// `for var in list:` (mirrors `HirStmt::ForList`, D-104). `list` is
+    /// `for var in list:` (mirrors `HirStmt::ForList`, D-105). `list` is
     /// carried as the plain variable name, exactly like `HirStmt::ForList`
     /// itself; there is no start/stop/step to lower here, only `body`.
     ForList {
@@ -388,7 +388,7 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
                 // `len` is a hand-recognized builtin, same as `print` above,
                 // not a user-declarable `$fn:` signature -- mirrors
                 // `pycc_types::collect_expr_constraints`'s own `callee ==
-                // "len"` arm (D-104 point 3). Without this branch, `len(lst)`
+                // "len"` arm (D-105 point 3). Without this branch, `len(lst)`
                 // falls to the `lookup` fallback below, finds no registered
                 // `$fn:len`, and panics even though `pycc_types` already
                 // accepts `len(lst)` as valid, `Ty::Int`-typed.
@@ -1683,7 +1683,7 @@ mod tests {
         // in the `HirExpr::Call` lowering arm, this would panic via
         // `lookup`'s own "has no recorded type" message, since no `$fn:len`
         // signature is ever registered -- even though `pycc_types` already
-        // accepts `len(lst)` as valid, `Ty::Int`-typed (D-104 point 3).
+        // accepts `len(lst)` as valid, `Ty::Int`-typed (D-105 point 3).
         let hir = HirModule {
             items: vec![
                 HirItem::TopLevelStmt(HirStmt::Assign {

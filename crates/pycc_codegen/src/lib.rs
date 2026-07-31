@@ -40,12 +40,12 @@ enum Scalar<'ctx> {
     /// Task 7) -- always refcounted, never inspected directly by this
     /// crate (see this enum's own doc comment).
     Str(PointerValue<'ctx>),
-    /// A pointer to a heap-allocated `pycc_rt::PyIntListObj` (D-104,
+    /// A pointer to a heap-allocated `pycc_rt::PyIntListObj` (D-105,
     /// Task 10) -- like `Str`, opaque to this crate, which only ever
     /// stores it, passes it to a `pycc_rt_int_list_*` call, or marshals it
     /// across a function boundary.
     ///
-    /// Its own variant rather than a reuse of `Str`'s (D-106): the two
+    /// Its own variant rather than a reuse of `Str`'s (D-107): the two
     /// runtime objects have entirely different layouts, and `truthy`/
     /// `to_str` are exhaustive matches that would otherwise hand a
     /// `PyIntListObj` pointer straight to a `pycc_rt_str_*` function --
@@ -56,7 +56,7 @@ enum Scalar<'ctx> {
     /// misreading memory.
     ///
     /// Refcounting is deliberately *not* wired for this variant in v0.2
-    /// (D-106): `pycc_rt_int_list_incref`/`_decref` are never called, so a
+    /// (D-107): `pycc_rt_int_list_incref`/`_decref` are never called, so a
     /// list's backing allocation leaks for the process's lifetime. That is
     /// leak-only -- never a premature free or a double free -- because
     /// nothing frees a list value early either.
@@ -113,7 +113,7 @@ struct RtFns<'ctx> {
     print_space: FunctionValue<'ctx>,
     print_newline: FunctionValue<'ctx>,
     print_none: FunctionValue<'ctx>,
-    /// D-105's input-side boundary conversion (Task 11a): turns a
+    /// D-106's input-side boundary conversion (Task 11a): turns a
     /// D-061-tagged `Ty::Int` into the raw, untagged `i64` `PyIntListObj`
     /// actually stores, panicking honestly on a bigint-tagged value.
     /// `pycc_rt`'s job rather than inline IR because it interprets the tag
@@ -297,7 +297,7 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         // representation `Str` already gets above. The element type `T`
         // only affects what Task 11's runtime does with the pointee, never
         // this decision, so every `List(_)` is a pointer regardless of `T`
-        // (D-104 restricts real *codegen* for non-`int` elements elsewhere,
+        // (D-105 restricts real *codegen* for non-`int` elements elsewhere,
         // not this representation choice).
         pycc_mir::Ty::List(_) => context.ptr_type(inkwell::AddressSpace::default()).into(),
         // Deviation from the task brief: the brief's own version of this
@@ -351,7 +351,7 @@ fn to_tagged_int<'ctx>(
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got str")
         }
         // Defensive, exactly like the two arms above -- not a feature gap
-        // (D-106): `pycc_types`' `numeric_result_type` maps no `Ty::List`
+        // (D-107): `pycc_types`' `numeric_result_type` maps no `Ty::List`
         // to a numeric type, so any arithmetic with a list operand is
         // already rejected as `T0021` before codegen runs. Its own arm
         // rather than folding into `Str`'s, so the message names the type
@@ -362,7 +362,7 @@ fn to_tagged_int<'ctx>(
     }
 }
 
-/// D-105's output-side boundary conversion: tags an already-known-in-range
+/// D-106's output-side boundary conversion: tags an already-known-in-range
 /// raw `i64` (a `list[int]` element read back out, or its length) as an
 /// ordinary D-061 `Ty::Int`. Always safe -- never overflows -- because
 /// every raw value crossing this boundary already passed through
@@ -425,7 +425,7 @@ fn expect_list_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'
     ptr
 }
 
-/// D-105's input-side boundary conversion, at all three sites where a
+/// D-106's input-side boundary conversion, at all three sites where a
 /// D-061-tagged `Ty::Int` crosses into `PyIntListObj`'s raw, untagged
 /// storage: `ListLiteral`'s per-element value, `ListAppend`'s value, and
 /// `Subscript`'s index. Delegates to `pycc_rt` (rather than emitting the
@@ -449,7 +449,7 @@ fn build_untag_checked<'ctx>(
 }
 
 /// Reads one element out of a `PyIntListObj`. Both operands and the result
-/// are on the **raw**, untagged side of D-105's boundary: callers convert
+/// are on the **raw**, untagged side of D-106's boundary: callers convert
 /// on the way in (`build_untag_checked`) and on the way out
 /// (`raw_i64_to_tagged_int`) only where the value is genuinely a user-visible
 /// `Ty::Int` -- which is why `MirStmt::ForList`'s own induction variable is
@@ -473,7 +473,7 @@ fn build_int_list_get<'ctx>(
 }
 
 /// A `PyIntListObj`'s current element count, as a **raw**, untagged `i64`
-/// (D-105). The `len(x)` builtin re-tags this before handing it back as a
+/// (D-106). The `len(x)` builtin re-tags this before handing it back as a
 /// `Ty::Int` expression value; `MirStmt::ForList` uses it directly as its
 /// own loop bound and deliberately does not.
 fn build_int_list_len<'ctx>(
@@ -489,7 +489,7 @@ fn build_int_list_len<'ctx>(
         .into_int_value()
 }
 
-/// Appends one already-untagged (D-105) value to a `PyIntListObj`, shared by
+/// Appends one already-untagged (D-106) value to a `PyIntListObj`, shared by
 /// `MirExpr::ListLiteral`'s per-element construction and
 /// `MirExpr::ListAppend`. Returns nothing: `pycc_rt_int_list_append` is
 /// declared `void`, so unlike every other `pycc_rt_int_list_*` helper above
@@ -535,7 +535,7 @@ fn range_operand_to_tagged_int<'ctx>(
     match scalar {
         scalar @ (Scalar::Int(_) | Scalar::Bool(_)) => to_tagged_int(context, builder, scalar),
         // `List` joins this arm's existing or-pattern rather than getting
-        // its own (D-106): unlike `to_tagged_int`/`to_float` above and
+        // its own (D-107): unlike `to_tagged_int`/`to_float` above and
         // below, this message never names the offending type, so it stays
         // exactly as honest for a list operand as for a `float` or `str`
         // one -- and folding adds no separate, permanently-unexecutable
@@ -574,7 +574,7 @@ fn to_float<'ctx>(
             panic!("pycc_codegen: internal error: expected a numeric operand, got str")
         }
         // Defensive for the same `numeric_result_type` reason as
-        // `to_tagged_int`'s own `List` arm above (D-106), and separate from
+        // `to_tagged_int`'s own `List` arm above (D-107), and separate from
         // `Str`'s for the same message-honesty reason.
         Scalar::List(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got list")
@@ -644,13 +644,13 @@ fn to_str<'ctx>(
         Scalar::Float(v) => (rt.float_to_str, v.into()),
         Scalar::Bool(v) => (rt.bool_to_str, v.into()),
         // A real, reachable feature gap rather than a defensive arm
-        // (D-106): `pycc_types` accepts any argument type for `print`, so
+        // (D-107): `pycc_types` accepts any argument type for `print`, so
         // `print(xs)` for a `list[int]` local type-checks today and lands
         // here -- and so does f-string interpolation (`f"{xs}"`, the
         // interpolation arm in `emit_expr`), a second, independent reachable
         // route into this same arm (`emit_print_arg` and that interpolation
         // arm both call into this one shared `to_str` helper). v0.2 has no
-        // `str(list)`/list-printing semantics (D-104), and there is no
+        // `str(list)`/list-printing semantics (D-105), and there is no
         // `pycc_rt_list_to_str` to call -- so this panics honestly instead
         // of handing a `PyIntListObj` pointer to a `pycc_rt_*_to_str`
         // function that would read it as a `PyStrObj`.
@@ -849,7 +849,7 @@ fn emit_expr<'ctx>(
                 // `Scalar::Str`, safe only for as long as no `MirExpr`
                 // could construct a `list[T]` value, and flagged as a
                 // Task-11 tripwire for `truthy`/`to_str` specifically.
-                // Task 11a (D-106) retired that reuse: the pointer is now
+                // Task 11a (D-107) retired that reuse: the pointer is now
                 // `Scalar::List`, so every exhaustive `Scalar` match had to
                 // answer for `list[T]` explicitly instead of silently
                 // treating it as a `PyStrObj`.
@@ -861,7 +861,7 @@ fn emit_expr<'ctx>(
                 // function -- and `incref_if_str_duplicate` needs no
                 // `List` arm at all, since its `if let Scalar::Str(..)
                 // else { scalar }` shape already passes a list through
-                // untouched, which is exactly D-106's leak-only policy.
+                // untouched, which is exactly D-107's leak-only policy.
                 Ty::List(_) => {
                     let loaded = builder
                         .build_load(
@@ -998,7 +998,7 @@ fn emit_expr<'ctx>(
                 }
                 // No container type supports any `BinOpKind` in this plan's
                 // own scope -- not even `+` for list concatenation, which
-                // D-104 defers past v0.2. This arm is a pure diagnostic-
+                // D-105 defers past v0.2. This arm is a pure diagnostic-
                 // message improvement over the generic `other` catch-all
                 // below (naming the specific container type via `.name()`
                 // and calling out that it's the *operator* that's
@@ -1109,7 +1109,7 @@ fn emit_expr<'ctx>(
                     "pycc_codegen: using print()'s result as a nested expression is not supported yet"
                 );
             }
-            // `len` is the second hand-recognized builtin (D-104 point 3),
+            // `len` is the second hand-recognized builtin (D-105 point 3),
             // dispatched here for the same reason `print` is: it has no
             // `user_functions` entry, so it must be claimed before the
             // lookup below turns it into an "undefined function" panic.
@@ -1135,7 +1135,7 @@ fn emit_expr<'ctx>(
                     list_arg,
                 );
                 let list_ptr = expect_list_pointer(scalar, "`len`'s argument");
-                // D-105 output side: the raw count becomes a user-visible
+                // D-106 output side: the raw count becomes a user-visible
                 // `Ty::Int` expression value here (`print(len(x))`,
                 // `n = len(x)`), so it is re-tagged -- unlike
                 // `MirStmt::ForList`'s own use of the same runtime call,
@@ -1297,14 +1297,14 @@ fn emit_expr<'ctx>(
                 panic!("pycc_codegen: internal error: an f-string with zero parts should not be reachable")
             }))
         }
-        // `[e1, e2, ...]` (D-104): an empty `pycc_rt_int_list_new()` object
+        // `[e1, e2, ...]` (D-105): an empty `pycc_rt_int_list_new()` object
         // followed by one `pycc_rt_int_list_append` per element, in source
         // order. No pre-sizing call: `PyIntListObj`'s payload is a
         // `Vec<i64>` whose own amortized-doubling `push` already handles
         // growth (see that struct's doc comment), so a reserve entry point
         // would be new runtime surface for no behavioral difference.
         //
-        // D-105 input side: each element is an arbitrary `Ty::Int`
+        // D-106 input side: each element is an arbitrary `Ty::Int`
         // expression and therefore D-061-tagged, while `PyIntListObj`
         // stores raw untagged slots -- hence the `build_untag_checked` per
         // element (which is also what turns a bigint-valued element into an
@@ -1338,7 +1338,7 @@ fn emit_expr<'ctx>(
             }
             Scalar::List(list_ptr)
         }
-        // `base[index]`, read-only (D-104 scope cut 2). Both of D-105's
+        // `base[index]`, read-only (D-105 scope cut 2). Both of D-106's
         // conversions apply here, in opposite directions: the index is a
         // tagged `Ty::Int` expression crossing *into* the list, and the
         // element read back out is a raw slot becoming a user-visible
@@ -1357,7 +1357,7 @@ fn emit_expr<'ctx>(
             let raw_element = build_int_list_get(builder, rt, base_ptr, raw_index);
             Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_element))
         }
-        // `list.append(value)` (D-104 point 3). Same input-side D-105
+        // `list.append(value)` (D-105 point 3). Same input-side D-106
         // conversion as `ListLiteral`'s elements above. `list` is a plain
         // variable name rather than a sub-expression (mirroring
         // `HirExpr::ListAppend`), so it is read through
@@ -1382,7 +1382,7 @@ fn emit_expr<'ctx>(
 /// Reads a `list[T]`-typed local by name. `MirExpr::ListAppend`'s `list` and
 /// `MirStmt::ForList`'s `list` both carry their list as a plain variable
 /// name rather than a sub-expression (mirroring `HirExpr::ListAppend`/
-/// `HirStmt::ForList`, D-104), so neither has a `MirExpr` to hand to
+/// `HirStmt::ForList`, D-105), so neither has a `MirExpr` to hand to
 /// `emit_expr` directly.
 ///
 /// Routes the read through `emit_expr`'s own `Name` arm (via a synthetic
@@ -1528,10 +1528,10 @@ fn truthy<'ctx>(
             .expect_basic("pycc_rt_str_truthy returns a non-void i8")
             .into_int_value(),
         // A real, reachable feature gap rather than a defensive arm
-        // (D-106): `pycc_types` places no type restriction on an `if`/
+        // (D-107): `pycc_types` places no type restriction on an `if`/
         // `while` condition, so `if xs:` for a `list[int]` local
         // type-checks today and lands here. v0.2 has no `bool(list)`
-        // semantics (D-104 ships only `len(x)`/`x[i]`/iteration/
+        // semantics (D-105 ships only `len(x)`/`x[i]`/iteration/
         // `.append()`), and there is no `pycc_rt_int_list_truthy` to call
         // -- so this panics honestly instead of calling
         // `pycc_rt_str_truthy` on a `PyIntListObj` pointer, whose layout
@@ -1628,7 +1628,7 @@ fn emit_assign<'ctx>(
         // Pass-through, identical to `Str`'s arm directly above: storing a
         // `list[T]` value is storing one opaque pointer into a slot
         // `ty_to_basic_type` already allocated as a pointer. No refcount
-        // traffic accompanies it -- D-106 keeps `list[T]` leak-only for
+        // traffic accompanies it -- D-107 keeps `list[T]` leak-only for
         // v0.2, so unlike `Str` there is deliberately no incref here and
         // no `decref_str_slot_before_store` counterpart. That helper is
         // never even called for a list target: `emit_stmt`'s `Assign` arm
@@ -1665,7 +1665,7 @@ fn emit_assign<'ctx>(
 /// `Scalar` variant alone, so without the gate it would have called
 /// `pycc_rt_str_incref` on a list pointer.
 ///
-/// Task 11a (D-106) removed that reuse: a list read is now `Scalar::List`,
+/// Task 11a (D-107) removed that reuse: a list read is now `Scalar::List`,
 /// so the two are no longer confusable and this gate is no longer what
 /// prevents the spurious incref. It is kept because it is independently the
 /// correct contract for this function -- it answers "is this a duplicate
@@ -1879,7 +1879,7 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         }
         // `Ty::Int` for the same reason `ForRange` above hardcodes it, not
         // by analogy: a `for` target's type is the iterated element type,
-        // and `pycc_types`' T0034 gate (D-104 scope cut 5) rejects every
+        // and `pycc_types`' T0034 gate (D-105 scope cut 5) rejects every
         // `list[T]` but `list[int]` before codegen ever runs, so `list`'s
         // element type is `int` for every `ForList` that can reach this
         // crate. Deliberately not derived from `bindings[list]` instead:
@@ -1958,13 +1958,13 @@ fn declare_module_globals<'ctx>(
                 // on the grounds that no real source could construct a list
                 // value at all yet; its own report flagged the interaction
                 // for Task 11 to re-derive. Task 11b makes `x = [1, 2, 3]`
-                // constructible from real source, and D-104's first scope
+                // constructible from real source, and D-105's first scope
                 // cut names module scope as one of the two places a
                 // `list[int]` value is expected to live -- so leaving it out
                 // now would turn that documented, supported form into an
                 // internal compiler panic. No exit-time decref accompanies
                 // it (contrast the `Ty::Str` loop in `compile_to_object`):
-                // D-106 keeps `list[T]` leak-only for v0.2.
+                // D-107 keeps `list[T]` leak-only for v0.2.
                 pycc_mir::Ty::List(_) => (
                     context.ptr_type(inkwell::AddressSpace::default()).into(),
                     context
@@ -2475,7 +2475,7 @@ fn emit_print_arg<'ctx>(
 /// equivalent for the terminator-safety this introduces (see both
 /// helpers' own doc comments) -- `Return` (Task 5), terminating
 /// the current block with the evaluated value (or none, for a bare
-/// `return`) -- and `ForList` (v0.2, D-104/Task 11b), reusing `ForRange`'s
+/// `return`) -- and `ForList` (v0.2, D-105/Task 11b), reusing `ForRange`'s
 /// own loop/branch-building infrastructure parametrized over a runtime
 /// `pycc_rt_int_list_len` call instead of a static bound. `ForList` is a
 /// v0.2 addition, not part of v0.1's own original shape set.
@@ -2784,7 +2784,7 @@ fn emit_stmt<'ctx>(
         //    there, and would terminate here if the length were hoisted.
         // 3. Each iteration prepends one `pycc_rt_int_list_get` read.
         //
-        // D-105 applies to exactly one value in this arm: the element read.
+        // D-106 applies to exactly one value in this arm: the element read.
         // The induction variable and the raw `len` it is compared against
         // are private LLVM implementation detail, never exposed to user
         // code as `Ty::Int` values, so they need neither
@@ -2801,8 +2801,8 @@ fn emit_stmt<'ctx>(
             //
             // That makes `list_ptr` a *borrowed* reference held across
             // arbitrary body code without an incref, which is sound only
-            // because D-106 keeps `list[T]` leak-only in v0.2 -- nothing
-            // frees a list. Whichever future PR wires D-106's own
+            // because D-107 keeps `list[T]` leak-only in v0.2 -- nothing
+            // frees a list. Whichever future PR wires D-107's own
             // reassignment-cleanup site must give this read an incref/decref
             // pair at the same time, or exactly the rebinding shape above
             // would free the object out from under the loop.
@@ -5460,14 +5460,14 @@ mod tests {
     fn reading_a_list_typed_local_back_out_of_its_alloca_produces_a_list_scalar() {
         // Exercises `emit_expr`'s `Name` arm's `Ty::List(_)` arm directly
         // (added by Task 5, D-089; retargeted from the `Scalar::Str` reuse
-        // onto `Scalar::List` by Task 11a, D-106) -- same hand-built-
+        // onto `Scalar::List` by Task 11a, D-107) -- same hand-built-
         // `StorageSlot` convention as `reading_an_unresolved_infer_typed_
         // local_is_an_internal_error` above: hand-building the slot is what
         // lets one `emit_expr` call read a `list[int]` local and the next
         // read a `str` one, with nothing else in the fixture to confuse
         // which variant came from which.
         //
-        // D-106's entire point is that a `list[T]` pointer must stop being
+        // D-107's entire point is that a `list[T]` pointer must stop being
         // *indistinguishable* from a `str` pointer at the `Scalar` level,
         // so this reads one `list[int]`-typed and one `str`-typed local
         // through the same `emit_expr` entry point and proves the two now
@@ -5570,7 +5570,7 @@ mod tests {
         // The `list[int]` read produces `Scalar::List` carrying the loaded
         // pointer (whose LLVM type must match what `ty_to_basic_type`
         // allocated the slot as); the `str` read, through the very same
-        // entry point, does not -- which is the property D-106 exists to
+        // entry point, does not -- which is the property D-107 exists to
         // establish and the one `Scalar::Str` reuse could never provide.
         assert_eq!(
             loaded_pointer_type(&list_value),
@@ -5593,12 +5593,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "pycc_codegen: truthiness of a list[T] value is not supported yet")]
     fn truthiness_of_a_list_value_panics_honestly() {
-        // D-106 confirmed this path is genuinely reachable, not defensive:
+        // D-107 confirmed this path is genuinely reachable, not defensive:
         // `pycc_types` accepts any type in a boolean context
         // (`crates/pycc_types/src/lib.rs`'s `if`/`while` handling calls
         // `infer_expr` with no type restriction at all), so `if xs:` for a
         // `list[int]` local type-checks today. v0.2 has no `bool(list)`
-        // semantics (D-104 ships only `len(x)`/`x[i]`/iteration/`.append()`),
+        // semantics (D-105 ships only `len(x)`/`x[i]`/iteration/`.append()`),
         // so an honest panic naming the gap is the correct behavior -- the
         // alternative this replaces was `pycc_rt_str_truthy` reading a
         // `PyIntListObj` as a `PyStrObj`.
@@ -5623,7 +5623,7 @@ mod tests {
         expected = "pycc_codegen: string conversion of a list[T] value is not supported yet"
     )]
     fn string_conversion_of_a_list_value_panics_honestly() {
-        // The `to_str` half of the same D-106 pair: `pycc_types` type-checks
+        // The `to_str` half of the same D-107 pair: `pycc_types` type-checks
         // `print(xs)` for a `list[int]` local unconditionally (its `print`
         // arm returns `Ok(Ty::None)` for any argument type), and `to_str` is
         // what `print` hands its evaluated argument to. Same honest-panic
@@ -5732,7 +5732,7 @@ mod tests {
     #[should_panic(expected = "binary operators are not supported on list[int] yet")]
     fn a_list_result_binop_is_not_yet_supported() {
         // No real Python operator produces a `BinOp` typed `list[int]`
-        // (D-104 defers even `+` list concatenation past v0.2), so
+        // (D-105 defers even `+` list concatenation past v0.2), so
         // `pycc_types`/`pycc_mir` never produce this shape -- hand-crafted
         // MIR exercises `emit_expr`'s `BinOp` arm's new explicit container
         // arm directly, same "hand-construct the otherwise-unreachable
@@ -5775,7 +5775,7 @@ mod tests {
     fn compiles_a_function_with_a_list_int_parameter_and_list_int_return_value() {
         // `def f(x: list[int]) -> list[int]: return x` -- no real source
         // program can produce this shape (`pycc_hir::annotation_to_ty`
-        // rejects every annotation but a bare name, and D-104's first scope
+        // rejects every annotation but a bare name, and D-105's first scope
         // cut keeps it that way for v0.2, so an annotated `list[int]`
         // parameter or return type never reaches codegen), but Task 5
         // (D-089) requires this MIR shape to compile *cleanly* rather than
@@ -5835,7 +5835,7 @@ mod tests {
         // `def g(x: list[int]) -> list[int]: return f(x)` -- the caller adds
         // the one shape the test directly above does not reach:
         // `build_call_to`'s argument-marshalling match, whose `Scalar::List`
-        // arm Task 11a (D-106) put in the *pass-through* bucket. That claim
+        // arm Task 11a (D-107) put in the *pass-through* bucket. That claim
         // ("a list pointer marshals identically to a str pointer -- it's an
         // opaque pointer either way") is exactly what `module.verify()`
         // inside `compile_to_object` checks here: if the marshalled argument
@@ -5854,7 +5854,7 @@ mod tests {
         // arm dispatches its *result* on the declared `Ty`, and that match
         // has no `Ty::List` arm -- it panics honestly through its catch-all
         // ("a `list[int]`-typed call result is not supported yet"). That is
-        // correct and deliberately left alone here: D-104's own first scope
+        // correct and deliberately left alone here: D-105's own first scope
         // cut means no v0.2 function can be *annotated* to return
         // `list[int]` in the first place, so the gap is unreachable rather
         // than a hole this task should fill. Only the argument side is
@@ -5900,7 +5900,7 @@ mod tests {
     #[test]
     fn assigning_a_list_value_stores_the_raw_pointer() {
         // Covers `emit_assign`'s `Scalar::List` arm, the third member of
-        // Task 11a's pass-through bucket (D-106), in isolation: it calls
+        // Task 11a's pass-through bucket (D-107), in isolation: it calls
         // `emit_assign` directly with a hand-built `Scalar::List` and a
         // hand-built `StorageSlot` so the store instruction itself is what
         // `f.verify(true)` judges, with no surrounding list construction to
@@ -5911,7 +5911,7 @@ mod tests {
         // `f.verify(true)` is the real assertion: `ty_to_basic_type`
         // allocated this slot as a pointer, so a `store` of anything but a
         // pointer-typed value would be rejected as malformed IR. Also
-        // proves no `str`-style refcount traffic is emitted -- D-106 keeps
+        // proves no `str`-style refcount traffic is emitted -- D-107 keeps
         // `list[T]` leak-only for v0.2.
         let context = Context::create();
         let module = context.create_module("test");
@@ -6120,7 +6120,7 @@ mod tests {
         // looping` above, this one reaches the arm's increment-and-branch-
         // back block on every iteration and its loop test's exhaustion
         // edge, and proves the per-iteration element read is re-tagged
-        // (D-105) rather than printed as a raw slot value -- an untagged
+        // (D-106) rather than printed as a raw slot value -- an untagged
         // element would print `0`/`1`/`1` here, not `1`/`2`/`3`.
         //
         // Kept as a `pycc_codegen` unit test even though
@@ -6252,7 +6252,7 @@ mod tests {
         // no other unit test in this file reaches (`appending_to_a_non_
         // list_local_is_an_internal_error` above panics inside
         // `emit_list_name_read` before any of it runs). Reading the
-        // appended element straight back out is what pins D-105's
+        // appended element straight back out is what pins D-106's
         // round trip for this arm specifically: the value is untagged on
         // the way into `pycc_rt_int_list_append` and re-tagged on the way
         // out of `pycc_rt_int_list_get`, so a missing conversion on either
@@ -6287,7 +6287,7 @@ mod tests {
     #[test]
     fn a_module_level_list_binding_gets_a_null_initialized_pointer_global() {
         // `declare_module_globals`' `Ty::List(_)` arm: a module-scope
-        // `xs = [1, 2, 3]` (one of the two places D-104's first scope cut
+        // `xs = [1, 2, 3]` (one of the two places D-105's first scope cut
         // says a `list[int]` value may live) becomes an LLVM global rather
         // than a function-local alloca. Task 5 (D-089) deliberately left
         // this arm out while no real source could build a list value, and

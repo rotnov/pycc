@@ -10,9 +10,9 @@ pub enum Ty {
     None,
     Infer,
     /// `list[T]`. Type-checking is planned to accept any scalar `T`; only
-    /// `T = Ty::Int` gets real codegen in v0.2 (D-104). Codegen rejecting
+    /// `T = Ty::Int` gets real codegen in v0.2 (D-105). Codegen rejecting
     /// every other element type before it becomes an unhandled codegen
-    /// case is planned via a `pycc_types` diagnostic (`T0034`, per D-104 --
+    /// case is planned via a `pycc_types` diagnostic (`T0034`, per D-105 --
     /// not yet implemented as of this commit; this variant only defines
     /// the type representation).
     List(Box<Ty>),
@@ -91,9 +91,9 @@ pub enum HirExpr {
     },
     FString(Vec<FStringPart>),
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this
-    /// lowering step's -- HIR only records the syntactic shape (D-104).
+    /// lowering step's -- HIR only records the syntactic shape (D-105).
     ListLiteral(Vec<HirExpr>),
-    /// `base[index]`, read-only (D-104 -- no subscript assignment target
+    /// `base[index]`, read-only (D-105 -- no subscript assignment target
     /// exists in v0.2). Every statement that extracts an assignment/for
     /// target rejects a non-bare-name target (see `Stmt::Assign`,
     /// `Stmt::AnnAssign`, and `Stmt::For`'s target handling in
@@ -106,7 +106,7 @@ pub enum HirExpr {
         index: Box<HirExpr>,
     },
     /// `list.append(value)`, recognized as a single dedicated node rather
-    /// than through any general method-call mechanism (D-104). Unlike
+    /// than through any general method-call mechanism (D-105). Unlike
     /// `Subscript` above, this arm is *not* structurally restricted to any
     /// particular position -- because `ListAppend` is an `HirExpr` (not a
     /// statement-only form), it currently lowers successfully anywhere an
@@ -159,7 +159,7 @@ pub enum HirStmt {
         body: Vec<HirStmt>,
     },
     /// `for var in list:`, parallel to the existing `ForRange` -- desugars
-    /// to an index-counted loop starting in a later PR-10 task (D-104),
+    /// to an index-counted loop starting in a later PR-10 task (D-105),
     /// not here.
     ForList {
         var: String,
@@ -429,7 +429,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     pycc_ast::expr_range(&for_stmt.target),
                 ));
             };
-            // A bare-name iterable is `for v in some_list:` (D-104) --
+            // A bare-name iterable is `for v in some_list:` (D-105) --
             // resolved to `Ty::List` or rejected by pycc_types, not here;
             // HIR only records the syntactic shape.
             if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
@@ -806,7 +806,7 @@ mod tests {
         // Tuple literals (`(1, 2)`) are this table's "genuinely unhandled at
         // every level" poison fixture -- a list literal used to fill this
         // role (see `a_tuple_literal_expression_is_unsupported`'s own
-        // comment) until Task 7 (D-104) added list-literal lowering.
+        // comment) until Task 7 (D-105) added list-literal lowering.
         let cases = [
             ("function body", "def _f():\n    pass\n"),
             ("if test", "if (1, 2):\n    print(1)\n"),
@@ -1065,7 +1065,7 @@ mod tests {
 
     #[test]
     fn subscript_assignment_target_is_unsupported() {
-        // D-104: v0.2's `list[int]` slice is read-only -- there is no
+        // D-105: v0.2's `list[int]` slice is read-only -- there is no
         // subscript assignment target anywhere in this file (see
         // `HirExpr::Subscript`'s own doc comment). That invariant holds
         // today only as an incidental consequence of `Stmt::Assign`'s
@@ -1115,7 +1115,7 @@ mod tests {
 
     #[test]
     fn non_name_callee_is_unsupported() {
-        // `foo.bar()` no longer reaches this message (Task 7, D-104): a
+        // `foo.bar()` no longer reaches this message (Task 7, D-105): a
         // `.` callee is now checked for the `.append()` shape first, and
         // rejected with its own dedicated message when it isn't `.append`
         // (see `calling_a_non_append_method_is_unsupported`). This fixture
@@ -1271,7 +1271,7 @@ mod tests {
 
     #[test]
     fn a_tuple_literal_expression_is_unsupported() {
-        // Before Task 7 (D-104), a list literal filled this role (every
+        // Before Task 7 (D-105), a list literal filled this role (every
         // other kind handled so far -- numbers, names, calls, binops,
         // bools, comparisons -- has its own dedicated arm) as the "genuinely
         // unhandled at every level" fixture that exercises the final catch-
@@ -1431,7 +1431,7 @@ mod tests {
 
     #[test]
     fn iterating_a_non_call_expression_is_not_supported_yet() {
-        // A list *literal* iterable is still rejected (Task 7/D-104 only
+        // A list *literal* iterable is still rejected (Task 7/D-105 only
         // added support for a bare-name iterable, i.e. `for v in some_list:`
         // -- see `lowers_for_over_a_list_name_to_for_list`); the rejection
         // message itself changed to mention that new bare-name-list form.
@@ -1842,7 +1842,7 @@ mod tests {
         assert_capability_error_message("x: int = (1, 2)\n", "expression kind not supported yet");
     }
 
-    // -- Task 7 (D-104): list[int] frontend HIR forms --------------------
+    // -- Task 7 (D-105): list[int] frontend HIR forms --------------------
 
     #[test]
     fn lowers_a_list_literal() {
@@ -1941,7 +1941,7 @@ mod tests {
 
     #[test]
     fn subscripted_type_annotation_is_still_rejected_on_purpose() {
-        // D-104: v0.2 adds no annotation-syntax support for list[T]. This test
+        // D-105: v0.2 adds no annotation-syntax support for list[T]. This test
         // locks in that `x: list[int] = []` keeps failing today's existing
         // "only a bare name type annotation" capability error, so a future
         // change to `annotation_to_ty` doesn't silently start accepting this
@@ -1967,7 +1967,7 @@ mod tests {
 
     #[test]
     fn appending_to_a_non_bare_name_base_is_unsupported() {
-        // `.append()` recognition is restricted to a bare-name list (D-104);
+        // `.append()` recognition is restricted to a bare-name list (D-105);
         // `a.b.append(1)` has a non-name `attr.value` (itself an attribute
         // access), so it must be rejected rather than silently accepted.
         assert_capability_error_message(
@@ -1996,7 +1996,7 @@ mod tests {
     fn calling_a_non_append_method_is_unsupported() {
         // Any other `.method()` call is rejected before ever falling through
         // to the bare-name-callee check below it -- this task only special-
-        // cases `.append()`, not general method dispatch (D-104).
+        // cases `.append()`, not general method dispatch (D-105).
         assert_capability_error_message(
             "foo.bar()\n",
             "only the `.append()` method is supported so far, got `.bar(...)`",

@@ -31,7 +31,12 @@ enforce the normal delivery path.
   release-runtime/manifest-relaxation changes with D-099's Windows vcpkg cache
   after D-099 activated first on `main`. Only D-100's exact reviewed
   whole-workflow digest is authorized; superseded whole-workflow digests are
-  historical audit evidence only. The
+  historical audit evidence only. The reviewed search-ledger trust anchor is
+  active. Its base-owned checker fetches protected head inputs as Git data,
+  requires exact regular-file modes, rejects checkout-affecting attributes,
+  and audits the query registry, ledger, checkpoints, and complete successor
+  manifest without executing candidate code. The one-use activation bridge and
+  superseded roadmap-only workflow digest are retired. The
   standalone `agent-policy` job provides faster
   feedback until its exact context has run successfully on `main` and is
   added to branch protection.

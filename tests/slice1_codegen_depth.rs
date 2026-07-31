@@ -727,11 +727,11 @@ fn pep_0526_annotated_assignments_compile_and_run_correctly() {
 
 #[test]
 fn list_int_literal_append_index_len_and_iteration_all_work() {
-    // The v0.2 `list[int]` thin slice (D-104) end to end through the real
+    // The v0.2 `list[int]` thin slice (D-105) end to end through the real
     // `pycc build` CLI: literal construction, `.append()`, indexed read,
     // `len()`, and `for`-iteration, all in one program. Inside a private
     // helper (D-038's `_`-prefixed convention), which is one of the two
-    // places D-104's first scope cut says a `list[int]` value can live;
+    // places D-105's first scope cut says a `list[int]` value can live;
     // `a_module_level_list_binding_lives_in_a_global_slot` below covers the
     // other. Expected output verified against `python3` on this exact
     // source.
@@ -754,7 +754,7 @@ _run()
 
 #[test]
 fn a_module_level_list_binding_lives_in_a_global_slot() {
-    // The other half of D-104's first scope cut ("`list[int]` values exist
+    // The other half of D-105's first scope cut ("`list[int]` values exist
     // ... inside module scope or a private helper"): the same operations as
     // the test above, written at module scope, where the binding becomes an
     // LLVM global rather than a function-local alloca. Task 5's own report
@@ -887,8 +887,8 @@ fn converting_a_list_to_str_stops_the_build_with_an_honest_unsupported_message()
     // v0.2 has no `str(list)`, and `pycc_types` type-checks both of these
     // unconditionally (its `print` arm accepts any argument type, and an
     // f-string interpolation imposes none), so each passes `pycc check` and
-    // then stops in codegen (D-106). Asserts the honest message rather than
-    // only the failure, since the whole point of D-106's `Scalar::List`
+    // then stops in codegen (D-107). Asserts the honest message rather than
+    // only the failure, since the whole point of D-107's `Scalar::List`
     // split was to replace silently handing a `PyIntListObj` pointer to a
     // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
     //
@@ -938,7 +938,7 @@ _run()
 
 #[test]
 fn appending_a_bigint_valued_element_fails_explicitly_instead_of_corrupting_the_slot() {
-    // D-105's own named regression: `PyIntListObj` stores raw, untagged
+    // D-106's own named regression: `PyIntListObj` stores raw, untagged
     // `i64` slots with no room for a bigint, and `pycc_rt_int_add`/`_mul`
     // promote past D-061's 63-bit smallint range on overflow -- reachable
     // from ordinary type-checked source, as here. The decision requires
@@ -968,7 +968,7 @@ _run()
         !output.status.success(),
         "a bigint-valued element must fail loudly, not be truncated into a raw i64 slot"
     );
-    // D-105 requires specifically an *honest panic*, not merely a failure --
+    // D-106 requires specifically an *honest panic*, not merely a failure --
     // asserting the message is what distinguishes it from a segfault or any
     // other abort that a missing guard could also produce. `pycc_rt`'s panic
     // handler writes this to stderr before the `extern "C"` boundary turns
@@ -984,7 +984,7 @@ _run()
 fn an_out_of_range_index_fails_explicitly() {
     // `pycc_rt_int_list_get`'s own bounds panic, reached through real
     // source: the index is only known at runtime, so there is nothing
-    // `pycc_types` could have rejected. Also pins D-107's documented v0.2
+    // `pycc_types` could have rejected. Also pins D-108's documented v0.2
     // scope cut that a *negative* index is out of range too rather than
     // CPython's last-element behavior.
     let source = "\

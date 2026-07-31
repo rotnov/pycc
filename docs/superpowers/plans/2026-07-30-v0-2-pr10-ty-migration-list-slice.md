@@ -19,14 +19,14 @@
   - **`T0021` is deliberately reused, not freshly minted, for three of Task 8's failure paths**: the empty-list-literal (`[]`) element-type-unknown case, the non-`int` list-index case, and the `.append()` argument-type-mismatch case. This is not an oversight against the "never reused" rule above — `docs/TYPE_SYSTEM.md`'s v0.1 inference section already documents `T0021` as the general code for "an unconstrained parameter or return variable" *and* "conflicting call-site constraints," and all three of these are instances of that same existing shape (an unconstrained or conflicting type-inference variable), not a new distinct failure shape. `T0032`/`T0033`/`T0034` remain genuinely new codes for genuinely new failure shapes (heterogeneous list-literal elements, non-subscriptable value, non-`int` list element type reaching codegen).
 - The pinned `ievo:deep-reviewer` review (D-068, `docs/AGENT_TOOLING.md`) runs on the full branch diff before merge (Task 14).
 - Keep `docs/ROADMAP.md`/`docs/DELIVERY_PLAN.md`/`docs/PYTHON_STANDARDS.md`/`docs/TYPE_SYSTEM.md`/`docs/RUNTIME.md`/`docs/TESTING.md`/`docs/SPEC.md` current in the same commit as the behavior change each describes, not deferred to a trailing "docs sweep" commit that never happens.
-- v1.0 invariant (docs/SPEC.md's own "Invariants" list, item 2): "Strict types are the only mode. Untyped public API doesn't compile." This plan's own Task 1 D-104 entry records that `list[T]` is **not** annotate-able in v0.2 (no subscripted type-annotation syntax support), so every `list[int]` value in this PR's own fixture/tests must live in a **private helper** (name starts with `_`, per D-038's existing private-helper local-inference convention already used by `docs/DECISIONS.md`'s prior PRs) or at module scope, never as a public function's annotated parameter or return type.
+- v1.0 invariant (docs/SPEC.md's own "Invariants" list, item 2): "Strict types are the only mode. Untyped public API doesn't compile." This plan's own Task 1 D-105 entry records that `list[T]` is **not** annotate-able in v0.2 (no subscripted type-annotation syntax support), so every `list[int]` value in this PR's own fixture/tests must live in a **private helper** (name starts with `_`, per D-038's existing private-helper local-inference convention already used by `docs/DECISIONS.md`'s prior PRs) or at module scope, never as a public function's annotated parameter or return type.
 
 ---
 
-## Task 1: Record D-103 and D-104; re-verify `Ty` call-site counts
+## Task 1: Record D-104 and D-105; re-verify `Ty` call-site counts
 
 **Files:**
-- Modify: `docs/DECISIONS.md` (two new entries: D-103, D-104)
+- Modify: `docs/DECISIONS.md` (two new entries: D-104, D-105)
 
 **Interfaces:**
 - Produces: the two accepted decisions every later task cites by number. If `docs/DECISIONS.md`'s highest entry is no longer D-102 when this task runs (another PR may have landed one), number these D-<next> and D-<next+1> instead and use that numbering consistently in your own commit — do not renumber anything already in the file.
@@ -42,7 +42,7 @@ for c in pycc_ast pycc_hir pycc_types pycc_mir pycc_codegen pycc_parser pycc_rt;
 done
 ```
 
-As of this plan's own writing (2026-07-30, HEAD `0598071`), this printed: `pycc_ast: 0`, `pycc_hir: 36`, `pycc_types: 335`, `pycc_mir: 111`, `pycc_codegen: 372`, `pycc_parser: 0`, `pycc_rt: 3` — total 857, up from D-089's own 729 figure. Re-run it yourself; if the numbers differ from these (they will, if any other PR landed `Ty`-touching code since), use your own freshly-measured numbers in the D-103/D-104 text you write below, not these.
+As of this plan's own writing (2026-07-30, HEAD `0598071`), this printed: `pycc_ast: 0`, `pycc_hir: 36`, `pycc_types: 335`, `pycc_mir: 111`, `pycc_codegen: 372`, `pycc_parser: 0`, `pycc_rt: 3` — total 857, up from D-089's own 729 figure. Re-run it yourself; if the numbers differ from these (they will, if any other PR landed `Ty`-touching code since), use your own freshly-measured numbers in the D-104/D-105 text you write below, not these.
 
 - [ ] **Step 2: Confirm `docs/DECISIONS.md`'s current highest entry**
 
@@ -50,14 +50,14 @@ As of this plan's own writing (2026-07-30, HEAD `0598071`), this printed: `pycc_
 grep -n "^## D-1" docs/DECISIONS.md | tail -5
 ```
 
-Expected (as of this plan's writing): highest is `## D-102: Extend \`tests/conformance.rs\`...`. If a higher one exists now, use the next two free numbers after it throughout this step instead of D-103/D-104.
+Expected (as of this plan's writing): highest is `## D-102: Extend \`tests/conformance.rs\`...`. If a higher one exists now, use the next two free numbers after it throughout this step instead of D-104/D-105.
 
-- [ ] **Step 3: Write the D-103 entry (defer the generic-type-parameter placeholder to PR-13)**
+- [ ] **Step 3: Write the D-104 entry (defer the generic-type-parameter placeholder to PR-13)**
 
 Append to `docs/DECISIONS.md` (before its closing, following the exact format of every other entry — `Status`/`Context`/`Decision`/`Alternatives`/`Consequences`):
 
 ```markdown
-## D-103: Defer the generic function type-parameter `Ty` placeholder to PR-13
+## D-104: Defer the generic function type-parameter `Ty` placeholder to PR-13
 
 - Status: accepted
 - Context: D-089 decided `Ty`'s new container variants (`List`/`Dict`/`Set`/`Tuple`) but explicitly left "whatever case PR-13 needs for a generic function's type parameter (a placeholder/parameter marker distinct from `Infer`)" unresolved, naming both PR-10 and PR-13 as candidate owners. PR-10's own actual scope (`docs/DELIVERY_PLAN.md` row 10; `docs/superpowers/specs/2026-07-28-v0-2-collections-generics-design.md`'s PR breakdown item 3) is `Ty` migration + monomorphization foundation + a `list[T]` thin slice with concrete, already-known element types (a literal's element type, a function argument's already-annotated type) — it never emits or consumes a type *parameter* (`def f[T](x: T) -> T`'s `T`), only concrete types. PEP 695 user-defined generic functions are PR-13's own scope (`docs/DELIVERY_PLAN.md` row 13).
@@ -66,12 +66,12 @@ Append to `docs/DECISIONS.md` (before its closing, following the exact format of
 - Consequences: `Ty`'s recursive shape after this PR is exactly the four container variants plus the six pre-existing scalars — ten variants total, all fully concrete. PR-13 supersedes nothing here; it simply adds its own variant when it has a real consumer for it.
 ```
 
-- [ ] **Step 4: Write the D-104 entry (v0.2's `list[T]` scope cuts)**
+- [ ] **Step 4: Write the D-105 entry (v0.2's `list[T]` scope cuts)**
 
-Append immediately after D-103, using your own Step 1 call-site counts in place of the `<N>` placeholders below:
+Append immediately after D-104, using your own Step 1 call-site counts in place of the `<N>` placeholders below:
 
 ```markdown
-## D-104: v0.2's `list[T]` thin slice — scope cuts and runtime-representation choice
+## D-105: v0.2's `list[T]` thin slice — scope cuts and runtime-representation choice
 
 - Status: accepted
 - Context: PR-10 (`docs/DELIVERY_PLAN.md` row 10) must migrate `Ty` to a recursive enum (<N total call sites across pycc_hir/pycc_types/pycc_mir/pycc_codegen/pycc_rt as of this decision) and then implement `list[T]` "end-to-end thin slice (literal, indexing, `len()`, iteration, `.append()`)" per the v0.2 design doc's own PR-10 line. Reading the actual current frontend (`crates/pycc_hir/src/lib.rs`): `Stmt::Assign` only accepts a bare-name target (line ~288, "only assigning to a bare name is supported so far") — no subscript-assignment target exists; `Stmt::For` only accepts `for x in range(...)` (line ~369-395) via a dedicated `HirStmt::ForRange { var, start, stop, step, body }` node with no general iterator/iterable abstraction anywhere downstream; `lower_expr`'s `Expr::Call` arm (line ~485) only accepts a bare-name callee, no attribute/method call exists at all today; `annotation_to_ty` (line ~249) only accepts a bare name, so a subscripted annotation like `list[int]` cannot be written today and none of `pycc_types`/`pycc_mir`/`pycc_codegen`'s existing `Ty` dispatch sites are exhaustive matches (they are catch-all `other => panic!(...)` arms — see `ty_to_basic_type`, the local-slot read match, the `BinOp` result match, `collect_module_bindings`'s inner match, all in `crates/pycc_codegen/src/lib.rs`), so adding new `Ty` variants is not compiler-enforced there. Separately, `docs/RUNTIME.md`'s only container-layout line ("`list[T]`: growable vec of unboxed `T`... `list[int]` is literally `Vec<i64>`-shaped") already conflicts with its own generic-heap-object-header line a few lines above (16-byte header with `rc`/`type_id`/`flags`) — the actual, shipped `PyStrObj` (`crates/pycc_rt/src/lib.rs`, struct at line ~702) has neither `type_id` nor `flags`, just `rc: Cell<u32>` plus payload.
@@ -89,7 +89,7 @@ Append immediately after D-103, using your own Step 1 call-site counts in place 
 
 ```bash
 git add docs/DECISIONS.md
-git commit -m "Record D-103 (defer generic type-param placeholder to PR-13) and D-104 (v0.2 list[T] scope cuts)"
+git commit -m "Record D-104 (defer generic type-param placeholder to PR-13) and D-105 (v0.2 list[T] scope cuts)"
 ```
 
 ---
@@ -191,7 +191,7 @@ pub enum Ty {
     None,
     Infer,
     /// `list[T]`. Type-checking (Task 8) accepts any scalar `T`; only
-    /// `T = Ty::Int` has real codegen in v0.2 (D-104) -- codegen for
+    /// `T = Ty::Int` has real codegen in v0.2 (D-105) -- codegen for
     /// anything else is rejected earlier by a `pycc_types` diagnostic
     /// (T0034), never reached as an unhandled codegen case.
     List(Box<Ty>),
@@ -413,7 +413,7 @@ Visit each site below (line numbers are from this plan's own research pass again
 
 2. **Local-slot read match** (~line 543-593): same pattern — add `Ty::List(_) => /* read the pointer slot, matching Str's existing pointer-slot-read arm exactly */`, catch-all message updated to use `.name()`.
 
-3. **`BinOp` result match** (~line 609-710): add an explicit catch-all arm covering `Ty::List(_) | Ty::Dict(..) | Ty::Set(_) | Ty::Tuple(_)` that panics `"pycc_codegen: binary operators are not supported on {} yet"` — no container type supports any `BinOpKind` in this plan's own scope (not even `+` for list concatenation; that's out of scope per D-104), so this arm is a pure diagnostic-message improvement over today's already-correct rejection, not new capability.
+3. **`BinOp` result match** (~line 609-710): add an explicit catch-all arm covering `Ty::List(_) | Ty::Dict(..) | Ty::Set(_) | Ty::Tuple(_)` that panics `"pycc_codegen: binary operators are not supported on {} yet"` — no container type supports any `BinOpKind` in this plan's own scope (not even `+` for list concatenation; that's out of scope per D-105), so this arm is a pure diagnostic-message improvement over today's already-correct rejection, not new capability.
 
 4. **`emit_expr`'s `MirExpr::Call` result match** (~line 835-869; Task 5's implementer confirmed this brief's original "`pycc_rt_int_to_str`-style conversion match" label was wrong — the actual code at this line range is the `Call`-result-unpacking match, not a conversion match): same pattern, explicit catch-all naming the type.
 
@@ -594,7 +594,7 @@ fn lowers_for_over_a_list_name_to_for_list() {
 
 #[test]
 fn subscripted_type_annotation_is_still_rejected_on_purpose() {
-    // D-104: v0.2 adds no annotation-syntax support for list[T]. This test
+    // D-105: v0.2 adds no annotation-syntax support for list[T]. This test
     // locks in that `x: list[int] = []` keeps failing today's existing
     // "only a bare name type annotation" capability error, so a future
     // change to `annotation_to_ty` doesn't silently start accepting this
@@ -624,11 +624,11 @@ In `crates/pycc_hir/src/lib.rs`, add to the existing `HirExpr` enum:
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job (Task 8),
     /// not this lowering step's -- HIR only records the syntactic shape.
     ListLiteral(Vec<HirExpr>),
-    /// `base[index]`, read-only (D-104 -- no subscript assignment target
+    /// `base[index]`, read-only (D-105 -- no subscript assignment target
     /// exists in v0.2).
     Subscript { base: Box<HirExpr>, index: Box<HirExpr> },
     /// `list.append(value)`, recognized as a single dedicated node rather
-    /// than through any general method-call mechanism (D-104).
+    /// than through any general method-call mechanism (D-105).
     ListAppend { list: String, value: Box<HirExpr> },
 ```
 
@@ -661,7 +661,7 @@ Add this arm (also before the catch-all):
         Expr::Subscript(sub) => {
             if sub.ctx != ExprContext::Load {
                 return Err(unsupported(
-                    "subscript assignment is not supported yet (D-104: indexing is read-only in v0.2)",
+                    "subscript assignment is not supported yet (D-105: indexing is read-only in v0.2)",
                     sub.range,
                 ));
             }
@@ -786,7 +786,7 @@ The existing `Stmt::For` arm rejects any non-`range(...)` iterable with `"only f
                     pycc_ast::expr_range(&for_stmt.target),
                 ));
             };
-            // A bare-name iterable is `for v in some_list:` (D-104) --
+            // A bare-name iterable is `for v in some_list:` (D-105) --
             // resolved to `Ty::List` or rejected by pycc_types (Task 9),
             // not here; HIR only records the syntactic shape.
             if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
@@ -821,7 +821,7 @@ cargo build -p pycc_hir
 
 ```bash
 git add crates/pycc_hir/src/lib.rs crates/pycc_ast/src/lib.rs
-git commit -m "list[int] part 1: HIR forms for list literal, read-subscript, .append(), for-over-list (D-104)"
+git commit -m "list[int] part 1: HIR forms for list literal, read-subscript, .append(), for-over-list (D-105)"
 ```
 
 ---
@@ -897,7 +897,7 @@ error[T0034]: list codegen only supports list[int] in v0.2
  --> tests/diagnostics/d0034_list_element_type_not_int.py:1:1
   |
 1 | x = ["a", "b"]
-  | ^^^^^^^^^^^^^^ list[str] is not compiled yet (D-104) -- only list[int] is
+  | ^^^^^^^^^^^^^^ list[str] is not compiled yet (D-105) -- only list[int] is
   |
 ```
 
@@ -918,7 +918,7 @@ Add 3 rows to the registry table, following its existing format exactly (copy a 
 ```markdown
 | `T0032` | error | list literal elements must all share one type |
 | `T0033` | error | value is not subscriptable |
-| `T0034` | error | list codegen only supports `list[int]` in v0.2 (D-104) |
+| `T0034` | error | list codegen only supports `list[int]` in v0.2 (D-105) |
 ```
 
 - [ ] **Step 5: Implement homogeneous list-literal inference and the 3 diagnostics**
@@ -929,14 +929,14 @@ In `crates/pycc_types/src/lib.rs`, find the function that type-checks expression
         HirExpr::ListLiteral(elements) => {
             if elements.is_empty() {
                 // An empty list literal has no element to infer a type
-                // from. v0.2 has no annotation syntax for list[T] (D-104),
+                // from. v0.2 has no annotation syntax for list[T] (D-105),
                 // so an empty list literal with no later-inferable use has
                 // no way to recover its element type -- reject it plainly
                 // rather than silently guessing `Ty::Infer` all the way
                 // through codegen.
                 return Err(diagnostic(
                     "T0021",
-                    "an empty list literal's element type cannot be inferred without an annotation (list[T] annotations are not supported yet, D-104)",
+                    "an empty list literal's element type cannot be inferred without an annotation (list[T] annotations are not supported yet, D-105)",
                     span_of(expr),
                 ));
             }
@@ -964,7 +964,7 @@ In `crates/pycc_types/src/lib.rs`, find the function that type-checks expression
                 return Err(diagnostic(
                     "T0034",
                     format!(
-                        "list[{}] is not compiled yet (D-104) -- only list[int] is",
+                        "list[{}] is not compiled yet (D-105) -- only list[int] is",
                         elem_ty.name()
                     ),
                     span_of(expr),
@@ -1033,10 +1033,10 @@ cargo test -p pycc_types
 
 ```bash
 git add crates/pycc_types/src/lib.rs docs/DIAGNOSTICS.md tests/diagnostics/d0032_heterogeneous_list_literal.py tests/diagnostics/d0032_heterogeneous_list_literal.expected.txt tests/diagnostics/d0033_subscript_on_non_list.py tests/diagnostics/d0033_subscript_on_non_list.expected.txt tests/diagnostics/d0034_list_element_type_not_int.py tests/diagnostics/d0034_list_element_type_not_int.expected.txt tests/diagnostics_test.rs
-git commit -m "list[int] part 2: pycc_types homogeneous-list inference, T0032/T0033/T0034 (D-104)"
+git commit -m "list[int] part 2: pycc_types homogeneous-list inference, T0032/T0033/T0034 (D-105)"
 ```
 
-**Post-implementation addendum (added during Task 8, in a follow-up commit, not originally in this task's Step list):** D-104 point 3 requires `len(lst)` to type-check via a hand-recognized `"len"` arm in `pycc_types`' call dispatch, alongside the existing `"print"` special-case, at both the `collect_expr_constraints` (solver) and `infer_expr_in` (real check) sites — Task 11's own end-to-end fixture (`print(len(x))`) assumes this already type-checks by the time codegen runs. Added: exactly-one-argument + `Ty::List(_)`-argument validation (generic over any element type, matching `Subscript`/`ListAppend`/`ForList`'s existing genericity), returning `Ty::Int`; both failure shapes reuse `T0033` (`docs/DIAGNOSTICS.md`'s row broadened accordingly), with corresponding unit tests at both dispatch sites.
+**Post-implementation addendum (added during Task 8, in a follow-up commit, not originally in this task's Step list):** D-105 point 3 requires `len(lst)` to type-check via a hand-recognized `"len"` arm in `pycc_types`' call dispatch, alongside the existing `"print"` special-case, at both the `collect_expr_constraints` (solver) and `infer_expr_in` (real check) sites — Task 11's own end-to-end fixture (`print(len(x))`) assumes this already type-checks by the time codegen runs. Added: exactly-one-argument + `Ty::List(_)`-argument validation (generic over any element type, matching `Subscript`/`ListAppend`/`ForList`'s existing genericity), returning `Ty::Int`; both failure shapes reuse `T0033` (`docs/DIAGNOSTICS.md`'s row broadened accordingly), with corresponding unit tests at both dispatch sites.
 
 ---
 
@@ -1113,7 +1113,7 @@ cargo build -p pycc_mir
 
 ```bash
 git add crates/pycc_mir/src/lib.rs
-git commit -m "list[int] part 3: pycc_mir lowering for list literal, subscript, append, for-list (D-104)"
+git commit -m "list[int] part 3: pycc_mir lowering for list literal, subscript, append, for-list (D-105)"
 ```
 
 **Note added during execution:** this task's actual scope grew by one required fix beyond the steps above, found by the controller before dispatch (mirroring the `len()` gap Task 8 found and fixed for `pycc_types`): `pycc_mir`'s existing `HirExpr::Call` lowering arm (`crates/pycc_mir/src/lib.rs:298-309`) special-cases `callee == "print"` to produce `Ty::None` directly, falling back to `lookup(scopes, "$fn:{callee}")` (which panics on a missing key) for every other callee. Without a parallel `callee == "len"` branch producing `Ty::Int`, `len(lst)` — already accepted by Task 8's `pycc_types` as valid — would panic during MIR lowering with `lookup`'s own internal-error message. This task's implementer added `else if callee == "len" { Ty::Int }` alongside the existing `"print"` case, plus a covering test, as part of the same commit. Task 11's own `"len"` addition (`pycc_codegen`'s call-dispatch) is unaffected by this note — codegen still needs its own arm, independent of this MIR-level fix.
@@ -1206,10 +1206,10 @@ Expected: compile failure — none of these functions/types exist yet.
 
 - [ ] **Step 3: Implement `PyIntListObj` and its extern "C" functions**
 
-Add to `crates/pycc_rt/src/lib.rs`, following `PyStrObj`'s exact real header shape (`rc: Cell<u32>` plus payload — no `type_id`/`flags`, per D-104's own decision to follow the real precedent, not `docs/RUNTIME.md`'s stale spec):
+Add to `crates/pycc_rt/src/lib.rs`, following `PyStrObj`'s exact real header shape (`rc: Cell<u32>` plus payload — no `type_id`/`flags`, per D-105's own decision to follow the real precedent, not `docs/RUNTIME.md`'s stale spec):
 
 ```rust
-/// `list[int]`'s runtime object (D-104: v0.2 codegen only supports
+/// `list[int]`'s runtime object (D-105: v0.2 codegen only supports
 /// `list[int]`; other element types stay a `pycc_types` diagnostic,
 /// T0034, never reaching codegen). Header shape follows `PyStrObj`'s
 /// real precedent (`rc: Cell<u32>` plus payload) rather than
@@ -1321,22 +1321,22 @@ cargo test -p pycc_rt int_list_new_starts_empty int_list_append_then_get_round_t
 
 ```bash
 git add crates/pycc_rt/src/lib.rs
-git commit -m "list[int] part 4: pycc_rt PyIntListObj runtime object (D-104)"
+git commit -m "list[int] part 4: pycc_rt PyIntListObj runtime object (D-105)"
 ```
 
 ---
 
 ## Task 11a: `list[T]` gets its own `Scalar::List` representation in `pycc_codegen`
 
-**Read `docs/DECISIONS.md`'s D-106 entry before starting this task — it is the record of exactly why this task exists and what it must fix.** Task 5 made `emit_expr`'s `Name` arm read a `Ty::List(_)`-typed local by reusing `Scalar::Str` to carry the pointer, explicitly documented as safe only because "no `MirExpr` can construct a `list[T]` value yet" and explicitly flagged as "a general Task-11 tripwire" for `truthy`/`to_str` specifically. D-106 confirms that tripwire is real and reachable: `pycc_types` accepts a `Ty::List` operand in a boolean context (`if x:`/`while x:`, `crates/pycc_types/src/lib.rs:1214`) and as `print`'s argument (`crates/pycc_types/src/lib.rs:310-312`) with no restriction at all — so `if x:`/`print(x)` for `x: list[int]` both type-check today and would reach `truthy(Scalar::Str(list_ptr))`/`to_str(Scalar::Str(list_ptr))` the moment `list[int]` values become constructible (this task + Task 11b make them constructible). `PyIntListObj`'s layout is nothing like `PyStrObj`'s, so this is real memory corruption, not a hypothetical — this task exists to close it before Task 11b lands the code that makes `list[int]` reachable from real source.
+**Read `docs/DECISIONS.md`'s D-107 entry before starting this task — it is the record of exactly why this task exists and what it must fix.** Task 5 made `emit_expr`'s `Name` arm read a `Ty::List(_)`-typed local by reusing `Scalar::Str` to carry the pointer, explicitly documented as safe only because "no `MirExpr` can construct a `list[T]` value yet" and explicitly flagged as "a general Task-11 tripwire" for `truthy`/`to_str` specifically. D-107 confirms that tripwire is real and reachable: `pycc_types` accepts a `Ty::List` operand in a boolean context (`if x:`/`while x:`, `crates/pycc_types/src/lib.rs:1214`) and as `print`'s argument (`crates/pycc_types/src/lib.rs:310-312`) with no restriction at all — so `if x:`/`print(x)` for `x: list[int]` both type-check today and would reach `truthy(Scalar::Str(list_ptr))`/`to_str(Scalar::Str(list_ptr))` the moment `list[int]` values become constructible (this task + Task 11b make them constructible). `PyIntListObj`'s layout is nothing like `PyStrObj`'s, so this is real memory corruption, not a hypothetical — this task exists to close it before Task 11b lands the code that makes `list[int]` reachable from real source.
 
 **Files:**
-- Modify: `crates/pycc_codegen/src/lib.rs` (new `Scalar::List` variant + every exhaustive match site it forces, plus D-105's two boundary-conversion helpers)
-- Modify: `crates/pycc_rt/src/lib.rs` (one new extern "C" function, per D-105 — this task's own scope, not Task 10's, since Task 10 was explicitly scoped to shipping `PyIntListObj` itself and its brief said so)
+- Modify: `crates/pycc_codegen/src/lib.rs` (new `Scalar::List` variant + every exhaustive match site it forces, plus D-106's two boundary-conversion helpers)
+- Modify: `crates/pycc_rt/src/lib.rs` (one new extern "C" function, per D-106 — this task's own scope, not Task 10's, since Task 10 was explicitly scoped to shipping `PyIntListObj` itself and its brief said so)
 
 **Interfaces:**
 - Consumes: Task 5's already-updated `ty_to_basic_type` (`Ty::List(_) => ptr type`) and its `emit_expr`'s `Name` arm (currently `Ty::List(_) => Scalar::Str(loaded.into_pointer_value())`, at the `Ty::List(_)` match arm next to `Ty::Str`'s — this is the exact reuse this task replaces); Task 10's `PyIntListObj` extern "C" functions.
-- Produces: `Scalar::List(PointerValue<'ctx>)`, `pycc_rt_int_untag_checked` (D-105's input-side boundary conversion), `raw_i64_to_tagged_int` (D-105's output-side boundary conversion) — all three consumed by Task 11b, which this task's brief does not cover (that's the four new `MirExpr`/`MirStmt` codegen arms themselves).
+- Produces: `Scalar::List(PointerValue<'ctx>)`, `pycc_rt_int_untag_checked` (D-106's input-side boundary conversion), `raw_i64_to_tagged_int` (D-106's output-side boundary conversion) — all three consumed by Task 11b, which this task's brief does not cover (that's the four new `MirExpr`/`MirStmt` codegen arms themselves).
 
 - [ ] **Step 1: Update the existing hand-built-`StorageSlot` test that currently asserts the `Scalar::Str` reuse**
 
@@ -1344,21 +1344,21 @@ git commit -m "list[int] part 4: pycc_rt PyIntListObj runtime object (D-104)"
 
 - [ ] **Step 2: Write two new tests proving `truthy`/`to_str` panic honestly on a list value**
 
-Both `truthy` and `crates/pycc_codegen/src/lib.rs`'s `to_str` are **exhaustive** matches over `Scalar` (no catch-all) — confirmed by reading both functions directly (`truthy` around line 1101, `to_str` around line 413). Neither has semantics for `list[T]` in v0.2 (no `bool(list)`, no `str(list)`/printing a list directly — only `len(x)`/`x[i]`/element iteration are supported operations, per D-104), so both need an honest `panic!("pycc_codegen: <description> of a list[T] value is not supported yet")` arm, matching this project's "honest panic over silently wrong data" convention. Write two tests calling `truthy`/`to_str` directly with a hand-built `Scalar::List(ptr)` value (the same "call the helper function directly with a hand-built `Scalar`" convention this file's existing defensive-panic tests already use, e.g. `an_int_result_binop_with_a_str_operand_hits_to_tagged_int_defensive_panic`), each `#[should_panic(expected = "...")]` with your exact chosen message. Run them now — expected FAIL to compile (`Scalar::List` doesn't exist yet).
+Both `truthy` and `crates/pycc_codegen/src/lib.rs`'s `to_str` are **exhaustive** matches over `Scalar` (no catch-all) — confirmed by reading both functions directly (`truthy` around line 1101, `to_str` around line 413). Neither has semantics for `list[T]` in v0.2 (no `bool(list)`, no `str(list)`/printing a list directly — only `len(x)`/`x[i]`/element iteration are supported operations, per D-105), so both need an honest `panic!("pycc_codegen: <description> of a list[T] value is not supported yet")` arm, matching this project's "honest panic over silently wrong data" convention. Write two tests calling `truthy`/`to_str` directly with a hand-built `Scalar::List(ptr)` value (the same "call the helper function directly with a hand-built `Scalar`" convention this file's existing defensive-panic tests already use, e.g. `an_int_result_binop_with_a_str_operand_hits_to_tagged_int_defensive_panic`), each `#[should_panic(expected = "...")]` with your exact chosen message. Run them now — expected FAIL to compile (`Scalar::List` doesn't exist yet).
 
 - [ ] **Step 3: Add `Scalar::List(PointerValue<'ctx>)` and fix every resulting compile error**
 
-Add the variant next to `Scalar::Str` (`crates/pycc_codegen/src/lib.rs` line ~25-43), with a doc comment parallel to `Str`'s own (a pointer to a heap-allocated `pycc_rt::PyIntListObj`, opaque to this crate, D-104/Task 10). Then change `emit_expr`'s `Name` arm's `Ty::List(_)` case (currently `Scalar::Str(loaded.into_pointer_value())`, next to the `Ty::Str` case) to `Scalar::List(loaded.into_pointer_value())` instead.
+Add the variant next to `Scalar::Str` (`crates/pycc_codegen/src/lib.rs` line ~25-43), with a doc comment parallel to `Str`'s own (a pointer to a heap-allocated `pycc_rt::PyIntListObj`, opaque to this crate, D-105/Task 10). Then change `emit_expr`'s `Name` arm's `Ty::List(_)` case (currently `Scalar::Str(loaded.into_pointer_value())`, next to the `Ty::Str` case) to `Scalar::List(loaded.into_pointer_value())` instead.
 
 This will not compile until every exhaustive `Scalar` match gets a new arm. Let the compiler enumerate them — do not go hunting through the file manually first. For each site the compiler flags, decide by this principle: **if the operation is one `list[T]` genuinely supports flowing through unchanged (storage, function-argument passing, function return), add `Scalar::List(v) => v.into()` exactly like the existing `Scalar::Str(v) => v.into()` arm right next to it — a list pointer marshals identically to a string pointer, it's just an opaque pointer either way. If the operation has no defined `list[T]` semantics in v0.2 (truthiness, string conversion, arithmetic, comparison), add an honest `panic!("pycc_codegen: <description> of a list[T] value is not supported yet")` arm instead.** Two sites already confirmed by direct reading, so you know which bucket to expect:
 - `truthy` (~line 1107) and `to_str` (~line 418): panic bucket (Step 2's tests are the spec for these two).
 - `build_call_to`'s argument-marshaling match (~line 1083-1088) and `emit_stmt`'s `Return`-statement match (~line 2314-2319): pass-through bucket, `Scalar::List(v) => v.into()`, mirroring the existing `Scalar::Str(v) => v.into()` arm in each.
 
-Any other site the compiler flags that isn't one of these four, use the same principle to decide, and note in your report which bucket you put it in and why. Do **not** touch `incref_if_str_duplicate` or `coerce_scalar_to_type` — both already handle `Scalar::List` correctly today via their existing non-exhaustive `if let .. else { scalar }` / catch-all `(_, scalar) => scalar` shapes (a no-op passthrough for anything that isn't `Str`), which is the *correct* v0.2 behavior for `list[T]` per D-106's leak-only refcounting decision — adding a `List` arm there would be unrequested scope, not a fix.
+Any other site the compiler flags that isn't one of these four, use the same principle to decide, and note in your report which bucket you put it in and why. Do **not** touch `incref_if_str_duplicate` or `coerce_scalar_to_type` — both already handle `Scalar::List` correctly today via their existing non-exhaustive `if let .. else { scalar }` / catch-all `(_, scalar) => scalar` shapes (a no-op passthrough for anything that isn't `Str`), which is the *correct* v0.2 behavior for `list[T]` per D-107's leak-only refcounting decision — adding a `List` arm there would be unrequested scope, not a fix.
 
-- [ ] **Step 4: Add `pycc_rt_int_untag_checked` — D-105's input-side boundary conversion — with its own RED/GREEN unit tests**
+- [ ] **Step 4: Add `pycc_rt_int_untag_checked` — D-106's input-side boundary conversion — with its own RED/GREEN unit tests**
 
-A D-061-tagged `Ty::Int` value about to cross into `PyIntListObj`'s raw storage (an appended element, a subscript index — Task 11b's own job to call this) must be verified smallint (not bigint-tagged) and untagged, in one step. Per D-105, this bit-level discriminant check belongs in `pycc_rt` (see `to_float`'s doc comment on why `int`-to-`float` goes through `pycc_rt_int_to_float` rather than a raw LLVM cast — the same "only `pycc_rt` interprets its bits" principle applies here), not as inline LLVM IR in codegen.
+A D-061-tagged `Ty::Int` value about to cross into `PyIntListObj`'s raw storage (an appended element, a subscript index — Task 11b's own job to call this) must be verified smallint (not bigint-tagged) and untagged, in one step. Per D-106, this bit-level discriminant check belongs in `pycc_rt` (see `to_float`'s doc comment on why `int`-to-`float` goes through `pycc_rt_int_to_float` rather than a raw LLVM cast — the same "only `pycc_rt` interprets its bits" principle applies here), not as inline LLVM IR in codegen.
 
 Add to `crates/pycc_rt/src/lib.rs`, next to the other `pycc_rt_int_*` functions, reusing the existing private `is_smallint`/`untag_smallint` helpers (do not duplicate their bit logic):
 
@@ -1391,7 +1391,7 @@ fn int_untag_checked_rejects_a_bigint_tagged_value() {
 Run `cargo test -p pycc_rt int_untag_checked` first to confirm RED (function doesn't exist), then implement:
 
 ```rust
-/// D-105: the input-side half of `PyIntListObj`'s raw/tagged boundary
+/// D-106: the input-side half of `PyIntListObj`'s raw/tagged boundary
 /// conversion. Takes a D-061-tagged `Ty::Int` value (an `.append()`
 /// argument, a subscript index) and returns the raw, untagged `i64`
 /// `PyIntListObj` actually stores/compares -- panicking honestly instead
@@ -1419,12 +1419,12 @@ pub extern "C" fn pycc_rt_int_untag_checked(tagged: i64) -> i64 {
 
 Run `cargo test -p pycc_rt int_untag_checked` again to confirm GREEN, then `cargo llvm-cov -p pycc_rt --fail-under-lines 100 --fail-under-regions 100` (per D-014 -- this is a new function in an already-100%-covered crate, so it must not regress that).
 
-- [ ] **Step 5: Add `raw_i64_to_tagged_int`, D-105's output-side conversion, as a `pycc_codegen`-local helper**
+- [ ] **Step 5: Add `raw_i64_to_tagged_int`, D-106's output-side conversion, as a `pycc_codegen`-local helper**
 
-The other direction of D-105's boundary -- a raw `i64` read back out of `PyIntListObj` that needs to become an ordinary tagged `Ty::Int` value -- is always safe to re-tag: Step 4's guard already proves every raw slot holds a value in `tag_smallint`'s 63-bit range. This is the same *construct a tagged value from a value already known to be in range* direction `to_tagged_int`'s `Scalar::Bool` arm already handles inline via `build_left_shift`/`build_or` (see `crates/pycc_codegen/src/lib.rs` lines ~284-294) -- add a sibling helper next to `to_tagged_int` itself, not a new `pycc_rt` call:
+The other direction of D-106's boundary -- a raw `i64` read back out of `PyIntListObj` that needs to become an ordinary tagged `Ty::Int` value -- is always safe to re-tag: Step 4's guard already proves every raw slot holds a value in `tag_smallint`'s 63-bit range. This is the same *construct a tagged value from a value already known to be in range* direction `to_tagged_int`'s `Scalar::Bool` arm already handles inline via `build_left_shift`/`build_or` (see `crates/pycc_codegen/src/lib.rs` lines ~284-294) -- add a sibling helper next to `to_tagged_int` itself, not a new `pycc_rt` call:
 
 ```rust
-/// D-105's output-side boundary conversion: tags an already-known-in-range
+/// D-106's output-side boundary conversion: tags an already-known-in-range
 /// raw `i64` (a `list[int]` element read back out, or its length) as an
 /// ordinary D-061 `Ty::Int`. Always safe -- never overflows -- because
 /// every raw value crossing this boundary already passed through
@@ -1462,7 +1462,7 @@ cargo test -p pycc_codegen
 
 ```bash
 git add crates/pycc_codegen/src/lib.rs crates/pycc_rt/src/lib.rs
-git commit -m "list[int] part 5a: Scalar::List representation (D-106) + D-105 boundary conversions"
+git commit -m "list[int] part 5a: Scalar::List representation (D-107) + D-106 boundary conversions"
 ```
 
 ---
@@ -1481,9 +1481,9 @@ git commit -m "list[int] part 5a: Scalar::List representation (D-106) + D-105 bo
 1. **Delete the `#[allow(dead_code)]` attribute on `raw_i64_to_tagged_int`** (added by Task 11a solely because the function had no caller yet — its own doc comment names this task as the owner of the deletion). Once this task's Steps 3/5/6/7 below call it, the attribute is no longer needed and leaving it in place would silently suppress a real future dead-code warning on that function.
 2. **This is the first point in the whole PR-10 branch where `cargo build --workspace` goes green.** Every earlier task in this plan left it red in exactly one crate (per each task's own final step) — Task 9 left `pycc_codegen` red with 3 `E0004` non-exhaustive-pattern errors (the same three `MirExpr`/`MirStmt::ForList` sites this task's Steps 4-7 close), and Task 11a's own report confirmed those same 3 errors are still the *only* ones remaining at this task's own start. This task's final step (Step 8) is therefore the first place the full-workspace `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100` gate can actually run and mean something — do not skip it or treat it as routine.
 
-**A confirmed non-issue, so you don't need to re-investigate it:** the controller checked (empirically, via the real parse → lower → type-check pipeline, not just by reading D-104's text) whether a private helper's `list[int]`-typed parameter or return type is reachable from real source without an explicit annotation (which D-104 forbids). It is not: `pycc_types`' constraint solver currently fails to infer either a `list[int]` parameter or return type for a private helper (both report `T0021: cannot infer ... ; add an annotation`), so `emit_expr`'s `Call`-result `Ty` dispatch (the one other codegen site with no `Ty::List` arm — a `Ty`-keyed catch-all, not one of Task 11a's 8 `Scalar`-keyed exhaustive-match sites) is genuinely unreachable today, exactly as Task 11a's report concluded. Its existing comment already correctly describes this (enumerating `List`/`Dict`/`Set`/`Tuple` alongside `Ty::Infer` as the catch-all's reachable cases). No fix or comment change is needed there in this task.
+**A confirmed non-issue, so you don't need to re-investigate it:** the controller checked (empirically, via the real parse → lower → type-check pipeline, not just by reading D-105's text) whether a private helper's `list[int]`-typed parameter or return type is reachable from real source without an explicit annotation (which D-105 forbids). It is not: `pycc_types`' constraint solver currently fails to infer either a `list[int]` parameter or return type for a private helper (both report `T0021: cannot infer ... ; add an annotation`), so `emit_expr`'s `Call`-result `Ty` dispatch (the one other codegen site with no `Ty::List` arm — a `Ty`-keyed catch-all, not one of Task 11a's 8 `Scalar`-keyed exhaustive-match sites) is genuinely unreachable today, exactly as Task 11a's report concluded. Its existing comment already correctly describes this (enumerating `List`/`Dict`/`Set`/`Tuple` alongside `Ty::Infer` as the catch-all's reachable cases). No fix or comment change is needed there in this task.
 
-**Read `docs/DECISIONS.md`'s D-105 entry before starting this task.** Task 10 shipped `PyIntListObj` storing **raw, untagged `i64`** elements/indices — not D-061's tagged `Ty::Int` representation (D-061's own general rule: "never a raw untagged value"; `bool` is the one prior exception, this is the second). Every one of `pycc_rt_int_list_append`/`_get`/`_len`'s parameters and return values that this task's own code sketches below touch is on the *raw* side of that boundary; every `Scalar::Int` value this codegen crate produces or consumes elsewhere is on the *tagged* side. Piping one straight into the other without the conversions D-105 specifies silently corrupts values (a value like `10` stored raw reads back as `10`, but compared/printed/arithmetic'd elsewhere in generated code as if it were tagged `21` — wrong, not a crash). Task 11a already added the two conversion functions this task needs (`pycc_rt_int_untag_checked`, `raw_i64_to_tagged_int`) — this task calls them, it does not define them.
+**Read `docs/DECISIONS.md`'s D-106 entry before starting this task.** Task 10 shipped `PyIntListObj` storing **raw, untagged `i64`** elements/indices — not D-061's tagged `Ty::Int` representation (D-061's own general rule: "never a raw untagged value"; `bool` is the one prior exception, this is the second). Every one of `pycc_rt_int_list_append`/`_get`/`_len`'s parameters and return values that this task's own code sketches below touch is on the *raw* side of that boundary; every `Scalar::Int` value this codegen crate produces or consumes elsewhere is on the *tagged* side. Piping one straight into the other without the conversions D-106 specifies silently corrupts values (a value like `10` stored raw reads back as `10`, but compared/printed/arithmetic'd elsewhere in generated code as if it were tagged `21` — wrong, not a crash). Task 11a already added the two conversion functions this task needs (`pycc_rt_int_untag_checked`, `raw_i64_to_tagged_int`) — this task calls them, it does not define them.
 
 - [ ] **Step 1: Write the failing end-to-end test**
 
@@ -1527,7 +1527,7 @@ Expected: FAIL — `HirExpr::Call { callee: "len", .. }` isn't recognized as a b
 
 - [ ] **Step 4: Add codegen for `MirExpr::ListLiteral`**
 
-Wherever `MirExpr` is matched for codegen (the function handling `MirExpr::BinOp`/`MirExpr::IntLiteral`/etc.), add. Each element's evaluated `Scalar::Int` is D-061-tagged (it came from an arbitrary sub-expression); it must go through **Task 11a's `pycc_rt_int_untag_checked`** before `append` -- `list[int]`'s runtime storage is raw, per D-105. `list_ptr` itself is `Scalar::List(PointerValue)` (Task 11a) -- extract the raw pointer the same way this file's existing code extracts a `PointerValue` from `Scalar::Str`:
+Wherever `MirExpr` is matched for codegen (the function handling `MirExpr::BinOp`/`MirExpr::IntLiteral`/etc.), add. Each element's evaluated `Scalar::Int` is D-061-tagged (it came from an arbitrary sub-expression); it must go through **Task 11a's `pycc_rt_int_untag_checked`** before `append` -- `list[int]`'s runtime storage is raw, per D-106. `list_ptr` itself is `Scalar::List(PointerValue)` (Task 11a) -- extract the raw pointer the same way this file's existing code extracts a `PointerValue` from `Scalar::Str`:
 
 ```rust
         MirExpr::ListLiteral(elements) => {
@@ -1602,7 +1602,7 @@ Same input-side conversion as `ListLiteral`'s element above -- `value` is a tagg
 
 Locate `MirStmt::ForRange`'s codegen (`crates/pycc_codegen/src/lib.rs` around line 2055) and read its comments before touching anything: this codebase's own `ForRange` arm is a **deliberate inline copy** of `emit_body_then_branch`'s basic-block-building logic (see the comments around `crates/pycc_codegen/src/lib.rs` lines ~1226 and ~2135), not a call into a shared, reusable loop-building helper. **Do not factor this into a shared helper as part of this task.** Refactoring a 372-call-site file's existing, intentionally-duplicated control-flow logic is out of scope for a feature task and is exactly the kind of drive-by restructuring that draws review pushback on an already-large diff — add `ForList` as its own inline copy that follows the same structure `ForRange` actually uses (loop-header/loop-body/loop-exit basic blocks, `br`/`phi` wiring, etc., copied verbatim from `ForRange`'s real arm), parametrized by two differences: the loop bound comes from a runtime call to `pycc_rt_int_list_len` instead of a static/computed integer bound, and each iteration prepends one indexed read (`pycc_rt_int_list_get(list_ptr, i)`, storing the result into `var`'s local slot) before emitting the user's own loop body.
 
-**Element-representation note specific to this arm (D-105):** the loop's own induction variable (`i`, running `0..len`) and the raw `len` value it's compared against are a **purely internal implementation detail** -- an LLVM counter never exposed to user code as a `Ty::Int` value -- so, unlike Step 3's standalone `len(x)` call, **neither needs `raw_i64_to_tagged_int`**, and since `i` was never tagged to begin with, it needs no `pycc_rt_int_untag_checked` call either before being passed as `pycc_rt_int_list_get`'s raw `index` parameter. The **only** conversion this arm needs is `raw_i64_to_tagged_int` on the per-iteration element read, before storing it into `var`'s local slot -- `var` is a user-visible `Ty::Int` local that the loop body may read (`print(v)`, arithmetic, etc.), so it must hold a properly tagged value like every other `Ty::Int` local in this codebase.
+**Element-representation note specific to this arm (D-106):** the loop's own induction variable (`i`, running `0..len`) and the raw `len` value it's compared against are a **purely internal implementation detail** -- an LLVM counter never exposed to user code as a `Ty::Int` value -- so, unlike Step 3's standalone `len(x)` call, **neither needs `raw_i64_to_tagged_int`**, and since `i` was never tagged to begin with, it needs no `pycc_rt_int_untag_checked` call either before being passed as `pycc_rt_int_list_get`'s raw `index` parameter. The **only** conversion this arm needs is `raw_i64_to_tagged_int` on the per-iteration element read, before storing it into `var`'s local slot -- `var` is a user-visible `Ty::Int` local that the loop body may read (`print(v)`, arithmetic, etc.), so it must hold a properly tagged value like every other `Ty::Int` local in this codebase.
 
 Read `ForRange`'s exact current code directly — the sketch below shows the shape of what's needed, not verbatim code to paste, since the real basic-block-building calls must come from what `ForRange`'s arm actually does today:
 
@@ -1650,7 +1650,7 @@ cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
 
 ```bash
 git add crates/pycc_codegen/src/lib.rs tests/slice1_codegen_depth.rs
-git commit -m "list[int] part 5b: pycc_codegen for literal/append/index/len/for-list, real end-to-end run (D-104)"
+git commit -m "list[int] part 5b: pycc_codegen for literal/append/index/len/for-list, real end-to-end run (D-105)"
 ```
 
 ---
@@ -1662,7 +1662,7 @@ git commit -m "list[int] part 5b: pycc_codegen for literal/append/index/len/for-
 - Modify: `tests/conformance.rs` (one new dual-profile test)
 - Modify: `docs/PYTHON_STANDARDS.md` (PEP 585 row: flip status, correct scope wording)
 - Modify: `docs/ROADMAP.md` (conformance-count note)
-- Modify: `docs/RUNTIME.md` (correct the header-shape inconsistency per D-104)
+- Modify: `docs/RUNTIME.md` (correct the header-shape inconsistency per D-105)
 - Modify: `docs/TYPE_SYSTEM.md` (note v0.2's narrower-than-full-PEP-585 scope, if the existing "Generics" section reads as already-complete)
 - Modify: `docs/DELIVERY_PLAN.md` (PR-10 row status)
 - Modify: `docs/ARCHITECTURE.md` (wording fix + Task 10's mis-citation, see Step 0 below)
@@ -1678,16 +1678,16 @@ These were raised across Task 10's, Task 11a's, and Task 11b's independent revie
 
 1. `docs/ARCHITECTURE.md` (~line 69-70): change "share a single conversion **site**" to "share a single conversion **helper**" — `to_str` has two call sites (`emit_print_arg`, the f-string interpolation arm in `emit_expr`) that both call into one shared function; "site" implied only one call site existed.
 2. `crates/pycc_codegen/src/lib.rs`'s `to_str` function, its `Scalar::List(_)` arm's doc comment (~line 644-653): currently reads "`pycc_types` accepts any argument type for `print`, so `print(xs)` for a `list[int]` local type-checks today and lands here" — naming only `print(xs)`. Update it to also name f-string interpolation as a second reachable route into this same arm (mirroring the fix `docs/ARCHITECTURE.md` already received in Task 11b's review round — this is the identical gap one layer down, in the source comment instead of the doc).
-3. `crates/pycc_codegen/src/lib.rs`'s `emit_stmt` function's doc comment (~line 2445): currently claims it "Handles every `MirStmt` shape in v0.1" and enumerates `If`/`While`/`ForRange` but not `ForList` (added in this same plan, Task 11b). Update the enumeration to include `ForList`, and correct "v0.1" to reflect that `ForList` is a v0.2/D-104 addition.
+3. `crates/pycc_codegen/src/lib.rs`'s `emit_stmt` function's doc comment (~line 2445): currently claims it "Handles every `MirStmt` shape in v0.1" and enumerates `If`/`While`/`ForRange` but not `ForList` (added in this same plan, Task 11b). Update the enumeration to include `ForList`, and correct "v0.1" to reflect that `ForList` is a v0.2/D-105 addition.
 4. `crates/pycc_codegen/src/lib.rs`'s `MirStmt::ForList` arm's comment (~line 1877) justifying why the loop variable's type isn't derived from `bindings[list]`: currently cites a list-typed function *parameter* as the blocking case — but `pycc_hir::annotation_to_ty` rejects any non-bare-name annotation (`def f(xs: list[int])` fails with `C0001`), so that case is unreachable, not merely inconvenient. The case that actually matters and that the comment omits: a module-scope list iterated from inside a function, whose `local_bindings` (built from the function body alone) has no entry for it at all — exactly what `a_module_level_list_binding_lives_in_a_global_slot` (Task 11b) exercises. Rewrite the comment to cite the real reason so a future widening of `annotation_to_ty` doesn't lead someone to conclude the sole obstacle is gone.
 5. `crates/pycc_codegen/src/lib.rs`'s `emit_assign` function, its new `Scalar::List` arm's comment (Task 11a): currently misattributes which mechanism protects it from `decref_str_slot_before_store` (says the helper "gates on the target's `Ty::Str`, so a list target never reaches it" — actually `emit_stmt`'s `Assign` arm gates on the target's `Ty` *before ever calling* the helper; the helper's own internal check is a panic if it's ever reached with a non-`Str` target, not a skip). The conclusion (a list target is safe) is correct; only the described mechanism is wrong. Fix the comment to name the actual gate.
-6. `crates/pycc_rt/src/lib.rs` (Task 10's negative-index rejection, and any other decision the task's own tests cite as D-104): find and fix the mis-citation Task 10's review flagged — the negative-index scope cut was attributed to the wrong decision entry; re-derive which D-number (or plain "this crate's own established convention" if no single decision covers it) actually governs that scope cut, and correct the citation to point at it.
+6. `crates/pycc_rt/src/lib.rs` (Task 10's negative-index rejection, and any other decision the task's own tests cite as D-105): find and fix the mis-citation Task 10's review flagged — the negative-index scope cut was attributed to the wrong decision entry; re-derive which D-number (or plain "this crate's own established convention" if no single decision covers it) actually governs that scope cut, and correct the citation to point at it.
 
 Run `cargo build --workspace` after this step (comment-only changes, so no test behavior should change) before moving to Step 1.
 
 - [ ] **Step 1: Write the fixture**
 
-Create `tests/fixtures/pep_0585_builtin_generics.py`, keeping every `list[int]` value inside a private helper (D-104's own annotation-scope cut — no public function may have a `list[T]`-annotated parameter or return type in v0.2):
+Create `tests/fixtures/pep_0585_builtin_generics.py`, keeping every `list[int]` value inside a private helper (D-105's own annotation-scope cut — no public function may have a `list[T]`-annotated parameter or return type in v0.2):
 
 ```python
 def _demo():
@@ -1742,7 +1742,7 @@ Before editing, `grep -n "585" docs/PYTHON_STANDARDS.md` and read the actual cur
 Change to (fixing the stale `py39/` path per D-102, and keeping the Feature-column wording already scoped to `list[int]` specifically — it was never mis-scoped like PEP 526's row was, since it already says `list[int]`, not "builtin generics" unqualified):
 
 ```markdown
-| [585](https://peps.python.org/pep-0585/) | Builtin generics `list[int]` (v0.2 scope: `list[int]` only — `dict`/`set`/`tuple` generics are PR-11's own PEP-585 coverage, D-104) | typing | `pep_0585_builtin_generics.py` | ✅ |
+| [585](https://peps.python.org/pep-0585/) | Builtin generics `list[int]` (v0.2 scope: `list[int]` only — `dict`/`set`/`tuple` generics are PR-11's own PEP-585 coverage, D-105) | typing | `pep_0585_builtin_generics.py` | ✅ |
 ```
 
 - [ ] **Step 6: Update `docs/ROADMAP.md`'s conformance-count note**
@@ -1751,11 +1751,11 @@ Before writing a number, actually count: `grep -c '✅' docs/PYTHON_STANDARDS.md
 
 - [ ] **Step 7: Fix `docs/RUNTIME.md`'s header-shape inconsistency**
 
-Find the line describing a generic 16-byte heap-object header (`rc`/`type_id`/`flags`) and the `list[T]` line. Correct both to describe what's actually implemented: no project-wide generic header exists; each heap object (`PyStrObj`, now `PyIntListObj`) defines its own header inline, and both existing ones use just `rc: Cell<u32>` plus their own payload fields — no `type_id`/`flags` anywhere in the actual runtime. Cross-reference D-104 for the decision record.
+Find the line describing a generic 16-byte heap-object header (`rc`/`type_id`/`flags`) and the `list[T]` line. Correct both to describe what's actually implemented: no project-wide generic header exists; each heap object (`PyStrObj`, now `PyIntListObj`) defines its own header inline, and both existing ones use just `rc: Cell<u32>` plus their own payload fields — no `type_id`/`flags` anywhere in the actual runtime. Cross-reference D-105 for the decision record.
 
 - [ ] **Step 8: Check `docs/TYPE_SYSTEM.md`'s "Generics" section for scope drift**
 
-Read the "Generics" section (line ~63-68). If its wording ("Monomorphization (Rust model): `list[int]` and `list[str]` are distinct compiled types") could be read as already-true for every element type, add a one-line note that v0.2 has only landed `list[int]`'s own compiled path (D-104); the full monomorphization model described there remains the v1.0 target.
+Read the "Generics" section (line ~63-68). If its wording ("Monomorphization (Rust model): `list[int]` and `list[str]` are distinct compiled types") could be read as already-true for every element type, add a one-line note that v0.2 has only landed `list[int]`'s own compiled path (D-105); the full monomorphization model described there remains the v1.0 target.
 
 - [ ] **Step 9: Update `docs/DELIVERY_PLAN.md`'s PR-10 row**
 
@@ -1774,7 +1774,7 @@ git add docs/ARCHITECTURE.md crates/pycc_codegen/src/lib.rs crates/pycc_rt/src/l
 git commit -m "Fix 6 accumulated review-comment/doc findings from Tasks 10/11a/11b (no behavior change)"
 
 git add tests/fixtures/pep_0585_builtin_generics.py tests/conformance.rs docs/PYTHON_STANDARDS.md docs/ROADMAP.md docs/RUNTIME.md docs/TYPE_SYSTEM.md docs/DELIVERY_PLAN.md
-git commit -m "PEP-585 (list[int]) conformance fixture + docs sweep (D-104)"
+git commit -m "PEP-585 (list[int]) conformance fixture + docs sweep (D-105)"
 ```
 
 ---
@@ -1805,17 +1805,17 @@ Follow this project's own established merge gate and squash-merge convention (ma
 ## Follow-ups intentionally out of this plan's scope (record if not already tracked)
 
 - `dict[K,V]`/`set[T]`/`tuple[...]` codegen and their own conformance fixtures — PR-11's scope per `docs/DELIVERY_PLAN.md`.
-- `list[str]`/`list[float]`/`list[bool]`/nested `list[list[T]]` codegen — deliberately deferred by D-104; each is its own later PR's scope once `list[int]`'s pattern is proven.
-- `list[T]` annotation syntax (`x: list[int] = [...]`, typed public function parameters/returns) — deliberately deferred by D-104.
-- Subscript-assignment (`x[0] = value`) — deliberately deferred by D-104.
-- General attribute/method-call dispatch beyond `.append()` — deliberately deferred by D-104.
-- A real iterator protocol (`__iter__`/`__next__`) beyond `ForList`'s index-counted desugaring — deliberately deferred by D-104.
-- The generic function type-parameter `Ty` placeholder — deliberately deferred to PR-13 by D-103.
+- `list[str]`/`list[float]`/`list[bool]`/nested `list[list[T]]` codegen — deliberately deferred by D-105; each is its own later PR's scope once `list[int]`'s pattern is proven.
+- `list[T]` annotation syntax (`x: list[int] = [...]`, typed public function parameters/returns) — deliberately deferred by D-105.
+- Subscript-assignment (`x[0] = value`) — deliberately deferred by D-105.
+- General attribute/method-call dispatch beyond `.append()` — deliberately deferred by D-105.
+- A real iterator protocol (`__iter__`/`__next__`) beyond `ForList`'s index-counted desugaring — deliberately deferred by D-105.
+- The generic function type-parameter `Ty` placeholder — deliberately deferred to PR-13 by D-104.
 - A shared loop-building helper factoring out the basic-block construction now duplicated between `MirStmt::ForRange` and `MirStmt::ForList` (Task 11 Step 7) — worth doing once a third consumer needs the same counted-loop shape, deliberately not attempted inside this plan to avoid an unrelated refactor of `pycc_codegen`'s existing, intentionally-inlined `ForRange` logic during a feature task.
-- **`list[T]` refcounting is leak-only in v0.2 (D-106).** Nothing calls `pycc_rt_int_list_incref`/`_decref` — a real gap once reassignment cleanup is wired for any type, since `MirStmt::ForList` holds a borrowed, un-increfed list pointer across its whole body: wiring reassignment cleanup for other types without also handling this would free a list out from under `for v in xs: xs = [9]`. A later refcounting task must treat `ForList` as a fourth site, not just the three D-106 already named.
+- **`list[T]` refcounting is leak-only in v0.2 (D-107).** Nothing calls `pycc_rt_int_list_incref`/`_decref` — a real gap once reassignment cleanup is wired for any type, since `MirStmt::ForList` holds a borrowed, un-increfed list pointer across its whole body: wiring reassignment cleanup for other types without also handling this would free a list out from under `for v in xs: xs = [9]`. A later refcounting task must treat `ForList` as a fourth site, not just the three D-107 already named.
 - **Adding `readonly`/`willreturn`/`memory(read)` attributes to the `pycc_rt_int_list_*` externs in `declare_rt_functions` is unsound**, not just a performance idea to revisit later: `pycc_rt_int_list_len` (and `_get`) genuinely mutate via `Cell::take()`/`.set()` internally. Task 11b's `a_for_list_loop_keeps_its_per_iteration_length_read_under_release_optimization` test (fixed post-review to use a mutating fixture) is the guard against LLVM's LICM hoisting these calls if such attributes were ever added; do not add them without re-deriving why they'd be unsound.
 - **A `pycc_types` diagnostic follow-up, one root cause, two observed symptoms**: inside a function body (not module scope), a malformed `list[int]` literal (`[1, "a"]`, `[]` with no inferrable type) and a `list[int]`-vs-`list[int]` comparison (`xs == ys`) both report `T0021: local name '<x>' is not bound before this use` instead of the correct diagnostic that already fires at module scope (`T0032`/`T0034` for the literal, `T0021: cannot compare 'list[int]' and 'list[int]'` for the comparison). Both are misdiagnoses, not soundness gaps — the program is still rejected — but the message names the wrong problem at the wrong span. Worth a dedicated `pycc_types` task once the pattern (why function-body binding resolution takes a different path than module scope for these checks) is understood.
 - **A `Ty::None`-valued assignment target panics in codegen instead of producing a diagnostic** (pre-existing, newly reachable via `MirExpr::ListAppend` since `.append()` returns `None`): `y = xs.append(3)` type-checks and then aborts with `"every assignment target must have a predeclared storage slot"` because `collect_stmt_bindings`'s `MirStmt::Assign` allow-list never included `Ty::None`. Fix by either extending that allow-list or rejecting a `None`-valued assignment target with a real diagnostic before codegen.
-- **`if xs:`/`while xs:`/`print(xs)` on a `list[T]` are codegen-level Rust panics, not spanned `pycc_types` diagnostics** — not a correctness bug (D-106 already adjudicated this: the panic fires at compile time inside `pycc`, not at runtime in the compiled binary, so it doesn't violate this plan's "never a runtime panic discovered only at codegen" constraint), but a real UX gap worth closing with a proper diagnostic once list[T] semantics stabilize enough to justify the new diagnostic code.
+- **`if xs:`/`while xs:`/`print(xs)` on a `list[T]` are codegen-level Rust panics, not spanned `pycc_types` diagnostics** — not a correctness bug (D-107 already adjudicated this: the panic fires at compile time inside `pycc`, not at runtime in the compiled binary, so it doesn't violate this plan's "never a runtime panic discovered only at codegen" constraint), but a real UX gap worth closing with a proper diagnostic once list[T] semantics stabilize enough to justify the new diagnostic code.
 - **`crates/pycc_codegen/src/lib.rs`'s `#[cfg(windows)] fn verify_module` is a no-op**, pre-existing and untouched by this plan — so `MirStmt::ForList`'s new IR (a `phi` with two incoming edges plus a back-edge, the most structurally complex control flow this crate emits) is never `module.verify()`-checked on Windows. Worth fixing once there's a reason to trust Windows-specific IR-shape bugs are being caught at all.
 - **No integration test builds any `list[int]` program with `--release` other than the one hoisting-guard fixture** (hand-built MIR, not real source) — the release profile's `list[int]` path has no real end-to-end coverage. Worth a real-source `--release` conformance-style test once `list[T]` has more than one element type to make the profile matrix worth the coverage cost.

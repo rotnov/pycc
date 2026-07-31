@@ -48,22 +48,22 @@ The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
 the AST. `pycc_hir::lower_checked` preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,
 calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. A first
-`list[int]` slice (D-104, PR-10) lowers list literals, read-only subscript
+`list[int]` slice (D-105, PR-10) lowers list literals, read-only subscript
 indexing (`base[index]`), a dedicated `.append()` call form, and
-`for var in <bare-name-list>:` iteration through HIR (D-104's HIR-forms
-task), `pycc_types` type-checking including `len()`'s call-dispatch (D-104's
-type-checking task, `T0032`/`T0033`/`T0034`), `pycc_mir` lowering (D-104's
-MIR-lowering task), and `pycc_codegen` (D-104's codegen task) against
+`for var in <bare-name-list>:` iteration through HIR (D-105's HIR-forms
+task), `pycc_types` type-checking including `len()`'s call-dispatch (D-105's
+type-checking task, `T0032`/`T0033`/`T0034`), `pycc_mir` lowering (D-105's
+MIR-lowering task), and `pycc_codegen` (D-105's codegen task) against
 `pycc_rt`'s `PyIntListObj` -- so `build`/`run` compiles and runs a
 `list[int]` program end to end, at module scope or inside a private helper
-(the two places D-104's first scope cut allows a `list[int]` value to live).
+(the two places D-105's first scope cut allows a `list[int]` value to live).
 Only `list[int]` reaches codegen: `T0034` rejects every other element type
 first. `pycc_codegen` owns the tagged/raw conversion at that runtime
-boundary in both directions (D-105), and `list[T]` values are deliberately
+boundary in both directions (D-106), and `list[T]` values are deliberately
 never refcounted in v0.2, so their allocations leak for the process's
-lifetime (D-106). Two *operations* on a `list[T]` still type-check and then
+lifetime (D-107). Two *operations* on a `list[T]` still type-check and then
 stop codegen with a "not supported yet" panic rather than compiling, because
-v0.2 gives `list[T]` no `str(list)` or `bool(list)` meaning (D-106):
+v0.2 gives `list[T]` no `str(list)` or `bool(list)` meaning (D-107):
 converting one to `str`, and using one as an `if`/`while` condition. The
 string conversion is reachable from every context that needs one, which
 today means both `print(xs)` and f-string interpolation (`f"{xs}"`) -- they

@@ -62,7 +62,7 @@ fn non_callable_binding(name: &str) -> Diagnostic {
 /// "unbound local" vs. "not defined" distinction `HirExpr::Name` itself
 /// uses in `infer_expr_in` below. `HirStmt::ForList`'s `list` field and
 /// `HirExpr::ListAppend`'s `list` field are both plain `String`s rather
-/// than `HirExpr::Name` nodes (D-104's HIR shape), so they can't go
+/// than `HirExpr::Name` nodes (D-105's HIR shape), so they can't go
 /// through `infer_expr_in`'s own `Name` arm and need this helper instead.
 fn lookup_bound_name(
     env: &Environment,
@@ -311,7 +311,7 @@ fn collect_expr_constraints(
                 return Ok(Some(Ok(Ty::None)));
             }
             if callee == "len" {
-                // D-104 point 3: `len(lst)` is a hand-recognized builtin
+                // D-105 point 3: `len(lst)` is a hand-recognized builtin
                 // call, same as `print` above, not a user-declarable
                 // signature. Its own return (`Ty::Int`) never depends on
                 // the list's element type, so it's always producible here
@@ -908,7 +908,7 @@ fn infer_expr_in(
                 return Ok(Ty::None); // print's own signature isn't user-declarable in v0.1
             }
             if callee == "len" {
-                // D-104 point 3: `len(lst)` is a hand-recognized builtin
+                // D-105 point 3: `len(lst)` is a hand-recognized builtin
                 // call, same as `print` above -- not a user-declarable
                 // signature. Generic over any scalar element type (`T0034`
                 // already gates non-`int` lists further upstream, at the
@@ -970,7 +970,7 @@ fn infer_expr_in(
             Ok(return_ty.clone())
         }
         HirExpr::ListLiteral(elements) => {
-            // D-104: an empty list literal has no element to infer a type
+            // D-105: an empty list literal has no element to infer a type
             // from, and v0.2 has no `list[T]` annotation syntax to recover
             // it from instead -- reject plainly rather than letting
             // `Ty::Infer` leak into codegen. Reuses T0021 (an unconstrained
@@ -979,7 +979,7 @@ fn infer_expr_in(
             if elements.is_empty() {
                 return Err(Diagnostic::error(
                     "T0021",
-                    "an empty list literal's element type cannot be inferred without an annotation (list[T] annotations are not supported yet, D-104)".to_string(),
+                    "an empty list literal's element type cannot be inferred without an annotation (list[T] annotations are not supported yet, D-105)".to_string(),
                     Span::new(0, 0),
                 ));
             }
@@ -992,7 +992,7 @@ fn infer_expr_in(
                     Some(expected) => {
                         // Exact `Ty` equality, not `is_assignable`'s
                         // bool-is-an-int-subtype rule used elsewhere in this
-                        // file -- D-104 requires every element to share the
+                        // file -- D-105 requires every element to share the
                         // *exact same* `Ty`, so `[1, True]` is T0032 even
                         // though a bare `bool` is assignable to `int`.
                         return Err(Diagnostic::error(
@@ -1009,7 +1009,7 @@ fn infer_expr_in(
             }
             let elem_ty = elem_ty.expect("checked non-empty above");
             // This is the one place a list literal's element type becomes
-            // known with a real source construct behind it (D-104's
+            // known with a real source construct behind it (D-105's
             // Consequences) -- deliberately placed here rather than as a
             // separate pre-codegen pass. Everything above this gate (the
             // homogeneity check) is fully generic over any scalar `Ty`; a
@@ -1019,7 +1019,7 @@ fn infer_expr_in(
                 return Err(Diagnostic::error(
                     "T0034",
                     format!(
-                        "list[{}] is not compiled yet (D-104) -- only list[int] is",
+                        "list[{}] is not compiled yet (D-105) -- only list[int] is",
                         elem_ty.name()
                     ),
                     Span::new(0, 0),
@@ -3615,7 +3615,7 @@ mod tests {
 
     #[test]
     fn a_list_literal_of_bool_and_int_is_rejected_since_homogeneity_uses_exact_ty_equality() {
-        // D-104 requires the *exact same* `Ty` for every element -- unlike
+        // D-105 requires the *exact same* `Ty` for every element -- unlike
         // `is_assignable`'s bool-is-an-int-subtype rule used elsewhere in
         // this file, `[1, True]` is still T0032.
         let env = Environment::new();
@@ -3637,7 +3637,7 @@ mod tests {
         // (currently unrunnable end-to-end -- see the T0032 test above).
         assert_eq!(
             err.message,
-            "list[str] is not compiled yet (D-104) -- only list[int] is"
+            "list[str] is not compiled yet (D-105) -- only list[int] is"
         );
     }
 
@@ -3836,7 +3836,7 @@ mod tests {
     fn len_of_a_list_of_str_infers_int_proving_len_is_not_int_specific() {
         // Proves `len`'s own check isn't hardcoded to `Ty::Int` -- generic
         // over any scalar element type, same discipline already applied to
-        // `Subscript`/`ListAppend`/`ForList` (D-104's own genericity claim).
+        // `Subscript`/`ListAppend`/`ForList` (D-105's own genericity claim).
         let mut env = Environment::new();
         env.bind("x".to_string(), Ty::List(Box::new(Ty::Str)));
         let expr = HirExpr::Call {

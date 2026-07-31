@@ -1,0 +1,15 @@
+{
+  "checkpoint_version": 1,
+  "surfaces": {
+    "github_repository_search": [
+      {
+        "required_prefix_rows": 108,
+        "sha256": "e1e44e137edce9300e75648e898b41dd3b8e25f13e06ba5264b8ee61b0fad433"
+      },
+      {
+        "required_prefix_rows": 130,
+        "sha256": "3ebf1ad5457aef04840be6ce397bb4e03415ffdac04edcab3e8cde3a5a76bef5"
+      }
+    ]
+  }
+}
