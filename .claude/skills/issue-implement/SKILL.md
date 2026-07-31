@@ -98,6 +98,13 @@ same commits as the code. Before entering review, run the full local gate set: t
 gate with its preparatory builds exactly as CI performs them, the `scripts/` unittest suite,
 the agent-asset and agent-policy validators, and clippy with warnings denied.
 
+A gate's verdict is its exit status, and a shell pipeline destroys it: `cmd | tail -2;
+echo $?` reports the pager's exit, not the gate's, which can present a failing gate as
+green. Capture the gate's own status (`cmd > log 2>&1; echo $?`, or `pipefail`) every time a
+pass/fail decision hangs on it, and read the numbers in the output rather than trusting the
+echoed code alone — this bit twice in one session, once nearly shipping a red coverage gate
+as green.
+
 If the tree refutes the plan mid-implementation — an assumption fails, a gate behaves
 differently than planned — do not force it. Record what refuted it, refresh the plan if the
 refutation changes the approach, and note the deviation in the pull request body. A plan
