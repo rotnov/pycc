@@ -1665,9 +1665,25 @@ git commit -m "list[int] part 5b: pycc_codegen for literal/append/index/len/for-
 - Modify: `docs/RUNTIME.md` (correct the header-shape inconsistency per D-104)
 - Modify: `docs/TYPE_SYSTEM.md` (note v0.2's narrower-than-full-PEP-585 scope, if the existing "Generics" section reads as already-complete)
 - Modify: `docs/DELIVERY_PLAN.md` (PR-10 row status)
+- Modify: `docs/ARCHITECTURE.md` (wording fix + Task 10's mis-citation, see Step 0 below)
+- Modify: `crates/pycc_codegen/src/lib.rs` (three stale/misattributed comments, see Step 0 below — comment-only, no behavior change)
+- Modify: `crates/pycc_rt/src/lib.rs` (one mis-citation, see Step 0 below — comment-only, no behavior change)
 
 **Interfaces:**
 - Consumes: Task 11's working `list[int]` end-to-end.
+
+- [ ] **Step 0: Fix six small accumulated review findings before the PEP-585 work — all comment/doc-only, no behavior change**
+
+These were raised across Task 10's, Task 11a's, and Task 11b's independent reviews, ruled Minor (non-blocking) at the time, and parked for this task to sweep up since each touches a file this task's own docs sweep already opens or a comment describing behavior this task's docs already describe correctly one layer up.
+
+1. `docs/ARCHITECTURE.md` (~line 69-70): change "share a single conversion **site**" to "share a single conversion **helper**" — `to_str` has two call sites (`emit_print_arg`, the f-string interpolation arm in `emit_expr`) that both call into one shared function; "site" implied only one call site existed.
+2. `crates/pycc_codegen/src/lib.rs`'s `to_str` function, its `Scalar::List(_)` arm's doc comment (~line 644-653): currently reads "`pycc_types` accepts any argument type for `print`, so `print(xs)` for a `list[int]` local type-checks today and lands here" — naming only `print(xs)`. Update it to also name f-string interpolation as a second reachable route into this same arm (mirroring the fix `docs/ARCHITECTURE.md` already received in Task 11b's review round — this is the identical gap one layer down, in the source comment instead of the doc).
+3. `crates/pycc_codegen/src/lib.rs`'s `emit_stmt` function's doc comment (~line 2445): currently claims it "Handles every `MirStmt` shape in v0.1" and enumerates `If`/`While`/`ForRange` but not `ForList` (added in this same plan, Task 11b). Update the enumeration to include `ForList`, and correct "v0.1" to reflect that `ForList` is a v0.2/D-104 addition.
+4. `crates/pycc_codegen/src/lib.rs`'s `MirStmt::ForList` arm's comment (~line 1877) justifying why the loop variable's type isn't derived from `bindings[list]`: currently cites a list-typed function *parameter* as the blocking case — but `pycc_hir::annotation_to_ty` rejects any non-bare-name annotation (`def f(xs: list[int])` fails with `C0001`), so that case is unreachable, not merely inconvenient. The case that actually matters and that the comment omits: a module-scope list iterated from inside a function, whose `local_bindings` (built from the function body alone) has no entry for it at all — exactly what `a_module_level_list_binding_lives_in_a_global_slot` (Task 11b) exercises. Rewrite the comment to cite the real reason so a future widening of `annotation_to_ty` doesn't lead someone to conclude the sole obstacle is gone.
+5. `crates/pycc_codegen/src/lib.rs`'s `emit_assign` function, its new `Scalar::List` arm's comment (Task 11a): currently misattributes which mechanism protects it from `decref_str_slot_before_store` (says the helper "gates on the target's `Ty::Str`, so a list target never reaches it" — actually `emit_stmt`'s `Assign` arm gates on the target's `Ty` *before ever calling* the helper; the helper's own internal check is a panic if it's ever reached with a non-`Str` target, not a skip). The conclusion (a list target is safe) is correct; only the described mechanism is wrong. Fix the comment to name the actual gate.
+6. `crates/pycc_rt/src/lib.rs` (Task 10's negative-index rejection, and any other decision the task's own tests cite as D-104): find and fix the mis-citation Task 10's review flagged — the negative-index scope cut was attributed to the wrong decision entry; re-derive which D-number (or plain "this crate's own established convention" if no single decision covers it) actually governs that scope cut, and correct the citation to point at it.
+
+Run `cargo build --workspace` after this step (comment-only changes, so no test behavior should change) before moving to Step 1.
 
 - [ ] **Step 1: Write the fixture**
 
@@ -1721,7 +1737,7 @@ Expected: FAIL before this task's own fixture/test exist, PASS once written (thi
 
 - [ ] **Step 5: Update `docs/PYTHON_STANDARDS.md`'s PEP 585 row**
 
-Current row (line ~155): `| [585](https://peps.python.org/pep-0585/) | Builtin generics \`list[int]\` | typing | \`py39/pep_0585_builtin_generics.py\` | ☐ |`
+Before editing, `grep -n "585" docs/PYTHON_STANDARDS.md` and read the actual current row yourself — the line number and exact current cell contents given below were written before this plan's own tasks executed and may already have drifted (this is the same "verify the counted claim, don't trust a pre-written number" lesson Task 11b's review just caught in `docs/ARCHITECTURE.md`'s "Two operations" paragraph). Row was last seen at line ~155: `| [585](https://peps.python.org/pep-0585/) | Builtin generics \`list[int]\` | typing | \`py39/pep_0585_builtin_generics.py\` | ☐ |`
 
 Change to (fixing the stale `py39/` path per D-102, and keeping the Feature-column wording already scoped to `list[int]` specifically — it was never mis-scoped like PEP 526's row was, since it already says `list[int]`, not "builtin generics" unqualified):
 
@@ -1731,7 +1747,7 @@ Change to (fixing the stale `py39/` path per D-102, and keeping the Feature-colu
 
 - [ ] **Step 6: Update `docs/ROADMAP.md`'s conformance-count note**
 
-Update the D-088 acceptance-bullet annotation (the same one PR-9's Task 3 updated) to record: 10 of the required ≥15 rows are now green (up from 9 after PR-9), still zero margin per the design doc's own "zero-margin" warning — restate it.
+Before writing a number, actually count: `grep -c '✅' docs/PYTHON_STANDARDS.md` (or however that file marks a passing row) both before and after Step 5's edit, and separately confirm the ≥15 total this project's own acceptance bar requires (check the design doc / D-088's own acceptance criteria for the exact figure — do not trust "10 of the required ≥15" below, it was written before this plan executed and may already be wrong). Update the D-088 acceptance-bullet annotation (the same one PR-9's Task 3 updated) with the real counted-and-verified numbers, restating the design doc's own "zero-margin" warning if it still applies at the actual current count.
 
 - [ ] **Step 7: Fix `docs/RUNTIME.md`'s header-shape inconsistency**
 
@@ -1751,7 +1767,12 @@ Per AGENTS.md's "if a code change genuinely has no documentation impact, explici
 
 - [ ] **Step 11: Commit**
 
+Commit Step 0's comment-only fixes separately from the PEP-585 fixture/docs work, so each commit's diff matches its own message:
+
 ```bash
+git add docs/ARCHITECTURE.md crates/pycc_codegen/src/lib.rs crates/pycc_rt/src/lib.rs
+git commit -m "Fix 6 accumulated review-comment/doc findings from Tasks 10/11a/11b (no behavior change)"
+
 git add tests/fixtures/pep_0585_builtin_generics.py tests/conformance.rs docs/PYTHON_STANDARDS.md docs/ROADMAP.md docs/RUNTIME.md docs/TYPE_SYSTEM.md docs/DELIVERY_PLAN.md
 git commit -m "PEP-585 (list[int]) conformance fixture + docs sweep (D-104)"
 ```
@@ -1791,3 +1812,10 @@ Follow this project's own established merge gate and squash-merge convention (ma
 - A real iterator protocol (`__iter__`/`__next__`) beyond `ForList`'s index-counted desugaring — deliberately deferred by D-104.
 - The generic function type-parameter `Ty` placeholder — deliberately deferred to PR-13 by D-103.
 - A shared loop-building helper factoring out the basic-block construction now duplicated between `MirStmt::ForRange` and `MirStmt::ForList` (Task 11 Step 7) — worth doing once a third consumer needs the same counted-loop shape, deliberately not attempted inside this plan to avoid an unrelated refactor of `pycc_codegen`'s existing, intentionally-inlined `ForRange` logic during a feature task.
+- **`list[T]` refcounting is leak-only in v0.2 (D-106).** Nothing calls `pycc_rt_int_list_incref`/`_decref` — a real gap once reassignment cleanup is wired for any type, since `MirStmt::ForList` holds a borrowed, un-increfed list pointer across its whole body: wiring reassignment cleanup for other types without also handling this would free a list out from under `for v in xs: xs = [9]`. A later refcounting task must treat `ForList` as a fourth site, not just the three D-106 already named.
+- **Adding `readonly`/`willreturn`/`memory(read)` attributes to the `pycc_rt_int_list_*` externs in `declare_rt_functions` is unsound**, not just a performance idea to revisit later: `pycc_rt_int_list_len` (and `_get`) genuinely mutate via `Cell::take()`/`.set()` internally. Task 11b's `a_for_list_loop_keeps_its_per_iteration_length_read_under_release_optimization` test (fixed post-review to use a mutating fixture) is the guard against LLVM's LICM hoisting these calls if such attributes were ever added; do not add them without re-deriving why they'd be unsound.
+- **A `pycc_types` diagnostic follow-up, one root cause, two observed symptoms**: inside a function body (not module scope), a malformed `list[int]` literal (`[1, "a"]`, `[]` with no inferrable type) and a `list[int]`-vs-`list[int]` comparison (`xs == ys`) both report `T0021: local name '<x>' is not bound before this use` instead of the correct diagnostic that already fires at module scope (`T0032`/`T0034` for the literal, `T0021: cannot compare 'list[int]' and 'list[int]'` for the comparison). Both are misdiagnoses, not soundness gaps — the program is still rejected — but the message names the wrong problem at the wrong span. Worth a dedicated `pycc_types` task once the pattern (why function-body binding resolution takes a different path than module scope for these checks) is understood.
+- **A `Ty::None`-valued assignment target panics in codegen instead of producing a diagnostic** (pre-existing, newly reachable via `MirExpr::ListAppend` since `.append()` returns `None`): `y = xs.append(3)` type-checks and then aborts with `"every assignment target must have a predeclared storage slot"` because `collect_stmt_bindings`'s `MirStmt::Assign` allow-list never included `Ty::None`. Fix by either extending that allow-list or rejecting a `None`-valued assignment target with a real diagnostic before codegen.
+- **`if xs:`/`while xs:`/`print(xs)` on a `list[T]` are codegen-level Rust panics, not spanned `pycc_types` diagnostics** — not a correctness bug (D-106 already adjudicated this: the panic fires at compile time inside `pycc`, not at runtime in the compiled binary, so it doesn't violate this plan's "never a runtime panic discovered only at codegen" constraint), but a real UX gap worth closing with a proper diagnostic once list[T] semantics stabilize enough to justify the new diagnostic code.
+- **`crates/pycc_codegen/src/lib.rs`'s `#[cfg(windows)] fn verify_module` is a no-op**, pre-existing and untouched by this plan — so `MirStmt::ForList`'s new IR (a `phi` with two incoming edges plus a back-edge, the most structurally complex control flow this crate emits) is never `module.verify()`-checked on Windows. Worth fixing once there's a reason to trust Windows-specific IR-shape bugs are being caught at all.
+- **No integration test builds any `list[int]` program with `--release` other than the one hoisting-guard fixture** (hand-built MIR, not real source) — the release profile's `list[int]` path has no real end-to-end coverage. Worth a real-source `--release` conformance-style test once `list[T]` has more than one element type to make the profile matrix worth the coverage cost.
