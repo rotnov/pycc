@@ -1033,6 +1033,21 @@ pub extern "C" fn pycc_rt_print_none() {
 /// `private_interfaces` lint refuses a private type in a public
 /// signature. Both fields stay private, so the "opaque pointer" contract
 /// still holds for any real Rust caller.
+///
+/// **Element representation -- deliberately *not* D-061-tagged.** Every
+/// `pycc_rt_int_*` function elsewhere in this file takes/returns a
+/// D-061-tagged `i64` (the low bit is the smallint-vs-bigint-pointer
+/// discriminant) -- D-061's own text says so explicitly ("never a raw
+/// untagged value"). This object's stored elements break that pattern on
+/// purpose: they are raw, untagged 64-bit slots, matching `docs/
+/// RUNTIME.md`'s stated `list[T]` design ("growable vec of unboxed `T`...
+/// SIMD-friendly"), the same kind of narrow, justified exception D-061's
+/// own consequences section already grants `bool` (its own untagged `i8`
+/// representation). This is *not yet reconciled with a codegen consumer*
+/// (Task 11, not this task) -- see the `# Element representation` note on
+/// `pycc_rt_int_list_append`/`_get`/`_len` below for the exact tag/untag
+/// conversions a caller crossing this boundary must perform, and the
+/// known bigint gap that follows from it.
 pub struct PyIntListObj {
     rc: Cell<u32>,
     items: Cell<Vec<i64>>,
@@ -1056,6 +1071,21 @@ pub extern "C" fn pycc_rt_int_list_new() -> *mut PyIntListObj {
 /// v0.2 `list[int]` slice). Grows `list`'s backing `Vec` via its own
 /// amortized-doubling `push`, so this never needs to reimplement
 /// capacity-doubling by hand.
+///
+/// # Element representation
+/// `value` is stored exactly as given -- a **raw, untagged** `i64` (see
+/// `PyIntListObj`'s own doc comment). A `Ty::Int` value flowing out of
+/// ordinary codegen (`emit_expr` on a `list[int]` element expression) is
+/// D-061-tagged, so a caller crossing this boundary must call
+/// `untag_smallint` on it first, exactly once, before passing it here.
+/// **Known gap:** a bigint-tagged `Ty::Int` (one that has overflowed past
+/// D-061's 63-bit smallint range) cannot be represented by this raw `i64`
+/// slot at all -- `untag_smallint` assumes a smallint-tagged input and
+/// silently produces garbage on a bigint-tagged one. Appending such a
+/// value needs an explicit `require_smallint`-style rejection (or an
+/// honest panic) at the codegen boundary; this function itself has no way
+/// to detect or reject it, since by the time a raw `i64` reaches here the
+/// tag bit is already gone.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.
@@ -1113,6 +1143,19 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 /// indexing, since that would panic here rather than matching CPython's
 /// last-element behavior.
 ///
+/// # Element representation
+/// Two independent conversions, in opposite directions, both needed by
+/// any caller crossing this boundary (see `PyIntListObj`'s own doc
+/// comment): `index` is a container offset, not a stored element -- it
+/// arrives as a **raw, untagged** `i64` here, so a caller with a
+/// D-061-tagged `Ty::Int` index expression must `untag_smallint` it
+/// first, exactly like `pycc_rt_int_list_append`'s `value`. The **return
+/// value**, in contrast, is a raw stored element read straight back out --
+/// a caller that treats it as an ordinary `Ty::Int` value anywhere else in
+/// generated code (printing it, comparing it, arithmetic on it) must
+/// `tag_smallint` it first, since every other `pycc_rt_int_*` function
+/// expects a tagged operand.
+///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.
 #[unsafe(no_mangle)]
@@ -1122,6 +1165,17 @@ pub unsafe extern "C" fn pycc_rt_int_list_get(list: *mut PyIntListObj, index: i6
 
 /// Returns `list`'s current element count (Python's `len(list)`, D-104's
 /// v0.2 `list[int]` slice).
+///
+/// # Element representation
+/// The returned count is a **raw, untagged** `i64`, not a D-061-tagged
+/// one (see `PyIntListObj`'s own doc comment) -- it is a plain `usize`
+/// element count, unrelated to any stored element's own representation.
+/// `len(x)` is itself a `Ty::Int`-typed expression result in ordinary
+/// Python semantics, so a caller that uses this return value as a
+/// `Ty::Int` anywhere else in generated code (e.g. passing it to
+/// `pycc_rt_int_to_str` for `print(len(x))`) must `tag_smallint` it
+/// first, the same conversion `pycc_rt_int_list_get`'s own return value
+/// needs.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.
