@@ -28,6 +28,49 @@ never a merge gate.
 
 ---
 
+## 2026-07-31 — A `cargo llvm-cov` region gap with no uncovered line means a per-instantiation gap, not a mystery
+
+**What happened:** PR-10 Task 11b (`pycc_codegen`'s `list[int]` wiring) is
+the first commit on that branch where `cargo build --workspace` goes green,
+so it is also the first time D-014's coverage gate could run there. It
+reported `crates/pycc_codegen/src/lib.rs` at 99.68% regions / 99.73% lines
+— but every drill-down disagreed: `--show-missing-lines` named a single
+line, the merged `--text` and `--html` reports contained no zero-count line
+at all, and summing the JSON export's region counts by source span gave
+zero uncovered regions against a total that exactly matched the summary's
+own. Roughly an hour went into reconciling those views (including two
+throwaway baseline worktrees, the first checked out at a commit that
+predated the gate breakage but was itself still red).
+
+**Root cause:** `pycc_codegen` is compiled more than once in a workspace
+coverage run — once for its own `#[cfg(test)]` unit-test binary, and again
+as an rlib for the integration tests and the `pycc` binary they spawn. The
+mangled names differ per compilation, so llvm-cov's file summary accounts
+for those copies separately even though every human-readable report merges
+them. Code exercised only through `tests/slice1_codegen_depth.rs` (which
+drives the separate `pycc` binary) can therefore leave the unit-test copy's
+regions unexecuted, and the summary counts that — with nothing to point at
+in any per-line view, because the merged view really is fully covered.
+
+**What fixed it:** adding two `pycc_codegen` unit tests that exercise the
+same paths the integration suite already covered — a `ForList` loop run to
+completion (the increment-and-branch-back block; the existing unit test
+returned on the first iteration and never reached it) and a module-level
+`list[int]` global. That took the workspace to 100%/100% with no production
+change. A third such test was added later for `MirExpr::ListAppend`'s body.
+
+**Lesson:** when the coverage summary reports a gap that no per-line view
+can locate, stop looking for the missing line — it does not exist. Ask
+instead which *binary* fails to reach the new code, and add a test in the
+crate's own `#[cfg(test)]` module rather than only an end-to-end one. As a
+default for this repository: any new `pycc_codegen` arm needs a unit test
+in that crate, even when `tests/slice1_codegen_depth.rs` already proves the
+behavior from real source. Related trap from the same session: `cargo fmt`
+with no `-p` swept seven unrelated files that were already unformatted on
+the branch into the working tree (CI runs no `fmt` check, so the drift was
+pre-existing) — scope it to the crate being edited, then check
+`git diff --stat` before staging.
+
 ## 2026-07-30 — A digest-pinned file has no "comment-only, no functional change" exemption
 
 **What happened:** PR-9 Task 10's docs sweep edited three stale test-count
