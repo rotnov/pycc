@@ -1,7 +1,8 @@
 # pycc — AOT compiler for typed Python to native binaries
 
-> pycc is a fully AI-created, human-managed pre-alpha project building an
-> ahead-of-time compiler for typed, standard Python 3.14 with Rust and LLVM.
+> pycc is a pre-alpha ahead-of-time compiler for typed, standard Python 3.14
+> with an implemented native-binary path through Rust and LLVM. AI agents
+> create it, and a human manages it.
 
 ## What pycc is
 
@@ -24,6 +25,9 @@ release automation, and process rules. A human only manages goals, constraints,
 priorities, product decisions, and the definition of success.
 
 No project code is handwritten by a human.
+
+“AI-native” describes the authorship and management model. pycc is not an AI
+or machine-learning compiler.
 
 ## Honest status
 

@@ -400,7 +400,7 @@ while the old anchor remains, then replace the active anchor byte-for-byte from
 that fixture in a later pull request and retire the superseded digest in that
 activation change.
 
-The prospective search-ledger audit is staged under
+The active search-ledger audit is pinned by the reviewed fixture
 `tests/fixtures/workflow-policy-search-ledger.yml` with SHA-256
 `f8d60936438c48362d0a5dc11ee709c9dd5354c3f697038bc36b620c266f0688`.
 It keeps the existing read-only `pull_request_target` boundary, additionally
@@ -510,71 +510,39 @@ the same reason. The checkpoint
 schema also requires a non-boolean JSON integer version before accepting
 version `1`. The GitHub surface and every measurement require exact non-boolean
 integers for the top-50 result window and `per_page`; Python's numeric equality
-cannot admit JSON floats such as `50.0` into authoritative replay data. This
-staging commit therefore also imports the 22 reviewed
-2026-07-29/30 GitHub rows that predate the registry, making them part of the
-actual trusted base. It stages the initial registry, both history checkpoints,
-and their roadmap projection in the same pre-activation revision. The audit's
-one-time initialization path accepts only those exact reviewed 108-row and
-130-row digests plus the byte-exact registry, ledger, and checkpoint files. Its
-schema validation covers the registry version, semantic
-identity versions, both surface contracts, query lifecycle/KPI/alias rules,
-one-way identity-preserving query retirement, unambiguous backtick projection,
-provider-scoped legacy-history lifecycle bounds, rejection of unprojectable raw
-HTML, Unicode control/formatting characters, pipes, and line separators, and the retired `AI-native compiler` authorship
+cannot admit JSON floats such as `50.0` into authoritative replay data. The
+reviewed bootstrap imported the 22 GitHub rows that predate the registry, the
+initial registry, both history checkpoints, and their roadmap projection. The
+audit's one-time initialization path accepts only those exact reviewed 108-row
+and 130-row digests plus the byte-exact registry, ledger, and checkpoint files.
+Its schema validation covers the registry version, semantic identity versions,
+both surface contracts, query lifecycle/KPI/alias rules, one-way
+identity-preserving retirement, unambiguous backtick projection,
+provider-scoped legacy-history bounds, unprojectable raw HTML, Unicode controls,
+pipes, line separators, and the retired `AI-native compiler` authorship
 diagnostic. Google retirement remains activation/clock-bounded until the
-registry gains a Google snapshot series. This is a pinned
-bootstrap, not a timestamp exception that future rows can claim. The suite and
-a direct head-versus-`origin/main` invocation cover the real bootstrap before
-the prospective workflow can be activated. The fixture is not active in this
-staging commit. Activation must copy it byte-for-byte to
-`workflow-policy.yml` in a later pull request, prove the new
-required `audit` run, and retire the older roadmap-only trust-anchor digest.
-During that transition, the still-active roadmap-only workflow runs this
-revision's base-owned policy checker. The checker recognizes only the exact
-prospective workflow digest, fetches the event's `refs/pull/<n>/head` commit as
-Git data without checking it out or executing it, verifies the fetched SHA,
-and requires the candidate registry, ledger, and checkpoints to remain
-byte-identical to this staged base. Every repository script the successor
-workflow executes -- the three policy/audit implementations and their three
-self-test suites -- is pinned byte-for-byte. Four remain identical to the
-trusted base. The policy checker and its self-test instead use deterministic,
-exactly-once transforms: they activate only the new digest, retire the old
-digest and one-use bridge, select the active fixture, and remove transition-only
-tests. Every repository-resident input those successor self-tests read is also
-byte-pinned: the active CI workflow, all eight historical performance workflow
-fixtures, the prospective search-policy fixture, and the four performance
-checker/test files whose digests the roadmap suite verifies. Changed and missing
-mutations cover each input independently. The search-audit self-test synthesizes
-its temporary roadmap projection from the already pinned checkpoint document,
-so unrelated activation-status prose may still be updated without becoming an
-implicit executable input. The staged suite materializes that transformed pair in an isolated tree
-and runs its remaining self-tests, so the activation cannot leave a permanent
-bridge or trust both workflow generations. These D-103 constraints prevent the
-activation commit from replacing any successor checker with a no-op that would
-become trusted after merge. Both successor Python invocations use isolated
-mode; the self-test loads its byte-pinned sibling auditor by exact path, so new
-modules or package initializers in the activation tree cannot shadow
-standard-library or trusted imports. The bridge also enumerates the complete
-candidate Git tree, pins every candidate workflow plus every activation input
-to a `100644 blob` entry (including the newly active trust anchor), and requires
-an empty `.gitattributes` manifest, so symlinks, executable
-mode changes, submodules, or root/nested checkout attributes cannot preserve Git
-blob bytes while changing the successor's materialized workflow, scripts, or
-fixtures. Git blob output is normalized to binary
-strings before comparison so identical UTF-8 files cannot fail solely because
-Ruby assigned different in-memory encodings. The candidate roadmap may
-still update unrelated current-status text, but the bridge extracts every
-`search-history-checkpoint` line and requires exactly the two staged markers in
-their reviewed order, rejecting removal, rewriting, or injection. Regular
-`pull_request` CI never performs that fetch; the bridge is limited to the one
-trust-anchor activation shape.
+registry gains a Google snapshot series.
+
+Activation copied the reviewed fixture byte-for-byte to
+`workflow-policy.yml`, proved the required `audit` run, and retired the older
+roadmap-only digest plus the one-use bridge. The active policy checker and its
+self-test are the exact deterministic steady-state variants staged by the base;
+their transition-only call and tests are absent. Every policy executable,
+self-test, workflow input, and transitive repository fixture is bound by the
+complete D-103 successor manifest. On every pull request, the base-owned audit
+downloads those inputs as non-executable Git data, requires `100644 blob` modes,
+rejects root or nested `.gitattributes`, and runs the isolated Python auditor
+against the trusted base ledger. A candidate cannot replace a checker, change
+one protected target while authorizing it from its own manifest, or shrink the
+bundle in one merge. Future protected-bundle changes therefore retain the same
+two-merge proposal-then-activation protocol.
 
 The regular PR job runs this checker for fast feedback only; pull-request code
 can change its own workflow. The authoritative `Workflow policy` workflow uses
 `pull_request_target` on every pull request, checks out the trusted base commit,
-downloads the head revision's workflow YAML and `docs/ROADMAP.md` through the
-read-only GitHub API, and treats them as data. It never checks out or executes
+downloads the head revision's workflows, search evidence, complete successor
+manifest, and every protected target/source through the read-only GitHub API,
+and treats them as data. It never checks out or executes
 pull-request code, so the check can remain required without path-filtered runs
 getting stuck as pending. Its checkout uses `github.sha`, which
 `pull_request_target` defines as the latest commit on the base branch; do not

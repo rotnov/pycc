@@ -45,6 +45,9 @@ syntax or dialect.
 
 **pycc is an experiment in autonomous, AI-native software development: the project writes itself.** AI agents create its specifications, code, tests, documentation, reviews, and release automation. Humans set goals and constraints; not a single line of project code is handwritten by a human.
 
+“AI-native” describes the authorship workflow. pycc is an AOT compiler for
+typed Python, not an AI or machine-learning compiler.
+
 ## Why
 
 Python compiler projects make different tradeoffs between compatibility,
