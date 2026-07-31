@@ -1051,8 +1051,12 @@ pub extern "C" fn pycc_rt_print_none() {
 /// T0034, never reaching codegen). Header shape follows `PyStrObj`'s real
 /// precedent (`rc: Cell<u32>` plus payload) rather than `docs/RUNTIME.md`'s
 /// former stale 16-byte generic-header spec (corrected by this plan's
-/// Task 12) -- `PyStrObj` is this runtime's only other heap object and it
-/// never had a `type_id`/`flags` field either.
+/// Task 12) -- `PyStrObj` is this runtime's only other *refcounted* heap
+/// object, and it never had a `type_id`/`flags` field either. (`BigIntObj`,
+/// above, is a third heap-allocated type -- `Box::into_raw`'d by
+/// `tag_bigint` -- but it carries no `rc` field at all: it is a deliberate,
+/// documented leak, not refcounted like `PyStrObj`/`PyIntListObj`, so it is
+/// not a counterexample to this struct's own refcounted-header shape.)
 ///
 /// No `#[repr(C)]`: exactly like `PyStrObj` (see that struct's own doc
 /// comment), `pycc_codegen` never sees anything but an opaque pointer to
