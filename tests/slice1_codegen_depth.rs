@@ -984,7 +984,7 @@ _run()
 fn an_out_of_range_index_fails_explicitly() {
     // `pycc_rt_int_list_get`'s own bounds panic, reached through real
     // source: the index is only known at runtime, so there is nothing
-    // `pycc_types` could have rejected. Also pins D-104's documented v0.2
+    // `pycc_types` could have rejected. Also pins D-107's documented v0.2
     // scope cut that a *negative* index is out of range too rather than
     // CPython's last-element behavior.
     let source = "\

@@ -67,7 +67,7 @@ v0.2 gives `list[T]` no `str(list)` or `bool(list)` meaning (D-106):
 converting one to `str`, and using one as an `if`/`while` condition. The
 string conversion is reachable from every context that needs one, which
 today means both `print(xs)` and f-string interpolation (`f"{xs}"`) -- they
-share a single conversion site in `pycc_codegen`, so both fail identically.
+share a single conversion helper in `pycc_codegen`, so both fail identically.
 Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument
 expressions; HIR does not yet assign binding identities or build and memoize a

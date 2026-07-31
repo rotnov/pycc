@@ -1050,10 +1050,9 @@ pub extern "C" fn pycc_rt_print_none() {
 /// `list[int]`; any other element type stays a `pycc_types` diagnostic,
 /// T0034, never reaching codegen). Header shape follows `PyStrObj`'s real
 /// precedent (`rc: Cell<u32>` plus payload) rather than `docs/RUNTIME.md`'s
-/// stale 16-byte generic-header spec (that document's own correction is
-/// this plan's Task 12, not this task) -- `PyStrObj` is this runtime's
-/// only other heap object and it never had a `type_id`/`flags` field
-/// either.
+/// former stale 16-byte generic-header spec (corrected by this plan's
+/// Task 12) -- `PyStrObj` is this runtime's only other heap object and it
+/// never had a `type_id`/`flags` field either.
 ///
 /// No `#[repr(C)]`: exactly like `PyStrObj` (see that struct's own doc
 /// comment), `pycc_codegen` never sees anything but an opaque pointer to
@@ -1091,11 +1090,11 @@ pub extern "C" fn pycc_rt_print_none() {
 /// RUNTIME.md`'s stated `list[T]` design ("growable vec of unboxed `T`...
 /// SIMD-friendly"), the same kind of narrow, justified exception D-061's
 /// own consequences section already grants `bool` (its own untagged `i8`
-/// representation). This is *not yet reconciled with a codegen consumer*
-/// (Task 11, not this task) -- see the `# Element representation` note on
+/// representation). This is reconciled with its codegen consumer
+/// (Task 11a/11b, D-105) -- see the `# Element representation` note on
 /// `pycc_rt_int_list_append`/`_get`/`_len` below for the exact tag/untag
-/// conversions a caller crossing this boundary must perform, and the
-/// known bigint gap that follows from it.
+/// conversions a caller crossing this boundary performs, and the known
+/// bigint gap that follows from it.
 pub struct PyIntListObj {
     rc: Cell<u32>,
     items: Cell<Vec<i64>>,
@@ -1186,7 +1185,7 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 /// reject a negative index at compile time (the index value is only known
 /// at runtime) -- so this panics on *any* negative index, the same
 /// "index out of range" panic as a too-large positive one. This is a
-/// deliberate, documented v0.2 gap (D-104), not a bug: it means a
+/// deliberate, documented v0.2 gap (D-107), not a bug: it means a
 /// conformance fixture exercising this function must not use negative
 /// indexing, since that would panic here rather than matching CPython's
 /// last-element behavior.
@@ -2146,7 +2145,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "pycc_rt: list index out of range")]
     fn int_list_get_rejects_negative_indices() {
-        // D-104's documented v0.2 scope cut: unlike real Python (where
+        // D-107's documented v0.2 scope cut: unlike real Python (where
         // `lst[-1]` is the last element), a negative index panics here
         // exactly like an out-of-range positive one -- `pycc_types` has no
         // way to reject a negative index at compile time, so this is

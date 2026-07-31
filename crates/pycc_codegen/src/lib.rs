@@ -646,10 +646,14 @@ fn to_str<'ctx>(
         // A real, reachable feature gap rather than a defensive arm
         // (D-106): `pycc_types` accepts any argument type for `print`, so
         // `print(xs)` for a `list[int]` local type-checks today and lands
-        // here. v0.2 has no `str(list)`/list-printing semantics (D-104),
-        // and there is no `pycc_rt_list_to_str` to call -- so this panics
-        // honestly instead of handing a `PyIntListObj` pointer to a
-        // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
+        // here -- and so does f-string interpolation (`f"{xs}"`, the
+        // interpolation arm in `emit_expr`), a second, independent reachable
+        // route into this same arm (`emit_print_arg` and that interpolation
+        // arm both call into this one shared `to_str` helper). v0.2 has no
+        // `str(list)`/list-printing semantics (D-104), and there is no
+        // `pycc_rt_list_to_str` to call -- so this panics honestly instead
+        // of handing a `PyIntListObj` pointer to a `pycc_rt_*_to_str`
+        // function that would read it as a `PyStrObj`.
         Scalar::List(_) => {
             panic!("pycc_codegen: string conversion of a list[T] value is not supported yet")
         }
@@ -1626,8 +1630,13 @@ fn emit_assign<'ctx>(
         // `ty_to_basic_type` already allocated as a pointer. No refcount
         // traffic accompanies it -- D-106 keeps `list[T]` leak-only for
         // v0.2, so unlike `Str` there is deliberately no incref here and
-        // no `decref_str_slot_before_store` counterpart (that helper gates
-        // on the *target's* `Ty::Str`, so a list target never reaches it).
+        // no `decref_str_slot_before_store` counterpart. That helper is
+        // never even called for a list target: `emit_stmt`'s `Assign` arm
+        // gates the call itself on the target's `Ty` (`if ty ==
+        // pycc_mir::Ty::Str`) before ever invoking this function, not the
+        // other way around -- the helper's own internal `slot.ty !=
+        // Ty::Str` check is a defensive `panic!` for the "reached with the
+        // wrong target" case, not a skip a list target relies on.
         Scalar::List(v) => v.into(),
     };
     builder
@@ -1874,11 +1883,19 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // `list[T]` but `list[int]` before codegen ever runs, so `list`'s
         // element type is `int` for every `ForList` that can reach this
         // crate. Deliberately not derived from `bindings[list]` instead:
-        // that entry is absent whenever `list` is a parameter, and a
-        // derived non-`int` element type would allocate a slot
-        // `emit_stmt`'s own `list[int]`-only `ForList` arm then stores a
-        // tagged `int` into. A future PR widening codegen past `list[int]`
-        // owns both halves together.
+        // that entry can be absent -- not because `list` might be a
+        // list-typed function *parameter* (unreachable: `pycc_hir::
+        // annotation_to_ty` rejects any non-bare-name annotation, so
+        // `def f(xs: list[int])` fails with `C0001` long before codegen),
+        // but because `list` can be a module-scope global iterated from
+        // inside a function body, whose `local_bindings` is built from that
+        // function body alone and so has no entry for it at all --
+        // exactly what `a_module_level_list_binding_lives_in_a_global_slot`
+        // (`tests/slice1_codegen_depth.rs`) exercises. A derived non-`int`
+        // element type would allocate a slot `emit_stmt`'s own
+        // `list[int]`-only `ForList` arm then stores a tagged `int` into. A
+        // future PR widening codegen past `list[int]` owns both halves
+        // together.
         MirStmt::ForList { var, body, .. } => {
             bindings.entry(var.clone()).or_insert(pycc_mir::Ty::Int);
             for stmt in body {
@@ -2442,7 +2459,7 @@ fn emit_print_arg<'ctx>(
     }
 }
 
-/// Handles every `MirStmt` shape in v0.1 (this match is exhaustive over
+/// Handles every `MirStmt` shape (this match is exhaustive over
 /// `MirStmt`, no catch-all arm): a `print()` call of any number of
 /// `int`/`float`/`bool`/`str` arguments plus `None` from either a direct
 /// user-function result or a D-075 parameter value (Task 10, space-separated,
@@ -2456,9 +2473,12 @@ fn emit_print_arg<'ctx>(
 /// branches, and loop back-edges, using `truthy` for the shared `if`/
 /// `while` truthiness check and `emit_body_then_branch`/an inline
 /// equivalent for the terminator-safety this introduces (see both
-/// helpers' own doc comments) -- and now (Task 5) `Return`, terminating
+/// helpers' own doc comments) -- `Return` (Task 5), terminating
 /// the current block with the evaluated value (or none, for a bare
-/// `return`).
+/// `return`) -- and `ForList` (v0.2, D-104/Task 11b), reusing `ForRange`'s
+/// own loop/branch-building infrastructure parametrized over a runtime
+/// `pycc_rt_int_list_len` call instead of a static bound. `ForList` is a
+/// v0.2 addition, not part of v0.1's own original shape set.
 #[allow(clippy::too_many_arguments)]
 fn emit_stmt<'ctx>(
     context: &'ctx Context,
