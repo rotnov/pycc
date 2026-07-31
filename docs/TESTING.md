@@ -478,10 +478,13 @@ canonical lookalike detection. Setext level-2
 paragraph recovery stops when the explicit quote/list container signature
 changes; text from a top-level paragraph cannot be joined to a blockquoted
 underline to forge the canonical title. Ambiguous list-contained Setext shapes
-fail closed instead of being partially normalized. Top-level and consistently
-blockquoted Setext level-2 headings recover their complete multiline paragraph,
-but two-or-more-space CommonMark hard breaks are rejected before trailing
-whitespace normalization can erase their rendered `<br>`.
+fail closed instead of being partially normalized. Setext recovery preserves
+omitted blockquote prefixes across contiguous CommonMark lazy-continuation
+lines only until their explicit ancestry is recovered, so a blockquoted
+duplicate cannot disappear at an unprefixed title line. GitHub renders even a
+soft title newline as `<br>`, so every multiline Setext heading is rejected
+after ancestry recovery; two-or-more-space hard breaks are rejected earlier,
+before trailing-whitespace normalization can erase that rendered boundary.
 Because this evidence file is a data ledger rather than
 general documentation, inline
 links or HTML are forbidden in headings, and fenced, GitHub display-math, or

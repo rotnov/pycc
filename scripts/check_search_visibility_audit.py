@@ -215,14 +215,28 @@ def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | No
     paragraph: list[str] = []
     start = underline_index
     container = explicit_container_signature(lines[underline_index])
+    used_lazy_container = False
+    saw_explicit_container = False
     for index in range(underline_index - 1, -1, -1):
         line_container = explicit_container_signature(lines[index])
         if line_container != container:
-            if begins_list_item(lines[index]):
+            missing_container = container[len(line_container) :]
+            lazy_blockquote = (
+                not saw_explicit_container
+                and len(line_container) < len(container)
+                and container[: len(line_container)] == line_container
+                and all(marker == "quote" for marker in missing_container)
+            )
+            if lazy_blockquote:
+                used_lazy_container = True
+            elif begins_list_item(lines[index]):
                 raise AuditError(
                     "Setext headings cannot cross Markdown container boundaries"
                 )
-            break
+            else:
+                break
+        else:
+            saw_explicit_container = True
         if re.search(r" {2,}\Z", lines[index]):
             raise AuditError(
                 "search visibility headings cannot contain hard line breaks"
@@ -238,8 +252,12 @@ def setext_title(lines: list[str], underline_index: int) -> tuple[int, str] | No
         start = index
         if begins_list_item(lines[index]):
             break
-    if not paragraph:
+    if not paragraph or (used_lazy_container and not saw_explicit_container):
         return None
+    if len(paragraph) > 1:
+        raise AuditError(
+            "search visibility Setext headings cannot contain line breaks"
+        )
     return start, " ".join(reversed(paragraph))
 
 

@@ -36,7 +36,9 @@ rejects fenced and GitHub display-math containers, and allows only top-level
 ASCII headings to end the machine-owned history section so Unicode homoglyphs
 cannot forge a second evidence owner. Setext title recovery rejects CommonMark
 hard breaks before source whitespace is normalized, so a rendered `<br>` cannot
-hide inside the canonical owner title.
+hide inside the canonical owner title. It also preserves lazy blockquote
+ancestry while scanning and rejects every multiline Setext title because GitHub
+renders its soft newline as `<br>` too.
 Its closed intent/KPI matrix
 prevents diagnostic classes from entering the acquisition denominator. The
 prospective base-owned audit pins and validates this exact bootstrap; a later

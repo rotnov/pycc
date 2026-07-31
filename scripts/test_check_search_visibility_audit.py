@@ -426,7 +426,8 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                     + self.head_visibility
                 )
                 with self.assertRaisesRegex(
-                    AuditError, "exactly one level-2|container boundaries"
+                    AuditError,
+                    "exactly one level-2|container boundaries|line breaks",
                 ):
                     validate(self.head, self.base, self.audited_at)
 
@@ -441,6 +442,43 @@ class SearchVisibilityAuditTests(unittest.TestCase):
             )
         )
         with self.assertRaisesRegex(AuditError, "exactly one level-2"):
+            validate(self.head, self.base, self.audited_at)
+
+    def test_setext_title_preserves_lazy_blockquote_ancestry(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        forged_table = (
+            "\n\n"
+            "| Observed at (UTC) | Exact query | Rank | Δ | Results | Total |\n"
+            "|---|---|---:|---:|---:|---:|\n"
+            "| 2026-07-31T02:00:00Z | `forged` | 1 | — | 1 | 1 |\n"
+        )
+        for lazy_heading in (
+            "> GitHub repository search\nhistory\n> ---",
+            "> > GitHub repository search\nhistory\n> > ---",
+            "- GitHub repository search\nhistory\n  ---",
+            "> - GitHub repository search\nhistory\n>   ---",
+        ):
+            with self.subTest(lazy_heading=lazy_heading):
+                path.write_text(
+                    self.head_visibility + "\n" + lazy_heading + forged_table
+                )
+                with self.assertRaisesRegex(
+                    AuditError,
+                    "exactly one level-2|container boundaries|line breaks",
+                ):
+                    validate(self.head, self.base, self.audited_at)
+
+    def test_canonical_setext_heading_rejects_multiline_rendering(self) -> None:
+        path = self.head / "docs" / "SEARCH_VISIBILITY.md"
+        canonical = "## GitHub repository search history"
+        path.write_text(
+            self.head_visibility.replace(
+                canonical,
+                "GitHub repository search\nhistory\n---",
+                1,
+            )
+        )
+        with self.assertRaisesRegex(AuditError, "line breaks"):
             validate(self.head, self.base, self.audited_at)
 
     def test_setext_history_heading_rejects_hard_line_breaks(self) -> None:
@@ -474,7 +512,8 @@ class SearchVisibilityAuditTests(unittest.TestCase):
                     f"{duplicate_heading}{forged_table}{self.head_visibility}"
                 )
                 with self.assertRaisesRegex(
-                    AuditError, "exactly one level-2|container boundaries"
+                    AuditError,
+                    "exactly one level-2|container boundaries|line breaks",
                 ):
                     validate(self.head, self.base, self.audited_at)
 
