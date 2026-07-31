@@ -65,10 +65,12 @@ labels or markers, theme clusters, and comment counts.
 Cheap pass over the inventory before any scoring: read newest comments first — this tracker
 accumulates "reconfirmed at commit X" comments that settle currency instantly — and give a
 quick premise check to any issue whose area has visibly changed since it was filed. An issue
-that provably no longer reproduces is not a selection candidate; it is a closure candidate,
-routed through `/issue-implement`'s own evidence-gated triage (and closing a stale issue is a
-perfectly good pick for the run when one is found). Anything inconclusive stays in the pool
-marked as unverified rather than being discarded on suspicion.
+that provably no longer reproduces is not a selection candidate; it is closed **now**, during
+the screen, by invoking `/issue-implement`'s evidence-gated triage for it — every provable
+closure found, not just one, so the tracker is cleaned as a side effect of every selection
+pass. Each closure individually meets that skill's evidence bar (the resolving change cited,
+the premise shown not to reproduce); anything inconclusive stays in the pool marked as
+unverified rather than being closed on suspicion.
 
 ### 4. Blocker screen
 
@@ -88,17 +90,17 @@ Drop or defer, with a recorded reason each:
 
 ### 5. Score the survivors
 
-Against everything already screened, score what remains on:
+The ordering is fixed: **the repository's own priority markers rank first** (P1 before P2
+before P3 before unmarked), and **within the same priority, smaller wins** — least effort,
+smallest blast radius, cleanest scope. Fast merges of the most important work beat both
+"biggest first" and "easiest first". Within that frame, use as tie-breakers and modifiers:
 
-- **Severity and value** — the repository's own priority markers, user-visible impact,
-  soundness holes over polish.
 - **Scope clarity** — itemized completion criteria and a pinned root cause make an issue
   cheap to plan and safe to execute; a vague aspiration is expensive at every later step.
 - **Premise verifiability** — can the defect be reproduced in this environment right now?
-- **Blast radius** — files touched, overlap with open pull requests, conflict surface,
+- **Blast radius detail** — files touched, overlap with open pull requests, conflict surface,
   whether the diff can stay localized.
-- **Effort** — prefer the smallest issue that still moves something real; chains of small
-  merged issues beat one stalled large one.
+- **Soundness over polish** when two issues share a priority marker and size.
 
 When the session has a stated secondary goal — exercising an untested workflow path, building
 evidence for a later decision — weigh it explicitly and say so in the justification rather
@@ -130,10 +132,21 @@ change the pick mean the scoring was wrong — redo step 5 with what was learned
 ### 8. Hand off
 
 Report: the selected issue with the justification (fit, unblocked-ness, the no-user-decisions
-rationale, the advisor's verdict), the runners-up with one-line reasons, and the exclusions
-worth the maintainer's own attention. With a standing autopilot directive, invoke
-`/issue-implement` on the selection; its enumerated write authorization covers the run from
-this point, and this skill's own report is delivered alongside, not instead.
+rationale, the advisor's verdict), the runners-up with one-line reasons, the closures made
+during the staleness screen, and the exclusions worth the maintainer's own attention. With a
+standing autopilot directive, invoke `/issue-implement` on the selection; its enumerated write
+authorization covers the run from this point, and this skill's own report is delivered
+alongside, not instead.
+
+## Loop
+
+A standing autopilot directive means a loop, not one pick: when the handed-off run reaches a
+terminal state, deliver its brief report, then re-enter this workflow at step 1 — a fresh
+baseline, because the just-merged work moved the default branch and may have changed other
+issues' standing. The loop ends only when the user stops it, when an `/issue-implement` stop
+condition needs the user, or when the pool has no survivors — report which. Never carry a
+previous iteration's inventory, scores, or baselines into the next: every iteration re-derives
+them.
 
 ## Output
 
