@@ -113,7 +113,9 @@ paths = ["tests/"]
 ## Exit codes
 
 `0` ok · `1` compile errors (including `C0001` version-capability gaps) · `2`
-bad invocation or unreadable input · `101` compiled program panicked/uncaught
+bad invocation, unreadable input, or a toolchain/environment failure such as a
+host linker driver that cannot be started (reported as an actionable
+`error:` diagnostic, never a panic) · `101` compiled program panicked/uncaught
 exception, or `build`/`run` hit one of `pycc_codegen`'s own explicit,
 named "not supported yet" boundaries for a construct `pycc check` accepts but
 codegen doesn't yet implement (D-072; the older D-035 `pycc_mir` boundary
