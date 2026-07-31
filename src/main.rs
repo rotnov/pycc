@@ -100,8 +100,9 @@ fn main() -> ExitCode {
 /// `dir` as a parameter instead of calling `std::env::current_dir()`
 /// internally -- matching `find_pycc_rt_lib_dir`/`find_pycc_rt_lib_dir_in`'s
 /// existing dependency-injection split below -- so a test can exercise
-/// `project_config::scaffold`'s error path (an unwritable target directory)
-/// without mutating this test process's real, shared working directory.
+/// `project_config::scaffold`'s error path (an existing `pycc.toml`,
+/// #237's refusal contract) without mutating this test process's real,
+/// shared working directory.
 fn init(name: Option<&str>, dir: &Path) -> Result<(), String> {
     project_config::scaffold(name, dir).map_err(|e| e.to_string())
 }
@@ -668,24 +669,28 @@ mod init_tests {
     }
 
     #[test]
-    fn reports_the_scaffold_error_when_the_target_directory_does_not_exist() {
-        // `dir` simply never exists (and is never created), so
-        // `std::fs::write` inside `scaffold` fails because its immediate
-        // parent doesn't exist -- a plain `NotFound` on every Tier-1
-        // platform, independent of any `..`-lexical-resolution semantics
-        // (Windows resolves `..` before touching the filesystem, unlike
-        // POSIX, so a path built from a nonexistent segment plus a
-        // trailing ".." is not a reliable way to force a fresh `NotFound`
-        // there -- verified against `project_config.rs`'s equivalent test,
-        // which uses this same plain-nonexistent-directory approach).
+    fn reports_the_scaffold_error_when_pycc_toml_already_exists() {
+        // #237: an existing `pycc.toml` is the deterministic cross-platform
+        // error case for `init`'s error arm now that a nonexistent target
+        // directory scaffolds successfully (the inverted write order's
+        // `create_dir_all` creates it -- see `project_config.rs`'s
+        // `scaffold_creates_a_missing_target_directory`). The refusal
+        // message flows through `init`'s io::Error -> String mapping.
         let dir = std::env::temp_dir().join(format!(
-            "pycc_main_init_nonexistent_target_{}",
+            "pycc_main_init_existing_toml_{}",
             std::process::id()
         ));
-        assert!(!dir.exists());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pycc.toml"), "user content").unwrap();
 
         let err = init(Some("irrelevant"), &dir).unwrap_err();
-        assert!(!err.is_empty());
+        assert!(err.contains("`pycc.toml` already exists"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("pycc.toml")).unwrap(),
+            "user content"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 

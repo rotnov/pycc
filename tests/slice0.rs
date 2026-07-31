@@ -325,11 +325,11 @@ fn init_scaffolds_pycc_toml_and_main_py_in_the_current_directory() {
 }
 
 #[test]
-fn init_reports_a_clean_error_when_pycc_toml_cannot_be_written() {
-    // `pycc.toml` already existing as a directory (rather than an
-    // unwritable filesystem root) forces `scaffold`'s write to fail
-    // deterministically on every Tier-1 target without depending on the
-    // test runner's OS or privilege level.
+fn init_refuses_when_pycc_toml_exists_as_a_directory() {
+    // Pre-#237 this same setup forced `scaffold`'s *write* to fail; the
+    // pre-check phase now refuses it up front (any entry type counts as
+    // an existing `pycc.toml`). Same exit code and stderr prefix, honest
+    // new name for the new mechanism.
     let dir = std::env::temp_dir().join(format!("pycc_e2e_init_conflict_{}", std::process::id()));
     std::fs::create_dir_all(dir.join("pycc.toml")).unwrap();
 
@@ -339,7 +339,130 @@ fn init_reports_a_clean_error_when_pycc_toml_cannot_be_written() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: pycc init failed"));
+    assert!(stderr.contains("`pycc.toml` already exists"));
+}
+
+/// #237 regression 1: both scaffold files already exist -- refuse with
+/// exit 2 and leave both byte-for-byte unchanged.
+#[test]
+fn init_refuses_to_overwrite_an_existing_project() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_existing_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("pycc.toml"), "user toml").unwrap();
+    std::fs::write(dir.join("src").join("main.py"), "user code").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .args(["init", "clobber"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: pycc init failed"));
+    assert!(stderr.contains("`pycc.toml` already exists"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("pycc.toml")).unwrap(),
+        "user toml"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src").join("main.py")).unwrap(),
+        "user code"
+    );
+}
+
+/// #237 regression 2 (variant A): only `pycc.toml` exists.
+#[test]
+fn init_refuses_when_only_pycc_toml_exists() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_toml_only_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pycc.toml"), "user toml").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("`pycc.toml` already exists"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("pycc.toml")).unwrap(),
+        "user toml"
+    );
+    assert!(!dir.join("src").exists());
+}
+
+/// #237 regression 2 (variant B): only `src/main.py` exists -- the refusal
+/// must also leave `pycc.toml` uncreated.
+#[test]
+fn init_refuses_when_only_main_py_exists() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_py_only_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src").join("main.py"), "user code").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("`src/main.py` already exists"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src").join("main.py")).unwrap(),
+        "user code"
+    );
+    assert!(!dir.join("pycc.toml").exists());
+}
+
+/// #237 regression 3: `src` exists as a plain file.
+#[test]
+fn init_refuses_when_src_is_a_plain_file() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_src_file_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("src"), "not a directory").unwrap();
+
+    let output = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("`src` exists and is not a directory")
+    );
+    assert!(!dir.join("pycc.toml").exists());
+}
+
+/// #237 regression 4: a late write failure leaves `pycc.toml` uncreated.
+/// Unix-only injection (a dangling `pycc.toml` symlink passes the
+/// follow-symlink pre-check, both `src` steps succeed, and the final
+/// `create_new` write fails with `EEXIST` on the symlink entry itself,
+/// never following it) -- the ordering guarantee is additionally pinned by
+/// `src/project_config.rs`'s unit-level injection trio, and the coverage
+/// leg runs on macOS, so this counts toward the 100% gate.
+#[cfg(unix)]
+#[test]
+fn init_leaves_pycc_toml_uncreated_when_a_late_write_fails() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_late_fail_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(
+        dir.join("missing_dir").join("pycc.toml"),
+        dir.join("pycc.toml"),
+    )
+    .unwrap();
+
+    let output = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("error: pycc init failed"));
+    // Both src steps ran...
+    assert!(dir.join("src").join("main.py").is_file());
+    // ...and the real pycc.toml path still resolves to nothing.
+    assert!(!dir.join("pycc.toml").try_exists().unwrap());
 }
 
 #[test]

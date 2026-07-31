@@ -53,6 +53,17 @@ struct ScaffoldToml<'a> {
 /// `dir`. `name` defaults to `dir`'s own file-name component when omitted,
 /// matching how `cargo init`/`npm init` derive a project name from the
 /// target directory.
+///
+/// Refusal contract (#237): before writing anything, every destination is
+/// inspected, and the scaffold returns an `ErrorKind::AlreadyExists` error
+/// -- "`pycc.toml` already exists", "`src` exists and is not a directory",
+/// or "`src/main.py` already exists" -- leaving all existing paths
+/// byte-for-byte unchanged. An existing `src` *directory* is not itself a
+/// conflict (only its entry type and `main.py`'s presence are checked). A
+/// missing `dir` is created. `pycc.toml` is written last, with
+/// `create_new`, so a late failure never leaves it behind and a dangling
+/// symlink at either file destination fails cleanly instead of writing
+/// through to the symlink's target.
 pub fn scaffold(name: Option<&str>, dir: &std::path::Path) -> std::io::Result<()> {
     let project_name = name
         .map(str::to_string)
@@ -89,12 +100,76 @@ pub fn scaffold(name: Option<&str>, dir: &std::path::Path) -> std::io::Result<()
     // lands together with the `--release` flag it depends on (this PR's
     // Task 3).
     parse(&toml_contents).expect("scaffold's own generated pycc.toml must parse and validate");
-    std::fs::write(dir.join("pycc.toml"), toml_contents)?;
 
-    std::fs::create_dir_all(dir.join("src"))?;
+    // #237: inspect every destination before writing anything, so an
+    // existing project is never silently replaced (the pre-check phase) and
+    // a later failure can never leave a half-written scaffold over user
+    // files (the write order below). Checks use follow-symlink semantics
+    // deliberately: a symlink to a real file is user content and must
+    // refuse, and a symlink to a directory is a usable `src`. A *dangling*
+    // symlink passes these checks (its target does not exist), which is
+    // why both file writes below use `create_new`: plain `fs::write` would
+    // follow such a symlink and could silently create the file *outside*
+    // the target directory when the symlink's target parent exists -- on
+    // POSIX platforms `create_new` refuses the existing symlink entry
+    // instead (O_EXCL never resolves symlinks; the Windows reparse-point
+    // path shares W3's accepted cfg(unix) test gap). The checks
+    // are a single-process guarantee, not an atomic one: nothing locks the
+    // directory between check and write, the same non-atomicity
+    // `cargo init`-family tools accept; `create_new` narrows that window
+    // for the two files.
+    let toml_path = dir.join("pycc.toml");
+    let src_dir = dir.join("src");
+    let main_py_path = src_dir.join("main.py");
+    if toml_path.try_exists()? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "`pycc.toml` already exists",
+        ));
+    }
+    match std::fs::metadata(&src_dir) {
+        Ok(meta) if !meta.is_dir() => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "`src` exists and is not a directory",
+            ));
+        }
+        // An existing `src` *directory* is not by itself a conflict:
+        // `create_dir_all` below tolerates it, and an empty `src/` next to
+        // no `pycc.toml`/`main.py` carries no user content to destroy.
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    if main_py_path.try_exists()? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "`src/main.py` already exists",
+        ));
+    }
+
+    // Write order (#237): `pycc.toml` goes LAST, so any late failure in
+    // the `src` steps leaves it uncreated -- the strongest form of the
+    // issue's "a late write failure leaves `pycc.toml` unchanged"
+    // regression. The worst a late failure can leave behind is an empty
+    // `src/` directory, which contains no user data (the same residue
+    // `cargo init`-family tools accept).
+    std::fs::create_dir_all(&src_dir)?;
     let main_py = "def main() -> None:\n    print(\"hello from pycc\")\n";
-    std::fs::write(dir.join("src").join("main.py"), main_py)?;
+    write_new(&main_py_path, main_py.as_bytes())?;
+    write_new(&toml_path, toml_contents.as_bytes())?;
     Ok(())
+}
+
+/// `fs::write` with `create_new`: fails if the path already names any
+/// entry, including a dangling symlink, instead of following it (#237).
+fn write_new(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(contents)
 }
 
 #[cfg(test)]
@@ -211,9 +286,8 @@ paths = ["tests/"]
         // (Windows) and a component-by-component one (POSIX) agree on the
         // answer once every intermediate component genuinely exists
         // (verified empirically: writing there succeeds and lands in the
-        // parent). This keeps the test independent of the more
-        // OS-sensitive assumption used for the "the write itself fails"
-        // test below.
+        // parent). This keeps the test independent of the filesystem-
+        // mutation injection scenarios covered further below.
         let dir = std::env::temp_dir().join(format!("pycc_myapp_fallback_{}", std::process::id()));
         let existing_subdir = dir.join("existing_subdir");
         std::fs::create_dir_all(&existing_subdir).unwrap();
@@ -230,23 +304,27 @@ paths = ["tests/"]
     }
 
     #[test]
-    fn scaffold_propagates_the_pycc_toml_write_error_when_the_target_directory_does_not_exist() {
-        // No parent-directory tricks here: `dir` simply never exists (and
-        // is never created), so `std::fs::write(dir.join("pycc.toml"),
-        // ..)` fails because its immediate parent doesn't exist -- a
-        // plain `NotFound` on every Tier-1 platform, independent of any
-        // `..`-resolution semantics. `name` is explicit so this test
-        // exercises only the first `?` (the `pycc.toml` write), not the
-        // name-resolution branches covered by the tests above.
+    fn scaffold_creates_a_missing_target_directory() {
+        // Behavior change under #237's inverted write order: the first
+        // mutation is now `create_dir_all(dir/src)`, which creates the
+        // missing target directory and its parents, so scaffolding into a
+        // nonexistent directory succeeds (matching `cargo init`-family
+        // behavior). The public `pycc init` surface is unaffected -- it
+        // always passes the existing current directory. This test used to
+        // pin the old order's `NotFound` from writing `pycc.toml` first;
+        // the Err arms are now covered by the injection trio below.
         let dir = std::env::temp_dir().join(format!(
             "pycc_nonexistent_target_dir_{}",
             std::process::id()
         ));
+        std::fs::remove_dir_all(&dir).ok();
         assert!(!dir.exists());
 
-        let err =
-            scaffold(Some("x"), &dir).expect_err("scaffold must propagate the underlying io error");
-        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        scaffold(Some("x"), &dir).expect("scaffold should create the missing directory");
+        assert!(dir.join("pycc.toml").is_file());
+        assert!(dir.join("src").join("main.py").is_file());
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -271,38 +349,213 @@ paths = ["tests/"]
     }
 
     #[test]
-    fn scaffold_propagates_the_error_when_src_already_exists_as_a_plain_file() {
-        // `dir/src` already existing as a regular file (not a directory)
-        // makes `create_dir_all(dir.join("src"))` fail deterministically on
-        // every Tier-1 target -- a directory/file entry-type conflict is a
-        // universal filesystem property, unlike a permission-based
-        // approach (verified empirically: `AlreadyExists`/"File exists").
-        // `dir/pycc.toml` itself writes successfully first, so this
-        // exercises the second `?` (the `create_dir_all` call), distinct
-        // from the test above, which fails at the first `?`.
+    fn scaffold_refuses_when_src_exists_as_a_plain_file() {
+        // #237: `dir/src` existing as a regular file is caught by the
+        // pre-check phase (it used to surface later, as `create_dir_all`'s
+        // own error after `pycc.toml` had already been replaced). Nothing
+        // is written on refusal.
         let dir = std::env::temp_dir().join(format!("pycc_src_conflict_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("src"), "not a directory").unwrap();
 
-        let err = scaffold(Some("x"), &dir).expect_err("scaffold must propagate the mkdir error");
-        assert!(!err.to_string().is_empty());
+        let err = scaffold(Some("x"), &dir).expect_err("scaffold must refuse a non-directory src");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(err.to_string(), "`src` exists and is not a directory");
+        assert!(!dir.join("pycc.toml").exists());
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn scaffold_propagates_the_error_when_main_py_already_exists_as_a_directory() {
-        // `dir/src/main.py` already existing as a directory makes the
-        // final `std::fs::write` fail deterministically on every Tier-1
-        // target (verified empirically: `IsADirectory`/"Is a directory"),
-        // exercising the third `?` -- the earlier `pycc.toml` write and
-        // `create_dir_all(dir/src)` (a no-op since it already exists) both
-        // succeed first.
+    fn scaffold_refuses_when_main_py_already_exists() {
+        // #237: `dir/src/main.py` already existing (here as a directory,
+        // any entry type counts) is caught by the pre-check phase, and
+        // nothing is written -- it used to surface as the final write's
+        // own error after `pycc.toml` had already been replaced.
         let dir = std::env::temp_dir().join(format!("pycc_main_py_conflict_{}", std::process::id()));
         std::fs::create_dir_all(dir.join("src").join("main.py")).unwrap();
 
-        let err = scaffold(Some("x"), &dir).expect_err("scaffold must propagate the write error");
+        let err = scaffold(Some("x"), &dir).expect_err("scaffold must refuse an existing main.py");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(err.to_string(), "`src/main.py` already exists");
+        assert!(!dir.join("pycc.toml").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scaffold_refuses_when_pycc_toml_already_exists() {
+        // #237's headline defect: an existing `pycc.toml` was silently
+        // replaced. Refusal must leave it byte-for-byte unchanged.
+        let dir = std::env::temp_dir().join(format!("pycc_toml_conflict_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pycc.toml"), "user content").unwrap();
+
+        let err = scaffold(Some("x"), &dir).expect_err("scaffold must refuse an existing pycc.toml");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(err.to_string(), "`pycc.toml` already exists");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("pycc.toml")).unwrap(),
+            "user content"
+        );
+        assert!(!dir.join("src").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scaffold_accepts_a_preexisting_empty_src_directory() {
+        // #237's deliberate non-conflict: an existing `src/` directory is
+        // not itself a conflict -- only its entry type and `main.py`'s
+        // presence are checked.
+        let dir = std::env::temp_dir().join(format!("pycc_empty_src_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+
+        scaffold(Some("x"), &dir).expect("an empty src directory is not a conflict");
+        assert!(dir.join("pycc.toml").is_file());
+        assert!(dir.join("src").join("main.py").is_file());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scaffold_accepts_a_populated_src_directory_without_main_py() {
+        // The acceptance condition is deliberately "any directory without
+        // a `main.py`", not emptiness: existing sibling files are left
+        // untouched and scaffolded alongside.
+        let dir = std::env::temp_dir().join(format!("pycc_populated_src_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src").join("lib.py"), "user lib").unwrap();
+
+        scaffold(Some("x"), &dir).expect("a src directory without main.py is not a conflict");
+        assert!(dir.join("pycc.toml").is_file());
+        assert!(dir.join("src").join("main.py").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("src").join("lib.py")).unwrap(),
+            "user lib"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_propagates_a_pycc_toml_existence_check_error() {
+        // A self-referential `pycc.toml` symlink makes `try_exists` itself
+        // fail (`ELOOP`), covering the first check's `?` propagation --
+        // distinct from a dangling symlink, which resolves to Ok(false).
+        let dir = std::env::temp_dir().join(format!("pycc_toml_eloop_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("pycc.toml"), dir.join("pycc.toml")).unwrap();
+
+        let err = scaffold(Some("x"), &dir).expect_err("the existence check must propagate ELOOP");
         assert!(!err.to_string().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_propagates_a_src_metadata_error_other_than_not_found() {
+        // A self-referential `src` symlink makes `metadata` fail with
+        // `ELOOP` -- neither a usable directory nor `NotFound` -- covering
+        // the check's error-propagation arm.
+        let dir = std::env::temp_dir().join(format!("pycc_src_eloop_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("src"), dir.join("src")).unwrap();
+
+        let err = scaffold(Some("x"), &dir).expect_err("the src metadata check must propagate");
+        assert_ne!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(!dir.join("pycc.toml").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_propagates_a_main_py_existence_check_error() {
+        // Same `ELOOP` shape for the third check: `src` is a real
+        // directory, `src/main.py` is a self-referential symlink.
+        let dir = std::env::temp_dir().join(format!("pycc_py_eloop_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::os::unix::fs::symlink(
+            dir.join("src").join("main.py"),
+            dir.join("src").join("main.py"),
+        )
+        .unwrap();
+
+        let err = scaffold(Some("x"), &dir).expect_err("the main.py check must propagate ELOOP");
+        assert!(!err.to_string().is_empty());
+        assert!(!dir.join("pycc.toml").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_fails_cleanly_when_src_is_a_dangling_symlink() {
+        // Injection 1 of #237's late-failure trio: a dangling `src`
+        // symlink passes the follow-symlink pre-check (its target does not
+        // exist), then `create_dir_all` fails on the symlink itself.
+        // `pycc.toml` must not be created.
+        let dir = std::env::temp_dir().join(format!("pycc_src_dangling_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("nonexistent_target"), dir.join("src")).unwrap();
+
+        let err = scaffold(Some("x"), &dir).expect_err("create_dir_all must fail on the symlink");
+        assert!(!err.to_string().is_empty());
+        assert!(!dir.join("pycc.toml").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_fails_cleanly_when_src_is_read_only() {
+        // Injection 2: an existing empty `src/` passes the checks, the
+        // directory-creation step is a no-op, and the `main.py` write
+        // fails with a permission error. `pycc.toml` must not be created.
+        // (Root ignores 0o555, so this would spuriously succeed under a
+        // root test runner; hosted CI and the coverage sandbox's `nobody`
+        // user are both non-root.)
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pycc_src_readonly_{}", std::process::id()));
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let err = scaffold(Some("x"), &dir).expect_err("the main.py write must fail");
+        assert!(!err.to_string().is_empty());
+        assert!(!dir.join("pycc.toml").exists());
+
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_leaves_pycc_toml_uncreated_when_its_own_write_fails_last() {
+        // Injection 3, the issue's regression 4 at the last possible
+        // moment: a dangling `pycc.toml` symlink passes the follow-symlink
+        // pre-check (its target does not exist), both `src` steps succeed,
+        // and the final `write_new` fails immediately with `EEXIST` on the
+        // symlink entry itself -- `create_new` never follows it (POSIX
+        // O_EXCL-on-symlink). The real `pycc.toml` path still resolves to
+        // nothing afterwards.
+        let dir = std::env::temp_dir().join(format!("pycc_toml_dangling_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(
+            dir.join("missing_dir").join("pycc.toml"),
+            dir.join("pycc.toml"),
+        )
+        .unwrap();
+
+        let err = scaffold(Some("x"), &dir).expect_err("the final pycc.toml write must fail");
+        assert!(!err.to_string().is_empty());
+        // The write happened after both src steps...
+        assert!(dir.join("src").join("main.py").is_file());
+        // ...and pycc.toml still does not resolve to any file.
+        assert!(!dir.join("pycc.toml").try_exists().unwrap());
 
         std::fs::remove_dir_all(&dir).ok();
     }
