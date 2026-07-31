@@ -61,10 +61,13 @@ Only `list[int]` reaches codegen: `T0034` rejects every other element type
 first. `pycc_codegen` owns the tagged/raw conversion at that runtime
 boundary in both directions (D-105), and `list[T]` values are deliberately
 never refcounted in v0.2, so their allocations leak for the process's
-lifetime (D-106). Two operations on a `list[T]` still type-check and then
-stop codegen with a "not supported yet" panic rather than compiling:
-`print(xs)` and using `xs` as an `if`/`while` condition, neither of which
-v0.2 gives a `str(list)`/`bool(list)` meaning (D-106).
+lifetime (D-106). Two *operations* on a `list[T]` still type-check and then
+stop codegen with a "not supported yet" panic rather than compiling, because
+v0.2 gives `list[T]` no `str(list)` or `bool(list)` meaning (D-106):
+converting one to `str`, and using one as an `if`/`while` condition. The
+string conversion is reachable from every context that needs one, which
+today means both `print(xs)` and f-string interpolation (`f"{xs}"`) -- they
+share a single conversion site in `pycc_codegen`, so both fail identically.
 Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument
 expressions; HIR does not yet assign binding identities or build and memoize a

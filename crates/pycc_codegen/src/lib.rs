@@ -6142,34 +6142,79 @@ mod tests {
     fn a_for_list_loop_keeps_its_per_iteration_length_read_under_release_optimization() {
         // `MirStmt::ForList` calls `pycc_rt_int_list_len` inside its
         // loop-test block on purpose, so appending during iteration extends
-        // the loop exactly as CPython's list iterator does. Every other test
-        // of that decision (this file's own loop tests and
+        // the loop exactly as CPython's list iterator does.
         // `iterating_a_list_rereads_its_length_each_step_like_cpython` in
-        // `tests/slice1_codegen_depth.rs`) builds unoptimized, where nothing
-        // could hoist the call anyway -- but `--release` additionally runs
-        // LLVM's `"default<O3>"` pipeline (D-094), whose LICM pass is
-        // precisely the transform that would lift a loop-invariant-looking
-        // call out of the loop and silently restore the hoisted behavior.
-        //
-        // It does not today: `declare_rt_functions` gives the declaration no
-        // attributes, so LLVM must assume the call may write memory. That is
-        // an inference from an absence, though, and a future PR adding
+        // `tests/slice1_codegen_depth.rs` pins that from real source, but
+        // only for an unoptimized build, where nothing could hoist the call
+        // anyway. `--release` additionally runs LLVM's `"default<O3>"`
+        // pipeline (D-094), whose LICM pass is precisely the transform that
+        // would lift a loop-invariant-looking call out of the loop and
+        // silently restore the hoisted behavior. It does not today --
+        // `declare_rt_functions` gives the declaration no attributes, so
+        // LLVM must assume the call may write memory -- but that is an
+        // inference from an absence, and a future PR adding
         // `readonly`/`willreturn` to these externs for performance would
-        // invalidate it with no other test noticing -- hence the same
-        // fixture compiled with `release: true`.
+        // invalidate it with no other release-profile test noticing.
+        //
+        // The fixture therefore has to *mutate* `xs` mid-loop. An earlier
+        // version of this test iterated a fixed `[1, 2, 3]` and asserted
+        // `1\n2\n3\n`, which a hoisted length read satisfies just as well --
+        // `len(xs)` is loop-invariant at 3 either way, so the test could not
+        // fail for the reason it is named after. Confirmed by patching this
+        // arm to compute the length in the preheader: that version still
+        // passed. This one grows the list from 1 element to 3 while
+        // iterating, so a length read hoisted out of the loop sees 1, runs a
+        // single iteration, and prints only "1".
+        //
+        // `if len(xs) < 3: xs.append(v + 1)` then `print(v)`, the same
+        // program the end-to-end test above uses.
+        let list_int = || Ty::List(Box::new(Ty::Int));
         let mir = list_fixture_module(vec![
-            assign_list_literal("xs"),
+            MirStmt::Assign {
+                target: "xs".to_string(),
+                value: MirExpr::ListLiteral(vec![MirExpr::IntLiteral(1)]),
+            },
             MirStmt::ForList {
                 var: "v".to_string(),
                 list: "xs".to_string(),
-                body: vec![MirStmt::ExprStmt(MirExpr::Call {
-                    callee: "print".to_string(),
-                    args: vec![MirExpr::Name {
-                        name: "v".to_string(),
-                        ty: Ty::Int,
-                    }],
-                    ty: Ty::None,
-                })],
+                body: vec![
+                    MirStmt::If {
+                        test: MirExpr::Compare {
+                            op: CmpOpKind::Lt,
+                            left: Box::new(MirExpr::Call {
+                                callee: "len".to_string(),
+                                args: vec![MirExpr::Name {
+                                    name: "xs".to_string(),
+                                    ty: list_int(),
+                                }],
+                                ty: Ty::Int,
+                            }),
+                            right: Box::new(MirExpr::IntLiteral(3)),
+                            ty: Ty::Bool,
+                        },
+                        body: vec![MirStmt::ExprStmt(MirExpr::ListAppend {
+                            list: "xs".to_string(),
+                            value: Box::new(MirExpr::BinOp {
+                                op: BinOpKind::Add,
+                                left: Box::new(MirExpr::Name {
+                                    name: "v".to_string(),
+                                    ty: Ty::Int,
+                                }),
+                                right: Box::new(MirExpr::IntLiteral(1)),
+                                ty: Ty::Int,
+                            }),
+                        })],
+                        orelse: vec![],
+                    },
+                    MirStmt::ExprStmt(MirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![MirExpr::Name {
+                            name: "v".to_string(),
+                            ty: Ty::Int,
+                        }],
+                        ty: Ty::None,
+                    }),
+                ],
             },
         ]);
         let dir = tempfile_dir("for_list_release");

@@ -883,39 +883,57 @@ print(k)
 }
 
 #[test]
-fn printing_a_list_stops_the_build_with_an_honest_unsupported_message() {
-    // v0.2 has no `str(list)`, and `pycc_types` type-checks `print(xs)` for
-    // any argument type at all -- so this program passes `pycc check` and
+fn converting_a_list_to_str_stops_the_build_with_an_honest_unsupported_message() {
+    // v0.2 has no `str(list)`, and `pycc_types` type-checks both of these
+    // unconditionally (its `print` arm accepts any argument type, and an
+    // f-string interpolation imposes none), so each passes `pycc check` and
     // then stops in codegen (D-106). Asserts the honest message rather than
     // only the failure, since the whole point of D-106's `Scalar::List`
     // split was to replace silently handing a `PyIntListObj` pointer to a
     // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
-    // `docs/ARCHITECTURE.md` records the same gap.
-    let source = "\
+    //
+    // Both source forms, not just `print(xs)`: `to_str` has exactly two
+    // call sites in `pycc_codegen` -- `emit_print_arg` and `emit_expr`'s
+    // f-string interpolation arm -- and `docs/ARCHITECTURE.md` names both
+    // as reachable, so both need evidence rather than one standing in for
+    // the other. (An earlier version of this test covered only `print(xs)`
+    // while the doc claimed a count of two operations, missing f-strings
+    // entirely.)
+    for (label, expression) in [
+        ("print_list", "print(xs)"),
+        ("fstring_list", "print(f\"{xs}\")"),
+    ] {
+        let source = format!(
+            "\
 def _run() -> None:
     xs = [1, 2]
-    print(xs)
+    {expression}
 
 _run()
-";
-    let dir = std::env::temp_dir().join(format!("pycc_slice1_print_list_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let src = write_fixture(&dir, "print_list.py", source);
-    let output = Command::new(pycc_bin())
-        .args([
-            "build",
-            src.to_str().unwrap(),
-            "-o",
-            dir.join("print_list").to_str().unwrap(),
-        ])
-        .output()
-        .unwrap();
-    assert!(!output.status.success(), "`print(xs)` must not build");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("string conversion of a list[T] value is not supported yet"),
-        "expected the honest unsupported-conversion message, got: {stderr}"
-    );
+"
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "pycc_slice1_{label}_{pid}",
+            pid = std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = write_fixture(&dir, &format!("{label}.py"), &source);
+        let output = Command::new(pycc_bin())
+            .args([
+                "build",
+                src.to_str().unwrap(),
+                "-o",
+                dir.join(label).to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "`{expression}` must not build");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("string conversion of a list[T] value is not supported yet"),
+            "expected the honest unsupported-conversion message for `{expression}`, got: {stderr}"
+        );
+    }
 }
 
 #[test]
