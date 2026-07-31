@@ -17,7 +17,7 @@
 - Runtime error convention (verified in `crates/pycc_rt/src/lib.rs`, e.g. lines 350/393/583): unrecoverable runtime conditions are `panic!("pycc_rt: <description>")`, tested via `#[should_panic(expected = "...")]`. A condition a *type-checked, valid-looking* Python program can actually reach must be a proper `pycc_types` diagnostic (`Txxxx`), never a runtime panic discovered only at codegen — panics are reserved for conditions that are unreachable once type-checking has run correctly.
 - Diagnostic-code convention (verified in `docs/DIAGNOSTICS.md`): highest code in use today is `T0031`; codes are narrow and situation-specific (one code per distinct failure shape), never reused. This plan's new codes are `T0032`, `T0033`, `T0034` (assigned in Task 8/9 below — do not renumber if another PR lands a `T0032`+ first; re-check `docs/DIAGNOSTICS.md`'s highest code at the start of Task 8 and shift these three plan-local numbers up together if so).
   - **`T0021` is deliberately reused, not freshly minted, for three of Task 8's failure paths**: the empty-list-literal (`[]`) element-type-unknown case, the non-`int` list-index case, and the `.append()` argument-type-mismatch case. This is not an oversight against the "never reused" rule above — `docs/TYPE_SYSTEM.md`'s v0.1 inference section already documents `T0021` as the general code for "an unconstrained parameter or return variable" *and* "conflicting call-site constraints," and all three of these are instances of that same existing shape (an unconstrained or conflicting type-inference variable), not a new distinct failure shape. `T0032`/`T0033`/`T0034` remain genuinely new codes for genuinely new failure shapes (heterogeneous list-literal elements, non-subscriptable value, non-`int` list element type reaching codegen).
-- The pinned `ievo:deep-reviewer` review (D-068, `docs/AGENT_TOOLING.md`) runs on the full branch diff before merge (Task 14).
+- The pinned `ievo:deep-reviewer` review (D-068, `docs/AGENT_TOOLING.md`) runs on the full branch diff before merge (Task 13 — this line originally said "Task 14" from this plan's first draft, before this plan's own Task 14 was later added for D-109's fix; renumbered here to avoid confusion between the two).
 - Keep `docs/ROADMAP.md`/`docs/DELIVERY_PLAN.md`/`docs/PYTHON_STANDARDS.md`/`docs/TYPE_SYSTEM.md`/`docs/RUNTIME.md`/`docs/TESTING.md`/`docs/SPEC.md` current in the same commit as the behavior change each describes, not deferred to a trailing "docs sweep" commit that never happens.
 - v1.0 invariant (docs/SPEC.md's own "Invariants" list, item 2): "Strict types are the only mode. Untyped public API doesn't compile." This plan's own Task 1 D-105 entry records that `list[T]` is **not** annotate-able in v0.2 (no subscripted type-annotation syntax support), so every `list[int]` value in this PR's own fixture/tests must live in a **private helper** (name starts with `_`, per D-038's existing private-helper local-inference convention already used by `docs/DECISIONS.md`'s prior PRs) or at module scope, never as a public function's annotated parameter or return type.
 
@@ -1792,6 +1792,8 @@ gh pr create --title "v0.2 PR-10: Ty representation migration + monomorphization
 
 Wait for the full CI matrix to go green on all 5 Tier-1 targets (`build-test-coverage`, all four `native-build-test` legs, both `cross-compile-*` jobs, `frontend-perf-measure`/`frontend-perf-gate`, `ci-gate`, `audit`) before proceeding. If `frontend-perf-gate` fails, check the actual reported delta and whether any Rust source changed since the last commit that passed it cleanly before assuming noise (per this project's own established methodology, D-095/D-096/D-101 and this same session's own PR-9 precedent) — trigger a full `gh run rerun` for an independent measurement rather than dismissing a first failure outright.
 
+**Update (2026-07-31):** this exact scenario happened. Two independent, genuinely fresh full reruns both failed `frontend-perf-gate` (4.7008%, then 5.1960%; threshold 2.00%), confirmed real and root-caused to the `Ty` migration's own size growth — recorded as D-109. Task 14 (below, inserted after this task since the gap was only discovered while executing this step) must land on this same branch and a subsequent fresh full CI rerun must show `frontend-perf-gate` passing before this step's "CI green" condition is satisfied and Steps 2-3 below can proceed.
+
 - [ ] **Step 2: Run the pinned local reviewer**
 
 Per D-068/`docs/AGENT_TOOLING.md`: dispatch the pinned `ievo:deep-reviewer` against the full `merge-base(origin/main)..HEAD` diff (not a two-dot diff against `main`'s current tip — refresh `origin/main` first and compute the actual merge-base). Address every actionable finding before merge, re-reviewing scoped fixes as needed. Pay particular attention to whether it finds any additional non-exhaustive `Ty`/`HirExpr`/`MirExpr` dispatch site Task 5's own audit missed — that crate's catch-all-match risk is this plan's own single highest-risk area.
@@ -1799,6 +1801,210 @@ Per D-068/`docs/AGENT_TOOLING.md`: dispatch the pinned `ievo:deep-reviewer` agai
 - [ ] **Step 3: Merge once required checks are green and review is clean**
 
 Follow this project's own established merge gate and squash-merge convention (matching PR-6 through PR-9's own precedent).
+
+---
+
+## Task 14: Box `Ty::Dict`/`Ty::Tuple` to shrink `Ty`'s representation, close the `frontend-perf-gate` regression (D-109)
+
+**Why this task exists, inserted after Task 13 rather than earlier:** Task 13's own CI run found `frontend-perf-gate` failing twice, on independent fresh measurements, at 4.7008% and 5.1960% against a 2.00% threshold — recorded as `docs/DECISIONS.md`'s D-109. `benches/check_bench.rs`'s benchmark is scalar-only (no `list[T]` involved), which rules out the new list codegen and points at this plan's own earlier `Ty` migration (Tasks 2-5, D-089/D-104): `size_of::<Ty>()` grew from 1 byte (flat, `Copy`, six-variant enum) to 24 bytes (recursive, non-`Copy`, `Box`/`Vec`-carrying enum). A direct `size_of`/`align_of` check and a full repo-wide grep (`rg 'Ty::Dict\(|Ty::Tuple\(|Ty::Set\('`) were both run before writing this brief, confirming the blast radius is exactly 13 call sites across 2 files — `crates/pycc_hir/src/lib.rs` (5 sites) and `crates/pycc_codegen/src/lib.rs` (8 sites) — with zero occurrences in `pycc_types`, `pycc_mir`, or `pycc_rt`. `Ty::Tuple(Vec<Ty>)` (24 bytes: ptr+len+cap) is the actual size-dominating variant today, not `Dict`'s two separate `Box<Ty>` fields (16 bytes) — both still get boxed down per D-109's own remedy, since after shrinking `Tuple` alone, `Dict`'s 16 bytes would become the new ceiling.
+
+**Files:**
+- Modify: `crates/pycc_hir/src/lib.rs` (the `Ty` enum definition + its doc comments, `Ty::name()`'s `Dict` arm, 2 test call sites)
+- Modify: `crates/pycc_codegen/src/lib.rs` (6 test call sites constructing `Ty::Dict`/`Ty::Tuple`, 2 comments asserting the old `Debug` rendering)
+- Modify: `docs/DECISIONS.md` (append a `**Update:**` line to D-109's own Consequences section — append-only, do not edit D-109's existing Context/Decision/Alternatives text)
+
+**Interfaces:**
+- Consumes: the `Ty` enum from Task 2 (this task changes two of its ten variants' field shapes, not its variant list).
+- Produces: `Ty::Dict(Box<(Ty, Ty)>)` and `Ty::Tuple(Box<[Ty]>)`, replacing `Dict(Box<Ty>, Box<Ty>)` and `Tuple(Vec<Ty>)`. `List(Box<Ty>)` and `Set(Box<Ty>)` are unchanged. Every later reference to `Ty::Dict`/`Ty::Tuple`'s field shape (there are none outside this task's own 2 files, confirmed by the grep above) must use the new shape.
+
+- [ ] **Step 1: Write the failing size regression-guard test**
+
+Add to `crates/pycc_hir/src/lib.rs`'s existing `#[cfg(test)] mod tests` block:
+
+```rust
+#[test]
+fn ty_shrinks_after_boxing_dict_and_tuple_d109() {
+    // D-109: before this task, size_of::<Ty>() measured 24 bytes (Vec<Ty>'s
+    // ptr+len+cap dominates). This is a real regression guard, not a vibe --
+    // it must stay strictly smaller than 24 forever, catching any future
+    // change that re-inflates Ty back to its pre-fix size.
+    assert!(
+        std::mem::size_of::<Ty>() < 24,
+        "Ty::size_of() is {} bytes -- expected a real reduction from the pre-D-109 24 bytes",
+        std::mem::size_of::<Ty>()
+    );
+}
+```
+
+- [ ] **Step 2: Run it to verify it currently fails**
+
+```bash
+cargo test -p pycc_hir ty_shrinks_after_boxing_dict_and_tuple_d109 -- --nocapture
+```
+
+Expected: FAIL — prints `Ty::size_of() is 24 bytes`.
+
+- [ ] **Step 3: Change `Ty`'s definition**
+
+In `crates/pycc_hir/src/lib.rs`, replace:
+
+```rust
+    /// `dict[K, V]`. No v0.2 code path constructs this yet (PR-11's own
+    /// scope per `docs/DELIVERY_PLAN.md`) -- the variant exists now only
+    /// because D-089 decided `Ty`'s full recursive shape up front, so
+    /// every later PR's match arms are additive, not migratory again.
+    Dict(Box<Ty>, Box<Ty>),
+    /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
+    Set(Box<Ty>),
+    /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own scope.
+    Tuple(Vec<Ty>),
+```
+
+with:
+
+```rust
+    /// `dict[K, V]`. No v0.2 code path constructs this yet (PR-11's own
+    /// scope per `docs/DELIVERY_PLAN.md`) -- the variant exists now only
+    /// because D-089 decided `Ty`'s full recursive shape up front, so
+    /// every later PR's match arms are additive, not migratory again.
+    /// The key/value pair is boxed together as a single pointer (D-109 --
+    /// shrinks `Ty`'s own size, closing a real frontend-throughput
+    /// regression the original two-separate-`Box<Ty>` shape caused), not
+    /// because `dict[K,V]` needs its own codegen yet.
+    Dict(Box<(Ty, Ty)>),
+    /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
+    Set(Box<Ty>),
+    /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own
+    /// scope. Boxed as a slice (D-109), not `Vec<Ty>`: this variant never
+    /// grows after construction, and `Box<[Ty]>` (a 16-byte fat pointer)
+    /// is smaller than `Vec<Ty>`'s 24-byte ptr+len+cap.
+    Tuple(Box<[Ty]>),
+```
+
+- [ ] **Step 4: Fix the resulting compile errors — `pycc_hir`**
+
+`Ty::name()`'s `Dict` arm, replace:
+
+```rust
+            Ty::Dict(key, value) => format!("dict[{}, {}]", key.name(), value.name()),
+```
+
+with:
+
+```rust
+            Ty::Dict(kv) => format!("dict[{}, {}]", kv.0.name(), kv.1.name()),
+```
+
+`Ty::Tuple`'s arm needs no change — `Box<[Ty]>` derefs to `[Ty]`, and `.iter()` works identically on both shapes.
+
+In the existing test block, replace:
+
+```rust
+        assert_eq!(
+            Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Float)).name(),
+            "dict[str, float]"
+        );
+        assert_eq!(Ty::Set(Box::new(Ty::Bool)).name(), "set[bool]");
+        assert_eq!(
+            Ty::Tuple(vec![Ty::Int, Ty::Str]).name(),
+            "tuple[int, str]"
+        );
+```
+
+with:
+
+```rust
+        assert_eq!(
+            Ty::Dict(Box::new((Ty::Str, Ty::Float))).name(),
+            "dict[str, float]"
+        );
+        assert_eq!(Ty::Set(Box::new(Ty::Bool)).name(), "set[bool]");
+        assert_eq!(
+            Ty::Tuple(Box::new([Ty::Int, Ty::Str])).name(),
+            "tuple[int, str]"
+        );
+```
+
+- [ ] **Step 5: Run `pycc_hir`'s tests, confirm the new size test now passes**
+
+```bash
+cargo test -p pycc_hir
+```
+
+Expected: all pass, including `ty_shrinks_after_boxing_dict_and_tuple_d109`. **Report the actual measured `size_of::<Ty>()` value in your task report** (add a temporary `eprintln!("{}", std::mem::size_of::<Ty>())` inside the test if needed to observe it, then remove it — the committed test only asserts `< 24`, it does not print). Do not guess or round; the real number (likely 16, but report whatever it actually is) is required, since it decides whether this task's own remedy plausibly closes D-109's regression. **If the measured value is not smaller than 24 bytes at all (i.e., the change produced no real reduction), stop here — do not proceed to Step 6 — and report BLOCKED with the measured number**; that would mean this task's own premise is wrong and needs re-diagnosis, not further mechanical edits.
+
+- [ ] **Step 6: Fix the resulting compile errors — `pycc_codegen`**
+
+`cargo build -p pycc_codegen` first to get the compiler's own exhaustive list of errors — expect exactly 6 (the test-only construction call sites; the catch-all match arm at the binary-operator dispatch site uses `Ty::Dict(..)`/`Ty::Tuple(_)`, which are shape-agnostic patterns and need no change — confirm this compiles unchanged, do not edit that line).
+
+Replace each of these 3 occurrences:
+
+```rust
+            Ty::Dict(Box::new(Ty::Str), Box::new(Ty::Int)),
+```
+
+with:
+
+```rust
+            Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+```
+
+(found at: the `a_dict_typed_module_binding_has_no_storage_representation` test's `bindings` map; the `ty_to_basic_type_panics_clearly_for_dict` test's direct call; the `collect_stmt_bindings_excludes_dict_set_and_tuple_typed_assignment_targets` test's array literal.)
+
+Replace each of these 2 occurrences:
+
+```rust
+        ty_to_basic_type(&context, Ty::Tuple(vec![Ty::Int, Ty::Str]));
+```
+```rust
+            Ty::Tuple(vec![Ty::Int, Ty::Str]),
+```
+
+with the boxed-slice form:
+
+```rust
+        ty_to_basic_type(&context, Ty::Tuple(Box::new([Ty::Int, Ty::Str])));
+```
+```rust
+            Ty::Tuple(Box::new([Ty::Int, Ty::Str])),
+```
+
+(found at: `ty_to_basic_type_panics_clearly_for_tuple`'s direct call; `collect_stmt_bindings_excludes_dict_set_and_tuple_typed_assignment_targets`'s array literal.)
+
+Also fix the 2 comments that assert the old `Debug` rendering (`Dict(Str, Int)`) — one directly above the `a_dict_typed_module_binding_has_no_storage_representation` test, one directly above `ty_to_basic_type_panics_clearly_for_dict` — both currently say `` `Ty::Dict(..)`'s `Debug` form is `Dict(Str, Int)` `` (or the equivalent "would render `Dict(Str, Int)` instead" phrasing); update both to say `Dict((Str, Int))` (the box now wraps a tuple, so `#[derive(Debug)]` renders the parenthesized pair inside).
+
+- [ ] **Step 7: Run `pycc_codegen`'s full test suite**
+
+```bash
+cargo test -p pycc_codegen
+```
+
+Expected: every pre-existing test passes unchanged (in particular, both `#[should_panic(expected = "dict[str, int] ...")]`/`"tuple[int, str] ..."` tests still pass — `.name()`'s rendered output string is unaffected by the field-shape change, only the internal `Debug` form referenced in comments changed).
+
+- [ ] **Step 8: Whole-workspace re-verification**
+
+```bash
+cargo build --workspace
+cargo test --workspace
+cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
+```
+
+Expected: all green, 100.00%/100.00% coverage maintained (this task adds exactly one new test with no new uncovered branches — the `Dict`/`Tuple` field-shape change touches only already-covered call sites).
+
+- [ ] **Step 9: Append a D-109 update note, commit**
+
+Append to `docs/DECISIONS.md`'s existing D-109 entry, as a new line inside its Consequences bullet (do not edit any existing D-109 text — this is additive, matching the append-only convention D-095's own "**Update:**" addendum and D-109's own cross-reference note both already used):
+
+```markdown
+**Update (Task 14):** `Ty::Dict`/`Ty::Tuple` are now boxed (`Dict(Box<(Ty, Ty)>)`, `Tuple(Box<[Ty]>)`); `size_of::<Ty>()` measured <ACTUAL NUMBER FROM STEP 5> bytes (down from 24). A fresh full CI rerun is still required to confirm `frontend-perf-gate` actually closes — a smaller `Ty` is necessary but this entry does not itself claim the regression is confirmed resolved until that rerun is observed.
+```
+
+```bash
+git add crates/pycc_hir/src/lib.rs crates/pycc_codegen/src/lib.rs docs/DECISIONS.md
+git commit -m "Task 14: box Ty::Dict/Ty::Tuple to shrink Ty's representation (D-109)"
+```
+
+**Do not claim in this commit or its report that D-109 is resolved.** That determination is the controlling session's own next step (a fresh full `gh run rerun`, not `--failed`-only, checking that `frontend-perf-measure`'s timestamps and replicate medians are genuinely new before reading the delta) — out of this task's own scope, since it requires pushing this commit and waiting on CI.
 
 ---
 
