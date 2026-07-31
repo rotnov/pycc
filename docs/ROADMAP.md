@@ -53,7 +53,7 @@ or candidate checkout rules cannot change the materialized successor behind
 byte-identical Git blobs. The successor repeats the `100644 blob` requirement
 for every workflow, evidence file, policy executable, and transitive
 repository input it downloads on all later PRs, and rejects every root or
-nested `.gitattributes` entry. A complete base-staged successor manifest binds
+nested `.gitattributes` entry. A complete base-staged successor manifest (D-103) binds
 future protected-bundle changes through two separate merges: one stages the
 reviewed proposal while active targets remain unchanged, and only the next may
 activate those exact bytes. A candidate cannot self-authorize or shrink that

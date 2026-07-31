@@ -417,7 +417,7 @@ policy executable and repository input plus the candidate's proposed next
 manifest sources as non-executable `100644` data, and compares active targets
 only with the base-staged sources and SHA-256 values. A candidate manifest
 cannot authorize a target changed in that same pull request or remove any
-already protected target. A legitimate policy-bundle update therefore uses two
+already protected target. Under D-103, a legitimate policy-bundle update uses two
 merges: first stage proposal files and the next complete manifest while active
 targets remain unchanged; only a later pull request may activate those bytes,
 after they are part of the trusted base. The later activation may reset each
@@ -546,7 +546,7 @@ its temporary roadmap projection from the already pinned checkpoint document,
 so unrelated activation-status prose may still be updated without becoming an
 implicit executable input. The staged suite materializes that transformed pair in an isolated tree
 and runs its remaining self-tests, so the activation cannot leave a permanent
-bridge or trust both workflow generations. These constraints prevent the
+bridge or trust both workflow generations. These D-103 constraints prevent the
 activation commit from replacing any successor checker with a no-op that would
 become trusted after merge. Both successor Python invocations use isolated
 mode; the self-test loads its byte-pinned sibling auditor by exact path, so new
