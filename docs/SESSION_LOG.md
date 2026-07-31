@@ -11,7 +11,7 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-07-31 — v0.2 PR-10: Task 14 landed (`Ty` boxing, corrected shape); fresh CI rerun still outstanding
+## 2026-07-31 — v0.2 PR-10: Task 14 landed and confirmed; `frontend-perf-gate` regression (D-109) resolved
 
 **Authoritative checkpoint:** same branch/PR as the entry directly below
 (`feat/v0-2-pr10-ty-representation-migration` → [PR #236](https://github.com/rotnov/pycc/pull/236)).
@@ -38,14 +38,27 @@ this correction, including an explicit caution that the niche-filling
 cite that mechanism as settled fact without checking rustc's actual
 layout algorithm).
 
-**Status: Task 14's code has landed; the fresh CI rerun has not.** PR
-#236 stays open and unmerged until a fresh full `frontend-perf-gate`
-rerun (not `--failed`-only, with genuinely new `frontend-perf-measure`
-timestamps and replicate medians) is observed passing — a smaller `Ty`
-is necessary for that but does not by itself confirm it, and this commit
-does not claim otherwise. That rerun, plus Task 13's resumed final merge
-step (pinned `ievo:deep-reviewer` pass on the full branch diff), is what
-a fresh session should pick up next.
+An independent task review (a fresh subagent, not the implementer's own
+self-dispatched pass) then found one further Important finding — the
+`Ty::Dict` doc comment overclaimed that boxing `Dict` itself "closed" the
+regression and mis-attributed the original 24-byte size to `Dict`'s
+shape, when the brief's own analysis already established `Tuple(Vec<Ty>)`
+(24 bytes) was the actual size-dominating variant, not `Dict`'s two boxes
+(16 bytes) — fixed directly in commit `c276262` (a one-line reword).
+
+**Status: confirmed resolved.** Two independent, genuinely fresh full CI
+reruns of commit `c276262` ([run 30613065177](https://github.com/rotnov/pycc/actions/runs/30613065177))
+both passed `frontend-perf-gate` — 1.8430% and then **-0.4454%** (current
+measurement slightly *faster* than previous), both comfortably under the
+2.00% threshold, each with its own fresh `frontend-perf-measure`
+timestamps and distinct replicate medians (ruling out the cached-artifact
+false-positive this same investigation hit earlier with a `--failed`-only
+rerun). `docs/DECISIONS.md`'s D-109 entry and `docs/ROADMAP.md`'s Task 14
+follow-up both carry the confirmation numbers. PR #236 is no longer
+merge-blocked by D-109. What a fresh session should pick up next: Task
+13's resumed final steps — dispatch the pinned `ievo:deep-reviewer` (D-068)
+against the full `merge-base(origin/main)..HEAD` diff, address any
+findings, then merge.
 
 ---
 
