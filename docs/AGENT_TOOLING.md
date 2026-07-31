@@ -79,7 +79,7 @@ vendored bytes. The stale skills.sh index and rescan request are tracked in
 
 ## Project-local alpha skills
 
-`pycc` and `pycc-feedback` follow the
+`pycc`, `pycc-feedback`, and `issue-to-plan` follow the
 [Agent Skills specification](https://agentskills.io/specification) but remain
 project-local alpha workflows. They are committed under `.claude/skills/` with
 thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
@@ -93,6 +93,21 @@ GitHub draft without approval. Non-public search terms require a separate
 exact-query preview and approval before transmission. The skill must also show
 the exact write payload and receive explicit per-payload user confirmation
 before creating an issue or comment in `rotnov/pycc`.
+
+`issue-to-plan` turns one GitHub issue into an implementation plan for a later
+session. It re-establishes the remote default branch and the open pull
+requests before planning, treats the issue's own text as dated evidence that
+every claim must be re-verified against the current tree rather than trusted,
+separates real merge gates from file conventions, and runs an adversarial
+review loop until a round changes nothing. It writes no implementation code and
+mutates no tracked file on its own. Like `pycc-feedback`, it must show the exact
+comment payload and receive explicit per-payload user confirmation before
+creating a comment in `rotnov/pycc`; unlike the other two, it has no bound
+executable eval runners yet, so `scripts/run_alpha_skill_evals.py` does not
+declare a case for it and its output remains a reviewed draft rather than a
+validated workflow. Binding trigger and output evals for it is a prerequisite
+for promoting it out of this project-local alpha set, on the same terms as the
+other two.
 
 The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary
