@@ -52,10 +52,19 @@ shared decision-log numbering.
 ### 2. Triage for staleness
 
 The issue was written against an older tree; its premise may have been resolved by unrelated
-work since. Extract the premise — the observable defect or gap the issue claims — and
-re-verify it against the current tree: run the failing command or test, read the code or
-document it describes, and search the history since the issue's creation date for merged work
-in that area.
+work since. Read the newest comments before re-deriving anything: this repository's issues
+accumulate "reconfirmed at commit X" comments, and a reconfirmation at or near the current
+default-branch tip settles "still current" immediately, while one at an old commit is dated
+evidence exactly like the body. Then extract the premise — the observable defect or gap the
+issue claims — and re-verify it against the current tree: run the issue's own reproduction
+commands verbatim where it provides them, read the code or document it describes, and search
+the history since the issue's creation date for merged work in that area.
+
+Calibrate the prior to the tracker's hygiene: when resolved issues are being closed promptly
+(check the recently-closed list), an issue that is still open is probably still real, and the
+closure outcome below needs correspondingly strong evidence — a premise that fails to
+reproduce plus the specific merged change that resolved it, not just the absence of a quick
+repro.
 
 Four outcomes:
 
