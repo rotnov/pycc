@@ -52,9 +52,15 @@ calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. A first
 indexing (`base[index]`), a dedicated `.append()` call form, and
 `for var in <bare-name-list>:` iteration through HIR (D-104's HIR-forms
 task), `pycc_types` type-checking including `len()`'s call-dispatch (D-104's
-type-checking task, `T0032`/`T0033`/`T0034`), and `pycc_mir` lowering (D-104's
-MIR-lowering task) -- `pycc_codegen` support is still a separate, later PR-10
-task, so `build`/`run` cannot yet compile a `list[int]` program end to end.
+type-checking task, `T0032`/`T0033`/`T0034`), `pycc_mir` lowering (D-104's
+MIR-lowering task), and `pycc_codegen` (D-104's codegen task) against
+`pycc_rt`'s `PyIntListObj` -- so `build`/`run` compiles and runs a
+`list[int]` program end to end, at module scope and inside a function alike.
+Only `list[int]` reaches codegen: `T0034` rejects every other element type
+first. `pycc_codegen` owns the tagged/raw conversion at that runtime
+boundary in both directions (D-105), and `list[T]` values are deliberately
+never refcounted in v0.2, so their allocations leak for the process's
+lifetime (D-106).
 Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument
 expressions; HIR does not yet assign binding identities or build and memoize a

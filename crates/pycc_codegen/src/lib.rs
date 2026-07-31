@@ -6071,18 +6071,23 @@ mod tests {
     fn a_for_list_loop_visits_every_element_in_order() {
         // The full `MirStmt::ForList` loop, run to completion: unlike
         // `a_return_inside_a_for_list_body_returns_immediately_without_
-        // looping` below, this one reaches the arm's increment-and-branch-
+        // looping` above, this one reaches the arm's increment-and-branch-
         // back block on every iteration and its loop test's exhaustion
         // edge, and proves the per-iteration element read is re-tagged
         // (D-105) rather than printed as a raw slot value -- an untagged
         // element would print `0`/`1`/`1` here, not `1`/`2`/`3`.
         //
         // Kept as a `pycc_codegen` unit test even though
-        // `tests/slice1_codegen_depth.rs` covers the same behavior from
-        // real source: that suite drives the separate `pycc` binary, which
-        // links its own copy of this crate, so `cargo llvm-cov`'s
-        // per-instantiation region accounting does not let it stand in for
-        // coverage of the copy this crate's own test binary uses.
+        // `tests/slice1_codegen_depth.rs` already covers the same behavior
+        // from real source, because empirically that was not enough: with
+        // this test and `a_module_level_list_binding_gets_a_null_
+        // initialized_pointer_global` below absent, `cargo llvm-cov
+        // --workspace` reported this file at 99.68% regions with no
+        // uncovered line to point at. That integration suite drives the
+        // separate `pycc` binary, which links its own copy of this crate,
+        // and llvm-cov's per-instantiation accounting does not always let
+        // that copy stand in for the one this crate's own test binary
+        // uses.
         let mir = list_fixture_module(vec![
             assign_list_literal("xs"),
             MirStmt::ForList {
@@ -6105,6 +6110,44 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"1\n2\n3\n");
+    }
+
+    #[test]
+    fn appending_to_a_list_untags_the_value_before_it_reaches_runtime_storage() {
+        // `MirExpr::ListAppend`'s success path, the one new arm whose body
+        // no other unit test in this file reaches (`appending_to_a_non_
+        // list_local_is_an_internal_error` above panics inside
+        // `emit_list_name_read` before any of it runs). Reading the
+        // appended element straight back out is what pins D-105's
+        // round trip for this arm specifically: the value is untagged on
+        // the way into `pycc_rt_int_list_append` and re-tagged on the way
+        // out of `pycc_rt_int_list_get`, so a missing conversion on either
+        // side would print a mangled number here rather than "4".
+        let mir = list_fixture_module(vec![
+            assign_list_literal("xs"),
+            MirStmt::ExprStmt(MirExpr::ListAppend {
+                list: "xs".to_string(),
+                value: Box::new(MirExpr::IntLiteral(4)),
+            }),
+            MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    index: Box::new(MirExpr::IntLiteral(3)),
+                }],
+                ty: Ty::None,
+            }),
+        ]);
+        let dir = tempfile_dir("list_append_round_trip");
+        let obj_path = dir.join("list_append_round_trip.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("list_append_round_trip");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"4\n");
     }
 
     #[test]

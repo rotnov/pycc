@@ -829,6 +829,30 @@ _run()
 }
 
 #[test]
+fn rebinding_the_iterated_name_inside_the_body_does_not_retarget_the_loop() {
+    // The other half of `MirStmt::ForList`'s iteration contract, alongside
+    // `iterating_a_list_rereads_its_length_each_step_like_cpython` above:
+    // Python binds its iterator to the object the `for` statement
+    // evaluated, so rebinding the *name* mid-loop leaves the iteration on
+    // the original list. That is why the arm reads the list pointer once,
+    // in the loop preheader, rather than per iteration -- with the read
+    // moved into the loop-test block this would print "1" and then loop on
+    // `[9]` forever. Module scope on purpose: it makes the rebinding write
+    // through to the same global slot the loop read from, which is the
+    // case that would actually break. Output verified against `python3` on
+    // this exact source.
+    let source = "\
+xs = [1, 2]
+for v in xs:
+    xs = [9]
+    print(v)
+";
+    let output = build_and_run("list_iteration_name_rebound", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n");
+}
+
+#[test]
 fn appending_a_bigint_valued_element_fails_explicitly_instead_of_corrupting_the_slot() {
     // D-105's own named regression: `PyIntListObj` stores raw, untagged
     // `i64` slots with no room for a bigint, and `pycc_rt_int_add`/`_mul`
