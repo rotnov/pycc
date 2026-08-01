@@ -34,6 +34,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
   D100_COMPOSED_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent /
     "tests/fixtures/d100-compose-d91-d99-ci.yml"
+  D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent / "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -148,6 +150,19 @@ class RoadmapEvidenceCliTest < Minitest::Test
         Marshal.load(Marshal.dump(REPLICATED_PERF_MEASURE_JOB)),
       "frontend-perf-gate" =>
         Marshal.load(Marshal.dump(REPLICATED_PERF_GATE_JOB)),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_CI_GATE_JOB))
+    }
+    yield jobs if block_given?
+    { "jobs" => jobs }.to_yaml
+  end
+
+  def d112_ubuntu_frontend_perf_workflow
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(Marshal.dump(D112_UBUNTU_FRONTEND_PERF_GATE_JOB)),
       "ci-gate" =>
         Marshal.load(Marshal.dump(PAIRED_PERF_CI_GATE_JOB))
     }
@@ -1460,6 +1475,42 @@ class RoadmapEvidenceCliTest < Minitest::Test
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
     )
+  end
+
+  # Staged (D-112, not yet activated): identical to the live D91/REPLICATED
+  # frontend-perf-measure/gate shape except runs-on: ubuntu-latest and the
+  # macOS brew-based LLVM install swapped for native-build-test's own
+  # already-reviewed apt.llvm.org Linux install step. Activation (a later
+  # task) requires real shadow-measurement CI evidence first -- see D-112's
+  # own Consequences in docs/DECISIONS.md.
+  def test_d112_ubuntu_frontend_perf_workflow_digest_matches_the_staged_fixture
+    assert_equal(
+      D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE).hexdigest
+    )
+  end
+
+  def test_d112_ubuntu_frontend_perf_workflow_is_staged_not_active
+    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256
+  end
+
+  def test_d112_ubuntu_frontend_perf_workflow_structure_is_recognized
+    workflow_text = D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE.read
+    assert validate_source_aware_perf_gate_lifecycle(
+      workflow_text, D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_rejects_d112_measurement_job_with_a_different_runner
+    workflow = d112_ubuntu_frontend_perf_workflow do |jobs|
+      jobs.fetch("frontend-perf-measure")["runs-on"] = "ubuntu-24.04" # plausible near-miss, not the pinned value
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware measurement job"
   end
 
   def test_d84_throughput_floor_workflow_remains_a_retired_audit_fixture
