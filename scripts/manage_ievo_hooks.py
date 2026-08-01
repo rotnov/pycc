@@ -810,9 +810,7 @@ def add_records(
     return result
 
 
-def ensure_no_symlink_components(root: Path, relative: Path) -> None:
-    if relative.is_absolute() or ".." in relative.parts:
-        raise HookLifecycleError(f"managed path must stay relative: {relative}")
+def ensure_root_is_a_real_directory(root: Path) -> os.stat_result:
     try:
         root_stat = root.lstat()
     except OSError as error:
@@ -827,6 +825,13 @@ def ensure_no_symlink_components(root: Path, relative: Path) -> None:
         raise HookLifecycleError(
             f"managed path root must be a regular directory: {root}"
         )
+    return root_stat
+
+
+def ensure_no_symlink_components(root: Path, relative: Path) -> None:
+    if relative.is_absolute() or ".." in relative.parts:
+        raise HookLifecycleError(f"managed path must stay relative: {relative}")
+    root_stat = ensure_root_is_a_real_directory(root)
 
     current = root
     for index, component in enumerate(relative.parts):
@@ -1210,8 +1215,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = parse_args(sys.argv[1:] if argv is None else argv)
-    root = arguments.root.resolve()
     try:
+        # #169: the symlink/reparse-point check below must see the raw --root
+        # argument -- resolving it first (as this used to do unconditionally)
+        # silently follows a symlinked root, so every later
+        # ensure_no_symlink_components() call only ever inspects the already
+        # -resolved real target and can never reject the alias itself.
+        ensure_root_is_a_real_directory(arguments.root)
+        root = arguments.root.resolve()
         if arguments.command == "localize":
             localize(root)
             print("iEvo hook wiring localized")

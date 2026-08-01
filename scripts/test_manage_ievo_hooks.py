@@ -1995,6 +1995,96 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
 
+    @unittest.skipUnless(os.name != "nt", "POSIX symlink regression")
+    def test_symlinked_root_rejects_lifecycle_mutation_through_the_cli(self) -> None:
+        # #169: a symlinked --root must be rejected before any lifecycle
+        # mutation, not just a symlinked *component* underneath an already
+        # -real root (test_symlinked_config_ancestor_blocks_disable covers
+        # that separate case). Exercised through the real public CLI
+        # (subprocess, not manager.disable() directly), because the bug this
+        # regresses lives in main()'s own argument handling, before disable()
+        # is ever called.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias = workspace / "repo-alias"
+            alias.symlink_to(root, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(alias),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(result.stderr, "managed path root must be a regular directory")
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction regression")
+    def test_junctioned_root_rejects_lifecycle_mutation_through_the_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias = workspace / "repo-alias"
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(alias), str(root)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(alias),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(result.stderr, "managed path root must be a regular directory")
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
