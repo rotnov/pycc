@@ -1322,7 +1322,8 @@ pub unsafe extern "C" fn pycc_rt_dict_set(dict: *mut PyDictObj, key: *mut PyStrO
 
 /// Linear-scan lookup (D-111). Panics if no stored key compares equal to
 /// `key` -- this compiler has no `KeyError` handling, so a missing key is
-/// an honest panic rather than a silently wrong value.
+/// an honest panic rather than a silently wrong value. The panic message
+/// is `"pycc_rt: dict key not found"`.
 ///
 /// Implementation note / deviation from the task brief: the brief's own
 /// Step 3 code made this a single plain `extern "C" fn`. Per this crate's
@@ -1337,6 +1338,9 @@ pub unsafe extern "C" fn pycc_rt_dict_set(dict: *mut PyDictObj, key: *mut PyStrO
 /// name/signature for pycc-generated code to call. Tests exercising the
 /// panic path call the private function directly, exactly as this file's
 /// established convention already does for `int_list_get`.
+///
+/// # Safety
+/// Same as `pycc_rt_dict_set`.
 fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
     let entries = dict.entries.take();
     let found = entries
@@ -1347,8 +1351,6 @@ fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
     found.unwrap_or_else(|| panic!("pycc_rt: dict key not found"))
 }
 
-/// # Safety
-/// Same as `pycc_rt_dict_set`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pycc_rt_dict_get(dict: *mut PyDictObj, key: *mut PyStrObj) -> i64 {
     dict_get(unsafe { &*dict }, key)
@@ -2395,6 +2397,20 @@ mod tests {
             pycc_rt_dict_incref(dict);
             pycc_rt_dict_decref(dict);
             pycc_rt_dict_decref(dict); // rc reaches 0, frees
+        }
+    }
+
+    #[test]
+    fn pycc_rt_dict_incref_and_decref_on_a_null_pointer_are_safe_no_ops() {
+        // D-014's 100% line/region coverage gate: without this,
+        // `pycc_rt_dict_incref`/`_decref`'s `if dict.is_null()` early
+        // return is dead code, since none of the tests above ever pass a
+        // null pointer. Mirrors `PyIntListObj`'s own
+        // `int_list_incref_and_decref_on_a_null_pointer_are_safe_no_ops`
+        // test above.
+        unsafe {
+            pycc_rt_dict_incref(std::ptr::null_mut());
+            pycc_rt_dict_decref(std::ptr::null_mut());
         }
     }
 }
