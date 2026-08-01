@@ -256,35 +256,54 @@
 
 ---
 
-### Task 3: Add a temporary shadow-measurement job
+### Task 3: Add a temporary shadow-measurement workflow
 
 **Files:**
-- Modify: `.github/workflows/ci.yml` (add a new, non-required job; do not touch `frontend-perf-measure`/`frontend-perf-gate` themselves)
+- Create: `.github/workflows/frontend-perf-shadow.yml` (a **separate workflow file** — see the blocking note below)
 
 **Interfaces:**
 - Consumes: the LLVM-install pattern and benchmark-running steps already present in `frontend-perf-measure` (Global Constraints).
-- Produces: real Criterion timing data for Task 4 to evaluate.
+- Produces: real paired-delta timing data for Task 4 to evaluate against the actual >2% threshold the live gate uses.
 
-- [ ] **Step 1: Add `frontend-perf-shadow-ubuntu`, triggered by `workflow_dispatch` only**
+**Blocking constraint, do not skip:** `validate_evidence` (`scripts/check_roadmap_evidence.rb:1452-1465`) hashes the **entire** `.github/workflows/ci.yml` file (`Digest::SHA256.hexdigest(workflow_text)`) and requires that digest to already be a member of `REVIEWED_PERF_CI_WORKFLOW_SHA256S`. Adding any job to `ci.yml` — even one with a different name, never wired into `ci-gate` — changes those bytes and therefore that digest, which is not in the reviewed set. **Putting the shadow job inside `ci.yml` makes the stage PR fail its own required audit and unable to merge.** It must live in its own workflow file instead — exactly the shape `.github/workflows/hook-install-check.yml` already uses (added in tasks #54-57 of this project's own history): a separate file, `workflow_dispatch`-only, never a required check, entirely outside `check_roadmap_evidence.rb`'s `ci.yml`-scoped digest and structural checks.
 
-  Add a new job to `.github/workflows/ci.yml`, not wired into `ci-gate`'s `needs`/`if` (so it can never block a PR), that runs the *current* candidate commit's frontend fixture benchmark on `ubuntu-latest`, twice (predecessor vs. itself is not the point here — the point is measuring **within-runner-class variance** across repeated same-source runs, matching the issue's own "repeated unchanged-code measurements" acceptance-criteria language):
+- [ ] **Step 1: Measure the actual paired delta, not just within-run spread**
+
+  The live gate does not fail on Criterion's own replicate spread — it fails on the **paired delta**: predecessor median-of-5 vs. candidate median-of-5, compared at a >2% threshold (`scripts/check_replicated_paired_perf_regression.rb`). Every failure in issue #109's own history is a delta on that comparison (+3.14%, +3.66%, +4.31%, +6.24%, +8.26%), several on byte-identical source. A shadow job that only measures 5 replicates of one checkout and reports their coefficient of variation answers a different, weaker question — CV can look tight while the paired delta it would have produced still exceeds 2%, since the delta captures phase-to-phase drift that a single-phase CV averages over. The shadow job must run the **same two-phase protocol** the real gate runs (predecessor checkout, 5 replicates; candidate checkout, 5 replicates; compare medians), on identical source both times, so its own reported delta is the literal figure Task 4's accept/reject decision needs.
+
+- [ ] **Step 2: Write `.github/workflows/frontend-perf-shadow.yml`**
 
   ```yaml
-    # Temporary (D-112 shadow-measurement, remove in the activation PR): runs
-    # the candidate frontend-perf fixture on ubuntu-latest, manually
-    # triggered, to gather real variance evidence before committing to the
-    # runner move. Never required by ci-gate. contents: read only, no
-    # elevated permissions, no pull_request_target.
+  # Temporary (D-112 shadow-measurement; delete this file entirely in the
+  # activation PR once evidence gathering, Task 4, is done). Measures the
+  # SAME paired-delta protocol frontend-perf-measure/gate run in production,
+  # against identical source checked out twice, on ubuntu-latest -- this
+  # answers "does the paired delta this gate actually thresholds on stay
+  # under 2% here," not merely "is single-phase replicate spread low."
+  # Manually triggered only, never required by ci-gate, never touches
+  # ci.yml (a separate workflow file so this file's own existence never
+  # changes ci.yml's whole-file digest that scripts/check_roadmap_evidence.rb
+  # pins). contents: read only, no elevated permissions, no
+  # pull_request_target.
+  name: frontend-perf-shadow
+  on:
+    workflow_dispatch:
+  jobs:
     frontend-perf-shadow-ubuntu:
-      if: github.event_name == 'workflow_dispatch'
       runs-on: ubuntu-latest
       permissions:
         contents: read
       steps:
-        - name: Check out candidate
+        - name: Check out candidate twice (both phases measure identical source)
           uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
           with:
             persist-credentials: false
+            path: predecessor
+        - name: Check out candidate (second copy, same ref)
+          uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+          with:
+            persist-credentials: false
+            path: current
         - name: Install LLVM 22 (Linux, via apt.llvm.org)
           run: |
             wget https://apt.llvm.org/llvm.sh
@@ -292,27 +311,54 @@
             sudo ./llvm.sh 22
             sudo apt-get install -y libpolly-22-dev
             echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
-        - name: Benchmark candidate, 5 replicates
+        - name: Benchmark "predecessor" phase, 5 replicates
           run: |
             set -euo pipefail
+            predecessor_target="$RUNNER_TEMP/pycc-shadow-predecessor"
             for round in 1 2 3 4 5; do
-              cargo bench --locked --bench check_bench -- --save-baseline "shadow-$round"
+              ( cd predecessor && CARGO_TARGET_DIR="$predecessor_target" \
+                cargo bench --locked --bench check_bench -- --save-baseline "predecessor-$round" )
+              cp "$predecessor_target/criterion/pycc_check_frontend_fixture/predecessor-$round/estimates.json" \
+                "predecessor-$round.json"
             done
-        - name: Print replicate medians to job summary
+        - name: Benchmark "candidate" phase, 5 replicates
           run: |
             set -euo pipefail
+            current_target="$RUNNER_TEMP/pycc-shadow-current"
+            for round in 1 2 3 4 5; do
+              ( cd current && CARGO_TARGET_DIR="$current_target" \
+                cargo bench --locked --bench check_bench -- --save-baseline "current-$round" )
+              cp "$current_target/criterion/pycc_check_frontend_fixture/current-$round/estimates.json" \
+                "current-$round.json"
+            done
+        - name: Compare medians using the real reviewed comparator
+          run: |
+            set -euo pipefail
+            mkdir -p target/criterion/pycc_check_frontend_fixture/previous
+            mkdir -p target/criterion/pycc_check_frontend_fixture/current
+            for round in 1 2 3 4 5; do
+              cp "predecessor-$round.json" target/criterion/pycc_check_frontend_fixture/previous/round-$round.json
+              cp "current-$round.json" target/criterion/pycc_check_frontend_fixture/current/round-$round.json
+            done
             {
-              echo "### frontend-perf-shadow-ubuntu replicate medians"
-              for round in 1 2 3 4 5; do
-                jq -r '.median.point_estimate' \
-                  "target/criterion/pycc_check_frontend_fixture/shadow-$round/estimates.json"
-              done
+              echo "### frontend-perf-shadow-ubuntu: identical source, both phases"
+              ruby scripts/check_replicated_paired_perf_regression.rb \
+                target/criterion/pycc_check_frontend_fixture/current \
+                target/criterion/pycc_check_frontend_fixture/previous \
+                false || true
             } >> "$GITHUB_STEP_SUMMARY"
   ```
 
-  Add `workflow_dispatch:` to the workflow's top-level `on:` block if not already present (check first — other jobs like `hook-install-check.yml` may already use a *separate* workflow file for their own `workflow_dispatch` trigger; if `ci.yml`'s own `on:` block has no `workflow_dispatch` today, adding one here is a new top-level trigger and must be checked against `scripts/check_ci_permissions.rb`'s own policy before this task's commit, per AGENTS.md's CI permission-boundary rules — run `ruby scripts/check_ci_permissions.rb` after this change and fix anything it flags).
+  **Note for the implementer**: `scripts/check_replicated_paired_perf_regression.rb` exits non-zero on a >2% delta by design (that's what makes it useful as the real gate's comparator) — the `|| true` above is deliberate so a single unfavorable shadow run doesn't fail the whole `workflow_dispatch` invocation; Task 4 reads the reported delta from `$GITHUB_STEP_SUMMARY`/logs regardless of exit code, across several independent runs.
 
-  This job is **not** covered by `check_roadmap_evidence.rb`'s `frontend-perf-measure`/`frontend-perf-gate` structural checks (different job name), so it needs no new Ruby constants — but confirm `ruby scripts/check_roadmap_evidence.rb .` still passes after adding it (a new, unrecognized job name should not trip any existing check; if it does, investigate before proceeding — do not silently work around a real trust-boundary concern the checker is correctly raising).
+- [ ] **Step 3: Verify `scripts/check_ci_permissions.rb` accepts the new workflow file**
+
+  ```bash
+  ruby scripts/check_ci_permissions.rb
+  ```
+  Fix anything it flags (a brand-new workflow file with `workflow_dispatch` only and `permissions: contents: read` should satisfy the minimum-token-scope rule from AGENTS.md's CI privilege boundary section, matching `hook-install-check.yml`'s own precedent, but do not assume — run the check).
+
+  Also confirm `ruby scripts/check_roadmap_evidence.rb .` still passes (this file is entirely outside `ci.yml`, so it should not be examined by that checker at all — if it somehow is, investigate before proceeding rather than silently working around a real trust-boundary concern the checker is correctly raising).
 
 - [ ] **Step 2: Commit and push, open the Stage PR**
 
@@ -344,22 +390,22 @@
 - Consumes: `frontend-perf-shadow-ubuntu`'s `$GITHUB_STEP_SUMMARY` output from Task 3.
 - Produces: the accept/reject decision Task 5 is gated on.
 
-- [ ] **Step 1: Trigger the shadow job several times on `main` post-merge**
+- [ ] **Step 1: Trigger the shadow workflow several times on `main` post-merge**
 
   ```bash
-  gh workflow run ci.yml --ref main -f dummy=1 2>&1 || gh workflow run ci.yml --ref main
+  gh workflow run frontend-perf-shadow.yml --ref main
   ```
-  (Adjust to however `workflow_dispatch` inputs, if any, are actually declared once Task 3 lands — the job itself takes none, so a bare `gh workflow run ci.yml --ref main` should suffice; consult `gh workflow run --help` if the workflow requires selecting the specific job vs. the whole file.) Trigger **at least 5 separate runs** (matching this project's own established minimum sample size, e.g. D-062's replicated-measurement precedent) spread over as much wall-clock time as practical (different times of day reduces the odds of measuring one contended CI queue window as if it were representative).
+  Trigger **at least 5 separate runs** (matching this project's own established minimum sample size, e.g. D-062's replicated-measurement precedent) spread over as much wall-clock time as practical (different times of day reduces the odds of measuring one contended CI queue window as if it were representative).
 
-- [ ] **Step 2: Collect and analyze the medians**
+- [ ] **Step 2: Collect and analyze the reported paired deltas**
 
-  For each run, `gh run view <run-id> --job <shadow-job-id> --log | grep -A10 "replicate medians"` (or read `$GITHUB_STEP_SUMMARY` via the API) to get the 5 replicate medians per run. Compute the coefficient of variation (stdev/mean) both *within* each run's 5 replicates and *across* runs' aggregate medians. Compare against this project's own already-recorded `macos-14` history from issue #109 (9-measurement record cited in D-109's own Correction note, `docs/DECISIONS.md`) and the job-duration CV table cited in D-112's Context.
+  For each run, `gh run view <run-id> --job <job-id> --log` (or read `$GITHUB_STEP_SUMMARY` via `gh run view <run-id> --log` / the API) to get the reported delta from `scripts/check_replicated_paired_perf_regression.rb`'s own output — this is the *same statistic and the same >2% threshold* the live gate uses, run here against two checkouts of identical source. Record all N deltas. Compare against this project's own already-recorded `macos-14` history from issue #109 (the 9-measurement record cited in D-109's own Correction note and the further post-D-109 measurements in issue #109 itself, e.g. +3.14%, +3.66%, +4.31%, +6.24%, +8.26% on unchanged source) — the accept criterion is whether these N `ubuntu-latest` deltas stay reliably under 2% where the `macos-14` history did not, not merely a lower coefficient of variation.
 
-- [ ] **Step 2: Record the finding as a dated Update note on D-112**
+- [ ] **Step 3: Record the finding as a dated Update note on D-112**
 
   Append to D-112 in `docs/DECISIONS.md` (do not edit the original Context/Decision text — matching this project's own append-only ADR-correction convention):
   ```markdown
-    **Update (<date>): shadow-measurement evidence.** <N> runs of `frontend-perf-shadow-ubuntu` on `main` produced <CV%> coefficient of variation across replicate medians (raw data: <run URLs>). This <supports/does not support> activation. <If supporting:> Proceeding to Task 5. <If not:> Not proceeding — see the user-facing report for next steps; the `getrusage` alternative from this ADR's own Alternatives section remains the documented fallback.
+    **Update (<date>): shadow-measurement evidence.** <N> runs of `frontend-perf-shadow.yml` on `main`, each comparing two checkouts of identical source via the same reviewed comparator the live gate uses, produced deltas of <list them> — (all/most/none) under the 2% threshold (raw data: <run URLs>). This <supports/does not support> activation. <If supporting:> Proceeding to Task 5. <If not:> Not proceeding — see the user-facing report for next steps; the `getrusage` alternative from this ADR's own Alternatives section remains the documented fallback.
   ```
 
   **If the evidence does not support activation**: STOP. Do not proceed to Task 5. Report this honestly — do not force activation on unfavorable evidence just to make progress; that would repeat exactly the mistake #109's own history already shows this project correctly avoiding (D-096/D-101's explicit rejection of "re-run until favorable"). Surface the finding and ask the user whether to pursue the `getrusage` alternative instead, accept the runner move's now-measured limitations, or take a different approach.
@@ -376,7 +422,8 @@
 ### Task 5: Activation (only if Task 4's evidence supports it)
 
 **Files:**
-- Modify: `.github/workflows/ci.yml` (flip `frontend-perf-measure`/`frontend-perf-gate` to the new shape; remove the Task 3 shadow job)
+- Modify: `.github/workflows/ci.yml` (flip `frontend-perf-measure`/`frontend-perf-gate` to the new shape)
+- Delete: `.github/workflows/frontend-perf-shadow.yml` (Task 3's temporary shadow-measurement workflow — its purpose is served once Task 4's evidence is in)
 - Modify: `scripts/check_roadmap_evidence.rb` (flip `REVIEWED_PERF_CI_WORKFLOW_SHA256S`; retire `D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256` to historical)
 - Modify: `scripts/test_check_roadmap_evidence.rb` (flip the "contains only active X" tests; add "D100 remains a reviewed audit fixture" test; update/rename the full activation test)
 - Modify: `docs/DECISIONS.md` (D-112 Status → `accepted`, dated Update note with acceptance evidence)
@@ -390,14 +437,19 @@
 
 - [ ] **Step 2: Flip `.github/workflows/ci.yml`**
 
-  Replace the live `frontend-perf-measure`/`frontend-perf-gate` job bodies with exactly the shape in `tests/fixtures/d112-ubuntu-frontend-perf-ci.yml` (byte-for-byte — copy the two job bodies directly from the fixture file rather than retyping, to guarantee the whole-file digest matches). Remove the Task 3 shadow job entirely (its purpose is served).
+  Replace the live `frontend-perf-measure`/`frontend-perf-gate` job bodies with exactly the shape in `tests/fixtures/d112-ubuntu-frontend-perf-ci.yml` (byte-for-byte — copy the two job bodies directly from the fixture file rather than retyping, to guarantee the whole-file digest matches). Delete `.github/workflows/frontend-perf-shadow.yml` entirely in this same commit (its purpose is served; it was always meant to be transient).
 
-- [ ] **Step 3: Recompute and verify the whole-file digest**
+- [ ] **Step 3: Recompute and verify the whole-file digest — and check whether `main` moved underneath the stage PR**
 
   ```bash
   ruby -rdigest -e 'puts Digest::SHA256.file(".github/workflows/ci.yml").hexdigest'
   ```
-  This **must** equal `D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256` from Task 2 (since the shadow job's own removal changes the file's bytes relative to the original fixture-construction moment — if the fixture in Task 2 Step 3 was built including a shadow-job placeholder, the digest **will not match** here; if that's the case, rebuild `tests/fixtures/d112-ubuntu-frontend-perf-ci.yml` now to reflect the true final `ci.yml` — without the shadow job — recompute its digest, and update `D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256` accordingly in the same commit as this activation; the fixture is a record of "what the live file will look like," and Task 3's shadow job was always meant to be transient, so the fixture should never have included it — flag this explicitly to the task reviewer if Task 2 built the fixture from a pre-shadow-job state, since then no correction is needed here and this note is moot).
+  This **must** equal `D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256` from Task 2. Since Task 3's shadow job lives in its own file (never touching `ci.yml`), the fixture built in Task 2 should already match `ci.yml`'s bytes at that point in history — so a mismatch here is **not** expected to come from the shadow job.
+
+  The real, likely cause of a mismatch is the one D-100 exists to document: this repository has heavy concurrent activity (multiple other agents/branches touching `ci.yml` at any given time — confirmed by direct observation of dozens of live worktrees this session), and an unrelated PR may have changed `ci.yml` on `main` between when Task 2's stage PR was authored and now. Before assuming the fixture is simply stale and patching it inline:
+  1. `git log origin/main -- .github/workflows/ci.yml` since the stage PR's own base commit — did anything land there in the interim?
+  2. If yes: **do not silently fold the correction into this activation PR.** D-100's own "Update" note records exactly this failure mode — a composed/corrected digest still needs its own separate stage PR before an activation PR can use it, because `workflow-policy.yml`'s audit always runs the *base* branch's checker, which does not yet know about a digest invented in the same PR that also changes `ci.yml`. Rebuild `tests/fixtures/d112-ubuntu-frontend-perf-ci.yml` against the new `main` state (composing the D-112 runner-move change with whatever the intervening PR changed, the same way D-100 composed D-091 with D-099), land that corrected digest as its own stage PR first, merge it, then resume this activation PR from the newly-merged base.
+  3. If no unrelated change landed: the mismatch indicates a real bug in how Task 2's fixture was constructed — investigate and fix the fixture/constant pair directly, it is safe to correct in place since nothing else depends on the wrong value yet (no digest has been activated).
 
 - [ ] **Step 4: Flip `REVIEWED_PERF_CI_WORKFLOW_SHA256S` and retire D100**
 
