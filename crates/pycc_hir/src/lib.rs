@@ -816,10 +816,12 @@ mod tests {
         // ptr+len+cap dominates). This is a real regression guard, not a vibe --
         // it must stay strictly smaller than 24 forever, catching any future
         // change that re-inflates Ty back to its pre-fix size.
-        assert!(
-            std::mem::size_of::<Ty>() < 24,
-            "Ty::size_of() is {} bytes -- expected a real reduction from the pre-D-109 24 bytes",
-            std::mem::size_of::<Ty>()
+        assert_eq!(
+            std::mem::size_of::<Ty>(),
+            16,
+            "size_of::<Ty>() must stay 16 bytes (PR-10 Task 14, D-109) -- PR-11 adds \
+             no new Ty variants, so this must not move; if it does, something in this \
+             PR accidentally widened Ty's boxing, not the containers themselves",
         );
     }
 
