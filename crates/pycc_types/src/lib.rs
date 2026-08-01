@@ -1537,15 +1537,20 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // reused unconditionally for any bare-name iterable, dict or
             // list alike (`pycc_hir`'s own lowering has no type information
             // to pick a different node) -- this is the point where the real
-            // type is resolved.
+            // type is resolved. PR-11 Task 7 (D-113): `for x in s:` iterates
+            // a set's own elements (order is this implementation's own
+            // insertion order, not a CPython-matching guarantee -- see
+            // D-113's own iteration-order caveat), so `Ty::Set` is accepted
+            // here too, binding the loop variable as the set's element type.
             let var_ty = match list_ty {
                 Ty::List(elem_ty) => *elem_ty,
                 Ty::Dict(kv) => kv.0,
+                Ty::Set(elem_ty) => *elem_ty,
                 other => {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V] supports this)",
+                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T] supports this)",
                             other.name()
                         ),
                         Span::new(0, 0),
@@ -1774,15 +1779,17 @@ fn check_stmt_in_function(
         HirStmt::ForList { var, list, body } => {
             let list_ty = lookup_bound_name(env, local_names, list)?;
             // See the module-scope `check_stmt` arm's own comment (PR-11
-            // Task 3, D-113): `for k in d:` iterates a dict's keys.
+            // Task 3, D-113): `for k in d:` iterates a dict's keys. PR-11
+            // Task 7 (D-113): `for x in s:` iterates a set's elements.
             let var_ty = match list_ty {
                 Ty::List(elem_ty) => *elem_ty,
                 Ty::Dict(kv) => kv.0,
+                Ty::Set(elem_ty) => *elem_ty,
                 other => {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V] supports this)",
+                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T] supports this)",
                             other.name()
                         ),
                         Span::new(0, 0),
@@ -3759,6 +3766,22 @@ mod tests {
         };
         check_stmt(&mut env, &stmt).unwrap();
         assert_eq!(env.lookup("k"), Some(Ty::Str));
+    }
+
+    #[test]
+    fn a_for_set_loop_binds_its_variable_as_the_element_type() {
+        // PR-11 Task 7 (D-113): `for x in s:` iterates a set's own elements,
+        // so `var` binds as the set's element type (`Ty::Int` for
+        // `set[int]`).
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let stmt = HirStmt::ForList {
+            var: "x".to_string(),
+            list: "s".to_string(),
+            body: vec![],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
     }
 
     #[test]
@@ -6983,6 +7006,25 @@ mod tests {
         check_stmt_in_function(&mut env, &["d", "k", "y"], &stmt, Ty::None).unwrap();
         assert_eq!(env.lookup("k"), Some(Ty::Str));
         assert_eq!(env.lookup("y"), Some(Ty::Str));
+    }
+
+    #[test]
+    fn a_for_set_loop_binds_its_variable_as_the_element_type_in_a_function_body() {
+        // Mirrors the dict-shaped test above (PR-11 Task 7, D-113): `for x in
+        // s:` binds `x` as the set's element type.
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let stmt = HirStmt::ForList {
+            var: "x".to_string(),
+            list: "s".to_string(),
+            body: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("x".to_string()),
+            }],
+        };
+        check_stmt_in_function(&mut env, &["s", "x", "y"], &stmt, Ty::None).unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+        assert_eq!(env.lookup("y"), Some(Ty::Int));
     }
 
     #[test]
