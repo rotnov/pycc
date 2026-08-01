@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import shutil
@@ -1790,7 +1791,9 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.assertTrue(external_target.is_file())
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
-    def test_check_smoke_invokes_every_distinct_configured_target(self) -> None:
+    def test_check_smoke_invokes_every_distinct_configured_target_exactly_once(
+        self,
+    ) -> None:
         # #168: the smoke loop's own fixtures are all inert "exit 0" scripts
         # with no observable side effect, so a mutation that deletes the
         # entire subprocess-invocation loop leaves every other test green.
@@ -1803,6 +1806,16 @@ class IevoHookLifecycleTests(unittest.TestCase):
         # there, and no existing test proves such a path survives Git
         # Bash's sh parsing) -- a subprocess-call spy sidesteps that risk
         # entirely while still proving each configured target actually ran.
+        #
+        # failure-capture is deliberately configured under two events
+        # (PostToolUseFailure and PermissionDenied, both real EVENT_TARGETS
+        # entries) so this exercises check()'s dict.fromkeys dedup-by-target
+        # for real: a per-command count, not a bare set of invoked commands,
+        # is required to prove a shared target still runs exactly once
+        # rather than once per event that references it (a codex review
+        # finding on this PR -- a set comparison alone cannot distinguish
+        # "invoked once" from "invoked twice", since both produce the same
+        # set of distinct commands).
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.create_gitignore(root, upstream_shims=False)
@@ -1828,6 +1841,11 @@ class IevoHookLifecycleTests(unittest.TestCase):
                             self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
                         )
                     ],
+                    "PermissionDenied": [
+                        self.group(
+                            self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
+                        )
+                    ],
                 }
             }
             self.write_json(root, manager.CLAUDE_LOCAL, local)
@@ -1839,17 +1857,19 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 manager.check(root, smoke=True)
 
             smoke_commands = [
-                call.args[0]
+                tuple(call.args[0])
                 for call in spy_run.call_args_list
                 if call.args and call.args[0] and call.args[0][0] == "sh"
             ]
             self.assertEqual(
-                {tuple(command) for command in smoke_commands},
-                {
-                    ("sh", manager.SCRIPT_TARGETS["correction-capture"].as_posix()),
-                    ("sh", manager.SCRIPT_TARGETS["evo-analysis-nudge"].as_posix()),
-                    ("sh", manager.SCRIPT_TARGETS["failure-capture"].as_posix()),
-                },
+                collections.Counter(smoke_commands),
+                collections.Counter(
+                    [
+                        ("sh", manager.SCRIPT_TARGETS["correction-capture"].as_posix()),
+                        ("sh", manager.SCRIPT_TARGETS["evo-analysis-nudge"].as_posix()),
+                        ("sh", manager.SCRIPT_TARGETS["failure-capture"].as_posix()),
+                    ]
+                ),
             )
 
     def test_check_smoke_rejects_a_failing_hook_through_the_cli(self) -> None:
