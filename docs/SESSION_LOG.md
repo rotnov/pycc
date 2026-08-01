@@ -11,6 +11,83 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-01 — Hardened the three autopilot skills after a 5-dimension adversarial audit
+
+**Authoritative checkpoint:** `origin/main`'s tip is `26e415e` (same commit
+the three skills merged at, below). This session's work lives on branch
+`claude/issue-skill-hardening`, not yet merged — see its own pull request
+once opened for the exact commit range and CI/review outcome.
+
+**What happened:** while shipping issue #256 (`pycc init` rollback fix,
+separate work, not part of this entry), a real gap surfaced live:
+`issue-implement`'s "one CI re-run" instruction didn't distinguish a job
+that gathers fresh data from one that only recomputes an already-uploaded
+upstream artifact — the latter reproduces an identical failure on rerun by
+construction, which is not evidence the failure "persisted." That prompted
+a broader question: what else in the three skills has this shape? A
+5-dimension parallel audit (33 agents: 5 finders, then an adversarial
+verifier per candidate finding) read all three skills' full text against
+`AGENTS.md`, `docs/DECISIONS.md`, `docs/AGENT_TOOLING.md`, and the eval/
+oracle scripts. 28 candidate findings, 12 confirmed after independent
+re-verification against the live text (16 refuted).
+
+**Design correction worth recording:** the first design draft routed most
+of the newly-found gaps to a full autopilot halt ("stop and report"). The
+user pushed back directly ("не похоже это на автопилот цикл", "слишком
+много стопов") — the standing directive is full autopilot, stop only on a
+genuinely unsolvable problem. The design was reworked around a strict test:
+would a *different* issue hit this same wall? Only "the pinned reviewer
+cannot be bound" does (an environment failure, not an issue-specific one);
+every other stop condition became **per-issue** — `issue-select`'s loop now
+carries forward an in-run denylist of issues that hit a per-issue stop
+condition, sets that one issue aside, and keeps working the rest of the
+pool instead of halting or reselecting and re-failing it every iteration.
+
+**14 fixes shipped** (design: `docs/superpowers/specs/2026-08-01-issue-autopilot-skill-hardening-design.md`;
+plan: `docs/superpowers/plans/2026-08-01-issue-autopilot-skill-hardening.md`):
+review-thread resolution now distinguishes bot-authored (self-resolvable)
+from human-authored (reply only) threads; `issue-to-plan`'s delegation
+exception is a closed, named list instead of an open self-declared class;
+`issue-implement` reciprocally acknowledges `issue-select`'s
+standing-directive closure authority (previously asserted only on
+`issue-select`'s side); a two-tier issue-trust policy (owner-authored or
+`approved`-labeled is trusted, otherwise an explicit security check is
+required) across all three skills; the systemic/per-issue stop-condition
+split above; a live re-check of the target issue's own state before
+opening the PR and before merging; a bounded retry on a rejected merge;
+`issue-to-plan` gained a 5-round review-loop cap it previously lacked
+entirely; a concrete "at or near tip" definition replacing an undefined
+proximity feel; a new capability letting `issue-implement` execute this
+repository's established two-PR CI-digest stage-then-activate pattern
+(D-080), chosen as full automation after the trust-anchor blast-radius risk
+was raised and the user confirmed that choice explicitly; the informal
+`P1:`/`P2:`/`P3:` priority-title-prefix convention promoted into D-111 (no
+GitHub priority labels exist in this repository — live-verified, 85/104
+open issues); `scripts/validate_agent_assets.py`'s structural eval-contract
+check extended from 2 to all 5 alpha skills; and the previously-untestable
+"Inconclusive" triage outcome now has real eval coverage and a
+`triage_action` oracle that can actually distinguish it from "Still
+current."
+
+**Verified before this entry:** full local gate set green —
+`scripts/test_run_alpha_skill_evals.py` (30 tests) and
+`scripts/test_validate_agent_assets.py` (138 tests, 363 subtests) via
+`python3 -m pytest`, both `validate_agent_assets.py`/
+`validate_agent_policies.py`, `ruby scripts/check_roadmap_evidence.rb`, both
+marketplace checkers, and `run_alpha_skill_evals.py --client claude`/
+`--client codex` end to end against a locally built `pycc` binary — all
+exit 0, checked directly (no pipe hiding a real exit code, per this
+session's own earlier-learned lesson).
+
+**Next session:** a second adversarial-audit pass re-checking that the 12
+originally-confirmed findings are actually resolved by the current text
+(not just intent) is still owed before opening the pull request — this is
+the plan's own Task 11, not yet run as of this entry. After that: push,
+open the PR, D-078 monitoring, merge, then resume the `issue-select`
+autopilot loop per the user's standing directive.
+
+---
+
 ## 2026-08-01 — Three new autopilot skills; four issues closed via them
 
 **Authoritative checkpoint:** `main`'s tip is `e026fc6` (merge of
