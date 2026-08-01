@@ -1790,6 +1790,105 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.assertTrue(external_target.is_file())
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
+    def test_check_smoke_invokes_every_distinct_configured_target(self) -> None:
+        # #168: the smoke loop's own fixtures are all inert "exit 0" scripts
+        # with no observable side effect, so a mutation that deletes the
+        # entire subprocess-invocation loop leaves every other test green.
+        # Spy on subprocess.run (wraps=, so every call still executes for
+        # real -- this only records calls, it never fakes a result) rather
+        # than giving fixtures a real side effect: writing an observable
+        # marker from inside a "sh" script would need an absolute path
+        # embedded in the script's own text, which is untested territory on
+        # Windows CI (this suite's tempdir paths are backslash-separated
+        # there, and no existing test proves such a path survives Git
+        # Bash's sh parsing) -- a subprocess-call spy sidesteps that risk
+        # entirely while still proving each configured target actually ran.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.create_gitignore(root, upstream_shims=False)
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {
+                    "UserPromptSubmit": [
+                        self.group(
+                            self.command_entry(
+                                manager.SCRIPT_TARGETS["correction-capture"]
+                            )
+                        )
+                    ],
+                    "SessionStart": [
+                        self.group(
+                            self.command_entry(
+                                manager.SCRIPT_TARGETS["evo-analysis-nudge"]
+                            )
+                        )
+                    ],
+                    "PostToolUseFailure": [
+                        self.group(
+                            self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
+                        )
+                    ],
+                }
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+
+            with mock.patch.object(
+                manager.subprocess, "run", wraps=manager.subprocess.run
+            ) as spy_run:
+                manager.check(root, smoke=True)
+
+            smoke_commands = [
+                call.args[0]
+                for call in spy_run.call_args_list
+                if call.args and call.args[0] and call.args[0][0] == "sh"
+            ]
+            self.assertEqual(
+                {tuple(command) for command in smoke_commands},
+                {
+                    ("sh", manager.SCRIPT_TARGETS["correction-capture"].as_posix()),
+                    ("sh", manager.SCRIPT_TARGETS["evo-analysis-nudge"].as_posix()),
+                    ("sh", manager.SCRIPT_TARGETS["failure-capture"].as_posix()),
+                },
+            )
+
+    def test_check_smoke_rejects_a_failing_hook_through_the_cli(self) -> None:
+        # #168's second half: a non-zero-exit hook must still make
+        # `check --smoke` fail through the real public CLI. This fixture
+        # needs no embedded path at all ("exit 3" alone), so unlike the
+        # invocation-proof test above, a real script is safe and portable
+        # here -- and exercising it through the actual CLI (not
+        # manager.check() directly) proves the whole path: subprocess ->
+        # HookLifecycleError -> main()'s error handler -> non-zero exit.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.create_gitignore(root, upstream_shims=False)
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            (root / target).write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(root),
+                    "check",
+                    "--smoke",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(result.stderr, r"hook smoke failed for .* exit 3")
+
     def test_mounted_config_ancestor_blocks_localize_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
