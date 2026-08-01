@@ -177,6 +177,26 @@ fn d0034_list_element_type_not_int() {
 }
 
 #[test]
+fn d0035_heterogeneous_dict_literal() {
+    assert_diagnostic_matches_fixture("d0035_heterogeneous_dict_literal");
+}
+
+#[test]
+fn d0036_dict_key_value_type_not_str_int() {
+    assert_diagnostic_matches_fixture("d0036_dict_key_value_type_not_str_int");
+}
+
+#[test]
+fn d0037_heterogeneous_set_literal() {
+    assert_diagnostic_matches_fixture("d0037_heterogeneous_set_literal");
+}
+
+#[test]
+fn d0038_set_element_type_not_int() {
+    assert_diagnostic_matches_fixture("d0038_set_element_type_not_int");
+}
+
+#[test]
 fn cli_spec_example() {
     assert_diagnostic_matches_fixture("cli_spec_example");
 }

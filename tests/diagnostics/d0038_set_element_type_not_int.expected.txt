@@ -1,0 +1,5 @@
+error[T0038]: set[str] is not compiled yet (D-112) -- only set[int] is
+ --> tests/diagnostics/d0038_set_element_type_not_int.py:1:1
+  |
+1 | x = {"a", "b"}
+  | ^ set[str] is not compiled yet (D-112) -- only set[int] is
