@@ -99,19 +99,33 @@ integer index (`T0040`), stricter than `list[int]`'s runtime-checked index,
 since a heterogeneous tuple's element type at position `k` is only knowable
 when `k` is known at compile time; any other element type is rejected
 before codegen with `T0039`, mirroring `T0034`/`T0036`/`T0038`. Both
-module-global and function-local tuple storage work end to end. Passing or
+module-global and function-local tuple storage work end to end. Like
+`list`/`dict`/`set` above, string conversion of a tuple (`print(t)`,
+f-string interpolation) and truthiness of a tuple (`if t:`/`while t:`)
+both type-check but stop codegen with a "not supported yet" panic in
+`to_str`/`truthy` respectively -- but unlike those three, whose own
+identical gap predates this whole PR-11 effort (`list`, PR-10) or was
+already in place before this slice started (`dict`/`set`, PR-11a), this
+reachability for `tuple[...]` is new as of this slice's own tuple-literal
+HIR lowering: before that change, any program containing a tuple literal
+failed to lower at all and got a clean `C0001` diagnostic instead of ever
+reaching codegen (`docs/ROADMAP.md` has the matching follow-up). Passing or
 returning a tuple value across a function boundary is implemented at the
 codegen layer (`build_call_to`, `MirStmt::Return`, and `emit_assign` all
 accept `Scalar::Tuple` with a plain pass-through) but is not yet reachable
-from real, unannotated Python source: `pycc_types`' private-helper
-signature-inference solver has no unification-friendly representation for
-any container literal (`list`/`dict`/`set`/`tuple` alike), so an entirely
-unannotated helper's parameter or return type can never be inferred as a
-container type from real source today -- a pre-existing limitation this
-slice surfaced but did not introduce (see `docs/DECISIONS.md`'s D-116
-point 4 correction note). `for x in t:` iteration, tuple-unpacking
-assignment (`a, b = t`), and a `tuple[...]` annotation syntax remain
-unimplemented, tracked as `docs/ROADMAP.md` follow-ups.
+from real, unannotated Python source, for two independent reasons:
+`pycc_types`' private-helper signature-inference solver has no
+unification-friendly representation for any container literal
+(`list`/`dict`/`set`/`tuple` alike), so an entirely unannotated helper's
+parameter or return type can never be inferred as a container type from
+real source today -- a pre-existing limitation this slice surfaced but did
+not introduce (see `docs/DECISIONS.md`'s D-116 point 4 correction note);
+and, even if that solver gap closed, `pycc_codegen`'s own `emit_expr` has
+no dedicated `MirExpr::Call` result-dispatch arm for a container-typed
+return either -- it panics for `Ty::List`/`Ty::Dict`/`Ty::Set`/`Ty::Tuple`
+alike (D-116's own further correction note). `for x in t:` iteration,
+tuple-unpacking assignment (`a, b = t`), and a `tuple[...]` annotation
+syntax remain unimplemented, tracked as `docs/ROADMAP.md` follow-ups.
 
 Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument

@@ -1065,17 +1065,31 @@ fn to_str<'ctx>(
         Scalar::Set(_) => {
             panic!("pycc_codegen: string conversion of a set[T] value is not supported yet")
         }
-        // A real, reachable feature gap, identical in kind to the `List`/
-        // `Dict`/`Set` arms directly above: `pycc_types` places no type
-        // restriction on `print`'s argument or an f-string interpolation,
-        // so `print(t)`/`f"{t}"` for a `tuple[...]` local type-checks today
+        // A real, reachable feature gap -- but NOT "identical in kind" to
+        // the `List`/`Dict`/`Set` arms directly above in one respect:
+        // `list[T]`'s own `print(xs)`/`f"{xs}"` reachability predates this
+        // whole PR-11 effort entirely (established back in PR-10, D-107);
+        // `dict`/`set`'s own reachability, while more recent (PR-11a's own
+        // HIR literal lowering), was already in place before this PR
+        // (PR-11b) started -- neither is something this PR's own diff
+        // turned from a clean diagnostic into a panic. `tuple[...]`'s
+        // reachability here IS exactly that: it is new as of this PR's own
+        // Task 2 (`HirExpr::TupleLiteral` lowering, `crates/pycc_hir/src/
+        // lib.rs`) -- before that commit, any program containing a tuple
+        // literal failed to lower at all and got a clean `C0001`
+        // ("expression kind not supported yet") diagnostic instead of ever
+        // reaching this function. `pycc_types` places no type restriction
+        // on `print`'s argument or an f-string interpolation, so
+        // `print(t)`/`f"{t}"` for a `tuple[...]` local type-checks today
         // and lands here. D-116 ships only construction and literal-index
-        // reads, so v0.2 has no `str(tuple)`/tuple-printing semantics --
-        // and unlike the three container arms above there is not even a
+        // reads, so v0.2 has no tuple string-conversion semantics -- and
+        // unlike the three container arms above there is not even a
         // runtime object to hand to a conversion function, since a tuple is
         // a bare LLVM struct with no `pycc_rt` type at all (D-115). Panics
         // honestly instead of reinterpreting the struct's first field as a
-        // `PyStrObj` pointer.
+        // `PyStrObj` pointer. See `docs/DECISIONS.md`'s D-116 deferred-
+        // capability list and `docs/ROADMAP.md`'s matching follow-up for
+        // this new-as-of-PR-11b reachability.
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: string conversion of a tuple[...] value is not supported yet")
         }
@@ -2439,15 +2453,29 @@ fn truthy<'ctx>(
         Scalar::Set(_) => {
             panic!("pycc_codegen: truthiness of a set[T] value is not supported yet")
         }
-        // A real, reachable feature gap, identical in kind to the `List`/
-        // `Dict`/`Set` arms directly above: `pycc_types` places no type
-        // restriction on an `if`/`while` condition, so `if t:` for a
-        // `tuple[...]` local type-checks today and lands here. D-116 ships
-        // only construction and literal-index reads, so v0.2 has no
-        // `bool(tuple)` semantics -- and CPython's own rule (a tuple is
-        // falsey only when empty) is not derivable from this
-        // representation for free anyway, since D-116 admits no empty
-        // tuple in the first place. Panics honestly rather than guessing.
+        // A real, reachable feature gap -- but NOT "identical in kind" to
+        // the `List`/`Dict`/`Set` arms directly above in one respect:
+        // `list[T]`'s own `if xs:`/`while xs:` reachability predates this
+        // whole PR-11 effort entirely (established back in PR-10, D-107);
+        // `dict`/`set`'s own reachability, while more recent (PR-11a's own
+        // HIR literal lowering), was already in place before this PR
+        // (PR-11b) started -- neither is something this PR's own diff
+        // turned from a clean diagnostic into a panic. `tuple[...]`'s
+        // reachability here IS exactly that: it is new as of this PR's own
+        // Task 2 (`HirExpr::TupleLiteral` lowering, `crates/pycc_hir/src/
+        // lib.rs`) -- before that commit, any program containing a tuple
+        // literal failed to lower at all and got a clean `C0001`
+        // ("expression kind not supported yet") diagnostic instead of ever
+        // reaching this function. `pycc_types` places no type restriction
+        // on an `if`/`while` condition, so `if t:` for a `tuple[...]` local
+        // type-checks today and lands here. D-116 ships only construction
+        // and literal-index reads, so v0.2 has no tuple truthiness
+        // semantics -- and CPython's own rule (a tuple is falsey only when
+        // empty) is not derivable from this representation for free
+        // anyway, since D-116 admits no empty tuple in the first place.
+        // Panics honestly rather than guessing. See `docs/DECISIONS.md`'s
+        // D-116 deferred-capability list and `docs/ROADMAP.md`'s matching
+        // follow-up for this new-as-of-PR-11b reachability.
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: truthiness of a tuple[...] value is not supported yet")
         }
