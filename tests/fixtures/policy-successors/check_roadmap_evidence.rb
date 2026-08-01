@@ -183,6 +183,11 @@ D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
 # entry since PR-8's own merge is that activation.
 D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
   "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
+# Staged (2026-08-01, D-112): ubuntu-latest frontend-perf-measure/gate.
+# Not yet in REVIEWED_PERF_CI_WORKFLOW_SHA256S -- see D-112's own
+# activation task before this becomes the live-accepted digest.
+D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256 =
+  "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256
 ].freeze
@@ -823,6 +828,35 @@ D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_STEPS =
 D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB = D56_SOURCE_AWARE_PERF_MEASURE_JOB.merge(
   "steps" => D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_STEPS
 ).freeze
+D112_UBUNTU_FRONTEND_PERF_MEASURE_STEPS =
+  Marshal.load(Marshal.dump(D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_STEPS)).tap do |steps|
+    llvm_index = steps.index { |step| step["name"] == "Install LLVM 22 (D-015)" }
+    raise "expected an existing macOS LLVM-install step to replace" unless llvm_index
+
+    export_index = steps.index { |step| step["name"] == "Export LLVM_SYS_221_PREFIX" }
+    raise "expected an existing LLVM_SYS_221_PREFIX export step to remove" unless export_index
+
+    steps.delete_at(export_index)
+    steps[llvm_index] = {
+      "name" => "Install LLVM 22 (Linux, via apt.llvm.org)",
+      "run" => <<~SHELL.strip
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 22
+        # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
+        # links it explicitly, so it must be installed separately here.
+        sudo apt-get install -y libpolly-22-dev
+        echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+      SHELL
+    }
+  end.freeze
+D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB = D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB.merge(
+  "runs-on" => "ubuntu-latest",
+  "steps" => D112_UBUNTU_FRONTEND_PERF_MEASURE_STEPS
+).freeze
+D112_UBUNTU_FRONTEND_PERF_GATE_JOB = REPLICATED_PERF_GATE_JOB.merge(
+  "runs-on" => "ubuntu-latest"
+).freeze
 PAIRED_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
   "native-build-test",
@@ -1203,6 +1237,8 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
       REPLICATED_PERF_GATE_JOB
     elsif measure_job == D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB
       REPLICATED_PERF_GATE_JOB
+    elsif measure_job == D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB
+      D112_UBUNTU_FRONTEND_PERF_GATE_JOB
     end
   unless expected_perf_job
     raise RoadmapEvidenceError,
