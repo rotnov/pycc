@@ -11,9 +11,17 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; no codegen |
 | `pycc test` | run project tests compiled (pytest-style discovery, subset) |
 | `pycc explain CODE` | long-form doc for a diagnostic (`pycc explain T0021`) |
-| `pycc init [NAME]` | scaffold `pycc.toml` + `src/main.py` |
+| `pycc init [NAME]` | scaffold `pycc.toml` + `src/main.py`; refuses to overwrite an existing `pycc.toml`, non-directory `src`, or `src/main.py` (exit 2, nothing written) |
 | `pycc clean` | drop `.pycc/` cache |
 | `pycc version --verbose` | compiler, LLVM, target list |
+
+`pycc init` inspects every scaffold destination before writing anything: an
+existing `pycc.toml`, a `src` that is not a directory, or an existing
+`src/main.py` is a refusal (exit 2) that leaves all existing paths
+byte-for-byte unchanged, and the scaffold writes `pycc.toml` last so a late
+failure in the `src` steps can never leave it behind (#237's regressions are
+pinned by `tests/slice0.rs`'s init suite and `src/project_config.rs`'s unit
+injections). An existing `src/` directory is not itself a conflict — only its entry type and `main.py`'s presence are checked. Both file writes use create-new semantics, so a dangling symlink at either destination fails cleanly instead of writing through it, and a write that fails after creating its file removes that partial file again — a genuine I/O failure leaves no scaffold residue behind for a retry to trip over.
 
 `pycc version` prints one summary line; `--verbose` appends the Tier-1 target
 list, in the exact set and order of ARCHITECTURE.md's "Cross-platform (hard
@@ -105,7 +113,9 @@ paths = ["tests/"]
 ## Exit codes
 
 `0` ok · `1` compile errors (including `C0001` version-capability gaps) · `2`
-bad invocation or unreadable input · `101` compiled program panicked/uncaught
+bad invocation, unreadable input, or a toolchain/environment failure such as a
+host linker driver that cannot be started (reported as an actionable
+`error:` diagnostic, never a panic) · `101` compiled program panicked/uncaught
 exception, or `build`/`run` hit one of `pycc_codegen`'s own explicit,
 named "not supported yet" boundaries for a construct `pycc check` accepts but
 codegen doesn't yet implement (D-072; the older D-035 `pycc_mir` boundary
