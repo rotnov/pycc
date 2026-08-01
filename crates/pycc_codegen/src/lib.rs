@@ -111,6 +111,39 @@ enum Scalar<'ctx> {
     /// lifetime. That is leak-only -- never a premature free or a double
     /// free -- because nothing frees a set value early either.
     Set(PointerValue<'ctx>),
+    /// An LLVM `struct` held **by value** -- an SSA aggregate register, not
+    /// a `PointerValue` to a heap or stack allocation, unlike every other
+    /// container variant above (D-115). Each field is one of `Ty::Int`/
+    /// `Ty::Bool`/`Ty::Float`'s own existing scalar representation (D-116
+    /// admits no other element type in v0.2, so no field is ever itself a
+    /// pointer or a refcounted value), and the arity is fixed at compile
+    /// time -- which is exactly why no heap object, no `pycc_rt` type, and
+    /// no refcounting policy accompanies this variant at all. There is
+    /// nothing to leak (contrast `List`/`Dict`/`Set`, whose D-107/D-114
+    /// leak-only policy exists because they *do* allocate).
+    ///
+    /// Its own variant rather than a reuse of any pointer-holding
+    /// variant's shape (D-107/D-114's exact reasoning, extended): every
+    /// exhaustive `Scalar` match (`truthy`/`to_str`/`to_tagged_int`/
+    /// `to_float`) would otherwise have no way to reject a struct value
+    /// passed where a pointer or a tagged int is expected. Unlike those
+    /// four, `emit_assign`, `build_call_to`'s argument marshalling, and
+    /// `MirStmt::Return` treat this exactly like every other variant's own
+    /// pass-through case (D-116): moving a `StructValue` needs no
+    /// container-specific logic, since `inkwell`'s `BasicValueEnum` and
+    /// `BasicMetadataValueEnum` both already include a `StructValue` arm.
+    ///
+    /// Field values are stored exactly as the corresponding `Scalar`
+    /// carries them -- in particular an `int` field holds the *already
+    /// D-061-tagged* `i64`, not a raw one. That is the opposite of
+    /// `PyIntListObj`/`PyDictObj`/`PyIntSetObj`, which all store raw
+    /// untagged slots and therefore need `build_untag_checked` on the way
+    /// in and `raw_i64_to_tagged_int` on the way out. A tuple crosses no
+    /// such boundary (there is no runtime object to cross into), so
+    /// neither conversion applies to it: `MirExpr::TupleLiteral` inserts
+    /// the tagged value directly and `MirExpr::Subscript`'s tuple branch
+    /// extracts it directly.
+    Tuple(inkwell::values::StructValue<'ctx>),
 }
 
 struct UserFunction<'ctx> {
@@ -443,16 +476,41 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         // element type, matching `List(_)`/`Dict(_)`'s own
         // element/key/value-agnostic shape.
         pycc_mir::Ty::Set(_) => context.ptr_type(inkwell::AddressSpace::default()).into(),
+        // `tuple[...]`'s v0.2 representation (D-115), and the one place
+        // this function departs from every container arm above: a real
+        // LLVM `struct` built positionally from each element's own
+        // `ty_to_basic_type`, *not* a pointer. A tuple is the only
+        // container this crate holds by value rather than by reference,
+        // because it is the only one whose full shape is known at compile
+        // time -- fixed arity, and (per D-116) every element a fixed-width
+        // scalar -- so it needs no heap allocation and therefore no
+        // runtime object to point at.
+        //
+        // Recursive rather than flat, matching `Ty::Tuple`'s own recursive
+        // shape. D-116 admits only `int`/`bool`/`float` elements today, so
+        // in practice every field resolves to `i64`/`i8`/`f64` -- but this
+        // arm is deliberately not narrowed to those three, matching the
+        // element-type-agnostic shape `List(_)`/`Dict(_)`/`Set(_)` already
+        // use above.
+        pycc_mir::Ty::Tuple(elems) => {
+            let field_types: Vec<inkwell::types::BasicTypeEnum> = elems
+                .iter()
+                .map(|elem_ty| ty_to_basic_type(context, elem_ty.clone()))
+                .collect();
+            context.struct_type(&field_types, false).into()
+        }
         // Deviation from the task brief: the brief's own version of this
         // catch-all's message read "(only int/float/bool/str/list[int] do)"
         // -- but that parenthetical is inaccurate twice over. This function
         // already gives `Ty::None` a representation too (the `i8 0` carrier
-        // above), and the `List(_)`/`Dict(_)`/`Set(_)` arms above aren't
-        // specific to `list[int]`/`dict[str, int]`/`set[int]`: each
-        // produces the same pointer type for any element/key/value type,
-        // not just those. Worded to match what this function actually does.
+        // above), and the `List(_)`/`Dict(_)`/`Set(_)`/`Tuple(_)` arms
+        // above aren't specific to `list[int]`/`dict[str, int]`/`set[int]`:
+        // each produces the same representation for any element/key/value
+        // type, not just those. Worded to match what this function actually
+        // does -- `Ty::Infer` is the one variant left with no arm (see
+        // `an_infer_typed_return_type_is_not_supported`).
         other => panic!(
-            "pycc_codegen: {} has no LLVM representation yet (int/float/bool/str/None/list[_]/dict[_, _]/set[_] do)",
+            "pycc_codegen: {} has no LLVM representation yet (int/float/bool/str/None/list[_]/dict[_, _]/set[_]/tuple[...] do)",
             other.name()
         ),
     }
@@ -515,6 +573,13 @@ fn to_tagged_int<'ctx>(
         // so this is never reached by real, type-checked source.
         Scalar::Set(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got set")
+        }
+        // Defensive for the identical `numeric_result_type` reason as the
+        // `List`/`Dict`/`Set` arms above, extended to `tuple[...]` (D-107's
+        // reasoning, per D-116): no arithmetic operand is ever `Ty::Tuple`,
+        // so this is never reached by real, type-checked source.
+        Scalar::Tuple(_) => {
+            panic!("pycc_codegen: internal error: expected an int-or-bool operand, got tuple")
         }
     }
 }
@@ -828,16 +893,22 @@ fn range_operand_to_tagged_int<'ctx>(
 ) -> IntValue<'ctx> {
     match scalar {
         scalar @ (Scalar::Int(_) | Scalar::Bool(_)) => to_tagged_int(context, builder, scalar),
-        // `List`/`Dict`/`Set` join this arm's existing or-pattern rather
-        // than getting their own (D-107, extended to dict/set by D-114):
-        // unlike `to_tagged_int`/`to_float` above and below, this message
-        // never names the offending type, so it stays exactly as honest
-        // for a list, dict, or set operand as for a `float` or `str` one --
-        // and folding adds no separate, permanently-unexecutable region
-        // under this crate's 100%-region gate (D-014). `range()` arguments
-        // are type-checked by `pycc_types` before codegen, so this whole
-        // arm is defensive either way.
-        Scalar::Float(_) | Scalar::Str(_) | Scalar::List(_) | Scalar::Dict(_) | Scalar::Set(_) => {
+        // `List`/`Dict`/`Set`/`Tuple` join this arm's existing or-pattern
+        // rather than getting their own (D-107, extended to dict/set by
+        // D-114 and to tuple by D-116): unlike `to_tagged_int`/`to_float`
+        // above and below, this message never names the offending type, so
+        // it stays exactly as honest for a list, dict, set, or tuple
+        // operand as for a `float` or `str` one -- and folding adds no
+        // separate, permanently-unexecutable region under this crate's
+        // 100%-region gate (D-014). `range()` arguments are type-checked by
+        // `pycc_types` before codegen, so this whole arm is defensive
+        // either way.
+        Scalar::Float(_)
+        | Scalar::Str(_)
+        | Scalar::List(_)
+        | Scalar::Dict(_)
+        | Scalar::Set(_)
+        | Scalar::Tuple(_) => {
             panic!("pycc_codegen: internal error: range() {position} did not evaluate to int")
         }
     }
@@ -885,6 +956,12 @@ fn to_float<'ctx>(
         // reasoning, per D-114).
         Scalar::Set(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got set")
+        }
+        // Defensive for the identical `numeric_result_type` reason as the
+        // `List`/`Dict`/`Set` arms above, extended to `tuple[...]` (D-107's
+        // reasoning, per D-116).
+        Scalar::Tuple(_) => {
+            panic!("pycc_codegen: internal error: expected a numeric operand, got tuple")
         }
     }
 }
@@ -987,6 +1064,20 @@ fn to_str<'ctx>(
         // `PyStrObj`.
         Scalar::Set(_) => {
             panic!("pycc_codegen: string conversion of a set[T] value is not supported yet")
+        }
+        // A real, reachable feature gap, identical in kind to the `List`/
+        // `Dict`/`Set` arms directly above: `pycc_types` places no type
+        // restriction on `print`'s argument or an f-string interpolation,
+        // so `print(t)`/`f"{t}"` for a `tuple[...]` local type-checks today
+        // and lands here. D-116 ships only construction and literal-index
+        // reads, so v0.2 has no `str(tuple)`/tuple-printing semantics --
+        // and unlike the three container arms above there is not even a
+        // runtime object to hand to a conversion function, since a tuple is
+        // a bare LLVM struct with no `pycc_rt` type at all (D-115). Panics
+        // honestly instead of reinterpreting the struct's first field as a
+        // `PyStrObj` pointer.
+        Scalar::Tuple(_) => {
+            panic!("pycc_codegen: string conversion of a tuple[...] value is not supported yet")
         }
     };
     builder
@@ -1249,6 +1340,34 @@ fn emit_expr<'ctx>(
                             "build_load should not fail for a slot this function itself allocated",
                         );
                     Scalar::Set(loaded.into_pointer_value())
+                }
+                // NOT a pointer read, unlike the four container arms above
+                // (PR-11b Task 5, D-115): a tuple slot holds the struct
+                // itself, so this loads the whole aggregate back out as an
+                // SSA value. The load type must be computed from `ty`
+                // rather than hardcoded like every other arm here, since a
+                // tuple's LLVM type depends on its own element types.
+                //
+                // Not optional, and not merely a nicety: `t[0]` -- the only
+                // tuple operation D-116 ships besides construction -- lowers
+                // to a `MirExpr::Subscript` whose base is exactly this
+                // `MirExpr::Name`. Without this arm every literal-index read
+                // of a tuple *variable* (as opposed to an inline
+                // `(1, 2)[0]`) would fall through to the catch-all below and
+                // panic on a real, type-checked program, which is why the
+                // module-level and function-local smoke programs for this
+                // task both exercise it.
+                Ty::Tuple(_) => {
+                    let loaded = builder
+                        .build_load(
+                            ty_to_basic_type(context, ty.clone()).into_struct_type(),
+                            slot.ptr,
+                            "load",
+                        )
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
+                    Scalar::Tuple(loaded.into_struct_value())
                 }
                 other => {
                     panic!(
@@ -1732,24 +1851,103 @@ fn emit_expr<'ctx>(
             }
             Scalar::List(list_ptr)
         }
-        // `base[index]`, read-only (D-105 scope cut 2). Both of D-106's
-        // conversions apply here, in opposite directions: the index is a
-        // tagged `Ty::Int` expression crossing *into* the list, and the
-        // element read back out is a raw slot becoming a user-visible
-        // `Ty::Int` expression result.
-        //
-        // An out-of-range (including any negative) index is
-        // `pycc_rt_int_list_get`'s own honest runtime panic, not something
-        // this crate can check -- the index is only known at runtime.
+        // `base[index]`, read-only, over two structurally different bases
+        // (PR-11b Task 5). A `list[T]` base is a runtime-indexed read into a
+        // heap object; a `tuple[...]` base is a compile-time-indexed field
+        // extraction from an SSA aggregate (D-115). They share only their
+        // surface syntax, so this arm dispatches between them rather than
+        // treating one as a special case of the other. `dict[K, V]` never
+        // reaches here at all -- `pycc_mir`'s `lower_expr` routes a dict
+        // base to `MirExpr::DictGet` instead.
         MirExpr::Subscript { base, index } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
-            let base_ptr = expect_list_pointer(base_scalar, "the subscripted value");
-            let index_scalar =
-                emit_expr(context, builder, module, rt, user_functions, locals, index);
-            let tagged_index = to_tagged_int(context, builder, index_scalar);
-            let raw_index = build_untag_checked(builder, rt, tagged_index, "list_untag_index");
-            let raw_element = build_int_list_get(builder, rt, base_ptr, raw_index);
-            Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_element))
+            // Matched as a *pair* rather than branching on `base.ty()` alone
+            // (PR-11b Task 5). Branching on the type alone would need a
+            // `let Scalar::Tuple(..) = base_scalar else { panic!(..) }`
+            // inside the tuple arm -- and that arm would be permanently
+            // uncoverable under D-014's 100%-region gate, because every
+            // expression whose `ty()` is `Ty::Tuple` already evaluates to
+            // `Scalar::Tuple` by construction: `TupleLiteral` returns one
+            // directly, `Name` returns one unconditionally from its own
+            // `Ty::Tuple(_)` arm (which dispatches on the very `ty` field
+            // `base.ty()` just read, so the two cannot disagree -- this
+            // holds on its own, without relying on that arm's
+            // `debug_assert_eq!`, which is compiled out in release), and a
+            // `Ty::Tuple`-typed `Call` panics at the container catch-all in
+            // this same function before it can return anything at all.
+            // Pairing the two instead lets that impossible
+            // combination fall into the list path's already-covered
+            // `expect_list_pointer` check, adding no new branch that no
+            // test could ever legitimately reach -- the same
+            // "no redundant impossible-to-cover branch" convention
+            // `emit_string_literal`'s own doc comment records.
+            match (base.ty(), base_scalar) {
+                // D-115: the field is read straight off the loaded
+                // `StructValue` with `extractvalue` -- no pointer, no
+                // `build_struct_gep`, because the aggregate is an SSA
+                // register rather than something in memory.
+                (pycc_mir::Ty::Tuple(_), Scalar::Tuple(struct_value)) => {
+                    let MirExpr::IntLiteral(literal_index) = index.as_ref() else {
+                        panic!(
+                            "pycc_codegen: internal error: a tuple subscript index is not a \
+                             literal int -- pycc_types::check (T0040) should have rejected this \
+                             before codegen"
+                        )
+                    };
+                    // Delegates the non-negative and in-range validation to
+                    // `MirExpr::ty()`, which already re-derives exactly this
+                    // positional element type from the same literal index
+                    // and panics on either failure (see `pycc_mir`'s own
+                    // `Subscript`/`Ty::Tuple` arm). Re-checking here would
+                    // duplicate that logic *and* add two more panic regions
+                    // this crate would then have to cover itself.
+                    let elem_ty = expr.ty();
+                    let field_value = builder
+                        .build_extract_value(struct_value, *literal_index as u32, "tuple_extract")
+                        .expect("build_extract_value should not fail for a validated index");
+                    // No `raw_i64_to_tagged_int` on the way out, unlike the
+                    // list path below and `MirExpr::DictGet`: a tuple field
+                    // already holds the D-061-tagged value `TupleLiteral`
+                    // inserted, because a tuple has no runtime object with
+                    // raw slots to convert across (see `Scalar::Tuple`'s own
+                    // doc comment). Re-tagging here would double-tag every
+                    // `int` element, so `t = (1,); print(t[0])` would print
+                    // `3` instead of `1`.
+                    match elem_ty {
+                        Ty::Int => Scalar::Int(field_value.into_int_value()),
+                        Ty::Bool => Scalar::Bool(field_value.into_int_value()),
+                        Ty::Float => Scalar::Float(field_value.into_float_value()),
+                        // Defensive: `pycc_types`' T0039 gate (D-116)
+                        // rejects every other element type before codegen.
+                        other => panic!(
+                            "pycc_codegen: reading a `{}`-typed tuple element is not supported yet",
+                            other.name()
+                        ),
+                    }
+                }
+                // `base[index]`, read-only (D-105 scope cut 2). Both of
+                // D-106's conversions apply here, in opposite directions:
+                // the index is a tagged `Ty::Int` expression crossing *into*
+                // the list, and the element read back out is a raw slot
+                // becoming a user-visible `Ty::Int` expression result.
+                //
+                // An out-of-range (including any negative) index is
+                // `pycc_rt_int_list_get`'s own honest runtime panic, not
+                // something this crate can check -- the index is only known
+                // at runtime. That is the opposite of the tuple arm above,
+                // where the index is a compile-time literal `pycc_types`
+                // has already bounds-checked.
+                (_, base_scalar) => {
+                    let base_ptr = expect_list_pointer(base_scalar, "the subscripted value");
+                    let index_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, index);
+                    let tagged_index = to_tagged_int(context, builder, index_scalar);
+                    let raw_index =
+                        build_untag_checked(builder, rt, tagged_index, "list_untag_index");
+                    let raw_element = build_int_list_get(builder, rt, base_ptr, raw_index);
+                    Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_element))
+                }
+            }
         }
         // `list.append(value)` (D-105 point 3). Same input-side D-106
         // conversion as `ListLiteral`'s elements above. `list` is a plain
@@ -1910,17 +2108,54 @@ fn emit_expr<'ctx>(
             }
             Scalar::Set(set_ptr)
         }
-        // TEMPORARY (PR-11b Task 4): `MirExpr::TupleLiteral` is reachable
-        // today from real source -- `pycc check` on `x = (1, 2)` exits 0,
-        // and `pycc build` reaches this exact panic. Task 5 of this plan
-        // replaces this with real codegen (`Scalar::Tuple`, LLVM struct
-        // construction via `build_insert_value`). This is not a defensive
-        // catch-all for an unreachable case -- see Task 3's own doc-comment
-        // correction in PR-11a for why an honest "reachable, deliberately
-        // temporary" comment matters here instead of a false
-        // "unreachable" claim.
-        MirExpr::TupleLiteral(_) => {
-            panic!("pycc_codegen: tuple[...] codegen is not implemented yet (PR-11b Task 5)")
+        // `(e1, e2, ...)` (PR-11b Task 5, D-115). The one container literal
+        // in this file that calls into no `pycc_rt` constructor at all:
+        // where `ListLiteral`/`DictLiteral`/`SetLiteral` each allocate a
+        // heap object and then fill it, this builds a pure SSA aggregate --
+        // `get_undef()` for the struct shape, then one
+        // `build_insert_value` (LLVM's `insertvalue`) per element in source
+        // order, each returning a *new* aggregate value rather than
+        // mutating one in place. No alloca, no pointer, no allocation, and
+        // so nothing for D-107/D-114's leak-only policy to apply to.
+        //
+        // Deliberately no `build_untag_checked` per element, unlike all
+        // three of those literals: their runtime objects store raw untagged
+        // slots, whereas a tuple field stores exactly the `Scalar` it was
+        // given (see `Scalar::Tuple`'s own doc comment). An `int` element
+        // therefore goes in still D-061-tagged, and
+        // `MirExpr::Subscript`'s tuple branch reads it back out tagged, so
+        // the two sides never disagree and no conversion happens on either.
+        MirExpr::TupleLiteral(elements) => {
+            let elem_tys: Vec<pycc_mir::Ty> = elements.iter().map(MirExpr::ty).collect();
+            let struct_ty = ty_to_basic_type(context, pycc_mir::Ty::Tuple(Box::new(elem_tys)))
+                .into_struct_type();
+            let mut aggregate = struct_ty.get_undef();
+            for (index, element) in elements.iter().enumerate() {
+                let scalar =
+                    emit_expr(context, builder, module, rt, user_functions, locals, element);
+                let field_value: inkwell::values::BasicValueEnum = match scalar {
+                    Scalar::Int(v) => v.into(),
+                    Scalar::Bool(v) => v.into(),
+                    Scalar::Float(v) => v.into(),
+                    // A defensive backstop, not a feature gap: `pycc_types`'
+                    // own T0039 gate (D-116) rejects every tuple element
+                    // type but `int`/`bool`/`float` before codegen runs, so
+                    // no type-checked program reaches this. Named in prose
+                    // rather than `{other:?}` because `Scalar` deliberately
+                    // derives no `Debug` -- matching `expect_list_pointer`'s
+                    // own message style.
+                    _ => panic!(
+                        "pycc_codegen: internal error: a tuple element evaluated to a \
+                         non-int/bool/float value -- pycc_types::check (T0039) should have \
+                         rejected this before codegen"
+                    ),
+                };
+                aggregate = builder
+                    .build_insert_value(aggregate, field_value, index as u32, "tuple_insert")
+                    .expect("build_insert_value should not fail for an in-range tuple field")
+                    .into_struct_value();
+            }
+            Scalar::Tuple(aggregate)
         }
     }
 }
@@ -2113,6 +2348,15 @@ fn build_call_to<'ctx>(
                 // same LLVM type), so argument marshalling needs no
                 // set-specific handling at all.
                 Scalar::Set(v) => v.into(),
+                // Pass-through like the three arms above, but by VALUE
+                // rather than by pointer (D-115): a `tuple[...]` argument
+                // is an LLVM struct at the ABI level, not an opaque
+                // pointer. It still needs no tuple-specific marshalling
+                // code, because `BasicMetadataValueEnum` already has a
+                // `StructValue` arm -- the calling convention's own
+                // by-value aggregate handling is LLVM's job, not this
+                // crate's.
+                Scalar::Tuple(v) => v.into(),
             }
         })
         .collect();
@@ -2194,6 +2438,18 @@ fn truthy<'ctx>(
         // `PyStrObj`'s.
         Scalar::Set(_) => {
             panic!("pycc_codegen: truthiness of a set[T] value is not supported yet")
+        }
+        // A real, reachable feature gap, identical in kind to the `List`/
+        // `Dict`/`Set` arms directly above: `pycc_types` places no type
+        // restriction on an `if`/`while` condition, so `if t:` for a
+        // `tuple[...]` local type-checks today and lands here. D-116 ships
+        // only construction and literal-index reads, so v0.2 has no
+        // `bool(tuple)` semantics -- and CPython's own rule (a tuple is
+        // falsey only when empty) is not derivable from this
+        // representation for free anyway, since D-116 admits no empty
+        // tuple in the first place. Panics honestly rather than guessing.
+        Scalar::Tuple(_) => {
+            panic!("pycc_codegen: truthiness of a tuple[...] value is not supported yet")
         }
     };
     builder
@@ -2309,6 +2565,15 @@ fn emit_assign<'ctx>(
         // leak-only for v0.2 (extending D-107's exact reasoning),
         // identically to `List`/`Dict`.
         Scalar::Set(v) => v.into(),
+        // Pass-through like the three arms above, but storing a whole
+        // struct by value rather than one opaque pointer (D-115) -- into a
+        // slot `ty_to_basic_type` already allocated at exactly that struct
+        // type, so the store is type-correct without any tuple-specific
+        // code at the `build_store` call below. No refcount traffic
+        // accompanies it, and for a stronger reason than `List`/`Dict`/
+        // `Set`'s leak-only policy: a tuple owns no allocation at all, so
+        // overwriting this slot frees nothing and leaks nothing.
+        Scalar::Tuple(v) => v.into(),
     };
     builder
         .build_store(slot.ptr, basic_value)
@@ -2514,15 +2779,15 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         MirStmt::Assign { target, value } => {
             let ty = value.ty();
             // `Ty::List(_)` joined the allow-list at D-089 (Task 5 of
-            // PR-10); `Ty::Dict(_)` joined it at PR-11 Task 5, and
-            // `Ty::Set(_)` joins it here (PR-11 Task 9) -- all for the
-            // identical reason: a `set[int]` local's binding does need to
-            // be collected, since this task's own codegen
-            // (`declare_module_globals`/`storage_slot_at_entry`) depends on
-            // this slot already existing. `Tuple` stays excluded: out of
-            // this PR's own scope (no codegen exists for it). This is a
-            // real, deliberate inclusion, not just a louder panic
-            // elsewhere.
+            // PR-10); `Ty::Dict(_)` joined it at PR-11 Task 5, `Ty::Set(_)`
+            // at PR-11 Task 9, and `Ty::Tuple(_)` joins it here (PR-11b
+            // Task 5) -- all for the identical reason: a tuple-typed
+            // local's binding does need to be collected, since this task's
+            // own codegen (`declare_module_globals`/
+            // `storage_slot_at_entry`) depends on this slot already
+            // existing, and `x = (1, 2)` is exactly the form D-116 ships.
+            // Each is a real, deliberate inclusion, not just a louder panic
+            // elsewhere. Only `Ty::None`/`Ty::Infer` remain excluded.
             if matches!(
                 ty,
                 pycc_mir::Ty::Int
@@ -2532,6 +2797,7 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                     | pycc_mir::Ty::List(_)
                     | pycc_mir::Ty::Dict(_)
                     | pycc_mir::Ty::Set(_)
+                    | pycc_mir::Ty::Tuple(_)
             ) {
                 bindings.entry(target.clone()).or_insert(ty);
             }
@@ -2748,6 +3014,32 @@ fn declare_module_globals<'ctx>(
                         .const_null()
                         .into(),
                 ),
+                // `tuple[...]`'s own storage (PR-11b Task 5, D-115), and
+                // the one arm here that is not a nullable pointer: the
+                // struct type itself, stored inline in the global, zero-
+                // initialized via `const_zero()` (which zero-fills every
+                // field whatever the arity and field types -- `i64`/`i8`/
+                // `f64` all have a well-defined zero).
+                //
+                // That zero is deliberately *not* a sentinel, unlike the
+                // null pointer the four arms above use. A zeroed struct is
+                // indistinguishable from a legitimately-zero tuple, so it
+                // could never mark "unassigned" on its own. Nothing is
+                // lost: read-before-first-assignment is trapped by the
+                // separate `initialized` flag every module global already
+                // gets just below -- which is the real guard for the
+                // pointer arms too, the null merely being a redundant
+                // second signal there. D-116 names module scope as a place
+                // a tuple value is expected to live (`x = (1, 2)` at top
+                // level is the canonical form), so omitting this arm would
+                // turn that supported form into an internal compiler panic.
+                // No exit-time decref accompanies it (contrast the
+                // `Ty::Str` loop in `compile_to_object`): a tuple owns no
+                // allocation to release.
+                pycc_mir::Ty::Tuple(_) => {
+                    let struct_ty = ty_to_basic_type(context, ty.clone()).into_struct_type();
+                    (struct_ty.into(), struct_ty.const_zero().into())
+                }
                 other => panic!(
                     "pycc_codegen: a `{}`-typed module binding is not supported yet",
                     other.name()
@@ -3708,6 +4000,14 @@ fn emit_stmt<'ctx>(
                         // pointer return type it gives a
                         // `str`/`list[T]`/`dict[K, V]`-returning one.
                         Scalar::Set(v) => v.into(),
+                        // Pass-through like the three arms above, but
+                        // returning a whole struct by value rather than one
+                        // opaque pointer (D-115) -- and
+                        // `ty_to_basic_type` already gave this function's
+                        // LLVM signature that same struct return type, so
+                        // the `ret` is well-typed with no tuple-specific
+                        // code here.
+                        Scalar::Tuple(v) => v.into(),
                     };
                     builder
                         .build_return(Some(&basic_value))
@@ -6486,9 +6786,10 @@ mod tests {
         //
         // Task 5 (D-089) also rewrote this catch-all's whole message (not
         // just the type-name formatting) to "{name} has no LLVM
-        // representation yet" -- see `ty_to_basic_type_panics_clearly_
-        // for_dict`/`_tuple` below for the two new tests that pin this
-        // exact wording. The `expected` string here pins the rendered
+        // representation yet". Since PR-11b Task 5 gave `Ty::Tuple` a real
+        // arm, `Ty::Infer` is the only variant that still reaches the
+        // catch-all, so this is now the sole test pinning that wording.
+        // The `expected` string here pins the rendered
         // `<inferred>` name too (`Ty::Infer`'s own `.name()` text), not
         // just the trailing message, for the same reason those two do.
         let mir = MirModule {
@@ -6505,18 +6806,74 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "tuple[int, str] has no LLVM representation yet")]
-    fn ty_to_basic_type_panics_clearly_for_tuple() {
-        // `tuple[int, str]` stays PR-11's own scope (no v0.2 code path
-        // constructs one), so it must still panic here -- but with an
-        // honest message naming the actual type via `Ty::name()`
-        // ("tuple[int, str]") instead of the generic `{other:?}` Debug
-        // format this catch-all used before D-089. The `expected` string
-        // pins the rendered type name itself (not just the trailing "has
-        // no LLVM representation yet"), so this test would fail if
-        // `.name()` were ever reverted back to `{other:?}`.
+    fn ty_to_basic_type_gives_tuple_a_struct_representation_positionally() {
+        // Supersedes `ty_to_basic_type_panics_clearly_for_tuple`, which
+        // asserted that `Ty::Tuple` had no LLVM representation at all --
+        // accurate through PR-11a, but PR-11b Task 5 gives it a real arm,
+        // so a test demanding a panic would now be asserting the absence of
+        // this task's own feature.
+        //
+        // D-115: unlike every other container (all pointer-represented),
+        // a tuple's LLVM type is a real `struct` built field-by-field from
+        // each element's own `ty_to_basic_type`. Traces the actual field
+        // types rather than just "is a struct", so this pins that each
+        // position maps to that element type's own scalar representation
+        // exactly (`i64`/`i8`/`f64`, mirroring `Ty::Int`/`Ty::Bool`/
+        // `Ty::Float`'s own arms) -- a positional mix-up or a widened
+        // `bool` field would still be "a struct" but would fail here.
         let context = Context::create();
-        ty_to_basic_type(&context, Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])));
+        let basic_type = ty_to_basic_type(
+            &context,
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float])),
+        );
+        let struct_ty = basic_type.into_struct_type();
+        assert_eq!(struct_ty.count_fields(), 3);
+        assert_eq!(
+            struct_ty.get_field_type_at_index(0),
+            Some(context.i64_type().into()),
+            "a tuple's int field keeps Ty::Int's own i64 representation"
+        );
+        assert_eq!(
+            struct_ty.get_field_type_at_index(1),
+            Some(context.i8_type().into()),
+            "a tuple's bool field keeps Ty::Bool's own i8 representation (D-061, not i1)"
+        );
+        assert_eq!(
+            struct_ty.get_field_type_at_index(2),
+            Some(context.f64_type().into()),
+            "a tuple's float field keeps Ty::Float's own f64 representation"
+        );
+        assert!(
+            !struct_ty.is_packed(),
+            "tuple fields stay naturally aligned -- ty_to_basic_type passes packed=false"
+        );
+    }
+
+    #[test]
+    fn ty_to_basic_type_builds_a_nested_tuple_struct_recursively() {
+        // The `Ty::Tuple` arm is deliberately not narrowed to D-116's
+        // current int/bool/float element gate (matching how `List(_)`/
+        // `Dict(_)`/`Set(_)` ignore their own element types) -- it recurses
+        // through `ty_to_basic_type` for whatever element types it is
+        // handed. `pycc_types`' T0039 means no such type reaches codegen
+        // from real source today; this pins the representation rule itself
+        // so a future widening of T0039 needs no change here.
+        let context = Context::create();
+        let basic_type = ty_to_basic_type(
+            &context,
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Tuple(Box::new(vec![Ty::Float]))])),
+        );
+        let struct_ty = basic_type.into_struct_type();
+        assert_eq!(struct_ty.count_fields(), 2);
+        let inner = struct_ty
+            .get_field_type_at_index(1)
+            .expect("the nested tuple field exists")
+            .into_struct_type();
+        assert_eq!(inner.count_fields(), 1);
+        assert_eq!(
+            inner.get_field_type_at_index(0),
+            Some(context.f64_type().into())
+        );
     }
 
     #[test]
@@ -6529,8 +6886,11 @@ mod tests {
         // allocated and pointer-referenced too), and PR-11 Task 9 gives
         // `Set(_)` the same treatment again (`PyIntSetObj` is heap-
         // allocated and pointer-referenced too) -- unlike `Tuple`, which
-        // stays PR-11's own scope and still panics (see the test directly
-        // above). Traces through the actual return value (not just
+        // PR-11b Task 5 gives a by-value *struct* representation instead,
+        // precisely because it has no heap object to point at (D-115; see
+        // `ty_to_basic_type_gives_tuple_a_struct_representation_
+        // positionally` above). Traces through the actual return value
+        // (not just
         // "doesn't panic") to prove all four really match, for a
         // `list[int]`/`list[str]` element type, a `dict[str, int]`
         // key/value pair, and a `set[int]` element type --
@@ -6906,20 +7266,30 @@ mod tests {
     }
 
     #[test]
-    fn collect_stmt_bindings_excludes_a_tuple_typed_assignment_target() {
-        // `Tuple` stays excluded -- PR-11's own scope, not this task's (no
-        // codegen exists for it) -- so its binding must NOT be collected,
-        // unlike `List(_)`/`Dict(_)`/`Set(_)` above.
+    fn collect_stmt_bindings_includes_a_tuple_typed_assignment_target() {
+        // Inverts `collect_stmt_bindings_excludes_a_tuple_typed_assignment_
+        // target`, which asserted the opposite: `Tuple` was excluded from
+        // the allow-list while no codegen existed for it. PR-11b Task 5
+        // joins `Ty::Tuple(_)` to that list, mirroring `Ty::List(_)`/
+        // `Ty::Dict(_)`/`Ty::Set(_)`'s own inclusion, for the identical
+        // reason -- `declare_module_globals`/`storage_slot_at_entry` can
+        // only allocate a slot for a binding that was collected here, so
+        // without this `x = (1, 2)` would reach codegen with no storage at
+        // all.
         let stmt = MirStmt::Assign {
             target: "xs".to_string(),
             value: MirExpr::Name {
                 name: "xs".to_string(),
-                ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])),
+                ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float])),
             },
         };
         let mut bindings = BTreeMap::new();
         collect_stmt_bindings(&stmt, &mut bindings);
-        assert_eq!(bindings.get("xs"), None);
+        assert_eq!(
+            bindings.get("xs"),
+            Some(&Ty::Tuple(Box::new(vec![Ty::Int, Ty::Float]))),
+            "a tuple[int, float]-typed assignment target's binding should be collected"
+        );
     }
 
     #[test]
@@ -7873,6 +8243,425 @@ mod tests {
             .ptr_type(inkwell::AddressSpace::default())
             .const_null();
         to_float(&context, &builder, &rt, Scalar::Set(ptr));
+    }
+
+    /// `tuple[int, bool, float]`, the heterogeneous shape most of the
+    /// tuple fixtures below use.
+    fn tuple_int_bool_float() -> Ty {
+        Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float]))
+    }
+
+    /// A hand-built `Scalar::Tuple` for the four direct-call panic tests
+    /// below. The `list`/`dict`/`set` fixtures all use
+    /// `ptr_type().const_null()`, which has no tuple analogue -- a tuple is
+    /// a by-value struct, not a pointer (D-115) -- so this builds an
+    /// `undef` single-field struct instead. No builder is needed: `undef`
+    /// is a constant, and every function under test rejects the value
+    /// before doing anything with its contents.
+    fn tuple_scalar(context: &Context) -> Scalar<'_> {
+        Scalar::Tuple(
+            context
+                .struct_type(&[context.i64_type().into()], false)
+                .get_undef(),
+        )
+    }
+
+    #[test]
+    fn tuple_construction_and_literal_index_reads_codegen_and_run() {
+        // `t = (1, True, 2.5)` followed by `print(t[0])`/`print(t[1])`/
+        // `print(t[2])` end to end through `compile_to_object` -- the first
+        // test to actually execute PR-11b Task 5's `MirExpr::TupleLiteral`
+        // construction (`insertvalue`) and `MirExpr::Subscript`'s tuple
+        // branch (`extractvalue`). Expected output verified against
+        // `python3` on this exact source.
+        //
+        // Heterogeneous on purpose, and reading all three positions on
+        // purpose. A single-type tuple would not catch a positional
+        // mix-up, and the `int` read in particular is what pins D-115's
+        // tagging rule: a tuple field stores the *already* D-061-tagged
+        // value, so `Subscript`'s tuple branch must NOT re-tag it the way
+        // the list branch and `DictGet` both do. With a stray
+        // `raw_i64_to_tagged_int` here this prints `3` instead of `1`,
+        // while the `bool` and `float` reads would both still pass -- which
+        // is exactly why this asserts the `int` line too.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "t".to_string(),
+                    value: MirExpr::TupleLiteral(vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::BoolLiteral(true),
+                        MirExpr::FloatLiteral(2.5),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "t".to_string(),
+                        ty: tuple_int_bool_float(),
+                    }),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "t".to_string(),
+                        ty: tuple_int_bool_float(),
+                    }),
+                    index: Box::new(MirExpr::IntLiteral(1)),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "t".to_string(),
+                        ty: tuple_int_bool_float(),
+                    }),
+                    index: Box::new(MirExpr::IntLiteral(2)),
+                })),
+            ],
+        };
+        let dir = tempfile_dir("tuple_literal_and_reads");
+        let obj_path = dir.join("tuple_literal_and_reads.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("tuple_literal_and_reads");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\nTrue\n2.5\n");
+    }
+
+    #[test]
+    fn a_function_local_tuple_codegens_and_runs_through_its_alloca_slot() {
+        // The module-level test above exercises `declare_module_globals`'
+        // new `Ty::Tuple(_)` arm; this exercises the *other* storage route,
+        // `storage_slot_at_entry`'s alloca, which allocates the struct type
+        // directly rather than a pointer. Both routes must work for
+        // `x = (...)` to be usable where D-116 says it is.
+        //
+        // Also the one fixture here that reads a tuple element as a
+        // function's return value, so `MirStmt::Return`'s path runs with a
+        // real tuple-derived scalar.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "second".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        MirStmt::Assign {
+                            target: "u".to_string(),
+                            value: MirExpr::TupleLiteral(vec![
+                                MirExpr::IntLiteral(10),
+                                MirExpr::IntLiteral(20),
+                                MirExpr::IntLiteral(30),
+                            ]),
+                        },
+                        MirStmt::Return(Some(MirExpr::Subscript {
+                            base: Box::new(MirExpr::Name {
+                                name: "u".to_string(),
+                                ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int, Ty::Int])),
+                            }),
+                            index: Box::new(MirExpr::IntLiteral(1)),
+                        })),
+                    ],
+                },
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "second".to_string(),
+                    args: vec![],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("tuple_local_slot");
+        let obj_path = dir.join("tuple_local_slot.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("tuple_local_slot");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"20\n");
+    }
+
+    #[test]
+    fn an_inline_tuple_literal_can_be_subscripted_without_a_named_binding() {
+        // `print((7, 8)[1])` -- the `Subscript` tuple branch reached with a
+        // `MirExpr::TupleLiteral` base rather than a `MirExpr::Name` one,
+        // so the struct value comes straight from `insertvalue` without
+        // ever being stored to or loaded from a slot. Proves the branch
+        // dispatches on the *value*, not on having a backing binding.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(print_expr(MirExpr::Subscript {
+                base: Box::new(MirExpr::TupleLiteral(vec![
+                    MirExpr::IntLiteral(7),
+                    MirExpr::IntLiteral(8),
+                ])),
+                index: Box::new(MirExpr::IntLiteral(1)),
+            }))],
+        };
+        let dir = tempfile_dir("tuple_inline_subscript");
+        let obj_path = dir.join("tuple_inline_subscript.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("tuple_inline_subscript");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"8\n");
+    }
+
+    #[test]
+    fn a_tuple_typed_module_binding_gets_a_struct_backed_global_slot() {
+        // The tuple counterpart of `a_dict_typed_module_binding_gets_a_
+        // real_pointer_backed_global_slot` above -- but asserting the
+        // *opposite* storage shape, which is the whole point of D-115: a
+        // tuple global holds the struct inline, not a nullable pointer to a
+        // heap object. Its zero initializer is therefore a real zeroed
+        // struct rather than a null sentinel, and the separate
+        // `initialized` flag is what guards a read-before-assignment.
+        let context = Context::create();
+        let module = context.create_module("tuple_global");
+        let bindings = BTreeMap::from([("t".to_string(), tuple_int_bool_float())]);
+        let slots = declare_module_globals(&context, &module, &bindings);
+        let slot = slots.get("t").expect("the tuple binding gets a slot");
+        assert_eq!(slot.ty, tuple_int_bool_float());
+        assert!(
+            slot.initialized.is_some(),
+            "a tuple global still gets the initialized flag -- a zeroed struct is \
+             indistinguishable from a legitimately-zero tuple, so it cannot self-signal"
+        );
+        let global = module
+            .get_global("pyglobal_t")
+            .expect("the global is named pyglobal_<name>");
+        let initializer = global
+            .get_initializer()
+            .expect("declare_module_globals always sets an initializer");
+        assert!(
+            initializer.is_struct_value(),
+            "a tuple global is initialized with a struct value, not a null pointer"
+        );
+    }
+
+    #[test]
+    fn compiles_a_function_with_a_tuple_parameter_and_tuple_return_value() {
+        // The tuple counterpart of `compiles_a_function_with_a_set_int_
+        // parameter_and_set_int_return_value` above, for the identical
+        // reason: no real source program can produce this shape
+        // (`pycc_hir::annotation_to_ty` rejects every annotation but a bare
+        // name, so an annotated `tuple[...]` parameter or return type never
+        // reaches codegen), but this MIR shape must still compile *cleanly*
+        // -- `ty_to_basic_type`'s `Tuple(_)` arm, `emit_expr`'s `Name` arm's
+        // `Ty::Tuple(_)` arm, and `MirStmt::Return`'s own `Scalar::Tuple`
+        // pass-through must all agree on the same by-value struct
+        // representation, or the `ret` would be typed against a different
+        // aggregate than the signature declares.
+        //
+        // Deliberately does not link or run the resulting object, for the
+        // identical reason the set counterpart doesn't.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), tuple_int_bool_float())],
+                return_ty: tuple_int_bool_float(),
+                body: vec![MirStmt::Return(Some(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: tuple_int_bool_float(),
+                }))],
+            }],
+        };
+        let dir = tempfile_dir("tuple_param_and_return");
+        let obj_path = dir.join("tuple_param_and_return.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    }
+
+    #[test]
+    fn passing_a_tuple_value_as_a_function_argument_marshals_it_by_value() {
+        // The tuple counterpart of `passing_a_set_value_as_a_function_
+        // argument_marshals_it_like_a_pointer` above: the caller adds the
+        // one shape the test directly above does not reach --
+        // `build_call_to`'s argument-marshalling match, whose
+        // `Scalar::Tuple` arm is also in the pass-through bucket, differing
+        // from its neighbours only in that it hands LLVM a `StructValue`
+        // rather than a `PointerValue`. Same not-linked, not-run caveat as
+        // the set counterpart.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![("x".to_string(), tuple_int_bool_float())],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::IntLiteral(0)))],
+                },
+                MirItem::Function {
+                    name: "g".to_string(),
+                    params: vec![("x".to_string(), tuple_int_bool_float())],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: tuple_int_bool_float(),
+                        }],
+                        ty: Ty::Int,
+                    }))],
+                },
+            ],
+        };
+        let dir = tempfile_dir("tuple_passed_as_argument");
+        let obj_path = dir.join("tuple_passed_as_argument.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_codegen: truthiness of a tuple[...] value is not supported yet")]
+    fn truthiness_of_a_tuple_value_panics_honestly() {
+        // The `tuple[...]` counterpart of `truthiness_of_a_set_value_
+        // panics_honestly` above: a real, reachable feature gap, not a
+        // defensive arm. `pycc_types` accepts any type in a boolean
+        // context, so `if t:` for a tuple local type-checks today; D-116
+        // ships no `bool(tuple)` semantics, so an honest panic naming the
+        // gap is the correct behavior. Calls `truthy` directly with a
+        // hand-built `Scalar::Tuple`, for the identical reason that test
+        // gives.
+        let context = Context::create();
+        let (_module, rt) = list_scalar_panic_fixture(&context);
+        let builder = context.create_builder();
+        truthy(&context, &builder, &rt, tuple_scalar(&context));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "pycc_codegen: string conversion of a tuple[...] value is not supported yet"
+    )]
+    fn string_conversion_of_a_tuple_value_panics_honestly() {
+        // The `tuple[...]` counterpart of `string_conversion_of_a_set_
+        // value_panics_honestly` above, for the identical reason: `print(t)`
+        // and `f"{t}"` both type-check today and both land in `to_str`.
+        let context = Context::create();
+        let (_module, rt) = list_scalar_panic_fixture(&context);
+        let builder = context.create_builder();
+        to_str(&builder, &rt, tuple_scalar(&context));
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: expected an int-or-bool operand, got tuple")]
+    fn to_tagged_int_rejects_a_tuple_operand() {
+        // The `tuple[...]` counterpart of `to_tagged_int_rejects_a_set_
+        // operand` above -- genuinely defensive, unlike the two tests
+        // directly above: `pycc_types`' `numeric_result_type` has no
+        // `as_numeric` mapping for `Ty::Tuple`, so no real MIR reaches this
+        // arm.
+        let context = Context::create();
+        let builder = context.create_builder();
+        to_tagged_int(&context, &builder, tuple_scalar(&context));
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: expected a numeric operand, got tuple")]
+    fn to_float_rejects_a_tuple_operand() {
+        // Same defensive-arm rationale as `to_tagged_int_rejects_a_tuple_
+        // operand` directly above, for `to_float`'s own match.
+        let context = Context::create();
+        let (_module, rt) = list_scalar_panic_fixture(&context);
+        let builder = context.create_builder();
+        to_float(&context, &builder, &rt, tuple_scalar(&context));
+    }
+
+    #[test]
+    #[should_panic(expected = "a tuple element evaluated to a non-int/bool/float value")]
+    fn a_non_scalar_tuple_element_is_an_internal_error() {
+        // `MirExpr::TupleLiteral`'s own defensive arm: `pycc_types`' T0039
+        // gate (D-116) admits only int/bool/float elements, so a `str`
+        // element cannot come from type-checked source -- only from
+        // hand-built MIR like this. Without the arm, a `PyStrObj` pointer
+        // would be silently inserted into a struct field whose declared
+        // type came from the same `Ty::Str`, storing an unrefcounted
+        // duplicate reference this crate has no policy for.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "t".to_string(),
+                value: MirExpr::TupleLiteral(vec![MirExpr::StringLiteral("a".to_string())]),
+            })],
+        };
+        let dir = tempfile_dir("tuple_non_scalar_element");
+        let _ = compile_to_object(&mir, &dir.join("tuple_non_scalar_element.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "a tuple subscript index is not a literal int")]
+    fn a_tuple_subscript_with_a_non_literal_index_is_an_internal_error() {
+        // `pycc_types`' T0040 rejects every non-literal tuple index before
+        // codegen, so this is defensive -- but genuinely reachable from
+        // hand-built MIR, because the index expression's shape is
+        // independent of the base's type: nothing about `base.ty()` being
+        // `Ty::Tuple` constrains `index` to be an `IntLiteral`. Fires
+        // before `MirExpr::ty()` would raise `pycc_mir`'s own equivalent
+        // panic, so the message pinned here is this crate's.
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "f".to_string(),
+                params: vec![
+                    ("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int]))),
+                    ("i".to_string(), Ty::Int),
+                ],
+                return_ty: Ty::Int,
+                body: vec![MirStmt::Return(Some(MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "t".to_string(),
+                        ty: Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])),
+                    }),
+                    index: Box::new(MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }))],
+            }],
+        };
+        let dir = tempfile_dir("tuple_non_literal_index");
+        let _ = compile_to_object(&mir, &dir.join("tuple_non_literal_index.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "reading a `str`-typed tuple element is not supported yet")]
+    fn reading_a_non_scalar_tuple_element_is_not_supported() {
+        // `MirExpr::Subscript`'s tuple branch mirrors `TupleLiteral`'s own
+        // element gate on the way back out: T0039 keeps every element
+        // int/bool/float, so a `str` element reaches this only from
+        // hand-built MIR. Reachable here (unlike a "base didn't evaluate to
+        // a tuple" check, which is why this arm has one and that one
+        // deliberately does not) because the element *type* is carried by
+        // the base's `Ty`, independently of the extract itself succeeding.
+        let element_ty = Ty::Tuple(Box::new(vec![Ty::Str]));
+        let mir = MirModule {
+            items: vec![MirItem::Function {
+                name: "f".to_string(),
+                params: vec![("t".to_string(), element_ty.clone())],
+                return_ty: Ty::None,
+                body: vec![print_expr(MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "t".to_string(),
+                        ty: element_ty,
+                    }),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                })],
+            }],
+        };
+        let dir = tempfile_dir("tuple_non_scalar_element_read");
+        let _ = compile_to_object(&mir, &dir.join("tuple_non_scalar_element_read.o"), None, false);
+    }
+
+    #[test]
+    fn a_tuple_operand_is_rejected_as_a_range_bound() {
+        // `range()`'s own operand check folds `Tuple` into its existing
+        // or-pattern rather than giving it a separate arm (that arm's
+        // message never names the offending type, so folding costs no
+        // honesty and adds no permanently-unexecutable region). Pinned via
+        // a direct call, matching how the arm's other variants are reached.
+        let context = Context::create();
+        let builder = context.create_builder();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            range_operand_to_tagged_int(&context, &builder, tuple_scalar(&context), "start");
+        }));
+        let payload = panicked.expect_err("a tuple range bound must be rejected");
+        let message = payload
+            .downcast_ref::<String>()
+            .expect("this crate's panics all carry a formatted String");
+        assert!(
+            message.contains("range() start did not evaluate to int"),
+            "unexpected panic message: {message}"
+        );
     }
 
     #[test]
