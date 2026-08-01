@@ -18,6 +18,7 @@
 
 ## Keep documentation current
 
+- Write every durable artifact in English: documentation and specifications under `docs/`, decision entries, `AGENTS.md` and its imports, code comments and identifiers, tests, skills, commit messages, pull-request titles and bodies, and anything published to the issue tracker. Converse with the user in the user's own language, matching whatever language they write in; that choice never changes the language of anything written into the repository or published upstream. Translate the user's intent into English artifacts rather than mirroring their language into the tree.
 - Documentation work is part of every implementation task. Update all affected documentation in the same change and commit as the code; a change is incomplete while its docs describe the old behavior.
 - Keep descriptions honest about what exists now versus what is planned. Update examples, commands, status markers, acceptance criteria, and cross-references when their underlying behavior changes.
 - Keep `docs/ROADMAP.md` current in the same pull request whenever behavior, platform support, milestone acceptance evidence, or delivery sequencing changes. Its current-status section describes the repository tree in the commit that contains it: count behavior and evidence added by that same commit, but never count work that exists only in another open pull request or unmerged branch.
