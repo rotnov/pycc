@@ -72,4 +72,4 @@ jobs:
               target/criterion/pycc_check_frontend_fixture/current \
               target/criterion/pycc_check_frontend_fixture/previous \
               false || true
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
