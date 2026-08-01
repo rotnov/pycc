@@ -1356,9 +1356,36 @@ pub unsafe extern "C" fn pycc_rt_dict_len(dict: *mut PyDictObj) -> i64 {
     len
 }
 
+/// Private half of `pycc_rt_dict_key_at` below, same panic-across-FFI
+/// split as `int_list_get`/`dict_get` above: a plain `extern "C" fn`
+/// turns an unwinding panic into a process abort, so the freely-panicking
+/// logic lives here and tests exercising the panic call this directly.
+///
+/// Uses `Vec::get` (bounds-checked, never panics on its own) rather than
+/// indexing directly, so the payload can be restored into the `Cell`
+/// *before* the panic branch -- mirroring `int_list_get`'s own "restore
+/// before panicking" comment and `dict_get`'s own `unwrap_or_else` shape,
+/// instead of `dict.entries.take()` followed by a direct index that would
+/// leave the `Cell` holding an empty `Vec` if it panicked. Not required
+/// for this compiler's actual generated code (`ForDict`'s own loop bound
+/// is always `pycc_rt_dict_len`, so no call site this project's own
+/// codegen emits can go out of range), but cheap insurance against
+/// leaving `dict` with a permanently emptied payload for any future
+/// caller that does catch this unwind (e.g. this file's own
+/// `#[should_panic]` test below).
+fn dict_key_at(dict: &PyDictObj, index: i64) -> *mut PyStrObj {
+    let entries = dict.entries.take();
+    let key = entries.get(index as usize).map(|(k, _)| *k);
+    dict.entries.set(entries);
+    key.unwrap_or_else(|| panic!("pycc_rt: dict_key_at index out of range"))
+}
+
 /// Key at a given insertion-order position, used only by `ForDict`'s own
 /// iteration codegen (Task 5) -- never a user-facing indexing operation
-/// (dict has no positional index in Python).
+/// (dict has no positional index in Python). Panics (message
+/// `"pycc_rt: dict_key_at index out of range"`) if `index` is out of
+/// range; unreachable in this compiler's own generated code (see `#
+/// Safety` below) but not undefined behavior if ever hit.
 ///
 /// # Safety
 /// `dict` must be a live `PyDictObj` pointer; `index` must satisfy
@@ -1368,10 +1395,7 @@ pub unsafe extern "C" fn pycc_rt_dict_len(dict: *mut PyDictObj) -> i64 {
 /// user program).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pycc_rt_dict_key_at(dict: *mut PyDictObj, index: i64) -> *mut PyStrObj {
-    let entries = unsafe { &*dict }.entries.take();
-    let key = entries[index as usize].0;
-    unsafe { &*dict }.entries.set(entries);
-    key
+    dict_key_at(unsafe { &*dict }, index)
 }
 
 /// Unconditional refcounting (D-114), mirroring `pycc_rt_int_list_incref`
@@ -2462,6 +2486,24 @@ mod tests {
             assert_eq!(pycc_rt_str_cmp(pycc_rt_dict_key_at(dict, 0), b), 0);
             assert_eq!(pycc_rt_str_cmp(pycc_rt_dict_key_at(dict, 1), a), 0);
             pycc_rt_dict_decref(dict);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: dict_key_at index out of range")]
+    fn pycc_rt_dict_key_at_out_of_range_panics_honestly() {
+        unsafe {
+            let dict = pycc_rt_dict_new();
+            let key = new_pystr(b"a");
+            pycc_rt_dict_set(dict, key, 1);
+            // Calls the private `dict_key_at`, not the public
+            // `pycc_rt_dict_key_at` wrapper -- the wrapper is a plain
+            // `extern "C" fn`, so a panic crossing its boundary aborts the
+            // whole test binary (`SIGABRT`) instead of unwinding into
+            // `#[should_panic]`'s own catch (same convention as
+            // `int_list_get_out_of_range_panics_honestly`/
+            // `pycc_rt_dict_get_on_a_missing_key_panics` just below).
+            dict_key_at(&*dict, 1);
         }
     }
 
