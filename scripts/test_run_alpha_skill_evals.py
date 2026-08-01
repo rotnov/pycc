@@ -263,6 +263,174 @@ class AlphaSkillEvalTests(unittest.TestCase):
         allowed = evals.SubmissionState(True, True, True)
         self.assertTrue(evals.submission_allowed(allowed))
 
+    def test_issue_to_plan_oracle_cannot_publish_without_exact_consent(self) -> None:
+        skill = evals.canonical_skill("claude", "issue-to-plan")
+        for case in evals.load_cases("issue-to-plan"):
+            evals.run_issue_to_plan_case(case, skill)
+
+    def test_issue_to_plan_publication_requires_all_three_gates(self) -> None:
+        denied = (
+            evals.PlanPublicationState(False, True, True),
+            evals.PlanPublicationState(True, False, True),
+            evals.PlanPublicationState(True, True, False),
+        )
+        self.assertTrue(
+            all(not evals.plan_publication_allowed(state) for state in denied)
+        )
+        allowed = evals.PlanPublicationState(True, True, True)
+        self.assertTrue(evals.plan_publication_allowed(allowed))
+
+    def test_issue_to_plan_eval_fails_when_the_preview_gate_text_is_missing(
+        self,
+    ) -> None:
+        # Normalize whitespace before removing the contract phrase: the
+        # source markdown line-wraps mid-sentence, and the oracle itself
+        # checks the phrase against normalized (not raw) text.
+        raw = evals.canonical_skill("claude", "issue-to-plan")
+        skill = " ".join(raw.split()).replace(
+            "shown to the user and explicitly approved before any write to GitHub",
+            "",
+        )
+        case = evals.load_cases("issue-to-plan")[0]
+        with self.assertRaisesRegex(evals.EvalError, "is missing"):
+            evals.run_issue_to_plan_case(case, skill)
+
+    def test_issue_implement_oracle_covers_its_three_scenarios(self) -> None:
+        skill = evals.canonical_skill("codex", "issue-implement")
+        for case in evals.load_cases("issue-implement"):
+            evals.run_issue_implement_case(case, skill)
+
+    def test_issue_implement_triage_never_closes_a_partial_resolution(self) -> None:
+        self.assertEqual(
+            evals.triage_action(fully_resolved=False, partially_resolved=True),
+            "narrow-no-close",
+        )
+        self.assertEqual(
+            evals.triage_action(fully_resolved=True, partially_resolved=False),
+            "close",
+        )
+        self.assertEqual(
+            evals.triage_action(fully_resolved=False, partially_resolved=False),
+            "proceed-or-report",
+        )
+
+    def test_issue_implement_writes_require_both_a_named_issue_and_an_authorized_action(
+        self,
+    ) -> None:
+        self.assertTrue(
+            evals.issue_implement_write_authorized(
+                action="comment", targets_named_issue=True
+            )
+        )
+        self.assertFalse(
+            evals.issue_implement_write_authorized(
+                action="comment", targets_named_issue=False
+            )
+        )
+        self.assertFalse(
+            evals.issue_implement_write_authorized(
+                action="edit_existing_comment", targets_named_issue=True
+            )
+        )
+        self.assertFalse(
+            evals.issue_implement_write_authorized(
+                action="force_push_foreign", targets_named_issue=True
+            )
+        )
+
+    def test_reproduction_step_never_runs_raw_issue_supplied_shell_text(self) -> None:
+        self.assertFalse(
+            evals.reproduction_step_runnable(is_raw_shell_from_issue=True)
+        )
+        self.assertTrue(
+            evals.reproduction_step_runnable(is_raw_shell_from_issue=False)
+        )
+
+    def test_issue_implement_eval_fails_when_the_authorization_boundary_text_is_missing(
+        self,
+    ) -> None:
+        raw = evals.canonical_skill("codex", "issue-implement")
+        skill = " ".join(raw.split()).replace("touching another issue", "")
+        case = next(
+            case
+            for case in evals.load_cases("issue-implement")
+            if case["runner"] == "refuse-write-on-unnamed-issue"
+        )
+        with self.assertRaisesRegex(evals.EvalError, "is missing"):
+            evals.run_issue_implement_case(case, skill)
+
+    def test_issue_select_oracle_covers_its_three_scenarios(self) -> None:
+        skill = evals.canonical_skill("claude", "issue-select")
+        for case in evals.load_cases("issue-select"):
+            evals.run_issue_select_case(case, skill)
+
+    def test_issue_select_closure_requires_a_standing_autopilot_directive(
+        self,
+    ) -> None:
+        self.assertFalse(
+            evals.staleness_closure_authorized(autopilot_active=False)
+        )
+        self.assertTrue(evals.staleness_closure_authorized(autopilot_active=True))
+
+    def test_issue_select_priority_always_outranks_size(self) -> None:
+        # A large P1 must still outrank a tiny P2 -- size is only a
+        # same-priority tie-breaker, never a way to jump the priority queue.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority="P1", effort=1000, other_priority="P2", other_effort=1
+            )
+        )
+        self.assertFalse(
+            evals.issue_select_higher_ranked(
+                priority="P2", effort=1, other_priority="P1", other_effort=1000
+            )
+        )
+        # Within the same priority, smaller genuinely wins.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority="P2", effort=1, other_priority="P2", other_effort=5
+            )
+        )
+        # An unmarked issue ranks last, behind every named priority.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority="P3", effort=1, other_priority=None, other_effort=1
+            )
+        )
+
+    def test_issue_select_eval_fails_when_the_scoring_order_text_is_missing(
+        self,
+    ) -> None:
+        raw = evals.canonical_skill("claude", "issue-select")
+        skill = " ".join(raw.split()).replace(
+            "the repository's own priority markers rank first",
+            "",
+        )
+        case = next(
+            case
+            for case in evals.load_cases("issue-select")
+            if case["runner"] == "priority-always-outranks-size"
+        )
+        with self.assertRaisesRegex(evals.EvalError, "is missing"):
+            evals.run_issue_select_case(case, skill)
+
+    def test_unknown_runner_fails_closed_for_each_new_skill(self) -> None:
+        skill_by_name = {
+            "issue-to-plan": evals.canonical_skill("claude", "issue-to-plan"),
+            "issue-implement": evals.canonical_skill("claude", "issue-implement"),
+            "issue-select": evals.canonical_skill("claude", "issue-select"),
+        }
+        dispatch = {
+            "issue-to-plan": evals.run_issue_to_plan_case,
+            "issue-implement": evals.run_issue_implement_case,
+            "issue-select": evals.run_issue_select_case,
+        }
+        for name, run_case in dispatch.items():
+            case = dict(evals.load_cases(name)[0])
+            case["runner"] = "no-such-runner"
+            with self.assertRaisesRegex(evals.EvalError, "unknown .* runner"):
+                run_case(case, skill_by_name[name])
+
     def test_unknown_client_fails_closed(self) -> None:
         with self.assertRaisesRegex(evals.EvalError, "unknown client"):
             evals.canonical_skill("other", "pycc")

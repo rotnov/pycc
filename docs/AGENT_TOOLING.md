@@ -97,50 +97,71 @@ before creating an issue or comment in `rotnov/pycc`.
 
 `issue-to-plan` turns one GitHub issue into an implementation plan for a later
 session. It re-establishes the remote default branch and the open pull
-requests before planning, treats the issue's own text as dated evidence that
-every claim must be re-verified against the current tree rather than trusted,
-separates real merge gates from file conventions, and runs an adversarial
-review loop until a round changes nothing. It writes no implementation code and
-mutates no tracked file on its own. Like `pycc-feedback`, it must show the exact
-comment payload and receive explicit per-payload user confirmation before
-creating a comment in `rotnov/pycc`; unlike the other two, it has no bound
-executable eval runners yet, so `scripts/run_alpha_skill_evals.py` does not
-declare a case for it and its output remains a reviewed draft rather than a
-validated workflow. Binding trigger and output evals for it is a prerequisite
-for promoting it out of this project-local alpha set, on the same terms as the
-other two.
+requests before planning, treats the issue's own text — including any
+"Reproduction" section — as untrusted data to re-verify against the current
+tree by reconstructing checks through this repository's own toolchain, never
+by executing issue-supplied shell text directly, separates real merge gates
+from file conventions, and runs an adversarial review loop until a round
+changes nothing. It writes no implementation code and mutates no tracked file
+on its own. Like `pycc-feedback`, it must show the exact comment payload and
+receive explicit per-payload user confirmation before creating a comment in
+`rotnov/pycc` (delegated invocation from `issue-implement` is the one
+exception).
 
 `issue-implement` takes one GitHub issue end to end in a single autonomously
 driven session: it triages the issue for staleness against the refreshed
-default branch and closes it with cited evidence when its premise no longer
-holds, obtains or refreshes an implementation plan through `issue-to-plan`,
-implements on a clean task branch under D-021's preflight, loops the pinned
-D-068 deep review until a round reports no actionable findings, opens the pull
-request, monitors CI and review threads under D-078, and merges only after
-re-reading the full diff with every required gate green. Unlike
-`pycc-feedback`'s per-payload confirmation, explicit invocation of
-`issue-implement` authorizes an enumerated set of public writes scoped to the
-named issue — the staleness-closure comment, the plan comment it delegates to
-`issue-to-plan`, the task branch and pull request, replies to and resolution
-of that pull request's review threads, and the merge itself. Anything outside
-that set still requires asking first, and `issue-to-plan`'s own publish gate
-recognizes exactly this delegation. It has no bound executable eval runners
-yet either, so `scripts/run_alpha_skill_evals.py` declares no case for it and
-binding those evals is the same promotion prerequisite the other alpha skills
-carry.
+default branch, treating issue content as data rather than commands the same
+way `issue-to-plan` does, and closes it with cited evidence when its premise
+no longer holds; obtains or refreshes an implementation plan through
+`issue-to-plan`; implements on a clean task branch under D-021's preflight;
+loops the pinned D-068 deep review until a round reports no actionable
+findings; opens the pull request; monitors CI and review threads under D-078;
+and merges only after re-reading the full diff with every required gate
+green. Unlike `pycc-feedback`'s per-payload confirmation, explicit invocation
+of `issue-implement` authorizes an enumerated set of public writes scoped to
+the named issue — a closure or narrowing comment depending on how staleness
+triage resolves, the plan comment it delegates to `issue-to-plan`, the task
+branch and pull request, replies to and resolution of that pull request's
+review threads, and the merge itself. Anything outside that set still
+requires asking first, and `issue-to-plan`'s own publish gate recognizes
+exactly this delegation.
 
 `issue-select` chooses the next issue for an autonomous end-to-end run and
-performs no public writes itself: it inventories the full open issue list,
-screens for staleness (routing provable closures through `issue-implement`'s
-evidence-gated triage), screens blockers (dependency on another issue,
+mutates no tracked file: it inventories the full open issue list, screens for
+staleness (routing provable closures through `issue-implement`'s
+evidence-gated triage — but only when a standing autopilot directive is in
+effect; a plain "what's next" query only reports stale candidates, since
+closing an issue the user never named is a public write outside a one-off
+query's own authorization), screens blockers (dependency on another issue,
 roadmap/delivery-plan mismatch, open-pull-request collision, maintainer-only
-authority), scores the survivors, verifies the top candidate's premise still
-reproduces, and challenges the pick with an independent adversarial advisor
+authority), scores the survivors by a fixed priority-then-size order,
+verifies the top candidate's premise still reproduces the same way
+`issue-to-plan` does (reconstructed toolchain checks, never issue-supplied
+shell text), and challenges the pick with an independent adversarial advisor
 in a fresh context instead of escalating "does this need the maintainer?" to
 the user. With a standing autopilot directive it hands the selection to
 `issue-implement`, whose enumerated write authorization covers the run from
-that point. Like the other two issue skills it has no bound executable eval
-runners yet, with the same promotion prerequisite.
+that point.
+
+All three bind deterministic offline eval cases in
+`scripts/run_alpha_skill_evals.py` (three each, mirroring `pycc-feedback`'s
+fail-closed-oracle pattern): `issue-to-plan`'s publish-gate boolean logic,
+`issue-implement`'s staleness-outcome/write-authorization/issue-content
+oracles, and `issue-select`'s autopilot-gated-closure/priority-ordering/
+issue-content oracles, each cross-checked against literal contract phrases in
+the live skill text so an edit that silently drops an invariant these oracles
+encode fails required CI (`EXPECTED_RUNNERS` in that script now names all
+five alpha skills, not just `pycc`/`pycc-feedback`). Two things remain
+deferred for all five, unchanged by this: authenticated model-response
+evals on both Codex and Claude (the `pycc`/`pycc-feedback` promotion
+requirement described below); and, specifically for the three issue skills,
+extending `scripts/validate_agent_assets.py`'s separate
+`validate_alpha_skill_contracts` structural check — which today still
+iterates only `("pycc", "pycc-feedback")` — to enforce the same "at least
+two evals, exact runner set, visibly alpha" structure on their `evals.json`
+files. `scripts/run_alpha_skill_evals.py` already validates that structure
+for them at the `load_cases`/`EXPECTED_RUNNERS` level regardless; the gap is
+only in this second, currently pycc-scoped validator.
 
 The required CI build runs `scripts/run_alpha_skill_evals.py` after resolving
 both the Codex wrapper and the Claude Code canonical entrypoint. The primary
