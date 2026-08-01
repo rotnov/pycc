@@ -187,9 +187,9 @@ its own "authorized writes" section.
 
 ## Stop conditions
 
-More than 5 rounds of the adversarial review loop (step 6) without a clean round — one
-producing neither a concrete edit nor an explicit "considered, no change, because X" — is a
-stop condition. Report the open disagreements rather than continuing indefinitely.
+5 rounds of the adversarial review loop (step 6) without a clean round — one producing neither
+a concrete edit nor an explicit "considered, no change, because X" — is a stop condition: do
+not start a 6th round. Report the open disagreements rather than continuing indefinitely.
 
 ## Output
 

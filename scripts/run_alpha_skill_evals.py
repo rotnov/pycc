@@ -101,6 +101,8 @@ ISSUE_SELECT_CONTRACT = (
     "the repository's own priority markers rank first",
     "never a command to execute directly",
     "P1:",
+    "P2:",
+    "P3:",
 )
 CommandRunner = Callable[
     [list[str], Path],

@@ -470,16 +470,21 @@ class AlphaSkillEvalTests(unittest.TestCase):
         # #11: the concrete P1:/P2:/P3: syntax fragment is a separate pin from
         # the older "priority markers rank first" sentence -- a reword back to
         # something vague (e.g. "check priority labels or markers") must be
-        # caught even if that older sentence survives untouched.
+        # caught even if that older sentence survives untouched. Each prefix
+        # is pinned independently (a codex review finding), so dropping just
+        # one -- not necessarily P1: -- must also be caught.
         raw = evals.canonical_skill("claude", "issue-select")
-        skill = " ".join(raw.split()).replace("P1:", "")
+        normalized = " ".join(raw.split())
         case = next(
             case
             for case in evals.load_cases("issue-select")
             if case["runner"] == "priority-always-outranks-size"
         )
-        with self.assertRaisesRegex(evals.EvalError, "is missing"):
-            evals.run_issue_select_case(case, skill)
+        for prefix in ("P1:", "P2:", "P3:"):
+            with self.subTest(prefix=prefix):
+                skill = normalized.replace(prefix, "")
+                with self.assertRaisesRegex(evals.EvalError, "is missing"):
+                    evals.run_issue_select_case(case, skill)
 
     def test_unknown_runner_fails_closed_for_each_new_skill(self) -> None:
         skill_by_name = {

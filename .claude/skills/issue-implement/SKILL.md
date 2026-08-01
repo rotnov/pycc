@@ -148,18 +148,30 @@ as green.
 If the diff touches a workflow file under `.github/workflows/` **and** requires registering a
 new digest in one of `scripts/check_roadmap_evidence.rb`'s reviewed allowlist constants
 (`TRUSTED_COVERAGE_STEPS`, `REVIEWED_PERF_CI_WORKFLOW_SHA256S`, or similar), split the work
-into two sequential pull requests rather than one: a **stage PR** that touches only
-`scripts/check_roadmap_evidence.rb` (and its test file) to add the new digest entry, with no
-`ci.yml` change; and an **activation PR**, opened only after the stage PR's commit is confirmed
-present on the default branch, that carries the real `ci.yml` change plus `Fixes #N`. Assemble
-the target `ci.yml`'s exact final bytes locally before computing the digest for the stage PR —
-the activation PR's later `ci.yml` commit must byte-identically match those assembled bytes, or
-the pattern is broken. Tag the stage PR's body: "Stage 1/2 for #N — see issue-implement's staged
-CI-digest pattern." The stage PR runs the full step 5 review loop, step 6 pull-request flow,
-step 7 monitoring, and step 8 merge exactly like any other PR, with one addition: its step 5
-review explicitly verifies the digest-byte-identity claim above, and treats any ambiguity in
-that verification as a stop condition rather than a best-effort guess. Only once the stage PR is
-merged does the activation PR begin its own pass through steps 4-8.
+into two sequential pull requests rather than one, matching this repository's own established
+D-080/D-048/D-051 precedent exactly — that precedent checks in an inert byte-exact fixture, it
+does not compute a digest against ephemeral local state:
+
+- **Stage PR:** assemble the target `ci.yml`'s exact final bytes and check them in as an inert
+  fixture under `tests/fixtures/` (matching the naming convention nearby staging fixtures use,
+  e.g. `tests/fixtures/d80-conformance-oracle-ci.yml`); bind that fixture's SHA-256 in
+  `scripts/check_roadmap_evidence.rb`'s allowlist constant, add or update its structural
+  acceptance test to reference the checked-in fixture (not a re-derived digest), and touch no
+  other file — no `ci.yml` change, and specifically no `Fixes #N` in the body, since merging the
+  stage PR must not close the issue before the activation PR delivers the real fix. Because it
+  never carries `Fixes #N`, the stage PR is exempt from step 6's `Fixes #N` requirement, and
+  step 8's `Fixes #N` merge-confirmation step does not apply to it either — every other part of
+  steps 5 through 8 (review loop, monitoring, merge preconditions) still applies to the stage PR
+  unchanged. Tag its body instead: "Stage 1/2 for #N — see issue-implement's staged CI-digest
+  pattern."
+- **Activation PR:** opened only after the stage PR's commit is confirmed present on the default
+  branch. Replaces `ci.yml` byte-for-byte from the now-checked-in fixture and carries the real
+  `Fixes #N`; the activation commit must byte-identically match the fixture the stage PR already
+  landed, or the pattern is broken. Runs the normal steps 4-8 unchanged.
+
+The stage PR's step 5 review explicitly verifies the fixture-to-allowlisted-digest binding is
+correct and that the fixture is byte-identical to what the activation PR intends to ship, and
+treats any ambiguity in that verification as a stop condition rather than a best-effort guess.
 
 If the tree refutes the plan mid-implementation — an assumption fails, a gate behaves
 differently than planned — do not force it. Record what refuted it, refresh the plan if the
