@@ -207,7 +207,12 @@ pub enum HirStmt {
     },
     /// `for var in list:`, parallel to the existing `ForRange` -- desugars
     /// to an index-counted loop starting in a later PR-10 task (D-105),
-    /// not here.
+    /// not here. Also reused, unconditionally, for `for k in <bare-name
+    /// dict>:` (PR-11 Task 3, D-113: iterates keys in insertion order) --
+    /// this lowering step has no type information to distinguish a
+    /// `list`-typed iterable from a `dict`-typed one, so `pycc_types`'
+    /// own `ForList` arms resolve `list`'s real type to `Ty::List`,
+    /// `Ty::Dict` (binding `var` as the key type), or reject it, not here.
     ForList {
         var: String,
         list: String,
@@ -220,8 +225,8 @@ pub enum HirStmt {
     /// field and `ListAppend`'s `list` field -- this lowering step has no
     /// type information, so a `list[int]` target also lowers to this node
     /// today (`pycc_types` rejects it with `T0033`, mirroring how
-    /// `ForList`'s own `list` field is resolved to `Ty::List` or rejected
-    /// downstream, not here).
+    /// `ForList`'s own `list` field is resolved to `Ty::List`, `Ty::Dict`,
+    /// or rejected downstream, not here).
     DictSet {
         dict: String,
         key: HirExpr,
@@ -418,8 +423,8 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                 // `list[int]`'s own read-only-indexing consequence (D-105),
                 // `dict[str, int]` ships `d[k] = v`. This lowering step has
                 // no type information (mirroring `ForList`'s own bare-name
-                // iterable, which is resolved to `Ty::List` or rejected
-                // downstream), so a `list[int]` subscript-assignment target
+                // iterable, which is resolved to `Ty::List`, `Ty::Dict`, or
+                // rejected downstream), so a `list[int]` subscript-assignment target
                 // also reaches `HirStmt::DictSet` here -- `pycc_types`
                 // rejects it with `T0033` once the base's real type is
                 // known, relocating (not removing) the invariant this file's
@@ -516,8 +521,9 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     pycc_ast::expr_range(&for_stmt.target),
                 ));
             };
-            // A bare-name iterable is `for v in some_list:` (D-105) --
-            // resolved to `Ty::List` or rejected by pycc_types, not here;
+            // A bare-name iterable is `for v in some_list:` (D-105) or
+            // `for k in some_dict:` (PR-11 Task 3, D-113) -- resolved to
+            // `Ty::List`, `Ty::Dict`, or rejected by pycc_types, not here;
             // HIR only records the syntactic shape.
             if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
                 return Ok(HirStmt::ForList {

@@ -367,16 +367,25 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
             }
         }
         HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes))),
-        // PR-11 Task 3 (`pycc_hir`/`pycc_types`) added `HirStmt::DictSet` so
-        // `dict[str, int]`'s type-checked HIR can exist at all; MIR lowering
-        // for it is PR-11 Task 4's own scope, not this task's. This arm
-        // exists only so this crate's exhaustive `match` still compiles --
-        // `pycc_types::check` never lets a `HirStmt::DictSet` reach codegen
-        // today (Task 3 stops at `pycc_types`), so this panic is unreachable
-        // from any currently-supported program, mirroring `lookup`'s own
-        // "internal error" convention above. Task 4 replaces this arm with
-        // real lowering and deletes the `should_panic` test that exercises
-        // it (`dict_set_mir_lowering_is_not_implemented_yet` below).
+        // PR-11 Task 3 (`pycc_hir`/`pycc_types`) added `HirStmt::DictSet` and
+        // taught `pycc_types::check` to accept `dict[str, int]`'s `d[k] = v`
+        // as valid, type-checked code -- MIR lowering for it is PR-11 Task
+        // 4's own scope, not this task's, so this arm is a deliberate,
+        // temporary panic stub that exists only so this crate's exhaustive
+        // `match` still compiles against `pycc_hir`'s new variant. Unlike
+        // `lookup`'s own "internal error" panics above (which really are
+        // unreachable from any type-checked program -- `pycc_types` already
+        // rejects the input that would trigger them), **this panic IS
+        // reachable today**: a real `dict[str, int]` program (e.g. `x =
+        // {"a": 1}\nx["b"] = 2\n`) type-checks cleanly (`pycc check` exits
+        // 0) and then panics here via `pycc build`/`pycc run`, since this
+        // crate has no real lowering for it yet. That is expected,
+        // intra-plan sequencing (PR-10 had the identical shape: Task 7 added
+        // HIR-level list forms before MIR/codegen existed, closed several
+        // tasks later) -- not a bug to silence here. Task 4 replaces this
+        // arm with real lowering (closing the gap end to end) and deletes
+        // the `should_panic` test that exercises this stub
+        // (`dict_set_mir_lowering_is_not_implemented_yet` below).
         HirStmt::DictSet { .. } => panic!(
             "pycc_mir: internal error: dict[str, int] MIR lowering is not implemented yet (PR-11 Task 4)"
         ),
@@ -454,10 +463,17 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
             list: list.clone(),
             value: Box::new(lower_expr(value, scopes)),
         },
-        // See `lower_stmt`'s own `HirStmt::DictSet` arm above: PR-11 Task 4
-        // owns real MIR lowering for `dict[str, int]`. This arm exists only
-        // so the exhaustive `match` compiles; unreachable from any program
-        // `pycc_types::check` currently accepts.
+        // See `lower_stmt`'s own `HirStmt::DictSet` arm above and its doc
+        // comment for the full reasoning: PR-11 Task 4 owns real MIR
+        // lowering for `dict[str, int]`, and this arm is the same kind of
+        // deliberate, temporary panic stub -- **reachable today**, not
+        // unreachable. `pycc_types::check` now correctly accepts a `dict[str,
+        // int]` literal (e.g. `x = {"a": 1}\n` type-checks cleanly), so
+        // `pycc build`/`pycc run` on that exact program reaches this arm and
+        // panics, because this crate has no real lowering for it yet. Task 4
+        // replaces this arm with real lowering and deletes the
+        // `should_panic` test that exercises this stub
+        // (`dict_literal_mir_lowering_is_not_implemented_yet` below).
         HirExpr::DictLiteral(_) => panic!(
             "pycc_mir: internal error: dict[str, int] MIR lowering is not implemented yet (PR-11 Task 4)"
         ),

@@ -1461,17 +1461,29 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // empty `local_names` slice too, so an unresolved `list` is
             // simply "not defined," never `unbound_local`.
             let list_ty = lookup_bound_name(env, &[], list)?;
-            let Ty::List(elem_ty) = list_ty else {
-                return Err(Diagnostic::error(
-                    "T0033",
-                    format!(
-                        "`{}` cannot be iterated with `for ... in ...` (only list[T] supports this)",
-                        list_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
+            // PR-11 Task 3 (D-113): `for k in d:` iterates a dict's own keys
+            // in insertion order, mirroring `len()`'s own relaxation to
+            // accept `Ty::Dict` alongside `Ty::List` at this crate's other
+            // hand-recognized dispatch points. `HirStmt::ForList` itself is
+            // reused unconditionally for any bare-name iterable, dict or
+            // list alike (`pycc_hir`'s own lowering has no type information
+            // to pick a different node) -- this is the point where the real
+            // type is resolved.
+            let var_ty = match list_ty {
+                Ty::List(elem_ty) => *elem_ty,
+                Ty::Dict(kv) => kv.0,
+                other => {
+                    return Err(Diagnostic::error(
+                        "T0033",
+                        format!(
+                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V] supports this)",
+                            other.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
             };
-            check_assignment(env, var, *elem_ty)?;
+            check_assignment(env, var, var_ty)?;
             for stmt in body {
                 check_stmt(env, stmt)?;
             }
@@ -1692,17 +1704,23 @@ fn check_stmt_in_function(
         }
         HirStmt::ForList { var, list, body } => {
             let list_ty = lookup_bound_name(env, local_names, list)?;
-            let Ty::List(elem_ty) = list_ty else {
-                return Err(Diagnostic::error(
-                    "T0033",
-                    format!(
-                        "`{}` cannot be iterated with `for ... in ...` (only list[T] supports this)",
-                        list_ty.name()
-                    ),
-                    Span::new(0, 0),
-                ));
+            // See the module-scope `check_stmt` arm's own comment (PR-11
+            // Task 3, D-113): `for k in d:` iterates a dict's keys.
+            let var_ty = match list_ty {
+                Ty::List(elem_ty) => *elem_ty,
+                Ty::Dict(kv) => kv.0,
+                other => {
+                    return Err(Diagnostic::error(
+                        "T0033",
+                        format!(
+                            "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V] supports this)",
+                            other.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
             };
-            check_assignment(env, var, *elem_ty)?;
+            check_assignment(env, var, var_ty)?;
             for s in body {
                 check_stmt_in_function(env, local_names, s, return_ty.clone())?;
             }
@@ -3657,6 +3675,21 @@ mod tests {
         };
         check_stmt(&mut env, &stmt).unwrap();
         assert_eq!(env.lookup("i"), Some(Ty::Str));
+    }
+
+    #[test]
+    fn a_for_dict_loop_binds_its_variable_as_the_key_type() {
+        // PR-11 Task 3 (D-113): `for k in d:` iterates a dict's own keys, so
+        // `var` binds as the dict's key type (`Ty::Str`), not its value type.
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let stmt = HirStmt::ForList {
+            var: "k".to_string(),
+            list: "d".to_string(),
+            body: vec![],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("k"), Some(Ty::Str));
     }
 
     #[test]
@@ -6648,6 +6681,25 @@ mod tests {
         check_stmt_in_function(&mut env, &["xs", "i", "y"], &stmt, Ty::None).unwrap();
         assert_eq!(env.lookup("i"), Some(Ty::Int));
         assert_eq!(env.lookup("y"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_for_dict_loop_binds_its_variable_as_the_key_type_in_a_function_body() {
+        // Mirrors the list-shaped test above (PR-11 Task 3, D-113): `for k in
+        // d:` binds `k` as the dict's key type, not its value type.
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let stmt = HirStmt::ForList {
+            var: "k".to_string(),
+            list: "d".to_string(),
+            body: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Name("k".to_string()),
+            }],
+        };
+        check_stmt_in_function(&mut env, &["d", "k", "y"], &stmt, Ty::None).unwrap();
+        assert_eq!(env.lookup("k"), Some(Ty::Str));
+        assert_eq!(env.lookup("y"), Some(Ty::Str));
     }
 
     #[test]
