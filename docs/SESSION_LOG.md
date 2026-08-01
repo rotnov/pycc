@@ -79,12 +79,32 @@ marketplace checkers, and `run_alpha_skill_evals.py --client claude`/
 exit 0, checked directly (no pipe hiding a real exit code, per this
 session's own earlier-learned lesson).
 
-**Next session:** a second adversarial-audit pass re-checking that the 12
-originally-confirmed findings are actually resolved by the current text
-(not just intent) is still owed before opening the pull request — this is
-the plan's own Task 11, not yet run as of this entry. After that: push,
-open the PR, D-078 monitoring, merge, then resume the `issue-select`
-autopilot loop per the user's standing directive.
+**Second audit pass, run before this entry:** 10 independent checkers
+re-verified all 12 originally-confirmed findings against the actual
+committed text, not the design's stated intent. 8 were genuinely resolved
+outright; 2 were not, and 3 more were resolved but flagged thin regression
+coverage — all 5 fixed and re-verified locally before this entry:
+
+- **#1 not resolved on the first pass:** item 4's bot/human thread-resolution
+  split never made it into step 7's own procedural text, which still said
+  "resolve the thread afterwards" unconditionally — an agent following the
+  workflow section (as opposed to the authorization summary) would have
+  reproduced the exact original defect. Fixed, and bot detection tightened
+  to a concrete signal (GitHub API author `type: Bot` / a known reviewer-bot
+  login) instead of one named example.
+- **#3 not resolved on the first pass:** the "at or near tip" evidence-bar
+  fix landed only in `issue-select`; `issue-implement`'s own near-identical
+  step 2 text — which the original finding's evidence explicitly cited —
+  was untouched, so a direct `/issue-implement` invocation bypassing
+  `issue-select`'s screen still hit the pre-fix behavior. Fixed.
+- **#8, #11, #12:** resolved, but each had a real regression-coverage gap
+  the checkers demonstrated empirically (deleting the fix's own text left
+  every test green). All three closed with a pin or a targeted mutation
+  test.
+
+**Next session:** push the branch, open the pull request, D-078 monitoring,
+merge, then resume the `issue-select` autopilot loop per the user's standing
+directive.
 
 ---
 
