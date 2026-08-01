@@ -32,10 +32,12 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0030` | error | non-exhaustive `match` (missing cases listed) |
 | `T0031` | error | `@override` without matching base method |
 | `T0032` | error | list literal elements must all share one type |
-| `T0033` | error | value does not support list/dict operations (subscript, item assignment, `for`, `.append()`, `len()`), or `len()` called with the wrong number of arguments |
+| `T0033` | error | value does not support list/dict/set operations (subscript, item assignment, `for`, `.append()`, `len()`), or `len()` called with the wrong number of arguments |
 | `T0034` | error | list codegen only supports `list[int]` in v0.2 (D-105) |
 | `T0035` | error | dict literal key/value pairs must all share one key type and one value type |
 | `T0036` | error | dict codegen only supports `dict[str, int]` in v0.2 (D-112) |
+| `T0037` | error | set literal elements must all share one type |
+| `T0038` | error | set codegen only supports `set[int]` in v0.2 (D-112) |
 | `O0201` | error | value used after move across scope boundary *(internal-only: never fires on legal Python — see note)* |
 | `O0301` | error | non-Shareable value crosses thread boundary without move |
 | `O0302` | error | lock-guarded field accessed without holding lock |

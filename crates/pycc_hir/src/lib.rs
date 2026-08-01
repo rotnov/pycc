@@ -169,6 +169,17 @@ pub enum HirExpr {
     /// rather than represented here, since this variant has no shape for
     /// it.
     DictLiteral(Vec<(HirExpr, HirExpr)>),
+    /// `{e1, e2, ...}`. Element homogeneity and the `set[int]`-only codegen
+    /// gate are `pycc_types`' job, not this lowering step's -- HIR only
+    /// records the syntactic shape (mirrors `ListLiteral`/`DictLiteral`
+    /// exactly, PR-11 Task 7). Unlike `Expr::Dict`'s `DictItem`, upstream's
+    /// `ExprSet` has no unpacking hole in its `elts: Vec<Expr>` shape, so
+    /// there is no analogous rejection arm to write. Python also has no
+    /// empty-set literal syntax at all (`{}` always parses as `Expr::Dict`,
+    /// the grammar's own ambiguity resolution) -- so an empty
+    /// `SetLiteral` can only ever be constructed by hand-built HIR (e.g. a
+    /// `pycc_types` unit test), never by `lower_expr` itself.
+    SetLiteral(Vec<HirExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -666,6 +677,12 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                     };
                     Ok((lower_expr(key)?, lower_expr(&item.value)?))
                 })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Expr::Set(set) => HirExpr::SetLiteral(
+            set.elts
+                .iter()
+                .map(lower_expr)
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Subscript(sub) => HirExpr::Subscript {
@@ -2150,6 +2167,30 @@ mod tests {
             "x = {\"a\": (1, 2)}\n",
             "expression kind not supported yet",
         );
+    }
+
+    // -- PR-11 Task 7 (D-113): set[int] frontend HIR forms ---------------
+
+    #[test]
+    fn lowers_a_set_literal() {
+        let module = pycc_parser_test_helper::parse("x = {1, 2, 3}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::SetLiteral(vec![
+                    HirExpr::IntLiteral(1),
+                    HirExpr::IntLiteral(2),
+                    HirExpr::IntLiteral(3),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn a_set_literal_with_an_unsupported_element_propagates_the_element_error() {
+        assert_capability_error_message("x = {(1, 2)}\n", "expression kind not supported yet");
     }
 
     #[test]

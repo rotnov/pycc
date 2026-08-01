@@ -360,8 +360,10 @@ fn collect_expr_constraints(
                 // collection (union-find resolution hasn't run yet); an
                 // unresolved argument is left to the real check pass
                 // (`infer_expr_in`) below, matching this solver's existing
-                // lenient-until-known pattern. PR-11 Task 3 (D-113) relaxes
-                // the argument-type check below to also accept `Ty::Dict`.
+                // lenient-until-known pattern. PR-11 Task 3 (D-113) relaxed
+                // the argument-type check below to also accept `Ty::Dict`;
+                // PR-11 Task 7 (D-113) relaxes it once more to also accept
+                // `Ty::Set`.
                 if arg_terms.len() != 1 {
                     return Err(Diagnostic::error(
                         "T0033",
@@ -370,12 +372,12 @@ fn collect_expr_constraints(
                     ));
                 }
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
-                    && !matches!(arg_ty, Ty::List(_) | Ty::Dict(_))
+                    && !matches!(arg_ty, Ty::List(_) | Ty::Dict(_) | Ty::Set(_))
                 {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`len` expects a `list[T]` or `dict[K, V]` argument, got `{}`",
+                            "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `{}`",
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
@@ -447,6 +449,16 @@ fn collect_expr_constraints(
             for (key, value) in pairs {
                 collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
                 collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            }
+            Ok(None)
+        }
+        // Same reasoning as `ListLiteral`/`DictLiteral` above (PR-11 Task
+        // 7): set element homogeneity and the `set[int]`-only gate are
+        // `infer_expr_in`'s job, not this solver's. Recurse into every
+        // element only to keep propagating genuine errors.
+        HirExpr::SetLiteral(elements) => {
+            for element in elements {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, element)?;
             }
             Ok(None)
         }
@@ -1020,7 +1032,9 @@ fn infer_expr_in(
                 // the same "value does not support list operations" shape
                 // already established for `ForList`/`Subscript`/`ListAppend`.
                 // PR-11 Task 3 (D-113): also accepts `Ty::Dict` (gated the
-                // same way by `T0036`), so `len(d)` type-checks too.
+                // same way by `T0036`), so `len(d)` type-checks too. PR-11
+                // Task 7 (D-113): also accepts `Ty::Set` (gated the same way
+                // by `T0038`), so `len(s)` type-checks too.
                 if arg_tys.len() != 1 {
                     return Err(Diagnostic::error(
                         "T0033",
@@ -1028,11 +1042,11 @@ fn infer_expr_in(
                         Span::new(0, 0),
                     ));
                 }
-                if !matches!(arg_tys[0], Ty::List(_) | Ty::Dict(_)) {
+                if !matches!(arg_tys[0], Ty::List(_) | Ty::Dict(_) | Ty::Set(_)) {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`len` expects a `list[T]` or `dict[K, V]` argument, got `{}`",
+                            "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `{}`",
                             arg_tys[0].name()
                         ),
                         Span::new(0, 0),
@@ -1179,6 +1193,55 @@ fn infer_expr_in(
             }
             Ok(dict_ty)
         }
+        // PR-11 Task 7 (D-113): mirrors `ListLiteral`'s own homogeneity
+        // check above, for a single-element-type container (no key/value
+        // pair), plus a `set[int]`-only gate mirroring `ListLiteral`'s own
+        // `T0034` gate (D-112: "exactly one combination gets real codegen").
+        // Unlike `DictLiteral` above, the empty-literal branch below is
+        // unreachable from any real Python source: `{}` always parses as an
+        // empty *dict* (Python has no empty-set literal spelling at all --
+        // `set()` is a call, not a literal), so this only fires for a
+        // hand-built `HirExpr::SetLiteral(vec![])` (e.g. this file's own
+        // unit tests).
+        HirExpr::SetLiteral(elements) => {
+            let Some(first) = elements.first() else {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    "an empty set literal's element type cannot be inferred without an annotation (set[T] annotations are not supported yet)".to_string(),
+                    Span::new(0, 0),
+                ));
+            };
+            let elem_ty = infer_expr_in(env, local_names, first)?;
+            for element in &elements[1..] {
+                let this_ty = infer_expr_in(env, local_names, element)?;
+                // Exact `Ty` equality, not `is_assignable`'s
+                // bool-is-an-int-subtype rule -- same reasoning as
+                // `ListLiteral`'s own homogeneity check.
+                if this_ty != elem_ty {
+                    return Err(Diagnostic::error(
+                        "T0037",
+                        format!(
+                            "set element type mismatch: expected {} (from the first element), found {}",
+                            elem_ty.name(),
+                            this_ty.name(),
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+            }
+            let set_ty = Ty::Set(Box::new(elem_ty));
+            if set_ty != Ty::Set(Box::new(Ty::Int)) {
+                return Err(Diagnostic::error(
+                    "T0038",
+                    format!(
+                        "{} is not compiled yet (D-112) -- only set[int] is",
+                        set_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            Ok(set_ty)
+        }
         HirExpr::Subscript { base, index } => {
             let base_ty = infer_expr_in(env, local_names, base)?;
             let index_ty = infer_expr_in(env, local_names, index)?;
@@ -1232,6 +1295,12 @@ fn infer_expr_in(
                     }
                     Ok(val_ty)
                 }
+                // PR-11 Task 7 (D-113): `Ty::Set` deliberately has no
+                // explicit arm here and falls through to this rejection --
+                // real Python sets are not subscriptable either (`s[0]`
+                // raises `TypeError` in CPython too), so this is not a v0.2
+                // scope cut needing its own arm, it is the semantically
+                // correct behavior for every other base type as well.
                 other => Err(Diagnostic::error(
                     "T0033",
                     format!("`{}` does not support indexing", other.name()),
@@ -2624,7 +2693,7 @@ mod tests {
         assert_eq!(err.code, "T0033");
         assert_eq!(
             err.message,
-            "`len` expects a `list[T]` or `dict[K, V]` argument, got `int`"
+            "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `int`"
         );
     }
 
@@ -4237,7 +4306,7 @@ mod tests {
         assert_eq!(err.code, "T0033");
         assert_eq!(
             err.message,
-            "`len` expects a `list[T]` or `dict[K, V]` argument, got `int`"
+            "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `int`"
         );
     }
 
@@ -4912,6 +4981,220 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(err.message.contains("is not bound before this use"));
+    }
+
+    // -- PR-11 Task 7 (D-113): set[int] type-checking ---------------------
+
+    #[test]
+    fn an_empty_set_literal_cannot_be_inferred() {
+        // Unlike `DictLiteral(vec![])`, which is reachable from real source
+        // (`{}` parses as an empty dict), an empty `SetLiteral` can only
+        // ever be hand-built HIR -- Python has no empty-set literal spelling
+        // at all.
+        let env = Environment::new();
+        let err = infer_expr(&env, &HirExpr::SetLiteral(vec![])).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("empty set literal"));
+    }
+
+    #[test]
+    fn a_homogeneous_set_literal_infers_set_of_int() {
+        let env = Environment::new();
+        let expr = HirExpr::SetLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::IntLiteral(2),
+            HirExpr::IntLiteral(3),
+        ]);
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Set(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn a_set_literal_with_mismatched_element_types_is_rejected_as_t0037() {
+        let env = Environment::new();
+        let expr = HirExpr::SetLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::StringLiteral("oops".to_string()),
+        ]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0037");
+        assert_eq!(
+            err.message,
+            "set element type mismatch: expected int (from the first element), found str"
+        );
+    }
+
+    #[test]
+    fn a_homogeneous_non_int_set_literal_is_rejected_as_t0038() {
+        let env = Environment::new();
+        let expr = HirExpr::SetLiteral(vec![
+            HirExpr::StringLiteral("a".to_string()),
+            HirExpr::StringLiteral("b".to_string()),
+        ]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0038");
+        assert_eq!(
+            err.message,
+            "set[str] is not compiled yet (D-112) -- only set[int] is"
+        );
+        assert!(err.message.contains("set[str]"));
+    }
+
+    #[test]
+    fn a_bad_set_literal_is_still_rejected_when_the_solver_path_runs_first() {
+        // The set-shaped counterpart to
+        // `a_bad_dict_literal_is_still_rejected_when_the_solver_path_runs_first`:
+        // `collect_expr_constraints`'s own `SetLiteral` arm always returns
+        // `Ok(None)` (it has no unification-friendly representation for
+        // `Ty::Set` either), so an unrelated private helper with an
+        // unresolved (`Ty::Infer`) signature must not let the solver's own
+        // leniency swallow a genuine T0038 -- it has to fall through to the
+        // real, set-aware check pass.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::SetLiteral(vec![
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::StringLiteral("b".to_string()),
+                    ]),
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0038");
+    }
+
+    #[test]
+    fn a_set_literal_propagates_an_ill_typed_first_element_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::SetLiteral(vec![HirExpr::Name("undefined".to_string())]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_set_literal_propagates_an_ill_typed_later_element_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::SetLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::Name("undefined".to_string()),
+        ]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn indexing_a_set_reports_t0033() {
+        // Mirrors real CPython: sets are not subscriptable either (D-113) --
+        // no explicit `Ty::Set` arm exists in `Subscript`'s own match, and
+        // the generic `other` fallthrough already covers it.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`set[int]` does not support indexing");
+    }
+
+    #[test]
+    fn len_of_a_set_infers_int() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn constraint_collection_len_call_returns_int_for_a_concretely_bound_set() {
+        // Mirrors `constraint_collection_len_call_returns_int_for_a_concretely_bound_dict`
+        // above, proving the solver's own relaxed `len()` arm (PR-11 Task 7)
+        // also accepts a concretely-bound `Ty::Set` term.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("s".to_string(), Ok(Ty::Set(Box::new(Ty::Int))))]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("s".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_set_literal_as_unconstrained_but_recurses_into_elements() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_set_literal_element() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::SetLiteral(vec![HirExpr::Name("missing".to_string())]);
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
     }
 
     #[test]

@@ -562,6 +562,27 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
                 .map(|(k, v)| (lower_expr(k, scopes), lower_expr(v, scopes)))
                 .collect(),
         ),
+        // PR-11 Task 7 (`pycc_hir`/`pycc_types`) adds `HirExpr::SetLiteral`
+        // and teaches `pycc_types::check` to accept `set[int]` literals as
+        // valid, type-checked code -- MIR lowering for it is PR-11 Task 8's
+        // own scope, not this task's, so this arm is a deliberate, temporary
+        // panic stub that exists only so this crate's exhaustive `match`
+        // still compiles against `pycc_hir`'s new variant. Learning from
+        // `DictLiteral`'s own Task 3-to-4 precedent above (whose first-draft
+        // doc comment wrongly claimed unreachability, corrected only after
+        // review flagged it -- see git history), this comment states the
+        // truth up front: **this panic IS reachable today** -- a real
+        // `set[int]` program (e.g. `x = {1, 2}\n`) type-checks cleanly
+        // (`pycc check` exits 0) and then panics here via `pycc build`/`pycc
+        // run`, since this crate has no real lowering for it yet. That is
+        // expected, intra-plan sequencing (mirroring `DictLiteral`'s own gap
+        // above), not a bug to silence here. Task 8 replaces this arm with
+        // real lowering and deletes the `should_panic` test that exercises
+        // this stub (`set_literal_mir_lowering_is_not_implemented_yet`
+        // below).
+        HirExpr::SetLiteral(_) => panic!(
+            "pycc_mir: internal error: set[int] MIR lowering is not implemented yet (PR-11 Task 8)"
+        ),
     }
 }
 
@@ -2180,5 +2201,26 @@ mod tests {
                 })],
             })
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "set[int] MIR lowering is not implemented yet")]
+    fn set_literal_mir_lowering_is_not_implemented_yet() {
+        // PR-11 Task 7 (`pycc_hir`/`pycc_types`) makes `HirExpr::SetLiteral`
+        // constructible and type-checkable; PR-11 Task 8 is what actually
+        // teaches this crate to lower it. Until then, this exhaustive-match
+        // arm is a deliberate panic stub (see its own doc comment in
+        // `lower_expr` above) -- reachable today from a real, type-checked
+        // `set[int]` program (`pycc check` accepts `x = {1, 2}`, `pycc
+        // build`/`pycc run` on it panics here). This test exists only to
+        // cover that stub region under the D-014 coverage gate, and Task 8
+        // should delete it once real lowering replaces the panic.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]),
+            })],
+        };
+        build(&hir);
     }
 }
