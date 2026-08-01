@@ -1320,27 +1320,6 @@ pub unsafe extern "C" fn pycc_rt_dict_set(dict: *mut PyDictObj, key: *mut PyStrO
     unsafe { &*dict }.entries.set(entries);
 }
 
-/// Linear-scan lookup (D-111). Panics if no stored key compares equal to
-/// `key` -- this compiler has no `KeyError` handling, so a missing key is
-/// an honest panic rather than a silently wrong value. The panic message
-/// is `"pycc_rt: dict key not found"`.
-///
-/// Implementation note / deviation from the task brief: the brief's own
-/// Step 3 code made this a single plain `extern "C" fn`. Per this crate's
-/// established convention (see the implementation-note comment above
-/// `int_add`), a panic that unwinds past a plain `extern "C" fn`'s
-/// boundary is caught at that boundary and turned into a process abort,
-/// regardless of who calls it -- including this crate's own same-binary
-/// Rust tests. `pycc_rt_dict_get` can panic (the key not found case), so
-/// it needs the same split every other panicking `pycc_rt_int_*` function
-/// already gets: a private, ordinary-Rust-ABI function holding the real
-/// logic, and a thin `pub extern "C"` wrapper of the exact brief-specified
-/// name/signature for pycc-generated code to call. Tests exercising the
-/// panic path call the private function directly, exactly as this file's
-/// established convention already does for `int_list_get`.
-///
-/// # Safety
-/// Same as `pycc_rt_dict_set`.
 fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
     let entries = dict.entries.take();
     let found = entries
@@ -1351,6 +1330,13 @@ fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
     found.unwrap_or_else(|| panic!("pycc_rt: dict key not found"))
 }
 
+/// Linear-scan lookup (D-111). Panics if no stored key compares equal to
+/// `key` -- this compiler has no `KeyError` handling, so a missing key is
+/// an honest panic rather than a silently wrong value. The panic message
+/// is `"pycc_rt: dict key not found"`.
+///
+/// # Safety
+/// Same as `pycc_rt_dict_set`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pycc_rt_dict_get(dict: *mut PyDictObj, key: *mut PyStrObj) -> i64 {
     dict_get(unsafe { &*dict }, key)
