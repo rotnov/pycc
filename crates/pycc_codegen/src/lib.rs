@@ -1910,6 +1910,18 @@ fn emit_expr<'ctx>(
             }
             Scalar::Set(set_ptr)
         }
+        // TEMPORARY (PR-11b Task 4): `MirExpr::TupleLiteral` is reachable
+        // today from real source -- `pycc check` on `x = (1, 2)` exits 0,
+        // and `pycc build` reaches this exact panic. Task 5 of this plan
+        // replaces this with real codegen (`Scalar::Tuple`, LLVM struct
+        // construction via `build_insert_value`). This is not a defensive
+        // catch-all for an unreachable case -- see Task 3's own doc-comment
+        // correction in PR-11a for why an honest "reachable, deliberately
+        // temporary" comment matters here instead of a false
+        // "unreachable" claim.
+        MirExpr::TupleLiteral(_) => {
+            panic!("pycc_codegen: tuple[...] codegen is not implemented yet (PR-11b Task 5)")
+        }
     }
 }
 

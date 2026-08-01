@@ -107,6 +107,17 @@ pub enum MirExpr {
     /// for every `SetLiteral` `pycc_hir::lower_expr`'s own `Expr::Set` arm
     /// could ever construct from a real parse.
     SetLiteral(Vec<MirExpr>),
+    /// `(e1, e2, ...)` (mirrors `HirExpr::TupleLiteral`, PR-11b Task 4). No
+    /// `ty` field: `ty()` below derives `Ty::Tuple(Box::new(elements.iter()
+    /// .map(MirExpr::ty).collect()))` positionally from every element (not
+    /// just the first, unlike `ListLiteral`/`DictLiteral`/`SetLiteral` --
+    /// heterogeneity means every position can differ). Empirically only
+    /// `int`/`bool`/`float` elements ever reach this crate today
+    /// (`pycc_types`' T0039 gate rejects every other element type at
+    /// construction time), but deriving here keeps this lowering correct on
+    /// its own terms rather than baking in an assumption this crate has no
+    /// way to verify independently.
+    TupleLiteral(Vec<MirExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,10 +163,33 @@ impl MirExpr {
             // constructed) -- this panic remains reachable only from a
             // hand-built `MirExpr` that bypasses both of those guarantees,
             // e.g. this file's own `a_subscript_over_a_non_list_bases_ty_panics_with_an_internal_error` test.
-            MirExpr::Subscript { base, .. } => match base.ty() {
+            MirExpr::Subscript { base, index } => match base.ty() {
                 Ty::List(elem_ty) => *elem_ty,
+                // PR-11b Task 4 (D-116): the literal-index extraction and
+                // bounds check already happened in `pycc_types::infer_expr_in`
+                // -- this re-derives the same positional element type from
+                // the already-validated literal `index`, mirroring how
+                // every other panic path in this file re-states "pycc_types
+                // should have rejected this" rather than re-validating.
+                Ty::Tuple(elems) => {
+                    let MirExpr::IntLiteral(literal_index) = index.as_ref() else {
+                        panic!(
+                            "pycc_mir: internal error: tuple subscript index is not a literal int -- pycc_types::check should have rejected this HIR before it reached pycc_mir (T0040)"
+                        )
+                    };
+                    let literal_index = usize::try_from(*literal_index).unwrap_or_else(|_| {
+                        panic!(
+                            "pycc_mir: internal error: tuple subscript index is negative -- pycc_types::check should have rejected this HIR before it reached pycc_mir (T0040)"
+                        )
+                    });
+                    elems.get(literal_index).cloned().unwrap_or_else(|| {
+                        panic!(
+                            "pycc_mir: internal error: tuple subscript index out of range -- pycc_types::check should have rejected this HIR before it reached pycc_mir (T0040)"
+                        )
+                    })
+                }
                 other => panic!(
-                    "pycc_mir: internal error: subscript base has non-list type `{}` -- pycc_types::check should have rejected this HIR before it reached pycc_mir, or lower_expr should have routed a dict base to MirExpr::DictGet instead",
+                    "pycc_mir: internal error: subscript base has non-list/tuple type `{}` -- pycc_types::check should have rejected this HIR before it reached pycc_mir, or lower_expr should have routed a dict base to MirExpr::DictGet instead",
                     other.name()
                 ),
             },
@@ -186,6 +220,14 @@ impl MirExpr {
                     )
                 });
                 Ty::Set(Box::new(first.ty()))
+            }
+            MirExpr::TupleLiteral(elements) => {
+                if elements.is_empty() {
+                    panic!(
+                        "pycc_mir: internal error: an empty tuple literal has no element types to derive -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
+                    )
+                }
+                Ty::Tuple(Box::new(elements.iter().map(MirExpr::ty).collect()))
             }
         }
     }
@@ -619,6 +661,9 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
         ),
         HirExpr::SetLiteral(elements) => {
             MirExpr::SetLiteral(elements.iter().map(|e| lower_expr(e, scopes)).collect())
+        }
+        HirExpr::TupleLiteral(elements) => {
+            MirExpr::TupleLiteral(elements.iter().map(|e| lower_expr(e, scopes)).collect())
         }
     }
 }
@@ -1753,6 +1798,10 @@ mod tests {
             MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]).ty(),
             Ty::Set(Box::new(Ty::Int))
         );
+        assert_eq!(
+            MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1), MirExpr::BoolLiteral(true)]).ty(),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool]))
+        );
     }
 
     #[test]
@@ -1997,13 +2046,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "subscript base has non-list type")]
+    #[should_panic(expected = "subscript base has non-list/tuple type")]
     fn a_subscript_over_a_non_list_bases_ty_panics_with_an_internal_error() {
-        // A non-list, non-dict subscript base (e.g. `Ty::Int`) is rejected
-        // by `pycc_types` (T0033) before HIR reaches `pycc_mir` -- unlike a
-        // dict base (which `pycc_types` accepts, but `lower_expr`'s own
-        // `HirExpr::Subscript` arm routes into `MirExpr::DictGet` instead of
-        // ever constructing this node), so this defensive panic path in
+        // A non-list, non-dict, non-tuple subscript base (e.g. `Ty::Int`) is
+        // rejected by `pycc_types` (T0033) before HIR reaches `pycc_mir` --
+        // unlike a dict base (which `pycc_types` accepts, but `lower_expr`'s
+        // own `HirExpr::Subscript` arm routes into `MirExpr::DictGet` instead
+        // of ever constructing this node), so this defensive panic path in
         // `MirExpr::Subscript`'s own `ty()` arm still needs direct coverage
         // via a hand-built node that bypasses both guarantees.
         MirExpr::Subscript {
@@ -2254,6 +2303,114 @@ mod tests {
         // (`{}` always parses as an empty `dict`, never an empty `set`) --
         // but the panic path itself still needs direct coverage.
         MirExpr::SetLiteral(vec![]).ty();
+    }
+
+    #[test]
+    fn tuple_literal_ty_derives_positionally_from_every_element() {
+        let expr = MirExpr::TupleLiteral(vec![
+            MirExpr::IntLiteral(1),
+            MirExpr::BoolLiteral(true),
+            MirExpr::FloatLiteral(2.5),
+        ]);
+        assert_eq!(
+            expr.ty(),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float]))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "an empty tuple literal has no element types to derive")]
+    fn an_empty_tuple_literal_ty_panics_with_an_internal_error() {
+        // By construction, `pycc_types::check` already rejects an empty
+        // tuple literal (T0039, mirroring the empty-list/empty-dict-literal
+        // cases above) before any HIR reaches `pycc_mir` -- but the panic
+        // path itself still needs direct coverage.
+        MirExpr::TupleLiteral(vec![]).ty();
+    }
+
+    #[test]
+    fn tuple_subscript_ty_derives_the_positional_element_type() {
+        let expr = MirExpr::Subscript {
+            base: Box::new(MirExpr::TupleLiteral(vec![
+                MirExpr::IntLiteral(1),
+                MirExpr::BoolLiteral(true),
+            ])),
+            index: Box::new(MirExpr::IntLiteral(1)),
+        };
+        assert_eq!(expr.ty(), Ty::Bool);
+    }
+
+    #[test]
+    #[should_panic(expected = "tuple subscript index is not a literal int")]
+    fn a_tuple_subscript_with_a_non_literal_index_ty_panics_with_an_internal_error() {
+        // By construction, `pycc_types::check` already rejects a
+        // non-literal tuple subscript index (T0040) before any HIR reaches
+        // `pycc_mir` -- but the panic path itself still needs direct
+        // coverage via a hand-built node that bypasses that guarantee.
+        let expr = MirExpr::Subscript {
+            base: Box::new(MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1)])),
+            index: Box::new(MirExpr::Name {
+                name: "i".to_string(),
+                ty: Ty::Int,
+            }),
+        };
+        expr.ty();
+    }
+
+    #[test]
+    #[should_panic(expected = "tuple subscript index is negative")]
+    fn a_tuple_subscript_with_a_negative_index_ty_panics_with_an_internal_error() {
+        // By construction, `pycc_types::check` already rejects a negative
+        // literal tuple subscript index (T0040) before any HIR reaches
+        // `pycc_mir` -- but the panic path itself still needs direct
+        // coverage via a hand-built node that bypasses that guarantee.
+        let expr = MirExpr::Subscript {
+            base: Box::new(MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1)])),
+            index: Box::new(MirExpr::IntLiteral(-1)),
+        };
+        expr.ty();
+    }
+
+    #[test]
+    #[should_panic(expected = "tuple subscript index out of range")]
+    fn a_tuple_subscript_out_of_range_ty_panics_with_an_internal_error() {
+        // By construction, `pycc_types::check` already rejects an
+        // out-of-range literal tuple subscript index (T0040) before any HIR
+        // reaches `pycc_mir` -- but the panic path itself still needs
+        // direct coverage via a hand-built node that bypasses that
+        // guarantee.
+        let expr = MirExpr::Subscript {
+            base: Box::new(MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1)])),
+            index: Box::new(MirExpr::IntLiteral(5)),
+        };
+        expr.ty();
+    }
+
+    #[test]
+    fn tuple_literal_lowers_to_mir_tuple_literal_with_correct_ty() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::TupleLiteral(vec![
+                    HirExpr::IntLiteral(1),
+                    HirExpr::BoolLiteral(true),
+                ]),
+            })],
+        };
+        let mir = build(&hir);
+        let expected_value =
+            MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1), MirExpr::BoolLiteral(true)]);
+        assert_eq!(
+            expected_value.ty(),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool]))
+        );
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: expected_value,
+            })
+        );
     }
 
     #[test]
