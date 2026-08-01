@@ -986,9 +986,14 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_tier1_workflow_authorization_contains_only_active_d100
+  # D-112's own ci.yml activation (a later task) will retire D100 and
+  # shrink this back to a single entry -- until then both coexist,
+  # mirroring D-090's own coexist-then-retire precedent for this exact
+  # array, because the audit's base-owned checker must already accept
+  # D112 before any PR can change ci.yml's live bytes to match it.
+  def test_tier1_workflow_authorization_contains_exactly_d100_and_d112
     assert_equal(
-      [D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256],
+      [D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256, D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
@@ -1477,21 +1482,23 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # Staged (D-112, not yet activated): identical to the live D91/REPLICATED
-  # frontend-perf-measure/gate shape except runs-on: ubuntu-latest and the
-  # macOS brew-based LLVM install swapped for native-build-test's own
-  # already-reviewed apt.llvm.org Linux install step. Activation (a later
-  # task) requires real shadow-measurement CI evidence first -- see D-112's
-  # own Consequences in docs/DECISIONS.md.
-  def test_d112_ubuntu_frontend_perf_workflow_digest_matches_the_staged_fixture
+  # Checker-active (D-112): the checker itself now recognizes and accepts
+  # this shape -- identical to the live D91/REPLICATED frontend-perf-
+  # measure/gate shape except runs-on: ubuntu-latest and the macOS
+  # brew-based LLVM install swapped for native-build-test's own
+  # already-reviewed apt.llvm.org Linux install step. The LIVE
+  # `.github/workflows/ci.yml` has not been changed to this shape yet --
+  # that activation (a later task) requires real shadow-measurement CI
+  # evidence first, see D-112's own Consequences in docs/DECISIONS.md.
+  def test_d112_ubuntu_frontend_perf_workflow_digest_matches_the_fixture
     assert_equal(
       D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE).hexdigest
     )
   end
 
-  def test_d112_ubuntu_frontend_perf_workflow_is_staged_not_active
-    refute_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+  def test_d112_ubuntu_frontend_perf_workflow_is_now_active
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
                     D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256
   end
 
