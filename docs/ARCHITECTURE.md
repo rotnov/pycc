@@ -80,9 +80,13 @@ codegen per container (`T0036` for dict, `T0038` for set), mirroring
 `list[int]`'s own `T0034` gate; every other combination type-checks but is
 rejected before codegen. Both new containers stay leak-only in v0.2 (D-114),
 matching `list[int]` (D-107), and neither ships a `str(...)`/`bool(...)`
-conversion or (for `set`) a membership test -- `in` does not exist anywhere
-in this compiler yet (D-113). `tuple[...]` remains unimplemented, pending
-its own follow-up plan.
+conversion or (for `set`) a membership test -- `in` parses fine (the
+parser produces a valid `CmpOp::In` node like any other comparison
+operator), but `pycc_hir`'s lowering step rejects it with the same generic
+`C0001` capability diagnostic used for `is`/`is not`/chained comparisons,
+so it has no HIR/type-checker/codegen support anywhere in this compiler
+yet (D-113). `tuple[...]` remains unimplemented, pending its own
+follow-up plan.
 
 Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument
