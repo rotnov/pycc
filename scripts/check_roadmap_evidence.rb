@@ -183,13 +183,16 @@ D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
 # entry since PR-8's own merge is that activation.
 D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
   "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
-# Staged (2026-08-01, D-112): ubuntu-latest frontend-perf-measure/gate.
-# Not yet in REVIEWED_PERF_CI_WORKFLOW_SHA256S -- see D-112's own
-# activation task before this becomes the live-accepted digest.
+# Active (2026-08-01, D-112): ubuntu-latest frontend-perf-measure/gate.
+# Coexists with D100 until the ci.yml activation PR retires D100 --
+# mirrors D-090/D-091's own coexist-then-retire precedent for this array,
+# needed because the audit's base-owned checker must already accept this
+# digest before any PR can change ci.yml's live bytes to match it.
 D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256 =
   "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
-  D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256
+  D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
+  D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
