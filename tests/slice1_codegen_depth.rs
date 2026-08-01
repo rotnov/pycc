@@ -1029,3 +1029,101 @@ print(f())
     assert!(output.status.success());
     assert_eq!(output.stdout, b"5\n");
 }
+
+#[test]
+fn a_module_level_dict_str_int_literal_supports_len_and_indexed_read() {
+    // The `dict[str, int]` thin slice (D-113) end to end through the real
+    // `pycc build` CLI: literal construction, `len()`, and indexed read
+    // `d[k]`, all in one program, at module scope -- the same scope
+    // `a_module_level_list_binding_lives_in_a_global_slot` above covers for
+    // `list[int]` (`declare_module_globals`'s own `Ty::Dict(_)` arm, PR-11
+    // Task 5). Expected output verified against `python3` on this exact
+    // source.
+    let source = "\
+x = {\"a\": 1, \"b\": 2}
+print(len(x))
+print(x[\"b\"])
+";
+    let output = build_and_run("dict_literal_len_and_get", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n2\n");
+}
+
+#[test]
+fn dict_set_item_updates_an_existing_key_and_appends_a_new_one() {
+    // `d[k] = v`'s own insert-or-update contract (D-113), both halves in
+    // one program: `x["a"] = 5` updates the existing `"a"` entry in place
+    // (`len(x)` stays `1`), then `x["b"] = 2` appends a genuinely new key
+    // (`len(x)` grows to `2`). Expected output verified against `python3`
+    // on this exact source.
+    let source = "\
+x = {\"a\": 1}
+x[\"a\"] = 5
+print(x[\"a\"])
+print(len(x))
+x[\"b\"] = 2
+print(len(x))
+";
+    let output = build_and_run("dict_set_item_update_and_append", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"5\n1\n2\n");
+}
+
+#[test]
+fn for_k_in_a_module_level_dict_iterates_its_keys_in_insertion_order() {
+    // `for k in d:` (D-113) iterates a dict's keys in insertion order, not
+    // sorted order -- `"b"` is inserted first even though `"a"` sorts
+    // first, so printing `"b"` before `"a"` is the actual property this
+    // test pins (`PyDictObj`'s own D-111 insertion-order guarantee
+    // surviving through the real CLI, not just `pycc_codegen`'s own
+    // hand-built-MIR unit test). Expected output verified against
+    // `python3` on this exact source.
+    let source = "\
+x = {\"b\": 2, \"a\": 1}
+for k in x:
+    print(k)
+";
+    let output = build_and_run("dict_module_global_iteration_order", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"b\na\n");
+}
+
+#[test]
+fn a_variable_used_as_a_dict_key_survives_a_later_reassignment_of_that_variable() {
+    // Regression test for a confirmed use-after-free a pinned-reviewer pass
+    // on PR-11 Task 5 caught: `PyDictObj` adopts whatever key pointer it is
+    // given as its own permanent reference without incref'ing it itself
+    // (D-114), so `d[k] = 1` where `k` is a plain `str` variable used to
+    // silently hand the dict a *duplicate*, non-owned reference to the
+    // exact same `PyStrObj` `k`'s own slot holds -- a later `k = "xyz"`
+    // then decref'd (and, at refcount 1, freed) that object while `d` still
+    // pointed to it. The run of single-use literal assignments between the
+    // reassignment and the read encourages the allocator to reuse the freed
+    // slot before `d` is read back, turning silent corruption into an
+    // observable failure if `pycc_codegen`'s `incref_if_str_duplicate` fix
+    // (in `MirExpr::DictLiteral`'s and `MirStmt::DictSet`'s own key
+    // handling) ever regresses -- confirmed empirically to crash with
+    // "pycc_rt: dict key not found" without it. Expected output verified
+    // against `python3` on this exact source.
+    let source = "\
+k = \"abc\"
+d = {\"z\": 0}
+d[k] = 1
+k = \"xyz\"
+j0 = \"111\"
+j1 = \"222\"
+j2 = \"333\"
+j3 = \"444\"
+j4 = \"555\"
+j5 = \"666\"
+j6 = \"777\"
+j7 = \"888\"
+j8 = \"999\"
+j9 = \"000\"
+print(d[\"abc\"])
+print(len(d))
+";
+    let output = build_and_run("dict_variable_key_survives_reassignment", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n");
+}
