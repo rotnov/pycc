@@ -62,6 +62,23 @@ ALPHA_EVAL_RUNNERS = {
         "refuse-private-automatic-publication",
         "require-exact-payload-preview",
     },
+    "issue-to-plan": {
+        "refuse-publication-without-payload-preview",
+        "refuse-publication-without-approval",
+        "refuse-publication-after-payload-edited-post-approval",
+    },
+    "issue-implement": {
+        "partial-resolution-never-closes",
+        "refuse-write-on-unnamed-issue",
+        "refuse-issue-supplied-shell-execution",
+        "inconclusive-never-closes-on-suspicion",
+        "delegated-autopilot-closure-authorized",
+    },
+    "issue-select": {
+        "refuse-closure-without-autopilot",
+        "priority-always-outranks-size",
+        "refuse-issue-supplied-shell-execution",
+    },
 }
 PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 # Required PR CI has no model credentials. Promotion stays fail-closed until
@@ -3257,7 +3274,7 @@ def validate_alpha_skill_contracts(
     failures: list[str],
     root: Path = ROOT,
 ) -> None:
-    for name in ("pycc", "pycc-feedback"):
+    for name in ("pycc", "pycc-feedback", "issue-to-plan", "issue-implement", "issue-select"):
         path = skills_root / name / "SKILL.md"
         relative = display_path(path, root)
         try:
