@@ -828,6 +828,49 @@ def ensure_root_is_a_real_directory(root: Path) -> os.stat_result:
     return root_stat
 
 
+def ensure_cli_root_is_not_redirected(root: Path) -> None:
+    # #169 follow-up: this is the raw --root argument's own gate, called
+    # from main() before .resolve() ever sees it -- and only from there.
+    # It is deliberately not folded into ensure_root_is_a_real_directory,
+    # which every internal lifecycle function (localize/check/disable, and
+    # the ~40 tests that call them directly) also relies on with an
+    # already-trusted root; those callers' own contract has always been
+    # "root is already safe by the time we receive it" -- extending that
+    # shared helper to walk every ancestor would reject their own
+    # tempdir-based roots too (tempfile's OS-level prefix, e.g. macOS's
+    # /var -> /private/var, is itself a symlink). The public CLI's raw
+    # argument is the one place this repository's own reproduction (and
+    # #169's own "a direct helper test is insufficient, it bypasses the
+    # main() normalization that causes this defect") says the check
+    # belongs. Walks every ancestor component of the caller-supplied path
+    # itself (root.absolute() only adds the cwd prefix when relative -- it
+    # never follows a symlink) and rejects the root outright if it is
+    # currently a mount point, matching D-081's symlink/reparse/mount
+    # redirection contract at the one seam that can still see the raw path.
+    absolute_root = root.absolute()
+    current = Path(absolute_root.anchor)
+    try:
+        current_stat = current.lstat()
+    except OSError as error:
+        raise HookLifecycleError(
+            f"cannot inspect --root component {current}: {error}"
+        ) from error
+    for component in absolute_root.parts[1:]:
+        current /= component
+        try:
+            current_stat = current.lstat()
+        except OSError as error:
+            raise HookLifecycleError(
+                f"cannot inspect --root component {current}: {error}"
+            ) from error
+        if stat.S_ISLNK(current_stat.st_mode) or stat_is_reparse_point(current_stat):
+            raise HookLifecycleError(
+                f"--root contains a symlink component or reparse point: {current}"
+            )
+    if not stat.S_ISDIR(current_stat.st_mode) or os.path.ismount(current):
+        raise HookLifecycleError(f"--root must be a regular, non-mounted directory: {root}")
+
+
 def ensure_no_symlink_components(root: Path, relative: Path) -> None:
     if relative.is_absolute() or ".." in relative.parts:
         raise HookLifecycleError(f"managed path must stay relative: {relative}")
@@ -1220,8 +1263,13 @@ def main(argv: list[str] | None = None) -> int:
         # argument -- resolving it first (as this used to do unconditionally)
         # silently follows a symlinked root, so every later
         # ensure_no_symlink_components() call only ever inspects the already
-        # -resolved real target and can never reject the alias itself.
-        ensure_root_is_a_real_directory(arguments.root)
+        # -resolved real target and can never reject the alias itself. This
+        # covers every ancestor component of the raw argument (not just its
+        # own leaf) and rejects a mounted root outright -- see
+        # ensure_cli_root_is_not_redirected's own doc comment for why this
+        # is a separate function from the internal lifecycle helpers' path
+        # safety check.
+        ensure_cli_root_is_not_redirected(arguments.root)
         root = arguments.root.resolve()
         if arguments.command == "localize":
             localize(root)

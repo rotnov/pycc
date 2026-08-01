@@ -127,12 +127,19 @@ class IevoHookLifecycleTests(unittest.TestCase):
     def run_manager(
         self, root: Path, *arguments: str
     ) -> subprocess.CompletedProcess[str]:
+        # #169 follow-up: resolve before handing to the CLI. main() now
+        # rejects any symlink/reparse component anywhere in the raw --root
+        # argument, and this machine's own tempdir prefix (e.g. macOS's
+        # /var -> /private/var) is exactly such a component -- resolving
+        # here matches what a real, non-test caller's --root looks like
+        # (this helper only ever asserts success below, so a legitimate,
+        # already-resolved root is always the correct input).
         result = subprocess.run(
             [
                 sys.executable,
                 str(Path(manager.__file__).resolve()),
                 "--root",
-                str(root),
+                str(root.resolve()),
                 *arguments,
             ],
             check=False,
@@ -1897,7 +1904,12 @@ class IevoHookLifecycleTests(unittest.TestCase):
                     sys.executable,
                     str(Path(manager.__file__).resolve()),
                     "--root",
-                    str(root),
+                    # #169 follow-up: resolve so this test fails for the
+                    # reason it means to (the hook's own exit 3), not
+                    # because the tempdir's own OS-level symlink prefix
+                    # (e.g. macOS's /var -> /private/var) trips the new
+                    # raw-root ancestor check.
+                    str(root.resolve()),
                     "check",
                     "--smoke",
                 ],
@@ -2156,9 +2168,85 @@ class IevoHookLifecycleTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertRegex(result.stderr, "managed path root must be a regular directory")
+            self.assertRegex(
+                result.stderr, "--root contains a symlink component"
+            )
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
+
+    @unittest.skipUnless(os.name != "nt", "POSIX symlink regression")
+    def test_symlinked_root_ancestor_rejects_lifecycle_mutation_through_the_cli(
+        self,
+    ) -> None:
+        # #169 follow-up (reopened by the repository owner's own post-merge
+        # review): a symlink anywhere in --root's ancestor chain must be
+        # rejected, not just a symlinked leaf. Here the final "repo"
+        # component is a real, non-symlink directory -- only its *parent*
+        # is an alias -- matching the owner's own reproduction exactly
+        # (alias-parent -> real-parent, --root alias-parent/repo).
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            real_parent = workspace / "real-parent"
+            root = real_parent / "repo"
+            root.mkdir(parents=True)
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias_parent = workspace / "alias-parent"
+            alias_parent.symlink_to(real_parent, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(alias_parent / "repo"),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(result.stderr, "--root contains a symlink component")
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
+    def test_mounted_root_rejects_lifecycle_mutation_before_resolution(self) -> None:
+        # #169 follow-up: the raw --root argument itself must be rejected
+        # if it is a mount point, even though it passes every symlink/
+        # reparse check -- ensure_cli_root_is_not_redirected must call
+        # os.path.ismount(root) directly, not rely on the descendant-only
+        # mount check ensure_no_symlink_components already does for paths
+        # *below* an already-accepted root. A real mount can't be created
+        # portably in a test, so this patches os.path.ismount to report the
+        # temporary directory itself as mounted, exercised directly against
+        # the new function (in-process, not through the CLI subprocess --
+        # the patch cannot cross a process boundary).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+
+            def fake_ismount(path: object) -> bool:
+                return Path(path) == root
+
+            with mock.patch.object(
+                manager.os.path, "ismount", side_effect=fake_ismount
+            ):
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "--root must be a regular, non-mounted directory",
+                ):
+                    manager.ensure_cli_root_is_not_redirected(root)
 
     @unittest.skipUnless(os.name == "nt", "Windows junction regression")
     def test_junctioned_root_rejects_lifecycle_mutation_through_the_cli(self) -> None:
@@ -2200,7 +2288,9 @@ class IevoHookLifecycleTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertRegex(result.stderr, "managed path root must be a regular directory")
+            self.assertRegex(
+                result.stderr, "--root contains a symlink component"
+            )
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
 
