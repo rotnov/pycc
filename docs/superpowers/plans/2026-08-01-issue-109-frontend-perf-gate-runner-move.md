@@ -360,19 +360,26 @@
 
   Also confirm `ruby scripts/check_roadmap_evidence.rb .` still passes (this file is entirely outside `ci.yml`, so it should not be examined by that checker at all — if it somehow is, investigate before proceeding rather than silently working around a real trust-boundary concern the checker is correctly raising).
 
-- [ ] **Step 2: Commit and push, open the Stage PR**
+- [ ] **Step 4: Commit this task's own file**
 
   ```bash
-  git add .github/workflows/ci.yml
-  git commit -m "ci: add temporary frontend-perf-shadow-ubuntu workflow_dispatch job for D-112 evidence-gathering"
+  git add .github/workflows/frontend-perf-shadow.yml
+  git commit -m "ci: add temporary frontend-perf-shadow.yml workflow_dispatch for D-112 evidence-gathering"
+  ```
+
+  (Pushing and opening the Stage PR — bundling this commit with Task 1's ADR and Task 2's staged constants — is Task 3's own final step below, not repeated here.)
+
+- [ ] **Step 5: Push and open the Stage PR**
+
+  ```bash
   git push -u origin fix/issue-109-frontend-perf-gate-runner
   gh pr create --title "Stage D-112: ubuntu-latest frontend-perf-gate shadow measurement" --body "$(cat <<'EOF'
   ## Summary
-  - Stages new `D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB`/`_GATE_JOB` constants in `scripts/check_roadmap_evidence.rb` (inactive — not yet in `REVIEWED_PERF_CI_WORKFLOW_SHA256S`).
-  - Adds a temporary, non-required `frontend-perf-shadow-ubuntu` workflow_dispatch job to gather real ubuntu-latest variance evidence before any activation decision (issue #109).
-  - Does not change the live `frontend-perf-measure`/`frontend-perf-gate` jobs.
+  - Records D-112 (`docs/DECISIONS.md`): proposal to move `frontend-perf-measure`/`frontend-perf-gate` from `macos-14` to `ubuntu-latest`.
+  - Stages new `D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB`/`_GATE_JOB` constants in `scripts/check_roadmap_evidence.rb` (inactive — not yet in `REVIEWED_PERF_CI_WORKFLOW_SHA256S`). Does not change the live `frontend-perf-measure`/`frontend-perf-gate` jobs.
+  - Adds a temporary, non-required `.github/workflows/frontend-perf-shadow.yml` (`workflow_dispatch`-only) to gather real ubuntu-latest paired-delta evidence before any activation decision.
 
-  Part of issue #109's remedy (D-112, `docs/DECISIONS.md`). Refs #109.
+  Part of issue #109's remedy. Refs #109.
   EOF
   )"
   ```
