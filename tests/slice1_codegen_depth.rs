@@ -1127,3 +1127,83 @@ print(len(d))
     assert!(output.status.success());
     assert_eq!(output.stdout, b"1\n2\n");
 }
+
+#[test]
+fn growing_a_dict_from_inside_for_k_in_d_iterates_the_newly_added_key_too() {
+    // A final whole-branch review flagged a genuinely new, deliberate v0.2
+    // CPython divergence introduced by `ForDict`'s own codegen (D-113): the
+    // loop bound is `pycc_rt_dict_len`, re-read on every iteration rather
+    // than hoisted, so `d[k] = v` inside a `for k in d:` loop body that
+    // grows the dict causes the loop to keep going and also visit the
+    // newly-added key. Real CPython raises `RuntimeError: dictionary
+    // changed size during iteration` for this exact program instead. This
+    // test pins the actual, verified behavior (empirically confirmed by
+    // running this exact source through the real `pycc build`/execute
+    // pipeline before writing the assertion below) so `docs/DECISIONS.md`'s
+    // D-113 Consequences note and `docs/RUNTIME.md`'s dict line describe
+    // enforced behavior, not an inference from a codegen comment. NOT a
+    // conformance fixture against CPython (this is the one documented
+    // point where pycc and CPython deliberately disagree).
+    let source = "\
+d = {\"a\": 1}
+for k in d:
+    print(k)
+    d[\"z\"] = 9
+print(len(d))
+";
+    let output = build_and_run("dict_grows_during_for_k_in_d_iteration", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"a\nz\n2\n");
+}
+
+#[test]
+fn a_module_level_set_int_literal_dedupes_and_supports_len() {
+    // The `set[int]` thin slice (D-113) end to end through the real `pycc
+    // build` CLI: literal construction (with `PyIntSetObj`'s own dedup on
+    // repeated elements, D-111) and `len()`, mirroring the dict coverage
+    // above (`a_module_level_dict_str_int_literal_supports_len_and_indexed_
+    // read`) -- until this test, `set[int]` had zero non-`#[ignore]`d
+    // end-to-end CLI coverage; the only prior coverage exercising this
+    // exact behavior was `pycc_codegen`'s own hand-built-MIR unit test
+    // `set_literal_and_len` one layer down. `len(x) == 3`, not `4`, is the
+    // actual point: the repeated `2` must be deduped, not counted twice.
+    // This assertion is order-independent (`len` doesn't observe iteration
+    // order), so it needs no CPython oracle disclaimer. Expected output
+    // verified against `python3` on this exact source.
+    let source = "\
+x = {1, 2, 2, 3}
+print(len(x))
+";
+    let output = build_and_run("set_literal_len_dedup", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n");
+}
+
+#[test]
+fn for_v_in_a_module_level_set_iterates_in_first_insertion_order() {
+    // `for v in x:` over a module-level `set[int]` (D-113) end to end
+    // through the real `pycc build` CLI, with a duplicate element in the
+    // literal -- mirrors the dict iteration-order coverage above
+    // (`for_k_in_a_module_level_dict_iterates_its_keys_in_insertion_
+    // order`) and pins the same property one layer down that
+    // `pycc_codegen`'s own hand-built-MIR unit test
+    // (`for_x_in_set_iterates_in_first_insertion_order`) already covers:
+    // `PyIntSetObj`'s first-insertion iteration order (D-111) surviving
+    // through the full CLI pipeline, not just direct MIR-to-object
+    // codegen. `2` printing before `1` (with the second `2` deduped away
+    // rather than moving `2`'s position) is pycc's own documented,
+    // internally-consistent behavior -- NOT a claim about CPython: this
+    // is pinning pycc against itself, not against a CPython oracle.
+    // `python3` on this exact source prints `1`/`2` instead (CPython's own
+    // set iteration order for small ints is unspecified by the language
+    // and happens to come out numeric here, not insertion order), so this
+    // is deliberately not a `tests/conformance.rs` fixture.
+    let source = "\
+x = {2, 1, 2}
+for v in x:
+    print(v)
+";
+    let output = build_and_run("set_for_iteration_order", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n1\n");
+}
