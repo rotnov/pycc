@@ -1408,6 +1408,110 @@ pub unsafe extern "C" fn pycc_rt_dict_decref(dict: *mut PyDictObj) {
     }
 }
 
+/// `set[int]`'s runtime representation (D-111): structurally identical to
+/// `PyIntListObj` (a dense array of raw untagged `i64`), but insertion goes
+/// through `pycc_rt_int_set_add`'s own dedup check (linear scan, D-111)
+/// instead of `PyIntListObj`'s unconditional append -- this is the one
+/// behavioral difference and the reason this is its own distinct type
+/// rather than a reuse of `PyIntListObj` (mirrors the same reasoning
+/// D-107 gave for `Scalar::List` needing its own variant instead of
+/// reusing `Scalar::Str`: distinct semantics deserve a distinct type so
+/// the compiler enforces every call site acknowledges the difference).
+pub struct PyIntSetObj {
+    rc: Cell<u32>,
+    items: Cell<Vec<i64>>,
+}
+
+/// Allocates a fresh, empty `PyIntSetObj` with refcount `1`. Never panics.
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_set_new() -> *mut PyIntSetObj {
+    Box::into_raw(Box::new(PyIntSetObj {
+        rc: Cell::new(1),
+        items: Cell::new(Vec::new()),
+    }))
+}
+
+/// Dedup-checked insert (D-111): linear-scan for an already-present equal
+/// value; appends only if absent, preserving first-insertion order.
+///
+/// # Safety
+/// `set` must be a live `PyIntSetObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_set_add(set: *mut PyIntSetObj, value: i64) {
+    let mut items = unsafe { &*set }.items.take();
+    if !items.contains(&value) {
+        items.push(value);
+    }
+    unsafe { &*set }.items.set(items);
+}
+
+/// Returns `set`'s current element count.
+///
+/// # Safety
+/// `set` must be a live `PyIntSetObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_set_len(set: *mut PyIntSetObj) -> i64 {
+    let items = unsafe { &*set }.items.take();
+    let len = items.len() as i64;
+    unsafe { &*set }.items.set(items);
+    len
+}
+
+/// Element at a given insertion-order position, used only by `ForSet`'s
+/// own iteration codegen (Task 9) -- `set` has no user-facing indexing in
+/// Python (real CPython also rejects `s[0]`), so this is an internal
+/// codegen helper only.
+///
+/// # Safety
+/// `set` must be a live `PyIntSetObj` pointer; `index` must satisfy
+/// `0 <= index < pycc_rt_int_set_len(set)` (an internal codegen
+/// invariant, mirroring `pycc_rt_dict_key_at`'s own contract).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_set_get(set: *mut PyIntSetObj, index: i64) -> i64 {
+    let items = unsafe { &*set }.items.take();
+    let value = items[index as usize];
+    unsafe { &*set }.items.set(items);
+    value
+}
+
+/// D-060-style unconditional refcounting for `set[int]`, matching
+/// `pycc_rt_int_list_incref`'s own convention exactly: increments `set`'s
+/// refcount by one, a no-op on a null pointer.
+///
+/// # Safety
+/// `set` must be either a null pointer or a live `PyIntSetObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_set_incref(set: *mut PyIntSetObj) {
+    if set.is_null() {
+        return;
+    }
+    let obj = unsafe { &*set };
+    obj.rc.set(obj.rc.get() + 1);
+}
+
+/// D-060-style unconditional refcounting for `set[int]`, matching
+/// `pycc_rt_int_list_decref`'s own convention exactly: decrements `set`'s
+/// refcount by one, freeing the allocation once it reaches zero (which,
+/// via `Box::from_raw`'s own drop glue, also frees the `Cell<Vec<i64>>`
+/// payload's backing buffer -- no separate manual deallocation call
+/// needed). A no-op on a null pointer, same rationale as
+/// `pycc_rt_int_set_incref` above.
+///
+/// # Safety
+/// Same as `pycc_rt_int_set_incref`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_set_decref(set: *mut PyIntSetObj) {
+    if set.is_null() {
+        return;
+    }
+    let obj = unsafe { &*set };
+    let rc = obj.rc.get() - 1;
+    obj.rc.set(rc);
+    if rc == 0 {
+        drop(unsafe { Box::from_raw(set) });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2397,6 +2501,55 @@ mod tests {
         unsafe {
             pycc_rt_dict_incref(std::ptr::null_mut());
             pycc_rt_dict_decref(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_set_add_deduplicates_repeated_values() {
+        unsafe {
+            let set = pycc_rt_int_set_new();
+            pycc_rt_int_set_add(set, 1);
+            pycc_rt_int_set_add(set, 1);
+            pycc_rt_int_set_add(set, 2);
+            assert_eq!(pycc_rt_int_set_len(set), 2);
+            pycc_rt_int_set_decref(set);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_set_preserves_first_insertion_order() {
+        unsafe {
+            let set = pycc_rt_int_set_new();
+            pycc_rt_int_set_add(set, 2);
+            pycc_rt_int_set_add(set, 1);
+            pycc_rt_int_set_add(set, 2); // duplicate, ignored, does not move 2's position
+            assert_eq!(pycc_rt_int_set_get(set, 0), 2);
+            assert_eq!(pycc_rt_int_set_get(set, 1), 1);
+            pycc_rt_int_set_decref(set);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_set_incref_then_decref_frees_without_leaking() {
+        unsafe {
+            let set = pycc_rt_int_set_new();
+            pycc_rt_int_set_incref(set);
+            pycc_rt_int_set_decref(set);
+            pycc_rt_int_set_decref(set);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_set_incref_and_decref_on_a_null_pointer_are_safe_no_ops() {
+        // D-014's 100% line/region coverage gate: without this,
+        // `pycc_rt_int_set_incref`/`_decref`'s `if set.is_null()` early
+        // return is dead code, since none of the tests above ever pass a
+        // null pointer. Mirrors `PyIntListObj`'s own
+        // `int_list_incref_and_decref_on_a_null_pointer_are_safe_no_ops`
+        // test above.
+        unsafe {
+            pycc_rt_int_set_incref(std::ptr::null_mut());
+            pycc_rt_int_set_decref(std::ptr::null_mut());
         }
     }
 }
