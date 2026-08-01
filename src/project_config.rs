@@ -127,7 +127,10 @@ pub fn scaffold(name: Option<&str>, dir: &std::path::Path) -> std::io::Result<()
             "`pycc.toml` already exists",
         ));
     }
-    match std::fs::metadata(&src_dir) {
+    // #256: captured (not discarded) so a later rollback knows whether
+    // *this invocation* created `src/`, and so never removes a directory
+    // that pre-existed it.
+    let src_dir_created = match std::fs::metadata(&src_dir) {
         Ok(meta) if !meta.is_dir() => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
@@ -137,10 +140,10 @@ pub fn scaffold(name: Option<&str>, dir: &std::path::Path) -> std::io::Result<()
         // An existing `src` *directory* is not by itself a conflict:
         // `create_dir_all` below tolerates it, and an empty `src/` next to
         // no `pycc.toml`/`main.py` carries no user content to destroy.
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
         Err(error) => return Err(error),
-    }
+    };
     if main_py_path.try_exists()? {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
@@ -151,14 +154,75 @@ pub fn scaffold(name: Option<&str>, dir: &std::path::Path) -> std::io::Result<()
     // Write order (#237): `pycc.toml` goes LAST, so any late failure in
     // the `src` steps leaves it uncreated -- the strongest form of the
     // issue's "a late write failure leaves `pycc.toml` unchanged"
-    // regression. The worst a late failure can leave behind is an empty
-    // `src/` directory, which contains no user data (the same residue
-    // `cargo init`-family tools accept).
+    // regression. Only a failure in the *final* `pycc.toml` write below
+    // triggers rollback (#256): if `create_dir_all` or `main.py`'s own
+    // write fails here instead, the `?` propagates directly and an
+    // invocation-created, still-empty `src/` can still be left behind --
+    // the same accepted residue `cargo init`-family tools leave, and not a
+    // conflict on the next `pycc init` (an empty `src/` was already a
+    // non-conflict before this issue).
     std::fs::create_dir_all(&src_dir)?;
     let main_py = "def main() -> None:\n    print(\"hello from pycc\")\n";
     write_new(&main_py_path, main_py.as_bytes())?;
-    write_new(&toml_path, toml_contents.as_bytes())?;
+    if let Err(toml_error) = write_new(&toml_path, toml_contents.as_bytes()) {
+        return Err(roll_back_after_toml_failure(
+            toml_error,
+            &main_py_path,
+            &src_dir,
+            src_dir_created,
+        ));
+    }
     Ok(())
+}
+
+/// #256: `pycc.toml` is the last mutation (see the write order above). If
+/// it fails after `main.py` was already created by *this* invocation, that
+/// `main.py` is residue nothing else will ever clean up -- the next `pycc
+/// init`, even after the underlying cause is fixed, would refuse it as a
+/// pre-existing user file. This function only ever removes `main_py_path`
+/// and, conditionally, `src_dir` -- both unconditionally owned by this
+/// invocation per the caller's pre-check (a pre-existing `src/` directory,
+/// and anything already in it, is never removed, matching #237's "never
+/// overwrite or destroy pre-existing user content" contract). It does not
+/// remove `dir` itself even when `create_dir_all` also created `dir` (not
+/// just `src/`): `scaffold`'s own doc comment already scopes that case out,
+/// since the public `pycc init` surface always passes an existing current
+/// directory, so an invocation-created `dir` is a library-only corner case
+/// left as accepted residue, the same as an earlier `create_dir_all`/
+/// `main.py`-write failure already leaves behind above.
+fn roll_back_after_toml_failure(
+    toml_error: std::io::Error,
+    main_py_path: &std::path::Path,
+    src_dir: &std::path::Path,
+    src_dir_created: bool,
+) -> std::io::Error {
+    if let Err(rollback_error) = std::fs::remove_file(main_py_path) {
+        // Unlike `write_new_in`'s own best-effort cleanup of the file whose
+        // *own* write just failed, a failure here is reported rather than
+        // swallowed: this removes an *earlier sibling's* already-successful
+        // write, and silently leaving that unreported is exactly what
+        // produces the residue this issue is about.
+        return std::io::Error::new(
+            toml_error.kind(),
+            format!(
+                "{toml_error}; additionally, could not remove the `src/main.py` \
+                 this invocation created ({rollback_error}) -- remove it manually \
+                 before retrying"
+            ),
+        );
+    }
+    if src_dir_created {
+        // `remove_dir` (not `remove_dir_all`) refuses a non-empty directory
+        // by construction, so this can never remove anything beyond what
+        // `main.py`'s own removal above just emptied -- no separate
+        // emptiness check that could race. A refusal here (something else
+        // is unexpectedly inside) is not this invocation's own residue by
+        // definition, so it is left alone without being reported, the same
+        // way an empty pre-existing `src/` was already an accepted
+        // non-conflict before this issue.
+        let _ = std::fs::remove_dir(src_dir);
+    }
+    toml_error
 }
 
 /// `fs::write` with `create_new`: fails if the path already names any
@@ -596,14 +660,16 @@ paths = ["tests/"]
 
     #[cfg(unix)]
     #[test]
-    fn scaffold_leaves_pycc_toml_uncreated_when_its_own_write_fails_last() {
-        // Injection 3, the issue's regression 4 at the last possible
-        // moment: a dangling `pycc.toml` symlink passes the follow-symlink
-        // pre-check (its target does not exist), both `src` steps succeed,
-        // and the final `write_new` fails immediately with `EEXIST` on the
-        // symlink entry itself -- `create_new` never follows it (POSIX
-        // O_EXCL-on-symlink). The real `pycc.toml` path still resolves to
-        // nothing afterwards.
+    fn scaffold_rolls_back_main_py_when_pycc_toml_fails_last() {
+        // #256, inverting the pre-#256 version of this test: a dangling
+        // `pycc.toml` symlink passes the follow-symlink pre-check (its
+        // target does not exist), the `src` steps succeed, and the final
+        // `write_new` fails immediately with `EEXIST` on the symlink entry
+        // itself -- `create_new` never follows it (POSIX O_EXCL-on-symlink).
+        // `main.py`, already created by this same invocation, is now
+        // residue nothing would otherwise clean up, so it must be rolled
+        // back rather than left behind (issue #256's item 1 / regression 4
+        // "at the last possible moment").
         let dir = std::env::temp_dir().join(format!("pycc_toml_dangling_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::os::unix::fs::symlink(
@@ -613,12 +679,165 @@ paths = ["tests/"]
         .unwrap();
 
         let err = scaffold(Some("x"), &dir).expect_err("the final pycc.toml write must fail");
-        assert!(!err.to_string().is_empty());
-        // The write happened after both src steps...
-        assert!(dir.join("src").join("main.py").is_file());
+        let message = err.to_string();
+        assert!(!message.is_empty());
+        // Positive proof that main.py genuinely existed and was cleanly
+        // removed, not that it never existed: `roll_back_after_toml_failure`
+        // only appends "could not remove"/"manually" when its own
+        // `remove_file` call fails, which it would if main.py were absent
+        // (a `NotFound` error). Its absence here proves the "src` steps
+        // succeeded, then rolled back" path ran, not a regression that
+        // skipped or reordered those steps before reaching this branch.
+        assert!(!message.contains("could not remove"));
+        assert!(!message.contains("remove it manually"));
+        // The invocation-owned main.py is rolled back...
+        assert!(!dir.join("src").join("main.py").exists());
+        // ...the src/ directory this same invocation created is now empty,
+        // so it is rolled back too...
+        assert!(!dir.join("src").exists());
         // ...and pycc.toml still does not resolve to any file.
         assert!(!dir.join("pycc.toml").try_exists().unwrap());
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_succeeds_on_retry_after_the_underlying_cause_is_removed() {
+        // #256 item 2: the whole point of rolling back is that a retry
+        // after fixing the cause is not blocked by scaffold's own residue.
+        // A dangling `pycc.toml` symlink (not a pre-flight-refused conflict
+        // like a plain existing directory) is deliberate here: it passes
+        // the follow-symlink pre-check, so the first attempt genuinely
+        // reaches and exercises the rollback path -- a directory conflict
+        // would instead be refused at the pre-check, before `src`/`main.py`
+        // are ever created, and would not discriminate this fix at all.
+        let dir = std::env::temp_dir().join(format!("pycc_retry_ok_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(dir.join("missing_dir").join("pycc.toml"), dir.join("pycc.toml"))
+            .unwrap();
+
+        scaffold(Some("x"), &dir).expect_err("first attempt must fail on the dangling symlink");
+        assert!(
+            !dir.join("src").join("main.py").exists(),
+            "the rollback must have already run before the retry"
+        );
+        std::fs::remove_file(dir.join("pycc.toml")).unwrap(); // the fix
+
+        scaffold(Some("x"), &dir).expect("retry after removing the cause must succeed");
+        assert!(dir.join("pycc.toml").is_file());
+        assert!(dir.join("src").join("main.py").is_file());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scaffold_preserves_a_preexisting_populated_src_while_rolling_back_main_py() {
+        // #256 item 3: a pre-existing `src/` (with its own user file, no
+        // main.py -- otherwise the pre-check phase would already refuse)
+        // must retain every user file; only the invocation-owned main.py
+        // is rolled back, and src/ itself -- not created by this
+        // invocation -- is never removed.
+        let dir = std::env::temp_dir().join(format!("pycc_preserve_src_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src").join("lib.py"), "user lib").unwrap();
+        std::os::unix::fs::symlink(
+            dir.join("missing_dir").join("pycc.toml"),
+            dir.join("pycc.toml"),
+        )
+        .unwrap();
+
+        scaffold(Some("x"), &dir).expect_err("the final pycc.toml write must fail");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("src").join("lib.py")).unwrap(),
+            "user lib"
+        );
+        assert!(!dir.join("src").join("main.py").exists());
+        assert!(dir.join("src").is_dir(), "pre-existing src/ must survive");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn roll_back_after_toml_failure_removes_the_owned_main_py() {
+        let dir = std::env::temp_dir().join(format!("pycc_rollback_helper_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let main_py = dir.join("main.py");
+        std::fs::write(&main_py, "content").unwrap();
+        let toml_error = std::io::Error::other("original toml failure");
+
+        let returned = roll_back_after_toml_failure(toml_error, &main_py, &dir, false);
+        assert_eq!(returned.to_string(), "original toml failure");
+        assert!(!main_py.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn roll_back_after_toml_failure_removes_an_invocation_created_empty_src_dir() {
+        let parent = std::env::temp_dir().join(format!("pycc_rollback_srcdir_{}", std::process::id()));
+        let src_dir = parent.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let main_py = src_dir.join("main.py");
+        std::fs::write(&main_py, "content").unwrap();
+        let toml_error = std::io::Error::other("original toml failure");
+
+        roll_back_after_toml_failure(toml_error, &main_py, &src_dir, true);
+        assert!(!src_dir.exists(), "an invocation-created, now-empty src/ must be removed");
+
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    #[test]
+    fn roll_back_after_toml_failure_never_removes_a_preexisting_src_dir() {
+        let parent = std::env::temp_dir().join(format!("pycc_rollback_preexisting_{}", std::process::id()));
+        let src_dir = parent.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("sibling.py"), "user file").unwrap();
+        let main_py = src_dir.join("main.py");
+        std::fs::write(&main_py, "content").unwrap();
+        let toml_error = std::io::Error::other("original toml failure");
+
+        // src_dir_created = false: this invocation did not create src/.
+        roll_back_after_toml_failure(toml_error, &main_py, &src_dir, false);
+        assert!(src_dir.is_dir(), "a pre-existing src/ must never be removed");
+        assert_eq!(
+            std::fs::read_to_string(src_dir.join("sibling.py")).unwrap(),
+            "user file"
+        );
+
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn roll_back_after_toml_failure_reports_a_rollback_failure_honestly() {
+        // #256 item 5: unlike write_new_in's own best-effort cleanup of the
+        // file whose *own* write just failed, a failure to remove an
+        // *earlier sibling's* successful write must be reported, not
+        // silently swallowed -- otherwise this is the exact same residue
+        // the issue is about, just relocated to a rarer trigger.
+        // (Root ignores 0o555, so this would spuriously succeed under a
+        // root test runner; hosted CI and the coverage sandbox's `nobody`
+        // user are both non-root.)
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pycc_rollback_fail_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let main_py = dir.join("main.py");
+        std::fs::write(&main_py, "content").unwrap();
+        // The file already exists; making its parent read-only now blocks
+        // only the later `unlink`, not the write that already happened.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let toml_error = std::io::Error::other("original toml failure");
+
+        let returned = roll_back_after_toml_failure(toml_error, &main_py, &dir, false);
+        let message = returned.to_string();
+        assert!(message.contains("original toml failure"));
+        assert!(message.contains("could not remove"));
+        assert!(message.contains("remove it manually"));
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok();
         std::fs::remove_dir_all(&dir).ok();
     }
 }

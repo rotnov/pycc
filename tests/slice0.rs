@@ -434,7 +434,9 @@ fn init_refuses_when_src_is_a_plain_file() {
     assert!(!dir.join("pycc.toml").exists());
 }
 
-/// #237 regression 4: a late write failure leaves `pycc.toml` uncreated.
+/// #237 regression 4, extended by #256: a late write failure leaves
+/// `pycc.toml` uncreated, AND rolls back whatever this same invocation
+/// already created (`main.py`, then the `src/` it made -- now empty).
 /// Unix-only injection (a dangling `pycc.toml` symlink passes the
 /// follow-symlink pre-check, both `src` steps succeed, and the final
 /// `create_new` write fails with `EEXIST` on the symlink entry itself,
@@ -443,7 +445,7 @@ fn init_refuses_when_src_is_a_plain_file() {
 /// leg runs on macOS, so this counts toward the 100% gate.
 #[cfg(unix)]
 #[test]
-fn init_leaves_pycc_toml_uncreated_when_a_late_write_fails() {
+fn init_rolls_back_main_py_when_a_late_write_fails() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_init_late_fail_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::os::unix::fs::symlink(
@@ -458,11 +460,51 @@ fn init_leaves_pycc_toml_uncreated_when_a_late_write_fails() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("error: pycc init failed"));
-    // Both src steps ran...
-    assert!(dir.join("src").join("main.py").is_file());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: pycc init failed"));
+    // Positive proof main.py genuinely existed and was cleanly removed
+    // (not that it never existed) -- see the unit-level twin in
+    // src/project_config.rs for why an absent "could not remove" substring
+    // proves this, not just non-emptiness of the error.
+    assert!(!stderr.contains("could not remove"));
+    assert!(!stderr.contains("remove it manually"));
+    // The invocation-owned main.py and the src/ it created are rolled back...
+    assert!(!dir.join("src").exists());
     // ...and the real pycc.toml path still resolves to nothing.
     assert!(!dir.join("pycc.toml").try_exists().unwrap());
+}
+
+/// #256 item 2 at the public-CLI level: after the underlying cause is
+/// removed, an immediate retry succeeds -- the whole point of rolling back
+/// invocation-owned residue is that a fixed retry is never blocked by it.
+#[cfg(unix)]
+#[test]
+fn init_succeeds_on_retry_after_a_late_write_failure_is_fixed() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_retry_ok_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(
+        dir.join("missing_dir").join("pycc.toml"),
+        dir.join("pycc.toml"),
+    )
+    .unwrap();
+
+    let first = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(2));
+
+    std::fs::remove_file(dir.join("pycc.toml")).unwrap();
+
+    let second = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0));
+    assert!(dir.join("pycc.toml").is_file());
+    assert!(dir.join("src").join("main.py").is_file());
 }
 
 /// #250: a missing host linker driver is an environment failure reported
