@@ -305,3 +305,35 @@ fn pep_0585_builtin_generics_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("pep_0585_builtin_generics_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_builtin_generics.py");
 }
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn dict_order_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dict_order.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("dict_order_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/dict_order.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("dict_order_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/dict_order.py");
+}
+
+// `set[int]`'s own iteration order is this implementation's insertion order,
+// which does not match CPython's hash-dependent set iteration order (D-113) --
+// so, unlike every other fixture in this file, this one intentionally prints
+// only an order-independent value (`len()` of a literal with a duplicate
+// element) rather than iterating the set. It exists to give the PEP 585
+// conformance-matrix row (`docs/PYTHON_STANDARDS.md`) real CI-verified
+// evidence for `set[int]`'s own half of that row, since `dict_order.py`
+// above only exercises `dict[str, int]`.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0585_set_int_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0585_set_int.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0585_set_int_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_set_int.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0585_set_int_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_set_int.py");
+}

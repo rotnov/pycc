@@ -133,7 +133,7 @@ For each newly observed upstream release:
 | [560](https://peps.python.org/pep-0560/) | `__class_getitem__` typing support | typing | `py37/pep_0560_class_getitem.py` | ☐ |
 | [562](https://peps.python.org/pep-0562/) | Module `__getattr__` | sem | `py37/pep_0562_mod_getattr.py` | ☐ |
 | [563](https://peps.python.org/pep-0563/) | `from __future__ import annotations` (superseded by 649) | typing | `py37/pep_0563_lazy_annotations.py` | ☐ |
-| — | `dict` insertion order guaranteed | sem | `py37/dict_order.py` | ☐ |
+| — | `dict` insertion order guaranteed (`dict[str, int]`, D-113) | sem | `dict_order.py` | ☐ |
 
 ## Python 3.8
 
@@ -152,7 +152,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [584](https://peps.python.org/pep-0584/) | `dict \| dict` union | sem | `py39/pep_0584_dict_union.py` | ☐ |
-| [585](https://peps.python.org/pep-0585/) | Builtin generics `list[int]` (v0.2 scope, D-105: `list[int]` only — `dict`/`set`/`tuple` generics are PR-11's own PEP-585 coverage per `docs/DELIVERY_PLAN.md`'s row 11) | typing | `pep_0585_builtin_generics.py` | ✅ |
+| [585](https://peps.python.org/pep-0585/) | Builtin generics: `list[int]` (D-105) — this row's `✅` reflects `list[int]`'s own CI-observed, all-5-Tier-1-target evidence. `dict[str, int]`/`set[int]` (D-111/D-112, PR-11a) now also ship real codegen and pass their own fixtures locally byte-for-byte against CPython, but await this row's CI-observed evidence on all 5 targets before the claim widens (see `docs/ROADMAP.md`'s PR-11a entry). `tuple[...]` remains unimplemented, pending its own separate follow-up plan | typing | `pep_0585_builtin_generics.py`, `dict_order.py`, `pep_0585_set_int.py` | ✅ |
 | [593](https://peps.python.org/pep-0593/) | `Annotated` | typing | `py39/pep_0593_annotated.py` | ☐ |
 | [614](https://peps.python.org/pep-0614/) | Relaxed decorator grammar | syntax | `py39/pep_0614_decorators.py` | ☐ |
 | [617](https://peps.python.org/pep-0617/) | PEG parser — **pycc's grammar reference** | syntax | (covered by whole suite) | ☐ |

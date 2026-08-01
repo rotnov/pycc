@@ -68,6 +68,22 @@ converting one to `str`, and using one as an `if`/`while` condition. The
 string conversion is reachable from every context that needs one, which
 today means both `print(xs)` and f-string interpolation (`f"{xs}"`) -- they
 share a single conversion helper in `pycc_codegen`, so both fail identically.
+
+A second slice (D-111/D-112, PR-11a) extends this same pattern to
+`dict[str, int]` and `set[int]`: dict/set literals, `d[k]`/`d[k] = v`
+(dict only, insert-or-update), `len(...)`, and `for k in d:`/`for x in s:`
+iteration lower through the same HIR/type-checking/MIR/codegen path,
+against `pycc_rt`'s `PyDictObj`/`PyIntSetObj` respectively -- so `build`/`run`
+now also compiles and runs `dict[str, int]` and `set[int]` programs end to
+end, not just `list[int]`. Exactly one key/element combination reaches
+codegen per container (`T0036` for dict, `T0038` for set), mirroring
+`list[int]`'s own `T0034` gate; every other combination type-checks but is
+rejected before codegen. Both new containers stay leak-only in v0.2 (D-114),
+matching `list[int]` (D-107), and neither ships a `str(...)`/`bool(...)`
+conversion or (for `set`) a membership test -- `in` does not exist anywhere
+in this compiler yet (D-113). `tuple[...]` remains unimplemented, pending
+its own follow-up plan.
+
 Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument
 expressions; HIR does not yet assign binding identities or build and memoize a
