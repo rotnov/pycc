@@ -133,7 +133,10 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
                 }
                 collect_local_names(body, names);
             }
-            HirStmt::ExprStmt(_) | HirStmt::Return(_) => {}
+            // `d[k] = v` (PR-11 Task 3) reassigns an existing binding's
+            // contents, not a name -- unlike `Assign`/`AnnAssign`/`ForList`
+            // above, it introduces no new local name to collect.
+            HirStmt::ExprStmt(_) | HirStmt::Return(_) | HirStmt::DictSet { .. } => {}
         }
     }
 }
@@ -357,7 +360,8 @@ fn collect_expr_constraints(
                 // collection (union-find resolution hasn't run yet); an
                 // unresolved argument is left to the real check pass
                 // (`infer_expr_in`) below, matching this solver's existing
-                // lenient-until-known pattern.
+                // lenient-until-known pattern. PR-11 Task 3 (D-113) relaxes
+                // the argument-type check below to also accept `Ty::Dict`.
                 if arg_terms.len() != 1 {
                     return Err(Diagnostic::error(
                         "T0033",
@@ -366,12 +370,12 @@ fn collect_expr_constraints(
                     ));
                 }
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
-                    && !matches!(arg_ty, Ty::List(_))
+                    && !matches!(arg_ty, Ty::List(_) | Ty::Dict(_))
                 {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`len` expects a `list[T]` argument, got `{}`",
+                            "`len` expects a `list[T]` or `dict[K, V]` argument, got `{}`",
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
@@ -433,6 +437,17 @@ fn collect_expr_constraints(
         }
         HirExpr::ListAppend { list: _, value } => {
             collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            Ok(None)
+        }
+        // Same reasoning as `ListLiteral` above (PR-11 Task 3): dict
+        // key/value homogeneity and the `dict[str, int]`-only gate are
+        // `infer_expr_in`'s job, not this solver's. Recurse into every
+        // key and value only to keep propagating genuine errors.
+        HirExpr::DictLiteral(pairs) => {
+            for (key, value) in pairs {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
+                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            }
             Ok(None)
         }
     }
@@ -604,6 +619,19 @@ fn collect_block_constraints(
                     )?;
                 }
             }
+            // PR-11 Task 3 (D-113): `dict`'s own type isn't tracked by this
+            // solver either (same reasoning as `ForList`'s `list` field
+            // above) -- recurse into `key`/`value` only to keep propagating
+            // genuine errors; real item-assignment type-checking is
+            // `check_stmt`/`check_stmt_in_function`'s job.
+            HirStmt::DictSet {
+                dict: _,
+                key,
+                value,
+            } => {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
+                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            }
         }
     }
     Ok(())
@@ -616,7 +644,10 @@ fn contains_return(body: &[HirStmt]) -> bool {
         HirStmt::While { body, .. }
         | HirStmt::ForRange { body, .. }
         | HirStmt::ForList { body, .. } => contains_return(body),
-        HirStmt::ExprStmt(_) | HirStmt::Assign { .. } | HirStmt::AnnAssign { .. } => false,
+        HirStmt::ExprStmt(_)
+        | HirStmt::Assign { .. }
+        | HirStmt::AnnAssign { .. }
+        | HirStmt::DictSet { .. } => false,
     })
 }
 
@@ -988,6 +1019,8 @@ fn infer_expr_in(
                 // both failure shapes (wrong arity, non-list argument) --
                 // the same "value does not support list operations" shape
                 // already established for `ForList`/`Subscript`/`ListAppend`.
+                // PR-11 Task 3 (D-113): also accepts `Ty::Dict` (gated the
+                // same way by `T0036`), so `len(d)` type-checks too.
                 if arg_tys.len() != 1 {
                     return Err(Diagnostic::error(
                         "T0033",
@@ -995,11 +1028,11 @@ fn infer_expr_in(
                         Span::new(0, 0),
                     ));
                 }
-                if !matches!(arg_tys[0], Ty::List(_)) {
+                if !matches!(arg_tys[0], Ty::List(_) | Ty::Dict(_)) {
                     return Err(Diagnostic::error(
                         "T0033",
                         format!(
-                            "`len` expects a `list[T]` argument, got `{}`",
+                            "`len` expects a `list[T]` or `dict[K, V]` argument, got `{}`",
                             arg_tys[0].name()
                         ),
                         Span::new(0, 0),
@@ -1099,32 +1132,106 @@ fn infer_expr_in(
             }
             Ok(Ty::List(Box::new(elem_ty)))
         }
-        HirExpr::Subscript { base, index } => {
-            let base_ty = infer_expr_in(env, local_names, base)?;
-            let index_ty = infer_expr_in(env, local_names, index)?;
-            // Reuses T0021 (an unconstrained/conflicting-constraint shape),
-            // not a new code -- a non-int-compatible index is that same
-            // "operand type mismatch" failure, not a distinct one.
-            //
-            // Uses `is_assignable`, not exact `Ty` equality: D-086 already
-            // established that `bool` is accepted wherever `int` is expected
-            // at an operand boundary (mirroring `is_assignable`'s own
-            // existing param/assignment rule), and indexing is exactly that
-            // kind of boundary -- `xs[True]` is ordinary, CPython-valid
-            // Python (`bool` is an `int` subtype, PEP 285), not a type
-            // error. `pycc_codegen`'s `to_tagged_int` already has a
-            // `Scalar::Bool` arm reached unconditionally by every subscript
-            // index, so this was a pure over-rejection in the type checker,
-            // not a missing codegen capability.
-            if !is_assignable(index_ty.clone(), Ty::Int) {
+        // PR-11 Task 3 (D-113): mirrors `ListLiteral`'s own homogeneity
+        // check above, extended to a key/value pair, plus a `dict[str,
+        // int]`-only gate mirroring `ListLiteral`'s own `T0034` gate
+        // (D-112: "exactly one combination gets real codegen").
+        HirExpr::DictLiteral(pairs) => {
+            let Some((first_key, first_value)) = pairs.first() else {
                 return Err(Diagnostic::error(
                     "T0021",
-                    format!("list index must be `int`, found `{}`", index_ty.name()),
+                    "an empty dict literal's key/value types cannot be inferred without an annotation (dict[K, V] annotations are not supported yet)".to_string(),
+                    Span::new(0, 0),
+                ));
+            };
+            let key_ty = infer_expr_in(env, local_names, first_key)?;
+            let val_ty = infer_expr_in(env, local_names, first_value)?;
+            for (key, value) in &pairs[1..] {
+                let this_key_ty = infer_expr_in(env, local_names, key)?;
+                let this_val_ty = infer_expr_in(env, local_names, value)?;
+                // Exact `Ty` equality on both key and value, not
+                // `is_assignable`'s bool-is-an-int-subtype rule -- same
+                // reasoning as `ListLiteral`'s own homogeneity check.
+                if this_key_ty != key_ty || this_val_ty != val_ty {
+                    return Err(Diagnostic::error(
+                        "T0035",
+                        format!(
+                            "dict entry type mismatch: expected {}: {} (from the first pair), found {}: {}",
+                            key_ty.name(),
+                            val_ty.name(),
+                            this_key_ty.name(),
+                            this_val_ty.name(),
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+            }
+            let dict_ty = Ty::Dict(Box::new((key_ty, val_ty)));
+            if dict_ty != Ty::Dict(Box::new((Ty::Str, Ty::Int))) {
+                return Err(Diagnostic::error(
+                    "T0036",
+                    format!(
+                        "{} is not compiled yet (D-112) -- only dict[str, int] is",
+                        dict_ty.name()
+                    ),
                     Span::new(0, 0),
                 ));
             }
+            Ok(dict_ty)
+        }
+        HirExpr::Subscript { base, index } => {
+            let base_ty = infer_expr_in(env, local_names, base)?;
+            let index_ty = infer_expr_in(env, local_names, index)?;
             match base_ty {
-                Ty::List(elem_ty) => Ok(*elem_ty),
+                Ty::List(elem_ty) => {
+                    // Reuses T0021 (an unconstrained/conflicting-constraint
+                    // shape), not a new code -- a non-int-compatible index is
+                    // that same "operand type mismatch" failure, not a
+                    // distinct one.
+                    //
+                    // Uses `is_assignable`, not exact `Ty` equality: D-086
+                    // already established that `bool` is accepted wherever
+                    // `int` is expected at an operand boundary (mirroring
+                    // `is_assignable`'s own existing param/assignment rule),
+                    // and indexing is exactly that kind of boundary --
+                    // `xs[True]` is ordinary, CPython-valid Python (`bool` is
+                    // an `int` subtype, PEP 285), not a type error.
+                    // `pycc_codegen`'s `to_tagged_int` already has a
+                    // `Scalar::Bool` arm reached unconditionally by every
+                    // subscript index, so this was a pure over-rejection in
+                    // the type checker, not a missing codegen capability.
+                    if !is_assignable(index_ty.clone(), Ty::Int) {
+                        return Err(Diagnostic::error(
+                            "T0021",
+                            format!("list index must be `int`, found `{}`", index_ty.name()),
+                            Span::new(0, 0),
+                        ));
+                    }
+                    Ok(*elem_ty)
+                }
+                // PR-11 Task 3 (D-113): `d[k]` read. Uses exact `Ty`
+                // equality on the key, not `is_assignable` -- every
+                // `Ty::Dict` value that survives `DictLiteral`'s own
+                // `T0036` gate above has key type exactly `Ty::Str` (no
+                // other combination reaches codegen, and no other source
+                // construct can produce a `Ty::Dict` value at all), so
+                // there is no bool/int-style widening question here, unlike
+                // the list-index case above.
+                Ty::Dict(kv) => {
+                    let (key_ty, val_ty) = *kv;
+                    if index_ty != key_ty {
+                        return Err(Diagnostic::error(
+                            "T0021",
+                            format!(
+                                "dict key type mismatch: expected `{}`, found `{}`",
+                                key_ty.name(),
+                                index_ty.name()
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
+                    Ok(val_ty)
+                }
                 other => Err(Diagnostic::error(
                     "T0033",
                     format!("`{}` does not support indexing", other.name()),
@@ -1375,7 +1482,61 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             "'return' outside a function is not allowed".to_string(),
             Span::new(0, 0),
         )),
+        HirStmt::DictSet { dict, key, value } => check_dict_set(env, &[], dict, key, value),
     }
+}
+
+/// `d[k] = v` (PR-11 Task 3, D-113): insert-or-update. Shared between
+/// module (`check_stmt`, `local_names = &[]`) and function-body
+/// (`check_stmt_in_function`) scope, mirroring how `check_range_operand`/
+/// `check_range_operand_in` are already split for `ForRange`. Reuses
+/// `T0033` for a non-`dict` base (matching `ListAppend`'s own "does not
+/// support X" shape) and `T0021` for a key or value type mismatch
+/// (matching `Subscript`'s and `ListAppend`'s own reuse of `T0021` for an
+/// operand/assignment constraint mismatch).
+fn check_dict_set(
+    env: &Environment,
+    local_names: &[&str],
+    dict: &str,
+    key: &HirExpr,
+    value: &HirExpr,
+) -> Result<(), Diagnostic> {
+    let dict_ty = lookup_bound_name(env, local_names, dict)?;
+    let Ty::Dict(kv) = &dict_ty else {
+        return Err(Diagnostic::error(
+            "T0033",
+            format!("`{}` does not support item assignment", dict_ty.name()),
+            Span::new(0, 0),
+        ));
+    };
+    let (key_ty, val_ty) = kv.as_ref();
+    // Exact `Ty` equality on the key, not `is_assignable` -- same reasoning
+    // as `Subscript`'s own `Ty::Dict` read arm.
+    let key_expr_ty = infer_expr_in(env, local_names, key)?;
+    if key_expr_ty != *key_ty {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "dict key type mismatch: expected `{}`, found `{}`",
+                key_ty.name(),
+                key_expr_ty.name()
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    let value_ty = infer_expr_in(env, local_names, value)?;
+    if !is_assignable(value_ty.clone(), val_ty.clone()) {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "cannot assign `{}` to a dict value of `{}`",
+                value_ty.name(),
+                val_ty.name()
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    Ok(())
 }
 
 pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
@@ -1456,7 +1617,8 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
         | HirStmt::AnnAssign { .. }
         | HirStmt::While { .. }
         | HirStmt::ForRange { .. }
-        | HirStmt::ForList { .. } => false,
+        | HirStmt::ForList { .. }
+        | HirStmt::DictSet { .. } => false,
     })
 }
 
@@ -1577,6 +1739,7 @@ fn check_stmt_in_function(
             Ok(())
         }
         HirStmt::ExprStmt(expr) => infer_expr_in(env, local_names, expr).map(|_| ()),
+        HirStmt::DictSet { dict, key, value } => check_dict_set(env, local_names, dict, key, value),
     }
 }
 
@@ -2441,7 +2604,10 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code, "T0033");
-        assert_eq!(err.message, "`len` expects a `list[T]` argument, got `int`");
+        assert_eq!(
+            err.message,
+            "`len` expects a `list[T]` or `dict[K, V]` argument, got `int`"
+        );
     }
 
     #[test]
@@ -4036,7 +4202,10 @@ mod tests {
         };
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0033");
-        assert_eq!(err.message, "`len` expects a `list[T]` argument, got `int`");
+        assert_eq!(
+            err.message,
+            "`len` expects a `list[T]` or `dict[K, V]` argument, got `int`"
+        );
     }
 
     #[test]
@@ -4047,6 +4216,669 @@ mod tests {
             args: vec![HirExpr::Name("undefined".to_string())],
         };
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    // -- PR-11 Task 3 (D-113): dict[str, int] type-checking --------------
+
+    #[test]
+    fn an_empty_dict_literal_cannot_be_inferred() {
+        let env = Environment::new();
+        let err = infer_expr(&env, &HirExpr::DictLiteral(vec![])).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("empty dict literal"));
+    }
+
+    #[test]
+    fn a_homogeneous_dict_literal_infers_dict_of_str_int() {
+        let env = Environment::new();
+        let expr = HirExpr::DictLiteral(vec![
+            (
+                HirExpr::StringLiteral("a".to_string()),
+                HirExpr::IntLiteral(1),
+            ),
+            (
+                HirExpr::StringLiteral("b".to_string()),
+                HirExpr::IntLiteral(2),
+            ),
+        ]);
+        assert_eq!(
+            infer_expr(&env, &expr),
+            Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int))))
+        );
+    }
+
+    #[test]
+    fn a_dict_literal_with_mismatched_value_types_is_rejected_as_t0035() {
+        let env = Environment::new();
+        let expr = HirExpr::DictLiteral(vec![
+            (
+                HirExpr::StringLiteral("a".to_string()),
+                HirExpr::IntLiteral(1),
+            ),
+            (
+                HirExpr::StringLiteral("b".to_string()),
+                HirExpr::StringLiteral("oops".to_string()),
+            ),
+        ]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0035");
+        assert_eq!(
+            err.message,
+            "dict entry type mismatch: expected str: int (from the first pair), found str: str"
+        );
+    }
+
+    #[test]
+    fn a_dict_literal_with_mismatched_key_types_is_rejected_as_t0035() {
+        // Same code as the value-mismatch case above, but exercises the
+        // `this_key_ty != key_ty` half of the homogeneity check's `||`
+        // independently of the value half.
+        let env = Environment::new();
+        let expr = HirExpr::DictLiteral(vec![
+            (
+                HirExpr::StringLiteral("a".to_string()),
+                HirExpr::IntLiteral(1),
+            ),
+            (HirExpr::IntLiteral(2), HirExpr::IntLiteral(2)),
+        ]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0035");
+        assert_eq!(
+            err.message,
+            "dict entry type mismatch: expected str: int (from the first pair), found int: int"
+        );
+    }
+
+    #[test]
+    fn a_homogeneous_non_str_int_dict_literal_is_rejected_as_t0036() {
+        let env = Environment::new();
+        let expr = HirExpr::DictLiteral(vec![(
+            HirExpr::StringLiteral("a".to_string()),
+            HirExpr::StringLiteral("b".to_string()),
+        )]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0036");
+        assert_eq!(
+            err.message,
+            "dict[str, str] is not compiled yet (D-112) -- only dict[str, int] is"
+        );
+    }
+
+    #[test]
+    fn a_bad_dict_literal_is_still_rejected_when_the_solver_path_runs_first() {
+        // The dict-shaped counterpart to
+        // `a_heterogeneous_list_literal_is_still_rejected_when_the_solver_path_runs_first`
+        // above: `collect_expr_constraints`'s own `DictLiteral` arm always returns
+        // `Ok(None)` (it has no unification-friendly representation for `Ty::Dict`
+        // either), so an unrelated private helper with an unresolved (`Ty::Infer`)
+        // signature must not let the solver's own leniency swallow a genuine T0036 --
+        // it has to fall through to the real, dict-aware check pass.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::StringLiteral("b".to_string()),
+                    )]),
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0036");
+    }
+
+    #[test]
+    fn a_dict_literal_propagates_an_ill_typed_first_key_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::DictLiteral(vec![(
+            HirExpr::Name("undefined".to_string()),
+            HirExpr::IntLiteral(1),
+        )]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_literal_propagates_an_ill_typed_first_value_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::DictLiteral(vec![(
+            HirExpr::StringLiteral("a".to_string()),
+            HirExpr::Name("undefined".to_string()),
+        )]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_literal_propagates_an_ill_typed_later_key_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::DictLiteral(vec![
+            (
+                HirExpr::StringLiteral("a".to_string()),
+                HirExpr::IntLiteral(1),
+            ),
+            (
+                HirExpr::Name("undefined".to_string()),
+                HirExpr::IntLiteral(2),
+            ),
+        ]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_literal_propagates_an_ill_typed_later_value_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::DictLiteral(vec![
+            (
+                HirExpr::StringLiteral("a".to_string()),
+                HirExpr::IntLiteral(1),
+            ),
+            (
+                HirExpr::StringLiteral("b".to_string()),
+                HirExpr::Name("undefined".to_string()),
+            ),
+        ]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn subscripting_a_dict_infers_its_value_type() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::StringLiteral("a".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn subscripting_a_dict_with_a_mismatched_key_type_is_rejected() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "dict key type mismatch: expected `str`, found `int`"
+        );
+    }
+
+    #[test]
+    fn len_of_a_dict_infers_int() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn constraint_collection_len_call_returns_int_for_a_concretely_bound_dict() {
+        // Mirrors `constraint_collection_len_call_returns_int_for_a_concretely_bound_list`
+        // above, proving the solver's own relaxed `len()` arm (PR-11 Task 3)
+        // also accepts a concretely-bound `Ty::Dict` term.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([(
+                "d".to_string(),
+                Ok(Ty::Dict(Box::new((Ty::Str, Ty::Int)))),
+            )]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "len".to_string(),
+            args: vec![HirExpr::Name("d".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_dict_literal_as_unconstrained_but_recurses_into_pairs() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::DictLiteral(vec![(
+            HirExpr::StringLiteral("a".to_string()),
+            HirExpr::IntLiteral(1),
+        )]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_dict_literal_key() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::DictLiteral(vec![(
+            HirExpr::Name("missing".to_string()),
+            HirExpr::IntLiteral(1),
+        )]);
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_dict_literal_value() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::DictLiteral(vec![(
+            HirExpr::StringLiteral("a".to_string()),
+            HirExpr::Name("missing".to_string()),
+        )]);
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_recurses_into_a_dict_set_s_key_and_value() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let body = vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::StringLiteral("a".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_dict_set_key() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let body = vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::Name("missing".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }];
+
+        let err = collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_dict_set_value() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let body = vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::StringLiteral("a".to_string()),
+            value: HirExpr::Name("missing".to_string()),
+        }];
+
+        let err = collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn local_name_collection_ignores_a_dict_set_target() {
+        // `d[k] = v` mutates an existing binding's contents, not a name --
+        // unlike `Assign`/`AnnAssign`/`ForList`, it must not be collected as
+        // a new local.
+        let params: Vec<(String, Ty)> = vec![];
+        let body = vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::StringLiteral("a".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }];
+        assert_eq!(function_local_names(&params, &body), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn contains_return_treats_a_dict_set_as_not_a_return() {
+        let body = vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::StringLiteral("a".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }];
+        assert!(!contains_return(&body));
+    }
+
+    #[test]
+    fn block_always_returns_treats_a_dict_set_as_not_always_returning() {
+        let body = vec![HirStmt::DictSet {
+            dict: "x".to_string(),
+            key: HirExpr::StringLiteral("a".to_string()),
+            value: HirExpr::IntLiteral(1),
+        }];
+        assert!(!block_always_returns(&body));
+    }
+
+    #[test]
+    fn a_dict_set_item_with_matching_value_type_checks_cleanly() {
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::DictLiteral(vec![(
+                    HirExpr::StringLiteral("a".to_string()),
+                    HirExpr::IntLiteral(1),
+                )]),
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("b".to_string()),
+                value: HirExpr::IntLiteral(2),
+            },
+        )
+        .unwrap();
+        // `d[k] = v` never rebinds `x`'s own environment type, unlike an
+        // ordinary `Assign`.
+        assert_eq!(
+            env.lookup("x"),
+            Some(Ty::Dict(Box::new((Ty::Str, Ty::Int))))
+        );
+    }
+
+    #[test]
+    fn a_dict_set_item_accepts_a_bool_value_since_bool_is_an_int_subtype() {
+        // Mirrors `appending_a_bool_to_a_list_of_int_is_accepted_since_bool_is_an_int_subtype`
+        // (D-086): `d[k] = True` is ordinary, CPython-valid Python.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("a".to_string()),
+                value: HirExpr::BoolLiteral(true),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_dict_set_item_with_wrong_key_type_is_t0021() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::IntLiteral(1),
+                value: HirExpr::IntLiteral(2),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "dict key type mismatch: expected `str`, found `int`"
+        );
+    }
+
+    #[test]
+    fn a_dict_set_item_with_wrong_value_type_is_t0021() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("a".to_string()),
+                value: HirExpr::StringLiteral("oops".to_string()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "cannot assign `str` to a dict value of `int`");
+    }
+
+    #[test]
+    fn a_dict_set_item_on_a_non_dict_value_is_t0033() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("a".to_string()),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`int` does not support item assignment");
+    }
+
+    #[test]
+    fn a_dict_set_item_on_a_list_value_is_still_t0033() {
+        // D-113 supersedes D-105's "no subscript assignment target anywhere
+        // in this file" HIR-level invariant (see `pycc_hir`'s own
+        // `subscript_assignment_to_a_bare_name_base_lowers_to_dict_set`
+        // test), but `list[int]` itself is still read-only-indexed -- this
+        // is where that invariant is actually enforced now.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::IntLiteral(0),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`list[int]` does not support item assignment");
+    }
+
+    #[test]
+    fn a_dict_set_item_over_an_undefined_name_is_rejected_as_not_defined() {
+        let mut env = Environment::new();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("a".to_string()),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("is not defined"));
+    }
+
+    #[test]
+    fn a_dict_set_item_propagates_an_ill_typed_key_expression_s_error() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::Name("undefined".to_string()),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_set_item_propagates_an_ill_typed_value_expression_s_error() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("a".to_string()),
+                value: HirExpr::Name("undefined".to_string()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn function_scope_dict_set_item_with_matching_value_type_checks_cleanly() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("a".to_string()),
+                value: HirExpr::IntLiteral(1),
+            },
+            Ty::None,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn function_scope_dict_set_item_over_an_unbound_local_is_unbound_local() {
+        // Mirrors the local-vs-global unbound distinction `lookup_bound_name`
+        // already gives every other function-scope name lookup (e.g.
+        // `ForList`'s own `list` field) -- a declared-but-unassigned local
+        // reports `unbound_local`, not "not defined".
+        let mut env = Environment::new();
+        let err = check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("a".to_string()),
+                value: HirExpr::IntLiteral(1),
+            },
+            Ty::None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("is not bound before this use"));
     }
 
     #[test]

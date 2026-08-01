@@ -367,6 +367,19 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
             }
         }
         HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes))),
+        // PR-11 Task 3 (`pycc_hir`/`pycc_types`) added `HirStmt::DictSet` so
+        // `dict[str, int]`'s type-checked HIR can exist at all; MIR lowering
+        // for it is PR-11 Task 4's own scope, not this task's. This arm
+        // exists only so this crate's exhaustive `match` still compiles --
+        // `pycc_types::check` never lets a `HirStmt::DictSet` reach codegen
+        // today (Task 3 stops at `pycc_types`), so this panic is unreachable
+        // from any currently-supported program, mirroring `lookup`'s own
+        // "internal error" convention above. Task 4 replaces this arm with
+        // real lowering and deletes the `should_panic` test that exercises
+        // it (`dict_set_mir_lowering_is_not_implemented_yet` below).
+        HirStmt::DictSet { .. } => panic!(
+            "pycc_mir: internal error: dict[str, int] MIR lowering is not implemented yet (PR-11 Task 4)"
+        ),
     }
 }
 
@@ -441,6 +454,13 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
             list: list.clone(),
             value: Box::new(lower_expr(value, scopes)),
         },
+        // See `lower_stmt`'s own `HirStmt::DictSet` arm above: PR-11 Task 4
+        // owns real MIR lowering for `dict[str, int]`. This arm exists only
+        // so the exhaustive `match` compiles; unreachable from any program
+        // `pycc_types::check` currently accepts.
+        HirExpr::DictLiteral(_) => panic!(
+            "pycc_mir: internal error: dict[str, int] MIR lowering is not implemented yet (PR-11 Task 4)"
+        ),
     }
 }
 
@@ -1826,6 +1846,43 @@ mod tests {
                     body: vec![],
                 }),
             ],
+        };
+        build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "dict[str, int] MIR lowering is not implemented yet")]
+    fn dict_literal_mir_lowering_is_not_implemented_yet() {
+        // PR-11 Task 3 (`pycc_hir`/`pycc_types`) makes `HirExpr::DictLiteral`
+        // constructible and type-checkable; PR-11 Task 4 is what actually
+        // teaches this crate to lower it. Until then, this exhaustive-match
+        // arm is a deliberate panic stub (see its own doc comment in
+        // `lower_expr` above) -- this test exists only to cover that stub
+        // region under the D-014 coverage gate, and Task 4 should delete it
+        // once real lowering replaces the panic.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::DictLiteral(vec![(
+                    HirExpr::StringLiteral("a".to_string()),
+                    HirExpr::IntLiteral(1),
+                )]),
+            })],
+        };
+        build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "dict[str, int] MIR lowering is not implemented yet")]
+    fn dict_set_mir_lowering_is_not_implemented_yet() {
+        // Same reasoning as `dict_literal_mir_lowering_is_not_implemented_yet`
+        // above, for `lower_stmt`'s own `HirStmt::DictSet` panic stub.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::StringLiteral("a".to_string()),
+                value: HirExpr::IntLiteral(1),
+            })],
         };
         build(&hir);
     }

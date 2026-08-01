@@ -120,14 +120,17 @@ pub enum HirExpr {
     /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this
     /// lowering step's -- HIR only records the syntactic shape (D-105).
     ListLiteral(Vec<HirExpr>),
-    /// `base[index]`, read-only (D-105 -- no subscript assignment target
-    /// exists in v0.2). Every statement that extracts an assignment/for
-    /// target rejects a non-bare-name target (see `Stmt::Assign`,
-    /// `Stmt::AnnAssign`, and `Stmt::For`'s target handling in
-    /// `lower_stmt` below) before ever calling `lower_expr` on it, so a
-    /// `Subscript` node reaches this arm only in a value (Load) position;
-    /// no separate `ExprContext` check is needed to enforce read-only-ness
-    /// here.
+    /// `base[index]`, a read (Load position). `Stmt::Assign`'s own target
+    /// handling below special-cases an `Expr::Subscript` target on a bare
+    /// name into a dedicated `HirStmt::DictSet` node instead of ever
+    /// constructing this variant for it (PR-11 Task 3, D-113 -- `list[int]`
+    /// itself is still read-only-indexed, D-105, but that is now
+    /// `pycc_types`' judgment on `HirStmt::DictSet`'s base type, not a
+    /// structural HIR-shape restriction), and every other assignment/for
+    /// target (`Stmt::AnnAssign`, `Stmt::For`) still rejects a non-bare-name
+    /// target before ever calling `lower_expr` on it. So a `Subscript` node
+    /// still reaches this arm only in a value (Load) position; no separate
+    /// `ExprContext` check is needed to enforce that here.
     Subscript {
         base: Box<HirExpr>,
         index: Box<HirExpr>,
@@ -157,6 +160,15 @@ pub enum HirExpr {
         list: String,
         value: Box<HirExpr>,
     },
+    /// `{k1: v1, k2: v2, ...}`. Key/value homogeneity and the `dict[str,
+    /// int]`-only codegen gate are `pycc_types`' job, not this lowering
+    /// step's -- HIR only records the syntactic shape (mirrors
+    /// `ListLiteral`, PR-11 Task 3). A dict-unpacking entry (`{**other}`,
+    /// `DictItem.key == None` in the upstream grammar) is rejected as
+    /// unsupported at lowering time (see `lower_expr`'s `Expr::Dict` arm)
+    /// rather than represented here, since this variant has no shape for
+    /// it.
+    DictLiteral(Vec<(HirExpr, HirExpr)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -200,6 +212,20 @@ pub enum HirStmt {
         var: String,
         list: String,
         body: Vec<HirStmt>,
+    },
+    /// `<bare name>[key] = value`, PR-11 Task 3 (D-113 supersedes D-105's
+    /// "no subscript assignment target anywhere in this file" consequence
+    /// for `list[int]`; see `Stmt::Assign`'s own lowering arm below). `dict`
+    /// is carried as a plain variable name, exactly like `ForList`'s `list`
+    /// field and `ListAppend`'s `list` field -- this lowering step has no
+    /// type information, so a `list[int]` target also lowers to this node
+    /// today (`pycc_types` rejects it with `T0033`, mirroring how
+    /// `ForList`'s own `list` field is resolved to `Ty::List` or rejected
+    /// downstream, not here).
+    DictSet {
+        dict: String,
+        key: HirExpr,
+        value: HirExpr,
     },
     Return(Option<HirExpr>),
 }
@@ -383,15 +409,41 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     assign.range,
                 ));
             };
-            let Expr::Name(name) = target else {
-                return Err(unsupported(
-                    format!("only assigning to a bare name is supported so far: {target:?}"),
-                    pycc_ast::expr_range(target),
-                ));
-            };
-            HirStmt::Assign {
-                target: name.id.as_str().to_string(),
-                value: lower_expr(&assign.value)?,
+            match target {
+                Expr::Name(name) => HirStmt::Assign {
+                    target: name.id.as_str().to_string(),
+                    value: lower_expr(&assign.value)?,
+                },
+                // `<bare name>[key] = value`, PR-11 Task 3 (D-113): unlike
+                // `list[int]`'s own read-only-indexing consequence (D-105),
+                // `dict[str, int]` ships `d[k] = v`. This lowering step has
+                // no type information (mirroring `ForList`'s own bare-name
+                // iterable, which is resolved to `Ty::List` or rejected
+                // downstream), so a `list[int]` subscript-assignment target
+                // also reaches `HirStmt::DictSet` here -- `pycc_types`
+                // rejects it with `T0033` once the base's real type is
+                // known, relocating (not removing) the invariant this file's
+                // own `subscript_assignment_target_is_unsupported` test used
+                // to enforce at the lowering level.
+                Expr::Subscript(sub) => {
+                    let Expr::Name(base_name) = sub.value.as_ref() else {
+                        return Err(unsupported(
+                            "only assigning to a bare-name subscript target (`name[key] = value`) is supported so far",
+                            pycc_ast::expr_range(target),
+                        ));
+                    };
+                    HirStmt::DictSet {
+                        dict: base_name.id.as_str().to_string(),
+                        key: lower_expr(&sub.slice)?,
+                        value: lower_expr(&assign.value)?,
+                    }
+                }
+                other => {
+                    return Err(unsupported(
+                        format!("only assigning to a bare name is supported so far: {other:?}"),
+                        pycc_ast::expr_range(other),
+                    ));
+                }
             }
         }
         Stmt::AnnAssign(ann) => {
@@ -594,6 +646,20 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
             list.elts
                 .iter()
                 .map(lower_expr)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Expr::Dict(dict) => HirExpr::DictLiteral(
+            dict.items
+                .iter()
+                .map(|item| {
+                    let Some(key) = &item.key else {
+                        return Err(unsupported(
+                            "dict-unpacking (`**expr`) inside a dict literal is not supported yet",
+                            pycc_ast::expr_range(&item.value),
+                        ));
+                    };
+                    Ok((lower_expr(key)?, lower_expr(&item.value)?))
+                })
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Subscript(sub) => HirExpr::Subscript {
@@ -1117,22 +1183,47 @@ mod tests {
     }
 
     #[test]
-    fn subscript_assignment_target_is_unsupported() {
-        // D-105: v0.2's `list[int]` slice is read-only -- there is no
-        // subscript assignment target anywhere in this file (see
-        // `HirExpr::Subscript`'s own doc comment). That invariant holds
-        // today only as an incidental consequence of `Stmt::Assign`'s
-        // existing bare-name-target check above (a `Subscript` node is not
-        // an `Expr::Name`, so it's rejected there, the same as `x.attr = 1`)
-        // -- not through any dedicated subscript-specific check. This test
-        // names `x[0] = 1` explicitly so a future refactor of that target
-        // extraction can't silently regress the read-only invariant without
-        // a test calling it out by name, even though the message and code
-        // path are shared with the `x.attr = 1` case above.
-        assert_capability_error_message(
-            "x[0] = 1\n",
-            "only assigning to a bare name is supported so far",
+    fn subscript_assignment_to_a_bare_name_base_lowers_to_dict_set() {
+        // PR-11 Task 3 (D-113) supersedes D-105's "no subscript assignment
+        // target anywhere in this file" invariant this test used to lock in
+        // (`list[int]` alone stayed read-only-indexed; `dict[str, int]`
+        // ships `d[k] = v`). This lowering step has no type information (the
+        // same reason `ForList`'s own bare-name iterable isn't type-checked
+        // here either), so `x[0] = 1` lowers to `HirStmt::DictSet`
+        // regardless of whether `x` actually turns out to be a `list` or a
+        // `dict` -- `pycc_types` now owns rejecting a `list`-typed base with
+        // `T0033` (see that crate's own test module), relocating rather than
+        // removing the read-only-list invariant.
+        let module = pycc_parser_test_helper::parse("x[0] = 1\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::IntLiteral(0),
+                value: HirExpr::IntLiteral(1),
+            })]
         );
+    }
+
+    #[test]
+    fn subscript_assignment_to_a_non_bare_name_base_is_unsupported() {
+        // `f()[0] = 1` has no plain variable name to record as `DictSet`'s
+        // own `dict` field -- rejected explicitly rather than guessed at.
+        assert_capability_error_message(
+            "f()[0] = 1\n",
+            "only assigning to a bare-name subscript target (`name[key] = value`) is supported so far",
+        );
+    }
+
+    #[test]
+    fn a_dict_set_target_with_an_unsupported_key_propagates_the_key_error() {
+        assert_capability_error_message("x[(1, 2)] = 1\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn a_dict_set_target_with_an_unsupported_value_propagates_the_value_error() {
+        assert_capability_error_message("x[0] = (1, 2)\n", "expression kind not supported yet");
     }
 
     #[test]
@@ -1989,6 +2080,69 @@ mod tests {
                     args: vec![HirExpr::Name("v".to_string())],
                 })],
             })
+        );
+    }
+
+    // -- PR-11 Task 3 (D-113): dict[str, int] frontend HIR forms ---------
+
+    #[test]
+    fn lowers_a_dict_literal() {
+        let module = pycc_parser_test_helper::parse("x = {\"a\": 1, \"b\": 2}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::DictLiteral(vec![
+                    (
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    ),
+                    (
+                        HirExpr::StringLiteral("b".to_string()),
+                        HirExpr::IntLiteral(2),
+                    ),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_an_empty_dict_literal() {
+        // `{}` is an empty *dict* literal in Python grammar (an empty set has
+        // no literal spelling -- `set()` is a call) -- `pycc_types` rejects
+        // it (its element types can't be inferred), but lowering itself
+        // succeeds, mirroring `HirExpr::ListLiteral(vec![])`'s own split of
+        // responsibility.
+        let module = pycc_parser_test_helper::parse("x = {}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::DictLiteral(vec![]),
+            })]
+        );
+    }
+
+    #[test]
+    fn dict_unpacking_inside_a_literal_is_unsupported() {
+        assert_capability_error_message(
+            "x = {**y}\n",
+            "dict-unpacking (`**expr`) inside a dict literal is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_literal_with_an_unsupported_key_propagates_the_key_error() {
+        assert_capability_error_message("x = {(1, 2): 1}\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn a_dict_literal_with_an_unsupported_value_propagates_the_value_error() {
+        assert_capability_error_message(
+            "x = {\"a\": (1, 2)}\n",
+            "expression kind not supported yet",
         );
     }
 
