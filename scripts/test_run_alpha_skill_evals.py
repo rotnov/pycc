@@ -378,6 +378,23 @@ class AlphaSkillEvalTests(unittest.TestCase):
         with self.assertRaisesRegex(evals.EvalError, "is missing"):
             evals.run_issue_implement_case(case, skill)
 
+    def test_delegated_autopilot_closure_requires_both_conditions(self) -> None:
+        self.assertTrue(
+            evals.delegated_autopilot_closure_authorized(
+                autopilot_active=True, screen_identified_as_stale=True
+            )
+        )
+        self.assertFalse(
+            evals.delegated_autopilot_closure_authorized(
+                autopilot_active=False, screen_identified_as_stale=True
+            )
+        )
+        self.assertFalse(
+            evals.delegated_autopilot_closure_authorized(
+                autopilot_active=True, screen_identified_as_stale=False
+            )
+        )
+
     def test_issue_select_oracle_covers_its_three_scenarios(self) -> None:
         skill = evals.canonical_skill("claude", "issue-select")
         for case in evals.load_cases("issue-select"):
