@@ -89,6 +89,24 @@ pub enum MirExpr {
         dict: Box<MirExpr>,
         key: Box<MirExpr>,
     },
+    /// `{e1, e2, ...}` (mirrors `HirExpr::SetLiteral`, PR-11 Task 8). No
+    /// `ty` field: `ty()` below derives `Ty::Set(Box::new(elements[0].ty()))`
+    /// from the first element, exactly like `ListLiteral`/`DictLiteral`
+    /// above derive their own element/key-value type from their first
+    /// element/pair rather than hardcoding one. Empirically only
+    /// `Ty::Set(Box::new(Ty::Int))` ever reaches this crate today
+    /// (`pycc_types`' T0037/T0038 gates reject every other element type at
+    /// construction time), but deriving here keeps this lowering correct on
+    /// its own terms rather than baking in an assumption this crate has no
+    /// way to verify independently. Unlike `ListLiteral`/`DictLiteral`, an
+    /// *empty* `SetLiteral` is impossible from real Python source in an even
+    /// stronger sense than "`pycc_types::check` would reject it": Python's
+    /// own grammar has no empty-set-literal syntax at all (`{}` parses as an
+    /// empty `dict`, not an empty `set` -- CPython's own grammar routes a
+    /// bare `{}` to `ast.Dict`, never `ast.Set`), so `elements` is non-empty
+    /// for every `SetLiteral` `pycc_hir::lower_expr`'s own `Expr::Set` arm
+    /// could ever construct from a real parse.
+    SetLiteral(Vec<MirExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -161,6 +179,14 @@ impl MirExpr {
                     other.name()
                 ),
             },
+            MirExpr::SetLiteral(elements) => {
+                let first = elements.first().unwrap_or_else(|| {
+                    panic!(
+                        "pycc_mir: internal error: an empty set literal has no element type to derive -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
+                    )
+                });
+                Ty::Set(Box::new(first.ty()))
+            }
         }
     }
 }
@@ -218,6 +244,16 @@ pub enum MirStmt {
     ForDict {
         var: String,
         dict: String,
+        body: Vec<MirStmt>,
+    },
+    /// `for var in set:` (mirrors `HirStmt::ForList` on a set-typed base --
+    /// see `lower_stmt`'s own `HirStmt::ForList` arm for why a set-typed
+    /// base is lowered to this node instead of `MirStmt::ForList`, PR-11
+    /// Task 8, D-113). `set` is carried as the plain variable name, exactly
+    /// like `ForList`'s `list` field and `ForDict`'s `dict` field.
+    ForSet {
+        var: String,
+        set: String,
         body: Vec<MirStmt>,
     },
     Return(Option<MirExpr>),
@@ -417,22 +453,26 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
             // mechanism every other name reference in this file uses --
             // mirroring `pycc_types::check_stmt`'s own `ForList` arm
             // (`check_assignment(env, var, *elem_ty)` / `check_assignment(env,
-            // var, kv.0)`), not hardcoded to `Ty::Int`. Empirically only a
-            // `Ty::List(Box::new(Ty::Int))` or `Ty::Dict(Box::new((Ty::Str,
-            // Ty::Int)))` binding ever reaches this arm today (`pycc_types`'
-            // T0034/T0036 gates reject every other element/key-value
-            // combination before HIR ever constructs one -- see those gates'
-            // own comments and this crate's own genericity tests), but
-            // deriving here keeps this lowering correct on its own terms
-            // rather than baking in an assumption this crate has no way to
-            // verify independently. `HirStmt::ForList` is reused
-            // unconditionally by `pycc_hir`'s own lowering for any bare-name
-            // iterable, dict or list alike (it has no type information to
-            // pick a different node) -- this is the point where the real
-            // type is resolved and where a dict-typed binding is routed into
-            // `MirStmt::ForDict` instead of `MirStmt::ForList`, mirroring
-            // `lower_expr`'s own `HirExpr::Subscript` arm doing the same
-            // list/dict routing for reads.
+            // var, kv.0)` / `check_assignment(env, var, *elem_ty)` for the
+            // set case), not hardcoded to `Ty::Int`. Empirically only a
+            // `Ty::List(Box::new(Ty::Int))`, `Ty::Dict(Box::new((Ty::Str,
+            // Ty::Int)))`, or `Ty::Set(Box::new(Ty::Int))` binding ever
+            // reaches this arm today (`pycc_types`' T0034/T0036/T0037/T0038
+            // gates reject every other element/key-value combination before
+            // HIR ever constructs one -- see those gates' own comments and
+            // this crate's own genericity tests), but deriving here keeps
+            // this lowering correct on its own terms rather than baking in
+            // an assumption this crate has no way to verify independently.
+            // `HirStmt::ForList` is reused unconditionally by `pycc_hir`'s
+            // own lowering for any bare-name iterable, dict, list, or set
+            // alike (it has no type information to pick a different node)
+            // -- this is the point where the real type is resolved and
+            // where a dict- or set-typed binding is routed into
+            // `MirStmt::ForDict`/`MirStmt::ForSet` instead of
+            // `MirStmt::ForList`, mirroring `lower_expr`'s own
+            // `HirExpr::Subscript` arm doing the same list/dict routing for
+            // reads (subscripting a set is rejected earlier, by
+            // `pycc_types`' own T0033, so there is no set counterpart there).
             match lookup(scopes, list) {
                 Ty::List(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
@@ -452,8 +492,23 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
                         body,
                     }
                 }
+                // `for x in s:` (PR-11 Task 8, D-113): iterates a set's own
+                // elements, binding the loop variable as the set's element
+                // type -- mirrors the `Ty::Dict` arm immediately above,
+                // which mirrors `pycc_types::check_stmt`'s own identical
+                // `Ty::Set(elem_ty) => *elem_ty` arm (added in that crate's
+                // Task 7 fix round).
+                Ty::Set(elem_ty) => {
+                    bind_variable(scopes, var.clone(), *elem_ty);
+                    let body = body.iter().map(|s| lower_stmt(s, scopes)).collect();
+                    MirStmt::ForSet {
+                        var: var.clone(),
+                        set: list.clone(),
+                        body,
+                    }
+                }
                 other => panic!(
-                    "pycc_mir: internal error: `{list}` is neither a list nor a dict (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    "pycc_mir: internal error: `{list}` is neither a list, dict, nor set (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
                     other.name()
                 ),
             }
@@ -562,27 +617,9 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
                 .map(|(k, v)| (lower_expr(k, scopes), lower_expr(v, scopes)))
                 .collect(),
         ),
-        // PR-11 Task 7 (`pycc_hir`/`pycc_types`) adds `HirExpr::SetLiteral`
-        // and teaches `pycc_types::check` to accept `set[int]` literals as
-        // valid, type-checked code -- MIR lowering for it is PR-11 Task 8's
-        // own scope, not this task's, so this arm is a deliberate, temporary
-        // panic stub that exists only so this crate's exhaustive `match`
-        // still compiles against `pycc_hir`'s new variant. Learning from
-        // `DictLiteral`'s own Task 3-to-4 precedent above (whose first-draft
-        // doc comment wrongly claimed unreachability, corrected only after
-        // review flagged it -- see git history), this comment states the
-        // truth up front: **this panic IS reachable today** -- a real
-        // `set[int]` program (e.g. `x = {1, 2}\n`) type-checks cleanly
-        // (`pycc check` exits 0) and then panics here via `pycc build`/`pycc
-        // run`, since this crate has no real lowering for it yet. That is
-        // expected, intra-plan sequencing (mirroring `DictLiteral`'s own gap
-        // above), not a bug to silence here. Task 8 replaces this arm with
-        // real lowering and deletes the `should_panic` test that exercises
-        // this stub (`set_literal_mir_lowering_is_not_implemented_yet`
-        // below).
-        HirExpr::SetLiteral(_) => panic!(
-            "pycc_mir: internal error: set[int] MIR lowering is not implemented yet (PR-11 Task 8)"
-        ),
+        HirExpr::SetLiteral(elements) => {
+            MirExpr::SetLiteral(elements.iter().map(|e| lower_expr(e, scopes)).collect())
+        }
     }
 }
 
@@ -1712,6 +1749,10 @@ mod tests {
             .ty(),
             Ty::Int
         );
+        assert_eq!(
+            MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]).ty(),
+            Ty::Set(Box::new(Ty::Int))
+        );
     }
 
     #[test]
@@ -1988,12 +2029,12 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "neither a list nor a dict")]
-    fn a_for_list_loop_over_a_non_list_non_dict_binding_panics_with_an_internal_error() {
+    #[should_panic(expected = "neither a list, dict, nor set")]
+    fn a_for_list_loop_over_a_non_list_non_dict_non_set_binding_panics_with_an_internal_error() {
         // Same reasoning again: `pycc_types` already rejects `for v in x:`
-        // when `x` is neither a list nor a dict (T0033), but the defensive
-        // panic path in `lower_stmt`'s `ForList` arm still needs direct
-        // coverage.
+        // when `x` is neither a list, dict, nor set (T0033), but the
+        // defensive panic path in `lower_stmt`'s `ForList` arm still needs
+        // direct coverage.
         let hir = HirModule {
             items: vec![
                 HirItem::TopLevelStmt(HirStmt::Assign {
@@ -2204,23 +2245,74 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "set[int] MIR lowering is not implemented yet")]
-    fn set_literal_mir_lowering_is_not_implemented_yet() {
-        // PR-11 Task 7 (`pycc_hir`/`pycc_types`) makes `HirExpr::SetLiteral`
-        // constructible and type-checkable; PR-11 Task 8 is what actually
-        // teaches this crate to lower it. Until then, this exhaustive-match
-        // arm is a deliberate panic stub (see its own doc comment in
-        // `lower_expr` above) -- reachable today from a real, type-checked
-        // `set[int]` program (`pycc check` accepts `x = {1, 2}`, `pycc
-        // build`/`pycc run` on it panics here). This test exists only to
-        // cover that stub region under the D-014 coverage gate, and Task 8
-        // should delete it once real lowering replaces the panic.
+    #[should_panic(expected = "an empty set literal has no element type to derive")]
+    fn an_empty_set_literals_ty_panics_with_an_internal_error() {
+        // By construction, `pycc_types::check` already rejects an empty set
+        // literal (mirroring the empty-list/empty-dict-literal cases above)
+        // before any HIR reaches `pycc_mir` -- and, unlike those two, an
+        // empty `SetLiteral` cannot even be *written* in real Python source
+        // (`{}` always parses as an empty `dict`, never an empty `set`) --
+        // but the panic path itself still needs direct coverage.
+        MirExpr::SetLiteral(vec![]).ty();
+    }
+
+    #[test]
+    fn set_literal_lowers_to_mir_set_literal_with_correct_ty() {
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
-                value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]),
+                value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
             })],
         };
-        build(&hir);
+        let mir = build(&hir);
+        let expected_value =
+            MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]);
+        assert_eq!(expected_value.ty(), Ty::Set(Box::new(Ty::Int)));
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: expected_value,
+            })
+        );
+    }
+
+    #[test]
+    fn for_x_in_set_lowers_to_mir_for_set() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::SetLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ForList {
+                    var: "v".to_string(),
+                    list: "x".to_string(),
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::Name("v".to_string())],
+                    })],
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::ForSet {
+                var: "v".to_string(),
+                set: "x".to_string(),
+                body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "v".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })],
+            })
+        );
     }
 }

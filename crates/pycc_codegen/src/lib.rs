@@ -1668,6 +1668,28 @@ fn emit_expr<'ctx>(
                 .into_int_value();
             Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_value))
         }
+        // PR-11 Task 8 (`pycc_mir`) added `MirExpr::SetLiteral` and taught
+        // that crate's own lowering to produce it for `set[int]` literals --
+        // real codegen for it is PR-11 Task 9's own scope, not this task's,
+        // so this arm is a deliberate, temporary panic stub that exists only
+        // so this crate's exhaustive `match` still compiles against
+        // `pycc_mir`'s new variant. Mirroring `MirExpr::DictLiteral`/
+        // `DictGet`'s own Task 4-to-5 precedent above (whose doc comment
+        // states its reachability up front rather than guessing), this
+        // panic **is reachable today, via the real CLI**, not unreachable:
+        // `pycc check` already accepts a `set[int]` program (e.g. `x = {1,
+        // 2, 3}\n`) and `pycc_mir::build` now really lowers it (no panic
+        // there -- see that crate's own
+        // `set_literal_lowers_to_mir_set_literal_with_correct_ty` test), so
+        // `pycc build`/`pycc run` on that exact program reaches this arm and
+        // panics here, because this crate has no real codegen for it yet.
+        // That is expected, intra-plan sequencing (mirroring `dict[str,
+        // int]`'s own PR-11 Task 4/5 split) -- not a bug to silence here.
+        // Task 9 replaces this arm with real codegen and deletes the
+        // `should_panic` test that exercises this stub.
+        MirExpr::SetLiteral(_) => panic!(
+            "pycc_codegen: internal error: set[int] expression codegen is not implemented yet (PR-11 Task 9)"
+        ),
     }
 }
 
@@ -2289,6 +2311,28 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // every other container arm above.
         MirStmt::ForDict { var, body, .. } => {
             bindings.entry(var.clone()).or_insert(pycc_mir::Ty::Str);
+            for stmt in body {
+                collect_stmt_bindings(stmt, bindings);
+            }
+        }
+        // `MirStmt::ForSet` (PR-11 Task 8), produced when a `for x in s:`
+        // HIR loop's base resolves to a set-typed binding (mirrors
+        // `MirStmt::ForDict` immediately above, which is produced for the
+        // dict-typed case). Unlike `ForDict`'s *current* version of this
+        // arm, this one deliberately does *not* also bind `var`'s own
+        // storage slot yet -- mirroring `ForDict`'s own Task 4-stage version
+        // of this arm (see git history/that arm's own comment): what that
+        // slot should look like is PR-11 Task 9's own codegen design
+        // decision, not this task's. Recursing into `body` is real,
+        // permanent behavior regardless of that decision, though -- it is
+        // what lets a nested, ordinary statement (e.g. `for x in s:\n y =
+        // 1\n`) still get `y`'s own binding collected, exactly like every
+        // other container arm above -- and `emit_stmt`'s own `MirStmt::
+        // ForSet` arm (not this function) is what actually panics honestly
+        // for the loop itself, so skipping this recursion here would
+        // silently swallow a *different*, unrelated binding instead of
+        // leaving that one clean failure point.
+        MirStmt::ForSet { body, .. } => {
             for stmt in body {
                 collect_stmt_bindings(stmt, bindings);
             }
@@ -3523,6 +3567,35 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(after_bb);
             Ok(())
         }
+        // PR-11 Task 8 (`pycc_mir`) added `MirStmt::ForSet`, produced when a
+        // `for x in s:` HIR loop's base resolves to a set-typed binding --
+        // real codegen for it is PR-11 Task 9's own scope, not this task's,
+        // so this arm is a deliberate, temporary panic stub that exists only
+        // so this crate's exhaustive `match` still compiles against
+        // `pycc_mir`'s new variant. Unlike `emit_expr`'s own `MirExpr::
+        // SetLiteral` stub above (genuinely reachable today via the real
+        // CLI, confirmed by direct repro), **this specific arm is not yet
+        // reachable from any real, type-checked program**: every real
+        // program containing `for x in s:` must also contain an earlier `s =
+        // {...}` assignment (`pycc_types`' own T0033 rejects iterating an
+        // undefined/wrongly-typed name), and `MirStmt::Assign`'s own arm
+        // above always calls `emit_expr` on that assignment's value before
+        // this statement is ever emitted -- so a real `set[int]` program
+        // reaches `emit_expr`'s `SetLiteral` stub and panics there first,
+        // never here. This arm is exercised today only by hand-built MIR
+        // that skips straight to a bare `ForSet` statement with no preceding
+        // literal (see this crate's own
+        // `a_for_set_statement_is_not_yet_supported_by_codegen` test, which
+        // does exactly that, mirroring `MirStmt::ForDict`'s own identical
+        // Task 4-stage stub and its test). It becomes reachable from a real
+        // program once Task 9 implements `SetLiteral` codegen -- at which
+        // point a real `set[int]` value can exist at runtime without
+        // hitting `emit_expr`'s stub first, making *this* arm the next
+        // honest failure point for `for x in s:` specifically, until Task 9
+        // also replaces it with real codegen and deletes that test.
+        MirStmt::ForSet { .. } => panic!(
+            "pycc_codegen: internal error: set[int] statement codegen is not implemented yet (PR-11 Task 9)"
+        ),
     }
 }
 
@@ -6444,6 +6517,29 @@ mod tests {
     }
 
     #[test]
+    fn collect_stmt_bindings_recurses_into_a_for_set_loop_body_without_binding_its_own_var() {
+        // `MirStmt::ForSet` (PR-11 Task 8) deliberately does not bind its
+        // own loop variable here -- mirroring `MirStmt::ForDict`'s own
+        // Task-4-stage version of this arm (see git history and this arm's
+        // own comment): that storage-slot scheme is PR-11 Task 9's own
+        // design decision. It must still recurse into `body`, exactly like
+        // `ForList`/`ForDict`/`ForRange`/`If`/`While` above, so a nested,
+        // ordinary statement's binding is not silently dropped.
+        let stmt = MirStmt::ForSet {
+            var: "v".to_string(),
+            set: "s".to_string(),
+            body: vec![MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::IntLiteral(1),
+            }],
+        };
+        let mut bindings = BTreeMap::new();
+        collect_stmt_bindings(&stmt, &mut bindings);
+        assert_eq!(bindings.get("y"), Some(&Ty::Int));
+        assert_eq!(bindings.get("v"), None);
+    }
+
+    #[test]
     #[should_panic(expected = "binary operators are not supported on list[int] yet")]
     fn a_list_result_binop_is_not_yet_supported() {
         // No real Python operator produces a `BinOp` typed `list[int]`
@@ -7027,6 +7123,68 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"z\n1\n1\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "set[int] expression codegen is not implemented yet (PR-11 Task 9)")]
+    fn a_set_literal_expression_is_not_yet_supported_by_codegen() {
+        // PR-11 Task 8 (`pycc_mir`) added real `MirExpr::SetLiteral`
+        // lowering; PR-11 Task 9 is what actually teaches this crate to
+        // generate code for it. This is a genuine, real-CLI-reachable
+        // repro, not hand-crafted malformed MIR: `x = {1, 2, 3}` already
+        // type-checks cleanly and lowers cleanly through `pycc_mir::build`
+        // (no panic there -- see that crate's own
+        // `set_literal_lowers_to_mir_set_literal_with_correct_ty` test), so
+        // `pycc build`/`pycc run` on that exact program reaches `emit_expr`'s
+        // new stub arm and panics here, because this crate has no real
+        // codegen for it yet.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::SetLiteral(vec![
+                    MirExpr::IntLiteral(1),
+                    MirExpr::IntLiteral(2),
+                    MirExpr::IntLiteral(3),
+                ]),
+            })],
+        };
+        let dir = tempfile_dir("set_literal_codegen_panics");
+        let _ = compile_to_object(&mir, &dir.join("set_literal_codegen_panics.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "set[int] statement codegen is not implemented yet (PR-11 Task 9)")]
+    fn a_for_set_statement_is_not_yet_supported_by_codegen() {
+        // PR-11 Task 8 (`pycc_mir`) added real `MirStmt::ForSet` lowering;
+        // PR-11 Task 9 is what actually teaches this crate to generate code
+        // for it. The underlying real-source scenario is `x = {1, 2,
+        // 3}\nfor v in x:\n    print(v)\n`, which already type-checks and
+        // lowers cleanly to `MirStmt::ForSet` (see `pycc_mir`'s own
+        // `for_x_in_set_lowers_to_mir_for_set` test) -- but this test
+        // deliberately omits the preceding `x = {1, 2, 3}` assignment and
+        // references an otherwise-unbound `x` directly: `emit_stmt`'s new
+        // stub arm panics unconditionally without ever reading `set`, so no
+        // binding for `x` is needed to reach it, and including that
+        // assignment here would have made this test accidentally exercise
+        // `emit_expr`'s *own* `MirExpr::SetLiteral` stub (a few statements
+        // earlier, in the same pipeline run) instead of this one -- the two
+        // stubs panic with deliberately distinct messages specifically so a
+        // test like this one cannot silently pass `#[should_panic]` while
+        // covering the wrong arm. `collect_stmt_bindings`'s own
+        // `MirStmt::ForSet` arm only recurses into `body` without
+        // panicking (see
+        // `collect_stmt_bindings_recurses_into_a_for_set_loop_body_without_binding_its_own_var`
+        // above), so this statement passes cleanly through that earlier
+        // pass and this is genuinely the first and only place it panics.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ForSet {
+                var: "v".to_string(),
+                set: "x".to_string(),
+                body: vec![],
+            })],
+        };
+        let dir = tempfile_dir("for_set_codegen_panics");
+        let _ = compile_to_object(&mir, &dir.join("for_set_codegen_panics.o"), None, false);
     }
 
     #[test]
