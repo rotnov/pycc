@@ -180,6 +180,17 @@ pub enum HirExpr {
     /// `SetLiteral` can only ever be constructed by hand-built HIR (e.g. a
     /// `pycc_types` unit test), never by `lower_expr` itself.
     SetLiteral(Vec<HirExpr>),
+    /// `(e1, e2, ...)`. Element *heterogeneity* is deliberately allowed at
+    /// this HIR layer -- unlike `ListLiteral`/`SetLiteral`, a tuple's whole
+    /// point is mixing element types (D-116). `pycc_types` still gates which
+    /// element *types* are accepted (int/bool/float only, T0039) and which
+    /// index forms are readable (literal in-range only, T0040); this
+    /// variant only records the syntactic shape.
+    ///
+    /// Only a parenthesized/bare tuple literal (`(1, 2)`, `1, 2`) lowers to
+    /// this form. Tuple-unpacking assignment (`a, b = t`) is a distinct,
+    /// deferred capability (D-116) with no HIR shape of its own yet.
+    TupleLiteral(Vec<HirExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -685,6 +696,13 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                 .map(lower_expr)
                 .collect::<Result<Vec<_>, _>>()?,
         ),
+        Expr::Tuple(tuple) => HirExpr::TupleLiteral(
+            tuple
+                .elts
+                .iter()
+                .map(lower_expr)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
         Expr::Subscript(sub) => HirExpr::Subscript {
             base: Box::new(lower_expr(&sub.value)?),
             index: Box::new(lower_expr(&sub.slice)?),
@@ -937,53 +955,59 @@ mod tests {
             Span::new(13, 17),
         );
         assert_capability_error(
-            "x = (1, 2)\n",
+            "x = lambda: 1\n",
             "expression kind not supported yet",
-            Span::new(4, 10),
+            Span::new(4, 13),
         );
     }
 
     #[test]
     fn capability_errors_propagate_through_every_supported_container() {
-        // Tuple literals (`(1, 2)`) are this table's "genuinely unhandled at
-        // every level" poison fixture -- a list literal used to fill this
-        // role (see `a_tuple_literal_expression_is_unsupported`'s own
-        // comment) until Task 7 (D-105) added list-literal lowering.
+        // `(1, 2)` was this table's "genuinely unhandled at every level"
+        // poison fixture -- a list literal used to fill this role (see
+        // `a_tuple_literal_expression_lowers_successfully`'s own comment)
+        // until Task 7 (D-105) added list-literal lowering, and a tuple
+        // literal took over in turn until this task (PR-11b Task 2, D-116)
+        // added tuple-literal lowering too. `lambda: 1` (parenthesized
+        // throughout, purely to dodge grammar ambiguity with the
+        // surrounding syntax -- not because any position here actually
+        // requires it) takes over now, since `lower_expr` still has no
+        // `Expr::Lambda` arm.
         let cases = [
             ("function body", "def _f():\n    pass\n"),
-            ("if test", "if (1, 2):\n    print(1)\n"),
+            ("if test", "if (lambda: 1):\n    print(1)\n"),
             ("if else body", "if True:\n    print(1)\nelse:\n    pass\n"),
-            ("while test", "while (1, 2):\n    print(1)\n"),
+            ("while test", "while (lambda: 1):\n    print(1)\n"),
             ("while body", "while True:\n    pass\n"),
             (
                 "one-argument range stop",
-                "for i in range((1, 2)):\n    print(i)\n",
+                "for i in range((lambda: 1)):\n    print(i)\n",
             ),
             (
                 "two-argument range start",
-                "for i in range((1, 2), 1):\n    print(i)\n",
+                "for i in range((lambda: 1), 1):\n    print(i)\n",
             ),
             (
                 "two-argument range stop",
-                "for i in range(0, (1, 2)):\n    print(i)\n",
+                "for i in range(0, (lambda: 1)):\n    print(i)\n",
             ),
             (
                 "three-argument range start",
-                "for i in range((1, 2), 1, 1):\n    print(i)\n",
+                "for i in range((lambda: 1), 1, 1):\n    print(i)\n",
             ),
             (
                 "three-argument range stop",
-                "for i in range(0, (1, 2), 1):\n    print(i)\n",
+                "for i in range(0, (lambda: 1), 1):\n    print(i)\n",
             ),
             (
                 "three-argument range step",
-                "for i in range(0, 1, (1, 2)):\n    print(i)\n",
+                "for i in range(0, 1, (lambda: 1)):\n    print(i)\n",
             ),
             ("for body", "for i in range(1):\n    pass\n"),
-            ("return value", "def _f():\n    return (1, 2)\n"),
+            ("return value", "def _f():\n    return (lambda: 1)\n"),
             (
                 "elif test",
-                "if True:\n    print(1)\nelif (1, 2):\n    print(2)\n",
+                "if True:\n    print(1)\nelif (lambda: 1):\n    print(2)\n",
             ),
             (
                 "elif body",
@@ -993,11 +1017,11 @@ mod tests {
                 "nested else body",
                 "if True:\n    print(1)\nelif True:\n    print(2)\nelse:\n    pass\n",
             ),
-            ("binary left operand", "x = (1, 2) + 1\n"),
-            ("binary right operand", "x = 1 + (1, 2)\n"),
-            ("f-string interpolation", "x = f\"{(1, 2)}\"\n"),
-            ("comparison left operand", "x = (1, 2) == 1\n"),
-            ("comparison right operand", "x = 1 == (1, 2)\n"),
+            ("binary left operand", "x = (lambda: 1) + 1\n"),
+            ("binary right operand", "x = 1 + (lambda: 1)\n"),
+            ("f-string interpolation", "x = f\"{(lambda: 1)}\"\n"),
+            ("comparison left operand", "x = (lambda: 1) == 1\n"),
+            ("comparison right operand", "x = 1 == (lambda: 1)\n"),
         ];
 
         for (container, source) in cases {
@@ -1241,12 +1265,16 @@ mod tests {
 
     #[test]
     fn a_dict_set_target_with_an_unsupported_key_propagates_the_key_error() {
-        assert_capability_error_message("x[(1, 2)] = 1\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("x[lambda: 1] = 1\n", "expression kind not supported yet");
     }
 
     #[test]
     fn a_dict_set_target_with_an_unsupported_value_propagates_the_value_error() {
-        assert_capability_error_message("x[0] = (1, 2)\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("x[0] = lambda: 1\n", "expression kind not supported yet");
     }
 
     #[test]
@@ -1259,7 +1287,9 @@ mod tests {
         // `if` itself is supported (Task 8); `pass` inside it is not -- no
         // v0.1 grammar construct needs it (empty bodies aren't reachable
         // through anything pycc lowers) and it exercises the same catch-all
-        // as `a_tuple_literal_expression_is_unsupported` does for expressions.
+        // that `unsupported_statement_and_expression_return_spanned_capability_diagnostics`
+        // does for expressions (a tuple literal filled that role there
+        // until this task; a lambda does now, D-116).
         assert_capability_error_message("if True:\n    pass\n", "statement kind not supported yet");
     }
 
@@ -1437,15 +1467,22 @@ mod tests {
     }
 
     #[test]
-    fn a_tuple_literal_expression_is_unsupported() {
-        // Before Task 7 (D-105), a list literal filled this role (every
-        // other kind handled so far -- numbers, names, calls, binops,
-        // bools, comparisons -- has its own dedicated arm) as the "genuinely
-        // unhandled at every level" fixture that exercises the final catch-
-        // all arm. List literals are supported now (see
-        // `lowers_a_list_literal`), so a tuple literal -- dict/set/tuple
-        // containers are out of this PR's scope -- takes over that role.
-        assert_capability_error_message("x = (1, 2)\n", "expression kind not supported yet");
+    fn a_tuple_literal_expression_lowers_successfully() {
+        // Tuple literals were this file's own "genuinely unhandled at every
+        // level" fixture before this task (list/dict/set literals filled
+        // that role earlier and became supported in turn). Now that
+        // `Expr::Tuple` has a real arm, this asserts the actual shape
+        // rather than a lowering failure -- `pycc_types` (not this crate)
+        // now owns which element types/index forms are valid (D-116).
+        let module = pycc_parser_test_helper::parse("x = (1, 2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+            })
+        );
     }
 
     #[test]
@@ -2006,7 +2043,12 @@ mod tests {
     fn an_annotated_assignment_with_an_unsupported_value_returns_a_capability_error() {
         // Exercises the `lower_expr(...)?` early-return branch for
         // AnnAssign's value expression specifically.
-        assert_capability_error_message("x: int = (1, 2)\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "x: int = lambda: 1\n",
+            "expression kind not supported yet",
+        );
     }
 
     // -- Task 7 (D-105): list[int] frontend HIR forms --------------------
@@ -2158,13 +2200,20 @@ mod tests {
 
     #[test]
     fn a_dict_literal_with_an_unsupported_key_propagates_the_key_error() {
-        assert_capability_error_message("x = {(1, 2): 1}\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "x = {(lambda: 1): 1}\n",
+            "expression kind not supported yet",
+        );
     }
 
     #[test]
     fn a_dict_literal_with_an_unsupported_value_propagates_the_value_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
         assert_capability_error_message(
-            "x = {\"a\": (1, 2)}\n",
+            "x = {\"a\": (lambda: 1)}\n",
             "expression kind not supported yet",
         );
     }
@@ -2190,7 +2239,9 @@ mod tests {
 
     #[test]
     fn a_set_literal_with_an_unsupported_element_propagates_the_element_error() {
-        assert_capability_error_message("x = {(1, 2)}\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("x = {(lambda: 1)}\n", "expression kind not supported yet");
     }
 
     #[test]
@@ -2264,28 +2315,92 @@ mod tests {
 
     #[test]
     fn a_list_literal_with_an_unsupported_element_propagates_the_element_error() {
-        assert_capability_error_message("x = [(1, 2)]\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("x = [(lambda: 1)]\n", "expression kind not supported yet");
     }
 
     #[test]
     fn a_subscript_with_an_unsupported_base_propagates_the_base_error() {
-        assert_capability_error_message("y = (1, 2)[0]\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "y = (lambda: 1)[0]\n",
+            "expression kind not supported yet",
+        );
     }
 
     #[test]
     fn a_subscript_with_an_unsupported_index_propagates_the_index_error() {
-        assert_capability_error_message("y = x[(1, 2)]\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("y = x[lambda: 1]\n", "expression kind not supported yet");
     }
 
     #[test]
     fn an_append_with_an_unsupported_argument_propagates_the_argument_error() {
-        assert_capability_error_message("x.append((1, 2))\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "x.append(lambda: 1)\n",
+            "expression kind not supported yet",
+        );
     }
 
     #[test]
     fn a_for_list_body_with_an_unsupported_statement_propagates_the_body_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
         assert_capability_error_message(
-            "x = [1, 2, 3]\nfor v in x:\n    (1, 2)\n",
+            "x = [1, 2, 3]\nfor v in x:\n    lambda: 1\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    // -- PR-11b Task 2 (D-116): tuple[...] frontend HIR forms -------------
+
+    #[test]
+    fn a_bare_unparenthesized_tuple_expression_lowers_the_same_as_parenthesized() {
+        // Python's tuple literal syntax does not require parentheses
+        // (`1, 2` and `(1, 2)` parse to the same `Expr::Tuple` node); this
+        // locks in that this crate's own lowering treats both identically,
+        // since `lower_expr` never inspects `ExprTuple::parenthesized`.
+        let module = pycc_parser_test_helper::parse("x = 1, 2\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+            })
+        );
+    }
+
+    #[test]
+    fn a_heterogeneous_tuple_literal_lowers_with_mixed_element_kinds() {
+        // Unlike `ListLiteral`/`SetLiteral`, this crate does not reject
+        // mixed element kinds at the HIR layer -- D-116 makes heterogeneity
+        // tuple's own defining feature, judged (for element *type*, not
+        // syntactic kind) entirely by `pycc_types`, not here.
+        let module = pycc_parser_test_helper::parse("x = (1, True, 2.5)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::TupleLiteral(vec![
+                    HirExpr::IntLiteral(1),
+                    HirExpr::BoolLiteral(true),
+                    HirExpr::FloatLiteral(2.5),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn a_tuple_element_that_fails_to_lower_propagates_its_own_error() {
+        assert_capability_error_message(
+            "x = (1, lambda: 1)\n",
             "expression kind not supported yet",
         );
     }
