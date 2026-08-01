@@ -68,7 +68,7 @@ jobs:
           done
           {
             echo "### frontend-perf-shadow-ubuntu: identical source, both phases"
-            ruby scripts/check_replicated_paired_perf_regression.rb \
+            ruby current/scripts/check_replicated_paired_perf_regression.rb \
               target/criterion/pycc_check_frontend_fixture/current \
               target/criterion/pycc_check_frontend_fixture/previous \
               false || true
