@@ -85,8 +85,33 @@ parser produces a valid `CmpOp::In` node like any other comparison
 operator), but `pycc_hir`'s lowering step rejects it with the same generic
 `C0001` capability diagnostic used for `is`/`is not`/chained comparisons,
 so it has no HIR/type-checker/codegen support anywhere in this compiler
-yet (D-113). `tuple[...]` remains unimplemented, pending its own
-follow-up plan.
+yet (D-113).
+
+A third slice (D-115/D-116, PR-11b) adds `tuple[...]`, structurally
+different from the first two: every v0.2-accepted element type
+(`int`/`bool`/`float`, any mix, any arity ≥ 1) is a fixed-width scalar with
+a compile-time-known count, so `pycc_codegen` represents a tuple as an LLVM
+struct held by value (an SSA aggregate, built with `insertvalue` and read
+with `extractvalue`) rather than a `pycc_rt` heap object -- no allocation,
+no pointer, no refcounting question, unlike `list[int]`/`dict[str, int]`/
+`set[int]`. `t[k]` type-checks only for a literal, non-negative, in-range
+integer index (`T0040`), stricter than `list[int]`'s runtime-checked index,
+since a heterogeneous tuple's element type at position `k` is only knowable
+when `k` is known at compile time; any other element type is rejected
+before codegen with `T0039`, mirroring `T0034`/`T0036`/`T0038`. Both
+module-global and function-local tuple storage work end to end. Passing or
+returning a tuple value across a function boundary is implemented at the
+codegen layer (`build_call_to`, `MirStmt::Return`, and `emit_assign` all
+accept `Scalar::Tuple` with a plain pass-through) but is not yet reachable
+from real, unannotated Python source: `pycc_types`' private-helper
+signature-inference solver has no unification-friendly representation for
+any container literal (`list`/`dict`/`set`/`tuple` alike), so an entirely
+unannotated helper's parameter or return type can never be inferred as a
+container type from real source today -- a pre-existing limitation this
+slice surfaced but did not introduce (see `docs/DECISIONS.md`'s D-116
+point 4 correction note). `for x in t:` iteration, tuple-unpacking
+assignment (`a, b = t`), and a `tuple[...]` annotation syntax remain
+unimplemented, tracked as `docs/ROADMAP.md` follow-ups.
 
 Function items carry their parameter and return types, while call
 expressions retain only the bare callee name plus ordered argument
