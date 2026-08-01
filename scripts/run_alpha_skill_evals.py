@@ -91,11 +91,13 @@ ISSUE_IMPLEMENT_CONTRACT = (
     "Do not close",
     "touching another issue",
     "Never execute it directly",
+    "Never close on suspicion",
 )
 ISSUE_SELECT_CONTRACT = (
     "Standing autopilot directive in effect",
     "the repository's own priority markers rank first",
     "never a command to execute directly",
+    "P1:",
 )
 CommandRunner = Callable[
     [list[str], Path],
@@ -149,13 +151,17 @@ def plan_publication_allowed(state: PlanPublicationState) -> bool:
     )
 
 
-def triage_action(*, fully_resolved: bool, partially_resolved: bool) -> str:
-    """issue-implement's four-outcome triage table, the two write-relevant arms."""
+def triage_action(
+    *, fully_resolved: bool, partially_resolved: bool, reconstructible: bool
+) -> str:
+    """issue-implement's four-outcome triage table, all four outcomes distinct."""
     if fully_resolved:
         return "close"
     if partially_resolved:
         return "narrow-no-close"
-    return "proceed-or-report"
+    if reconstructible:
+        return "proceed"
+    return "inconclusive-stop-and-report"
 
 
 # issue-implement's "## Authorized writes" enumeration (items 1-5): every
@@ -167,6 +173,7 @@ ISSUE_IMPLEMENT_AUTHORIZED_ACTIONS = {
     "push_pr",
     "thread_reply",
     "merge",
+    "close_issue",
 }
 
 
@@ -607,7 +614,9 @@ def run_issue_implement_case(case: dict[str, Any], skill_text: str) -> None:
     runner_name = case["runner"]
     expected = case["expected_output"]
     if runner_name == "partial-resolution-never-closes":
-        action = triage_action(fully_resolved=False, partially_resolved=True)
+        action = triage_action(
+            fully_resolved=False, partially_resolved=True, reconstructible=True
+        )
         required = ("narrowed with a comment", "never closed")
         if action == "close":
             raise EvalError(f"{runner_name} closed a partially resolved issue")

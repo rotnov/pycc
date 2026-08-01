@@ -300,18 +300,30 @@ class AlphaSkillEvalTests(unittest.TestCase):
         for case in evals.load_cases("issue-implement"):
             evals.run_issue_implement_case(case, skill)
 
-    def test_issue_implement_triage_never_closes_a_partial_resolution(self) -> None:
+    def test_issue_implement_triage_distinguishes_every_outcome(self) -> None:
         self.assertEqual(
-            evals.triage_action(fully_resolved=False, partially_resolved=True),
+            evals.triage_action(
+                fully_resolved=False, partially_resolved=True, reconstructible=True
+            ),
             "narrow-no-close",
         )
         self.assertEqual(
-            evals.triage_action(fully_resolved=True, partially_resolved=False),
+            evals.triage_action(
+                fully_resolved=True, partially_resolved=False, reconstructible=True
+            ),
             "close",
         )
         self.assertEqual(
-            evals.triage_action(fully_resolved=False, partially_resolved=False),
-            "proceed-or-report",
+            evals.triage_action(
+                fully_resolved=False, partially_resolved=False, reconstructible=True
+            ),
+            "proceed",
+        )
+        self.assertEqual(
+            evals.triage_action(
+                fully_resolved=False, partially_resolved=False, reconstructible=False
+            ),
+            "inconclusive-stop-and-report",
         )
 
     def test_issue_implement_writes_require_both_a_named_issue_and_an_authorized_action(
@@ -335,6 +347,13 @@ class AlphaSkillEvalTests(unittest.TestCase):
         self.assertFalse(
             evals.issue_implement_write_authorized(
                 action="force_push_foreign", targets_named_issue=True
+            )
+        )
+
+    def test_issue_implement_close_issue_is_an_authorized_action(self) -> None:
+        self.assertTrue(
+            evals.issue_implement_write_authorized(
+                action="close_issue", targets_named_issue=True
             )
         )
 
