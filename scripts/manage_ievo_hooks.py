@@ -845,8 +845,10 @@ def ensure_cli_root_is_not_redirected(root: Path) -> None:
     # belongs. Walks every ancestor component of the caller-supplied path
     # itself (root.absolute() only adds the cwd prefix when relative -- it
     # never follows a symlink) and rejects the root outright if it is
-    # currently a mount point, matching D-081's symlink/reparse/mount
-    # redirection contract at the one seam that can still see the raw path.
+    # currently a mount point, completing D-081's symlink/reparse/mount
+    # redirection contract at the one seam that can still see the raw path
+    # (D-113 records why this is a separate function, not an extension of
+    # ensure_root_is_a_real_directory below).
     absolute_root = root.absolute()
     current = Path(absolute_root.anchor)
     try:

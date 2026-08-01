@@ -2396,6 +2396,64 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
 
+    @unittest.skipUnless(os.name == "nt", "Windows junction regression")
+    def test_junctioned_root_ancestor_rejects_lifecycle_mutation_through_the_cli(
+        self,
+    ) -> None:
+        # #169 follow-up: Windows sibling of
+        # test_symlinked_root_ancestor_rejects_lifecycle_mutation_through_
+        # the_cli above -- an *ancestor* junction, not the leaf itself
+        # (test_junctioned_root_rejects_lifecycle_mutation_through_the_cli
+        # covers that separate, leaf-only case). Without this, the
+        # ancestor-walk branch of ensure_cli_root_is_not_redirected -- the
+        # exact code this reopened #169 -- would have no coverage on the
+        # required native Windows matrix, only on the macOS discovery run.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            real_parent = workspace / "real-parent"
+            root = real_parent / "repo"
+            root.mkdir(parents=True)
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias_parent = workspace / "alias-parent"
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(alias_parent), str(real_parent)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(alias_parent / "repo"),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(
+                result.stderr,
+                "--root contains a symlink component.*" + re.escape(str(alias_parent)),
+            )
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
