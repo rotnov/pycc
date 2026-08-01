@@ -358,7 +358,14 @@ tree without touching an unrelated sibling. Windows-only junction and native 8.3
 short-path regressions cover reparse redirection and lexical aliasing. Platform-neutral
 mount simulations prove that neither a
 mounted configuration ancestor nor a mounted generated-hook ancestor can redirect
-writes or deletion outside the worktree. Matching duplicate values for all intent
+writes or deletion outside the worktree. The raw `--root` CLI argument itself is
+covered separately from every path *underneath* an already-accepted root (D-081's
+#169 follow-up addendum): a symlinked leaf, a symlink anywhere in `--root`'s
+ancestor chain, and a mounted `--root` leaf are each rejected through the real CLI
+before `main()` ever resolves the argument, and a direct, non-CLI call to
+`disable()` with a symlinked root argument proves `ensure_root_is_a_real_directory`'s
+own, narrower contract for library callers independently of the CLI-boundary check.
+Matching duplicate values for all intent
 fields are accepted by localize, check, disable, and the policy parser, while missing
 or conflicting values fail closed before every lifecycle mutation.
 `scripts/validate_agent_policies.py` additionally requires both

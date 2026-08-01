@@ -6,6 +6,7 @@ from __future__ import annotations
 import collections
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -2126,6 +2127,49 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
 
+    def test_symlinked_root_rejects_direct_lifecycle_call(self) -> None:
+        # #169 follow-up: ensure_root_is_a_real_directory's own symlink/
+        # reparse-point check on the root argument itself is a separate
+        # contract from ensure_cli_root_is_not_redirected's ancestor walk --
+        # it is what protects a direct/library caller of
+        # localize()/check()/disable() that bypasses the CLI (and therefore
+        # never reaches main()'s new check) from being handed a symlinked
+        # root directly. A tracked git baseline is required here: without
+        # a ".git" marker, lifecycle_lock_path()'s own no-repo fallback
+        # calls ensure_lock_directory() on the root argument first and
+        # raises its own, different message before this test can reach the
+        # function under test; with ".git" present, lifecycle_lock_path()
+        # resolves the lock path through the symlink and only
+        # ensure_root_is_a_real_directory (via ensure_no_symlink_components)
+        # still sees the original, unresolved alias.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias = workspace / "repo-alias"
+            alias.symlink_to(root, target_is_directory=True)
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "managed path root must be a regular directory",
+            ):
+                manager.disable(alias)
+
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
     @unittest.skipUnless(os.name != "nt", "POSIX symlink regression")
     def test_symlinked_root_rejects_lifecycle_mutation_through_the_cli(self) -> None:
         # #169: a symlinked --root must be rejected before any lifecycle
@@ -2134,9 +2178,18 @@ class IevoHookLifecycleTests(unittest.TestCase):
         # that separate case). Exercised through the real public CLI
         # (subprocess, not manager.disable() directly), because the bug this
         # regresses lives in main()'s own argument handling, before disable()
-        # is ever called.
+        # is ever called. workspace is resolved up front (see run_manager's
+        # own comment): this machine's tempdir prefix (e.g. macOS's
+        # /var -> /private/var) is itself a symlink ancestor, and
+        # ensure_cli_root_is_not_redirected walks ancestors left to right --
+        # an unresolved workspace would make this test pass because it hit
+        # that prefix, not because of the "repo-alias" leaf this test
+        # actually means to exercise. The assertion below pins the flagged
+        # path to "alias" specifically so a regression that stops catching
+        # leaf symlinks (while some earlier, unrelated ancestor is still
+        # caught) cannot pass silently.
         with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
+            workspace = Path(directory).resolve()
             root = workspace / "repo"
             root.mkdir()
             self.create_gitignore(root, upstream_shims=False)
@@ -2169,7 +2222,8 @@ class IevoHookLifecycleTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertRegex(
-                result.stderr, "--root contains a symlink component"
+                result.stderr,
+                "--root contains a symlink component.*" + re.escape(str(alias)),
             )
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
@@ -2183,9 +2237,14 @@ class IevoHookLifecycleTests(unittest.TestCase):
         # rejected, not just a symlinked leaf. Here the final "repo"
         # component is a real, non-symlink directory -- only its *parent*
         # is an alias -- matching the owner's own reproduction exactly
-        # (alias-parent -> real-parent, --root alias-parent/repo).
+        # (alias-parent -> real-parent, --root alias-parent/repo). workspace
+        # is resolved up front for the same reason as the sibling leaf-alias
+        # test above: this machine's own tempdir prefix is itself a symlink
+        # ancestor on macOS, and without resolving first this test would
+        # pass because of that unrelated prefix rather than the
+        # "alias-parent" component it actually means to exercise.
         with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
+            workspace = Path(directory).resolve()
             real_parent = workspace / "real-parent"
             root = real_parent / "repo"
             root.mkdir(parents=True)
@@ -2218,7 +2277,10 @@ class IevoHookLifecycleTests(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertRegex(result.stderr, "--root contains a symlink component")
+            self.assertRegex(
+                result.stderr,
+                "--root contains a symlink component.*" + re.escape(str(alias_parent)),
+            )
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
 
