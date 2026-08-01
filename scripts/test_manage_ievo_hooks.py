@@ -2310,10 +2310,49 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 ):
                     manager.ensure_cli_root_is_not_redirected(root)
 
+    def test_non_directory_root_rejects_lifecycle_mutation_through_the_cli(
+        self,
+    ) -> None:
+        # #169 follow-up: --root must be rejected when it exists, has no
+        # symlink/reparse ancestor, and is not itself a mount point, but is
+        # not a directory at all (e.g. a plain file) -- the
+        # "not stat.S_ISDIR(...)" operand of
+        # ensure_cli_root_is_not_redirected's leaf check, independent of the
+        # "or os.path.ismount(...)" operand the mount test above exercises.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            not_a_directory = workspace / "not-a-directory"
+            not_a_directory.write_text("", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(not_a_directory),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(
+                result.stderr, "--root must be a regular, non-mounted directory"
+            )
+
     @unittest.skipUnless(os.name == "nt", "Windows junction regression")
     def test_junctioned_root_rejects_lifecycle_mutation_through_the_cli(self) -> None:
+        # #169 follow-up: resolve workspace up front and pin the assertion to
+        # the junction itself, matching the POSIX symlink siblings above --
+        # an unresolved workspace plus a generic message-shape assertion
+        # would let this test pass because of an unrelated ancestor rather
+        # than the "repo-alias" junction it actually means to exercise, and
+        # this leg only runs in the required native Windows matrix, so that
+        # defect class would be invisible to the macOS discovery run.
         with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
+            workspace = Path(directory).resolve()
             root = workspace / "repo"
             root.mkdir()
             self.create_gitignore(root, upstream_shims=False)
@@ -2351,7 +2390,8 @@ class IevoHookLifecycleTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertRegex(
-                result.stderr, "--root contains a symlink component"
+                result.stderr,
+                "--root contains a symlink component.*" + re.escape(str(alias)),
             )
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
