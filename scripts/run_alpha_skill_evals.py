@@ -94,6 +94,7 @@ ISSUE_IMPLEMENT_CONTRACT = (
     "touching another issue",
     "Never execute it directly",
     "Never close on suspicion",
+    "provably stale in the same pass",
 )
 ISSUE_SELECT_CONTRACT = (
     "Standing autopilot directive in effect",
@@ -652,8 +653,8 @@ def run_issue_implement_case(case: dict[str, Any], skill_text: str) -> None:
             fully_resolved=False, partially_resolved=False, reconstructible=False
         )
         required = ("stop and report", "Never close on suspicion")
-        if action == "close":
-            raise EvalError(f"{runner_name} closed an inconclusive issue")
+        if action != "inconclusive-stop-and-report":
+            raise EvalError(f"{runner_name} did not treat this as Inconclusive")
     elif runner_name == "delegated-autopilot-closure-authorized":
         authorized = delegated_autopilot_closure_authorized(
             autopilot_active=True, screen_identified_as_stale=True

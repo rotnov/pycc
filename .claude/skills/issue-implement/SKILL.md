@@ -33,9 +33,10 @@ without per-payload confirmation:
 2. the plan comment that `/issue-to-plan` publishes to that issue when this skill invokes it;
 3. pushing the task branch and opening the pull request that names the issue;
 4. replies to review threads on that pull request; resolution of threads opened by a recognized
-   automated reviewer (e.g. the optional `@codex review` integration) only — a human-authored
-   thread, including one from the repository owner, is replied to but never resolved by this
-   session;
+   automated reviewer only — checked via the GitHub API's author `type` field (`Bot`), or a
+   known reviewer-bot login such as the optional `@codex review` integration, never by the
+   comment's tone or content — a human-authored thread, including one from the repository
+   owner, is replied to but never resolved by this session;
 5. merging that pull request once every gate below is satisfied, and deleting the task branch.
 
 Under a standing autopilot directive from `/issue-select`'s own staleness screen, item 1's
@@ -82,9 +83,12 @@ shared decision-log numbering.
 
 The issue was written against an older tree; its premise may have been resolved by unrelated
 work since. Read the newest comments before re-deriving anything: this repository's issues
-accumulate "reconfirmed at commit X" comments, and a reconfirmation at or near the current
-default-branch tip settles "still current" immediately, while one at an old commit is dated
-evidence exactly like the body. Then extract the premise — the observable defect or gap the
+accumulate "reconfirmed at commit X" comments — a reconfirmation settles "still current"
+immediately only when both hold: no commit touching the issue's own referenced files or area
+has landed between the reconfirmation commit and the current default-branch tip (a real history
+search, not a proximity guess), and the comment states what was actually checked, not just a
+bare commit reference. A reconfirmation missing either is dated evidence, read exactly like the
+issue body. Then extract the premise — the observable defect or gap the
 issue claims — and re-verify it against the current tree: read the code or document it
 describes, search the history since the issue's creation date for merged work in that area,
 and reconstruct any reproduction the issue describes yourself, from its stated inputs (a
@@ -209,9 +213,13 @@ moment it closes, becomes conflicting, or its head is superseded.
 
 Read every review comment, including inline pull-request comments, not just top-level reviews.
 For each: a confirmed finding is fixed through step 5's loop and pushed; a refuted finding
-gets an evidence-backed reply. Either way, resolve the thread afterwards — branch protection
-requires resolved conversations, so an unresolved thread is a merge blocker regardless of its
-merit.
+gets an evidence-backed reply. Whether to resolve the thread afterwards depends on who opened
+it, per `Authorized writes` item 4: a bot-authored thread is resolved either way, replied to or
+fixed; a human-authored thread — including one from the repository owner — is replied to but
+left unresolved, regardless of whether the finding was confirmed or refuted. Branch protection
+requires resolved conversations, so an unresolved bot-authored thread is a merge blocker
+regardless of its merit, while an unresolved human-authored thread is instead the per-issue
+stop condition below — it is never resolved by this session to clear the way for a merge.
 
 Attribute CI failures before reacting. A failure attributable to the diff goes back through
 step 5. A known-noisy gate failing in a way unrelated to the diff — the nbody speedup gate on

@@ -378,6 +378,20 @@ class AlphaSkillEvalTests(unittest.TestCase):
         with self.assertRaisesRegex(evals.EvalError, "is missing"):
             evals.run_issue_implement_case(case, skill)
 
+    def test_issue_implement_eval_fails_when_the_delegated_closure_text_is_missing(
+        self,
+    ) -> None:
+        raw = evals.canonical_skill("codex", "issue-implement")
+        normalized = " ".join(raw.split())
+        skill = normalized.replace("provably stale in the same pass", "")
+        case = next(
+            case
+            for case in evals.load_cases("issue-implement")
+            if case["runner"] == "delegated-autopilot-closure-authorized"
+        )
+        with self.assertRaisesRegex(evals.EvalError, "is missing"):
+            evals.run_issue_implement_case(case, skill)
+
     def test_delegated_autopilot_closure_requires_both_conditions(self) -> None:
         self.assertTrue(
             evals.delegated_autopilot_closure_authorized(
@@ -442,6 +456,23 @@ class AlphaSkillEvalTests(unittest.TestCase):
             "the repository's own priority markers rank first",
             "",
         )
+        case = next(
+            case
+            for case in evals.load_cases("issue-select")
+            if case["runner"] == "priority-always-outranks-size"
+        )
+        with self.assertRaisesRegex(evals.EvalError, "is missing"):
+            evals.run_issue_select_case(case, skill)
+
+    def test_issue_select_eval_fails_when_the_priority_marker_syntax_is_missing(
+        self,
+    ) -> None:
+        # #11: the concrete P1:/P2:/P3: syntax fragment is a separate pin from
+        # the older "priority markers rank first" sentence -- a reword back to
+        # something vague (e.g. "check priority labels or markers") must be
+        # caught even if that older sentence survives untouched.
+        raw = evals.canonical_skill("claude", "issue-select")
+        skill = " ".join(raw.split()).replace("P1:", "")
         case = next(
             case
             for case in evals.load_cases("issue-select")
