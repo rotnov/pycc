@@ -1376,6 +1376,24 @@ fn emit_expr<'ctx>(
             build_int_list_append(builder, rt, list_ptr, raw);
             Scalar::Bool(context.i8_type().const_int(0, false))
         }
+        // PR-11 Task 4 (`pycc_mir`) added `MirExpr::DictLiteral`/`DictGet` and
+        // taught that crate's own lowering to produce them for `dict[str,
+        // int]` literals and reads -- real codegen for them is PR-11 Task
+        // 5's own scope, not this task's, so this arm is a deliberate,
+        // temporary panic stub that exists only so this crate's exhaustive
+        // `match` still compiles against `pycc_mir`'s new variants. This
+        // panic **is reachable today, via the real CLI**, not unreachable:
+        // `pycc check` already accepts a `dict[str, int]` program (e.g. `x =
+        // {"a": 1}\n`) and `pycc_mir::build` now really lowers it (no panic
+        // there), so `pycc build`/`pycc run` on that exact program reaches
+        // this arm and panics here, because this crate has no real codegen
+        // for it yet. That is expected, intra-plan sequencing (mirroring
+        // `list[int]`'s own PR-10 Task 9/11 split) -- not a bug to silence
+        // here. Task 5 replaces this arm with real codegen and deletes the
+        // `should_panic` test that exercises this stub.
+        MirExpr::DictLiteral(_) | MirExpr::DictGet { .. } => panic!(
+            "pycc_codegen: internal error: dict[str, int] expression codegen is not implemented yet (PR-11 Task 5)"
+        ),
     }
 }
 
@@ -1898,6 +1916,34 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // together.
         MirStmt::ForList { var, body, .. } => {
             bindings.entry(var.clone()).or_insert(pycc_mir::Ty::Int);
+            for stmt in body {
+                collect_stmt_bindings(stmt, bindings);
+            }
+        }
+        // `d[k] = v` (PR-11 Task 4) reassigns an existing binding's
+        // contents, not a name -- mirrors `pycc_types::collect_local_names`'s
+        // own identical `HirStmt::DictSet` arm and its comment. Unlike
+        // `ForDict` immediately below, this is real, permanent behavior, not
+        // a temporary stub: no future codegen task ever needs `d[k] = v` to
+        // introduce a new binding, since it structurally cannot.
+        MirStmt::DictSet { .. } => {}
+        // PR-11 Task 4 (`pycc_mir`) added `MirStmt::ForDict`, produced when a
+        // `for k in d:` HIR loop's base resolves to a dict-typed binding
+        // (mirrors `MirStmt::ForList` above, which is produced for the
+        // list-typed case). Unlike `ForList`, this arm deliberately does
+        // *not* also bind `var`'s own storage slot: what that slot should
+        // look like (its representation, whether it is even a bare `Ty::Str`
+        // the way `ForList`'s hardcoded `Ty::Int` is) is PR-11 Task 5's own
+        // codegen design decision, not this task's. Recursing into `body` is
+        // real, permanent behavior regardless of that decision, though: it
+        // is what lets a nested, ordinary statement (e.g. `for k in d:\n
+        // y = 1\n`) still get `y`'s own binding collected, exactly like
+        // every other container arm above -- and, crucially, `emit_stmt`'s
+        // own `MirStmt::ForDict` arm (not this function) is what actually
+        // panics honestly for the loop itself, so skipping that recursion
+        // here would silently swallow a *different*, unrelated binding
+        // instead of leaving that one clean failure point.
+        MirStmt::ForDict { body, .. } => {
             for stmt in body {
                 collect_stmt_bindings(stmt, bindings);
             }
@@ -2931,6 +2977,38 @@ fn emit_stmt<'ctx>(
             }
             Ok(())
         }
+        // PR-11 Task 4 (`pycc_mir`) added `MirStmt::DictSet`/`ForDict` and
+        // taught that crate's own lowering to produce them for `dict[str,
+        // int]`'s `d[k] = v` and `for k in d:` -- real codegen for them is
+        // PR-11 Task 5's own scope, not this task's, so this arm is a
+        // deliberate, temporary panic stub that exists only so this crate's
+        // exhaustive `match` still compiles against `pycc_mir`'s new
+        // variants. Unlike `emit_expr`'s own `MirExpr::DictLiteral`/`DictGet`
+        // stub above (genuinely reachable today via the real CLI, confirmed
+        // by direct repro), **this specific arm is not yet reachable from
+        // any real, type-checked program** -- `pycc_types`' own comment on
+        // `Subscript`'s `Ty::Dict` read arm states plainly that a
+        // `DictLiteral` expression is the *only* source construct that can
+        // ever produce a `Ty::Dict` value, and every real program containing
+        // `d[k] = v` or `for k in d:` must therefore also contain an earlier
+        // `d = {...}` assignment -- which reaches `emit_expr`'s stub above
+        // and panics there first, before this statement is ever emitted.
+        // This arm is exercised today only by hand-built MIR that skips
+        // straight to a bare `DictSet`/`ForDict` statement with no preceding
+        // literal (see this crate's own
+        // `a_dict_set_statement_is_not_yet_supported_by_codegen`/
+        // `a_for_dict_statement_is_not_yet_supported_by_codegen` tests,
+        // which do exactly that, and whose own comments explain why they
+        // deliberately omit that preceding assignment). It becomes reachable
+        // from a real program once Task 5 implements
+        // `DictLiteral`/`DictGet` codegen -- at which point a real `dict[str,
+        // int]` value can exist at runtime without hitting `emit_expr`'s
+        // stub first, making *this* arm the next honest failure point for
+        // `d[k] = v` and `for k in d:` specifically, until Task 5 also
+        // replaces it with real codegen and deletes those two tests.
+        MirStmt::DictSet { .. } | MirStmt::ForDict { .. } => panic!(
+            "pycc_codegen: internal error: dict[str, int] statement codegen is not implemented yet (PR-11 Task 5)"
+        ),
     }
 }
 
@@ -5726,6 +5804,43 @@ mod tests {
     }
 
     #[test]
+    fn collect_stmt_bindings_excludes_a_dict_set_target() {
+        // `d[k] = v` (PR-11 Task 4) reassigns an existing binding's
+        // contents, not a name -- mirrors `pycc_types::collect_local_names`'s
+        // own identical `HirStmt::DictSet` test. `dict` itself must not
+        // pick up an entry from this statement.
+        let stmt = MirStmt::DictSet {
+            dict: "x".to_string(),
+            key: MirExpr::StringLiteral("a".to_string()),
+            value: MirExpr::IntLiteral(1),
+        };
+        let mut bindings = BTreeMap::new();
+        collect_stmt_bindings(&stmt, &mut bindings);
+        assert_eq!(bindings.get("x"), None);
+    }
+
+    #[test]
+    fn collect_stmt_bindings_recurses_into_a_for_dict_loop_body_without_binding_its_own_var() {
+        // `MirStmt::ForDict` (PR-11 Task 4) deliberately does not bind its
+        // own loop variable here -- that storage-slot scheme is PR-11 Task
+        // 5's own design decision -- but it must still recurse into `body`,
+        // exactly like `ForList`/`ForRange`/`If`/`While` above, so a nested,
+        // ordinary statement's binding is not silently dropped.
+        let stmt = MirStmt::ForDict {
+            var: "k".to_string(),
+            dict: "d".to_string(),
+            body: vec![MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::IntLiteral(1),
+            }],
+        };
+        let mut bindings = BTreeMap::new();
+        collect_stmt_bindings(&stmt, &mut bindings);
+        assert_eq!(bindings.get("y"), Some(&Ty::Int));
+        assert_eq!(bindings.get("k"), None);
+    }
+
+    #[test]
     #[should_panic(expected = "binary operators are not supported on list[int] yet")]
     fn a_list_result_binop_is_not_yet_supported() {
         // No real Python operator produces a `BinOp` typed `list[int]`
@@ -6054,6 +6169,129 @@ mod tests {
             None,
             false,
         );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "dict[str, int] expression codegen is not implemented yet (PR-11 Task 5)"
+    )]
+    fn a_dict_literal_expression_is_not_yet_supported_by_codegen() {
+        // PR-11 Task 4 (`pycc_mir`) added real `MirExpr::DictLiteral`
+        // lowering; PR-11 Task 5 is what actually teaches this crate to
+        // generate code for it. This is a genuine, real-CLI-reachable
+        // repro, not hand-crafted malformed MIR: `x = {"a": 1}` already
+        // type-checks cleanly and lowers cleanly through `pycc_mir::build`
+        // (no panic there -- see that crate's own
+        // `dict_literal_lowers_to_mir_dict_literal_with_correct_ty` test),
+        // so `pycc build`/`pycc run` on that exact program reaches
+        // `emit_expr`'s new stub arm and panics here, because this crate has
+        // no real codegen for it yet.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: MirExpr::DictLiteral(vec![(
+                    MirExpr::StringLiteral("a".to_string()),
+                    MirExpr::IntLiteral(1),
+                )]),
+            })],
+        };
+        let dir = tempfile_dir("dict_literal_codegen_panics");
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("dict_literal_codegen_panics.o"),
+            None,
+            false,
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "dict[str, int] expression codegen is not implemented yet (PR-11 Task 5)"
+    )]
+    fn a_dict_get_expression_is_not_yet_supported_by_codegen() {
+        // Same reasoning as `a_dict_literal_expression_is_not_yet_supported_by_codegen`
+        // above, for `emit_expr`'s `MirExpr::DictGet` half of the same
+        // combined stub arm: real source like `{"a": 1}["a"]` lowers
+        // cleanly through `pycc_mir::build` today (see that crate's own
+        // `dict_get_ty_unwraps_the_value_type` test), so this repro's shape
+        // is genuine, not malformed MIR -- only the top-level `dict` operand
+        // is a literal rather than a named binding, to keep this test
+        // independent of any storage-slot allocation.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::DictGet {
+                dict: Box::new(MirExpr::DictLiteral(vec![(
+                    MirExpr::StringLiteral("a".to_string()),
+                    MirExpr::IntLiteral(1),
+                )])),
+                key: Box::new(MirExpr::StringLiteral("a".to_string())),
+            }))],
+        };
+        let dir = tempfile_dir("dict_get_codegen_panics");
+        let _ = compile_to_object(&mir, &dir.join("dict_get_codegen_panics.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "dict[str, int] statement codegen is not implemented yet (PR-11 Task 5)"
+    )]
+    fn a_dict_set_statement_is_not_yet_supported_by_codegen() {
+        // PR-11 Task 4 (`pycc_mir`) added real `MirStmt::DictSet` lowering;
+        // PR-11 Task 5 is what actually teaches this crate to generate code
+        // for it. The underlying real-source scenario is `x = {"a":
+        // 1}\nx["b"] = 2\n`, which already type-checks and lowers cleanly
+        // (see `pycc_mir`'s own `dict_set_lowers_to_mir_dict_set_stmt`
+        // test) -- but this test deliberately omits the preceding `x =
+        // {"a": 1}` assignment and references an otherwise-unbound `x`
+        // directly: `emit_stmt`'s new stub arm panics unconditionally
+        // without ever reading `dict`/`key`/`value`, so no binding for `x`
+        // is needed to reach it, and including that assignment here would
+        // have made this test accidentally exercise `emit_expr`'s *own*
+        // `MirExpr::DictLiteral` stub (a few statements earlier, in the
+        // same pipeline run) instead of this one -- both panic with the
+        // identical message, which would silently pass `#[should_panic]`
+        // while covering the wrong arm entirely. `collect_stmt_bindings`'s
+        // own `MirStmt::DictSet` arm is a real no-op (see
+        // `collect_stmt_bindings_excludes_a_dict_set_target` above), so this
+        // statement passes cleanly through that earlier pass and this is
+        // genuinely the first and only place it panics.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::DictSet {
+                dict: "x".to_string(),
+                key: MirExpr::StringLiteral("b".to_string()),
+                value: MirExpr::IntLiteral(2),
+            })],
+        };
+        let dir = tempfile_dir("dict_set_codegen_panics");
+        let _ = compile_to_object(&mir, &dir.join("dict_set_codegen_panics.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "dict[str, int] statement codegen is not implemented yet (PR-11 Task 5)"
+    )]
+    fn a_for_dict_statement_is_not_yet_supported_by_codegen() {
+        // Same reasoning as `a_dict_set_statement_is_not_yet_supported_by_codegen`
+        // above, for `emit_stmt`'s `MirStmt::ForDict` half of the same
+        // combined stub arm -- including the same deliberate omission of a
+        // preceding `x = {"a": 1}` assignment, for the identical reason.
+        // The underlying real-source scenario is `x = {"a": 1}\nfor k in
+        // x:\n    print(k)\n`, which already type-checks and lowers cleanly
+        // to `MirStmt::ForDict` (see `pycc_mir`'s own
+        // `for_k_in_dict_lowers_to_mir_for_dict` test). `collect_stmt_bindings`'s
+        // own `MirStmt::ForDict` arm only recurses into `body` without
+        // panicking (see
+        // `collect_stmt_bindings_recurses_into_a_for_dict_loop_body_without_binding_its_own_var`
+        // above), so this statement passes cleanly through that earlier
+        // pass and this is genuinely the first and only place it panics.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ForDict {
+                var: "k".to_string(),
+                dict: "x".to_string(),
+                body: vec![],
+            })],
+        };
+        let dir = tempfile_dir("for_dict_codegen_panics");
+        let _ = compile_to_object(&mir, &dir.join("for_dict_codegen_panics.o"), None, false);
     }
 
     #[test]

@@ -68,6 +68,27 @@ pub enum MirExpr {
         list: String,
         value: Box<MirExpr>,
     },
+    /// `{k1: v1, k2: v2, ...}` (mirrors `HirExpr::DictLiteral`, PR-11 Task 4).
+    /// No `ty` field: `ty()` below derives `Ty::Dict(Box::new((pairs[0].0.ty(),
+    /// pairs[0].1.ty())))` from the first pair, exactly like `ListLiteral`
+    /// above derives its element type from its first element rather than
+    /// hardcoding one. Empirically only `Ty::Dict(Box::new((Ty::Str,
+    /// Ty::Int)))` ever reaches this crate today (`pycc_types`' T0036 gate
+    /// rejects every other key/value combination at construction time), but
+    /// deriving here keeps this lowering correct on its own terms rather
+    /// than baking in an assumption this crate has no way to verify
+    /// independently.
+    DictLiteral(Vec<(MirExpr, MirExpr)>),
+    /// `dict[key]`, read-only (mirrors `HirExpr::Subscript` on a
+    /// dict-typed base -- see `lower_expr`'s own `HirExpr::Subscript` arm
+    /// for why a dict-typed base is routed here instead of into
+    /// `MirExpr::Subscript`). `ty()` below derives its result from
+    /// `dict.ty()`'s value type, for the same reason `Subscript` derives
+    /// from `base.ty()`'s element type rather than hardcoding one.
+    DictGet {
+        dict: Box<MirExpr>,
+        key: Box<MirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -95,10 +116,28 @@ impl MirExpr {
                 });
                 Ty::List(Box::new(elem_ty))
             }
+            // Unlike `ForList`'s own `Ty::List`/`Ty::Dict` dispatch just
+            // below, this arm is *not* where a dict-typed base gets
+            // resolved: `pycc_types::infer_expr_in`'s own `Subscript` arm
+            // accepts a `Ty::Dict` base just as readily as `Ty::List` (it
+            // returns the dict's value type directly), so a non-list base
+            // reaching *this* HIR shape is not, on its own, something
+            // `pycc_types::check` would have rejected. What actually keeps
+            // a dict-typed base out of this arm is `lower_expr`'s own
+            // `HirExpr::Subscript` arm: it inspects the lowered base's type
+            // and constructs `MirExpr::DictGet` instead of
+            // `MirExpr::Subscript` whenever that type is `Ty::Dict`, so no
+            // `MirExpr::Subscript` node produced by `build()` ever carries a
+            // dict base. A base that is neither list nor dict *is* still
+            // impossible from a type-checked program (`pycc_types` rejects
+            // every other subscript base with T0033 before HIR is even
+            // constructed) -- this panic remains reachable only from a
+            // hand-built `MirExpr` that bypasses both of those guarantees,
+            // e.g. this file's own `a_subscript_over_a_non_list_bases_ty_panics_with_an_internal_error` test.
             MirExpr::Subscript { base, .. } => match base.ty() {
                 Ty::List(elem_ty) => *elem_ty,
                 other => panic!(
-                    "pycc_mir: internal error: subscript base has non-list type `{}` -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    "pycc_mir: internal error: subscript base has non-list type `{}` -- pycc_types::check should have rejected this HIR before it reached pycc_mir, or lower_expr should have routed a dict base to MirExpr::DictGet instead",
                     other.name()
                 ),
             },
@@ -107,6 +146,21 @@ impl MirExpr {
             // `Bool` and `ForRange`'s `Int` above), not narrowed by any
             // `pycc_types` gate, so this is hardcoded on purpose.
             MirExpr::ListAppend { .. } => Ty::None,
+            MirExpr::DictLiteral(pairs) => {
+                let (first_key, first_value) = pairs.first().unwrap_or_else(|| {
+                    panic!(
+                        "pycc_mir: internal error: an empty dict literal has no key/value type to derive -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
+                    )
+                });
+                Ty::Dict(Box::new((first_key.ty(), first_value.ty())))
+            }
+            MirExpr::DictGet { dict, .. } => match dict.ty() {
+                Ty::Dict(kv) => kv.1,
+                other => panic!(
+                    "pycc_mir: internal error: dict subscript base has non-dict type `{}` -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    other.name()
+                ),
+            },
         }
     }
 }
@@ -145,6 +199,25 @@ pub enum MirStmt {
     ForList {
         var: String,
         list: String,
+        body: Vec<MirStmt>,
+    },
+    /// `d[k] = v` (mirrors `HirStmt::DictSet`, PR-11 Task 4/D-113). `dict` is
+    /// carried as the plain variable name, exactly like `ForList`'s `list`
+    /// field and `ListAppend`'s `list` field -- there is no sub-expression to
+    /// recursively lower for it, only for `key`/`value`.
+    DictSet {
+        dict: String,
+        key: MirExpr,
+        value: MirExpr,
+    },
+    /// `for var in dict:` (mirrors `HirStmt::ForList` on a dict-typed base --
+    /// see `lower_stmt`'s own `HirStmt::ForList` arm for why a dict-typed
+    /// base is lowered to this node instead of `MirStmt::ForList`). `dict` is
+    /// carried as the plain variable name, exactly like `ForList`'s `list`
+    /// field.
+    ForDict {
+        var: String,
+        dict: String,
         body: Vec<MirStmt>,
     },
     Return(Option<MirExpr>),
@@ -339,56 +412,58 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
             }
         }
         HirStmt::ForList { var, list, body } => {
-            // The loop variable's type is `list`'s element type, derived via
-            // the same `lookup` mechanism every other name reference in this
-            // file uses -- mirroring `pycc_types::check_stmt`'s own
-            // `ForList` arm (`check_assignment(env, var, *elem_ty)`), not
-            // hardcoded to `Ty::Int`. Empirically only a `Ty::List(Box::new(Ty::Int))`
-            // binding ever reaches this arm today (`pycc_types`' T0034 gate
-            // rejects every other list-element type before HIR ever
-            // constructs one -- see that gate's own comment and its
-            // `a_for_list_loop_binds_its_variable_as_str_for_a_list_of_str`
-            // genericity test), but deriving here keeps this lowering
-            // correct on its own terms rather than baking in an assumption
-            // this crate has no way to verify independently.
-            let elem_ty = match lookup(scopes, list) {
-                Ty::List(elem_ty) => *elem_ty,
+            // The loop variable's type is `list`'s element (or, for a
+            // dict-typed binding, key) type, derived via the same `lookup`
+            // mechanism every other name reference in this file uses --
+            // mirroring `pycc_types::check_stmt`'s own `ForList` arm
+            // (`check_assignment(env, var, *elem_ty)` / `check_assignment(env,
+            // var, kv.0)`), not hardcoded to `Ty::Int`. Empirically only a
+            // `Ty::List(Box::new(Ty::Int))` or `Ty::Dict(Box::new((Ty::Str,
+            // Ty::Int)))` binding ever reaches this arm today (`pycc_types`'
+            // T0034/T0036 gates reject every other element/key-value
+            // combination before HIR ever constructs one -- see those gates'
+            // own comments and this crate's own genericity tests), but
+            // deriving here keeps this lowering correct on its own terms
+            // rather than baking in an assumption this crate has no way to
+            // verify independently. `HirStmt::ForList` is reused
+            // unconditionally by `pycc_hir`'s own lowering for any bare-name
+            // iterable, dict or list alike (it has no type information to
+            // pick a different node) -- this is the point where the real
+            // type is resolved and where a dict-typed binding is routed into
+            // `MirStmt::ForDict` instead of `MirStmt::ForList`, mirroring
+            // `lower_expr`'s own `HirExpr::Subscript` arm doing the same
+            // list/dict routing for reads.
+            match lookup(scopes, list) {
+                Ty::List(elem_ty) => {
+                    bind_variable(scopes, var.clone(), *elem_ty);
+                    let body = body.iter().map(|s| lower_stmt(s, scopes)).collect();
+                    MirStmt::ForList {
+                        var: var.clone(),
+                        list: list.clone(),
+                        body,
+                    }
+                }
+                Ty::Dict(kv) => {
+                    bind_variable(scopes, var.clone(), kv.0);
+                    let body = body.iter().map(|s| lower_stmt(s, scopes)).collect();
+                    MirStmt::ForDict {
+                        var: var.clone(),
+                        dict: list.clone(),
+                        body,
+                    }
+                }
                 other => panic!(
-                    "pycc_mir: internal error: `{list}` is not a list (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    "pycc_mir: internal error: `{list}` is neither a list nor a dict (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
                     other.name()
                 ),
-            };
-            bind_variable(scopes, var.clone(), elem_ty);
-            let body = body.iter().map(|s| lower_stmt(s, scopes)).collect();
-            MirStmt::ForList {
-                var: var.clone(),
-                list: list.clone(),
-                body,
             }
         }
         HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes))),
-        // PR-11 Task 3 (`pycc_hir`/`pycc_types`) added `HirStmt::DictSet` and
-        // taught `pycc_types::check` to accept `dict[str, int]`'s `d[k] = v`
-        // as valid, type-checked code -- MIR lowering for it is PR-11 Task
-        // 4's own scope, not this task's, so this arm is a deliberate,
-        // temporary panic stub that exists only so this crate's exhaustive
-        // `match` still compiles against `pycc_hir`'s new variant. Unlike
-        // `lookup`'s own "internal error" panics above (which really are
-        // unreachable from any type-checked program -- `pycc_types` already
-        // rejects the input that would trigger them), **this panic IS
-        // reachable today**: a real `dict[str, int]` program (e.g. `x =
-        // {"a": 1}\nx["b"] = 2\n`) type-checks cleanly (`pycc check` exits
-        // 0) and then panics here via `pycc build`/`pycc run`, since this
-        // crate has no real lowering for it yet. That is expected,
-        // intra-plan sequencing (PR-10 had the identical shape: Task 7 added
-        // HIR-level list forms before MIR/codegen existed, closed several
-        // tasks later) -- not a bug to silence here. Task 4 replaces this
-        // arm with real lowering (closing the gap end to end) and deletes
-        // the `should_panic` test that exercises this stub
-        // (`dict_set_mir_lowering_is_not_implemented_yet` below).
-        HirStmt::DictSet { .. } => panic!(
-            "pycc_mir: internal error: dict[str, int] MIR lowering is not implemented yet (PR-11 Task 4)"
-        ),
+        HirStmt::DictSet { dict, key, value } => MirStmt::DictSet {
+            dict: dict.clone(),
+            key: lower_expr(key, scopes),
+            value: lower_expr(value, scopes),
+        },
     }
 }
 
@@ -455,27 +530,37 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
         HirExpr::ListLiteral(elements) => {
             MirExpr::ListLiteral(elements.iter().map(|e| lower_expr(e, scopes)).collect())
         }
-        HirExpr::Subscript { base, index } => MirExpr::Subscript {
-            base: Box::new(lower_expr(base, scopes)),
-            index: Box::new(lower_expr(index, scopes)),
-        },
+        // `HirExpr::Subscript` is reused unconditionally by `pycc_hir`'s own
+        // lowering for both a list read and a dict read (it has no type
+        // information to pick a different node) -- `pycc_types::infer_expr_in`
+        // accepts either base equally (see its own `Subscript` arm), so this
+        // is the point where the real type is resolved and where a
+        // dict-typed base is routed into `MirExpr::DictGet` instead of
+        // `MirExpr::Subscript`, mirroring `lower_stmt`'s own `HirStmt::ForList`
+        // arm doing the same list/dict routing for iteration.
+        HirExpr::Subscript { base, index } => {
+            let base = lower_expr(base, scopes);
+            let index = lower_expr(index, scopes);
+            match base.ty() {
+                Ty::Dict(_) => MirExpr::DictGet {
+                    dict: Box::new(base),
+                    key: Box::new(index),
+                },
+                _ => MirExpr::Subscript {
+                    base: Box::new(base),
+                    index: Box::new(index),
+                },
+            }
+        }
         HirExpr::ListAppend { list, value } => MirExpr::ListAppend {
             list: list.clone(),
             value: Box::new(lower_expr(value, scopes)),
         },
-        // See `lower_stmt`'s own `HirStmt::DictSet` arm above and its doc
-        // comment for the full reasoning: PR-11 Task 4 owns real MIR
-        // lowering for `dict[str, int]`, and this arm is the same kind of
-        // deliberate, temporary panic stub -- **reachable today**, not
-        // unreachable. `pycc_types::check` now correctly accepts a `dict[str,
-        // int]` literal (e.g. `x = {"a": 1}\n` type-checks cleanly), so
-        // `pycc build`/`pycc run` on that exact program reaches this arm and
-        // panics, because this crate has no real lowering for it yet. Task 4
-        // replaces this arm with real lowering and deletes the
-        // `should_panic` test that exercises this stub
-        // (`dict_literal_mir_lowering_is_not_implemented_yet` below).
-        HirExpr::DictLiteral(_) => panic!(
-            "pycc_mir: internal error: dict[str, int] MIR lowering is not implemented yet (PR-11 Task 4)"
+        HirExpr::DictLiteral(pairs) => MirExpr::DictLiteral(
+            pairs
+                .iter()
+                .map(|(k, v)| (lower_expr(k, scopes), lower_expr(v, scopes)))
+                .collect(),
         ),
     }
 }
@@ -1587,6 +1672,25 @@ mod tests {
             .ty(),
             Ty::None
         );
+        assert_eq!(
+            MirExpr::DictLiteral(vec![(
+                MirExpr::StringLiteral("a".to_string()),
+                MirExpr::IntLiteral(1)
+            )])
+            .ty(),
+            Ty::Dict(Box::new((Ty::Str, Ty::Int)))
+        );
+        assert_eq!(
+            MirExpr::DictGet {
+                dict: Box::new(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+                }),
+                key: Box::new(MirExpr::StringLiteral("a".to_string())),
+            }
+            .ty(),
+            Ty::Int
+        );
     }
 
     #[test]
@@ -1833,10 +1937,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "subscript base has non-list type")]
     fn a_subscript_over_a_non_list_bases_ty_panics_with_an_internal_error() {
-        // Same reasoning as the empty-list-literal panic above: `pycc_types`
-        // already rejects a non-list subscript base (T0033) before HIR
-        // reaches `pycc_mir`, but the defensive panic path still needs
-        // direct coverage.
+        // A non-list, non-dict subscript base (e.g. `Ty::Int`) is rejected
+        // by `pycc_types` (T0033) before HIR reaches `pycc_mir` -- unlike a
+        // dict base (which `pycc_types` accepts, but `lower_expr`'s own
+        // `HirExpr::Subscript` arm routes into `MirExpr::DictGet` instead of
+        // ever constructing this node), so this defensive panic path in
+        // `MirExpr::Subscript`'s own `ty()` arm still needs direct coverage
+        // via a hand-built node that bypasses both guarantees.
         MirExpr::Subscript {
             base: Box::new(MirExpr::IntLiteral(1)),
             index: Box::new(MirExpr::IntLiteral(0)),
@@ -1845,11 +1952,27 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "is not a list")]
-    fn a_for_list_loop_over_a_non_list_binding_panics_with_an_internal_error() {
+    #[should_panic(expected = "dict subscript base has non-dict type")]
+    fn a_dict_get_over_a_non_dict_bases_ty_panics_with_an_internal_error() {
+        // Same reasoning as the subscript panic above, for `MirExpr::DictGet`'s
+        // own defensive `ty()` arm: no real lowering ever constructs this
+        // node with a non-dict base (`lower_expr`'s own `HirExpr::Subscript`
+        // arm only builds `MirExpr::DictGet` when the base's derived type is
+        // `Ty::Dict`), but the panic path still needs direct coverage.
+        MirExpr::DictGet {
+            dict: Box::new(MirExpr::IntLiteral(1)),
+            key: Box::new(MirExpr::StringLiteral("a".to_string())),
+        }
+        .ty();
+    }
+
+    #[test]
+    #[should_panic(expected = "neither a list nor a dict")]
+    fn a_for_list_loop_over_a_non_list_non_dict_binding_panics_with_an_internal_error() {
         // Same reasoning again: `pycc_types` already rejects `for v in x:`
-        // when `x` is not a list (T0033), but the defensive panic path in
-        // `lower_stmt`'s `ForList` arm still needs direct coverage.
+        // when `x` is neither a list nor a dict (T0033), but the defensive
+        // panic path in `lower_stmt`'s `ForList` arm still needs direct
+        // coverage.
         let hir = HirModule {
             items: vec![
                 HirItem::TopLevelStmt(HirStmt::Assign {
@@ -1867,15 +1990,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "dict[str, int] MIR lowering is not implemented yet")]
-    fn dict_literal_mir_lowering_is_not_implemented_yet() {
-        // PR-11 Task 3 (`pycc_hir`/`pycc_types`) makes `HirExpr::DictLiteral`
-        // constructible and type-checkable; PR-11 Task 4 is what actually
-        // teaches this crate to lower it. Until then, this exhaustive-match
-        // arm is a deliberate panic stub (see its own doc comment in
-        // `lower_expr` above) -- this test exists only to cover that stub
-        // region under the D-014 coverage gate, and Task 4 should delete it
-        // once real lowering replaces the panic.
+    #[should_panic(expected = "an empty dict literal has no key/value type to derive")]
+    fn an_empty_dict_literals_ty_panics_with_an_internal_error() {
+        // By construction, `pycc_types::check` already rejects an empty
+        // dict literal (T0021, mirroring the empty-list-literal case above)
+        // before any HIR reaches `pycc_mir` -- this MIR node could never
+        // come from a real `check_and_resolve` success, but the panic path
+        // itself still needs direct coverage.
+        MirExpr::DictLiteral(vec![]).ty();
+    }
+
+    #[test]
+    fn dict_literal_lowers_to_mir_dict_literal_with_correct_ty() {
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
                 target: "x".to_string(),
@@ -1885,21 +2011,174 @@ mod tests {
                 )]),
             })],
         };
-        build(&hir);
+        let mir = build(&hir);
+        let expected_value = MirExpr::DictLiteral(vec![(
+            MirExpr::StringLiteral("a".to_string()),
+            MirExpr::IntLiteral(1),
+        )]);
+        assert_eq!(expected_value.ty(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "x".to_string(),
+                value: expected_value,
+            })
+        );
     }
 
     #[test]
-    #[should_panic(expected = "dict[str, int] MIR lowering is not implemented yet")]
-    fn dict_set_mir_lowering_is_not_implemented_yet() {
-        // Same reasoning as `dict_literal_mir_lowering_is_not_implemented_yet`
-        // above, for `lower_stmt`'s own `HirStmt::DictSet` panic stub.
+    fn dict_get_ty_unwraps_the_value_type() {
+        // `x["a"]` where `x: dict[str, int]` lowers `HirExpr::Subscript`
+        // into `MirExpr::DictGet` (not `MirExpr::Subscript`), whose `ty()`
+        // unwraps the dict's value type, mirroring `dict_get_ty_unwraps_the_value_type`
+        // in the task brief.
         let hir = HirModule {
-            items: vec![HirItem::TopLevelStmt(HirStmt::DictSet {
-                dict: "x".to_string(),
-                key: HirExpr::StringLiteral("a".to_string()),
-                value: HirExpr::IntLiteral(1),
-            })],
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Subscript {
+                        base: Box::new(HirExpr::Name("x".to_string())),
+                        index: Box::new(HirExpr::StringLiteral("a".to_string())),
+                    },
+                }),
+            ],
         };
-        build(&hir);
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::DictGet {
+                    dict: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+                    }),
+                    key: Box::new(MirExpr::StringLiteral("a".to_string())),
+                },
+            })
+        );
+        assert_eq!(
+            MirExpr::DictGet {
+                dict: Box::new(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Dict(Box::new((Ty::Str, Ty::Int))),
+                }),
+                key: Box::new(MirExpr::StringLiteral("a".to_string())),
+            }
+            .ty(),
+            Ty::Int
+        );
+    }
+
+    #[test]
+    fn a_list_subscript_still_lowers_to_mir_subscript_not_dict_get() {
+        // Genericity check mirroring `list_literal_subscript_and_for_list_derive_their_type_from_actual_elements_not_hardcoded_int`
+        // above: `lower_expr`'s `HirExpr::Subscript` arm must route based on
+        // the base's *actual* derived type, not assume every subscript is a
+        // dict read now that `MirExpr::DictGet` exists.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Subscript {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        index: Box::new(HirExpr::IntLiteral(0)),
+                    },
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Subscript {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    index: Box::new(MirExpr::IntLiteral(0)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn dict_set_lowers_to_mir_dict_set_stmt() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::DictSet {
+                    dict: "x".to_string(),
+                    key: HirExpr::StringLiteral("b".to_string()),
+                    value: HirExpr::IntLiteral(2),
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::DictSet {
+                dict: "x".to_string(),
+                key: MirExpr::StringLiteral("b".to_string()),
+                value: MirExpr::IntLiteral(2),
+            })
+        );
+    }
+
+    #[test]
+    fn for_k_in_dict_lowers_to_mir_for_dict() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ForList {
+                    var: "k".to_string(),
+                    list: "x".to_string(),
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::Name("k".to_string())],
+                    })],
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::ForDict {
+                var: "k".to_string(),
+                dict: "x".to_string(),
+                body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "k".to_string(),
+                        ty: Ty::Str,
+                    }],
+                    ty: Ty::None,
+                })],
+            })
+        );
     }
 }
