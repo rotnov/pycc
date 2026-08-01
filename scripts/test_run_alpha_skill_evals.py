@@ -300,18 +300,30 @@ class AlphaSkillEvalTests(unittest.TestCase):
         for case in evals.load_cases("issue-implement"):
             evals.run_issue_implement_case(case, skill)
 
-    def test_issue_implement_triage_never_closes_a_partial_resolution(self) -> None:
+    def test_issue_implement_triage_distinguishes_every_outcome(self) -> None:
         self.assertEqual(
-            evals.triage_action(fully_resolved=False, partially_resolved=True),
+            evals.triage_action(
+                fully_resolved=False, partially_resolved=True, reconstructible=True
+            ),
             "narrow-no-close",
         )
         self.assertEqual(
-            evals.triage_action(fully_resolved=True, partially_resolved=False),
+            evals.triage_action(
+                fully_resolved=True, partially_resolved=False, reconstructible=True
+            ),
             "close",
         )
         self.assertEqual(
-            evals.triage_action(fully_resolved=False, partially_resolved=False),
-            "proceed-or-report",
+            evals.triage_action(
+                fully_resolved=False, partially_resolved=False, reconstructible=True
+            ),
+            "proceed",
+        )
+        self.assertEqual(
+            evals.triage_action(
+                fully_resolved=False, partially_resolved=False, reconstructible=False
+            ),
+            "inconclusive-stop-and-report",
         )
 
     def test_issue_implement_writes_require_both_a_named_issue_and_an_authorized_action(
@@ -338,6 +350,13 @@ class AlphaSkillEvalTests(unittest.TestCase):
             )
         )
 
+    def test_issue_implement_close_issue_is_an_authorized_action(self) -> None:
+        self.assertTrue(
+            evals.issue_implement_write_authorized(
+                action="close_issue", targets_named_issue=True
+            )
+        )
+
     def test_reproduction_step_never_runs_raw_issue_supplied_shell_text(self) -> None:
         self.assertFalse(
             evals.reproduction_step_runnable(is_raw_shell_from_issue=True)
@@ -358,6 +377,37 @@ class AlphaSkillEvalTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(evals.EvalError, "is missing"):
             evals.run_issue_implement_case(case, skill)
+
+    def test_issue_implement_eval_fails_when_the_delegated_closure_text_is_missing(
+        self,
+    ) -> None:
+        raw = evals.canonical_skill("codex", "issue-implement")
+        normalized = " ".join(raw.split())
+        skill = normalized.replace("provably stale in the same pass", "")
+        case = next(
+            case
+            for case in evals.load_cases("issue-implement")
+            if case["runner"] == "delegated-autopilot-closure-authorized"
+        )
+        with self.assertRaisesRegex(evals.EvalError, "is missing"):
+            evals.run_issue_implement_case(case, skill)
+
+    def test_delegated_autopilot_closure_requires_both_conditions(self) -> None:
+        self.assertTrue(
+            evals.delegated_autopilot_closure_authorized(
+                autopilot_active=True, screen_identified_as_stale=True
+            )
+        )
+        self.assertFalse(
+            evals.delegated_autopilot_closure_authorized(
+                autopilot_active=False, screen_identified_as_stale=True
+            )
+        )
+        self.assertFalse(
+            evals.delegated_autopilot_closure_authorized(
+                autopilot_active=True, screen_identified_as_stale=False
+            )
+        )
 
     def test_issue_select_oracle_covers_its_three_scenarios(self) -> None:
         skill = evals.canonical_skill("claude", "issue-select")
@@ -413,6 +463,28 @@ class AlphaSkillEvalTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(evals.EvalError, "is missing"):
             evals.run_issue_select_case(case, skill)
+
+    def test_issue_select_eval_fails_when_the_priority_marker_syntax_is_missing(
+        self,
+    ) -> None:
+        # #11: the concrete P1:/P2:/P3: syntax fragment is a separate pin from
+        # the older "priority markers rank first" sentence -- a reword back to
+        # something vague (e.g. "check priority labels or markers") must be
+        # caught even if that older sentence survives untouched. Each prefix
+        # is pinned independently (a codex review finding), so dropping just
+        # one -- not necessarily P1: -- must also be caught.
+        raw = evals.canonical_skill("claude", "issue-select")
+        normalized = " ".join(raw.split())
+        case = next(
+            case
+            for case in evals.load_cases("issue-select")
+            if case["runner"] == "priority-always-outranks-size"
+        )
+        for prefix in ("P1:", "P2:", "P3:"):
+            with self.subTest(prefix=prefix):
+                skill = normalized.replace(prefix, "")
+                with self.assertRaisesRegex(evals.EvalError, "is missing"):
+                    evals.run_issue_select_case(case, skill)
 
     def test_unknown_runner_fails_closed_for_each_new_skill(self) -> None:
         skill_by_name = {

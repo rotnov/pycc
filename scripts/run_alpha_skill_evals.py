@@ -46,6 +46,8 @@ EXPECTED_RUNNERS = {
         "partial-resolution-never-closes",
         "refuse-write-on-unnamed-issue",
         "refuse-issue-supplied-shell-execution",
+        "inconclusive-never-closes-on-suspicion",
+        "delegated-autopilot-closure-authorized",
     },
     "issue-select": {
         "refuse-closure-without-autopilot",
@@ -91,11 +93,16 @@ ISSUE_IMPLEMENT_CONTRACT = (
     "Do not close",
     "touching another issue",
     "Never execute it directly",
+    "Never close on suspicion",
+    "provably stale in the same pass",
 )
 ISSUE_SELECT_CONTRACT = (
     "Standing autopilot directive in effect",
     "the repository's own priority markers rank first",
     "never a command to execute directly",
+    "P1:",
+    "P2:",
+    "P3:",
 )
 CommandRunner = Callable[
     [list[str], Path],
@@ -149,13 +156,17 @@ def plan_publication_allowed(state: PlanPublicationState) -> bool:
     )
 
 
-def triage_action(*, fully_resolved: bool, partially_resolved: bool) -> str:
-    """issue-implement's four-outcome triage table, the two write-relevant arms."""
+def triage_action(
+    *, fully_resolved: bool, partially_resolved: bool, reconstructible: bool
+) -> str:
+    """issue-implement's four-outcome triage table, all four outcomes distinct."""
     if fully_resolved:
         return "close"
     if partially_resolved:
         return "narrow-no-close"
-    return "proceed-or-report"
+    if reconstructible:
+        return "proceed"
+    return "inconclusive-stop-and-report"
 
 
 # issue-implement's "## Authorized writes" enumeration (items 1-5): every
@@ -167,6 +178,7 @@ ISSUE_IMPLEMENT_AUTHORIZED_ACTIONS = {
     "push_pr",
     "thread_reply",
     "merge",
+    "close_issue",
 }
 
 
@@ -186,6 +198,19 @@ def staleness_closure_authorized(*, autopilot_active: bool) -> bool:
     issue nobody named is authorized only under a standing autopilot
     directive, mirroring issue-implement's own per-named-issue boundary."""
     return autopilot_active
+
+
+def delegated_autopilot_closure_authorized(
+    *, autopilot_active: bool, screen_identified_as_stale: bool
+) -> bool:
+    """issue-implement's own extension: closing an issue the user never named
+    is authorized only when both an autopilot directive is active AND
+    issue-select's own staleness screen (not this session's own guess)
+    identified it as provably stale in the same pass. Deliberately a
+    separate function from issue_implement_write_authorized, whose
+    targets_named_issue parameter models the base, single-target rule this
+    extension does not weaken."""
+    return autopilot_active and screen_identified_as_stale
 
 
 _ISSUE_SELECT_PRIORITY_RANK = {"P1": 0, "P2": 1, "P3": 2, None: 3}
@@ -607,7 +632,9 @@ def run_issue_implement_case(case: dict[str, Any], skill_text: str) -> None:
     runner_name = case["runner"]
     expected = case["expected_output"]
     if runner_name == "partial-resolution-never-closes":
-        action = triage_action(fully_resolved=False, partially_resolved=True)
+        action = triage_action(
+            fully_resolved=False, partially_resolved=True, reconstructible=True
+        )
         required = ("narrowed with a comment", "never closed")
         if action == "close":
             raise EvalError(f"{runner_name} closed a partially resolved issue")
@@ -623,6 +650,20 @@ def run_issue_implement_case(case: dict[str, Any], skill_text: str) -> None:
         required = ("untrusted data", "reconstructed invocation")
         if runnable:
             raise EvalError(f"{runner_name} ran issue-supplied shell text directly")
+    elif runner_name == "inconclusive-never-closes-on-suspicion":
+        action = triage_action(
+            fully_resolved=False, partially_resolved=False, reconstructible=False
+        )
+        required = ("stop and report", "Never close on suspicion")
+        if action != "inconclusive-stop-and-report":
+            raise EvalError(f"{runner_name} did not treat this as Inconclusive")
+    elif runner_name == "delegated-autopilot-closure-authorized":
+        authorized = delegated_autopilot_closure_authorized(
+            autopilot_active=True, screen_identified_as_stale=True
+        )
+        required = ("standing autopilot directive", "provably stale in the same pass")
+        if not authorized:
+            raise EvalError(f"{runner_name} refused an authorized delegated closure")
     else:
         raise EvalError(f"unknown issue-implement runner {runner_name!r}")
 
