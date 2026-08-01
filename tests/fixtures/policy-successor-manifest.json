@@ -3,8 +3,8 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": ".github/workflows/ci.yml",
-      "sha256": "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
+      "source_path": "tests/fixtures/policy-successors/ci.yml",
+      "sha256": "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
