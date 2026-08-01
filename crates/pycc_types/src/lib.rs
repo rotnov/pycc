@@ -462,6 +462,16 @@ fn collect_expr_constraints(
             }
             Ok(None)
         }
+        // Same reasoning as `ListLiteral`/`DictLiteral`/`SetLiteral` above
+        // (PR-11b Task 3, D-116): the per-element int/bool/float membership
+        // gate is `infer_expr_in`'s job, not this solver's. Recurse into
+        // every element only to keep propagating genuine errors.
+        HirExpr::TupleLiteral(elements) => {
+            for element in elements {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, element)?;
+            }
+            Ok(None)
+        }
     }
 }
 
@@ -1242,6 +1252,36 @@ fn infer_expr_in(
             }
             Ok(set_ty)
         }
+        // PR-11b Task 3 (D-116): unlike `ListLiteral`/`DictLiteral`/
+        // `SetLiteral`'s homogeneity checks, this arm allows *any* mix of
+        // accepted element types -- heterogeneity is tuple's own defining
+        // feature. The gate is per-element type membership (int/bool/float
+        // only), not agreement with a first element's type.
+        HirExpr::TupleLiteral(elements) => {
+            if elements.is_empty() {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    "an empty tuple literal's element types cannot be inferred without an annotation (tuple[...] annotations are not supported yet)".to_string(),
+                    Span::new(0, 0),
+                ));
+            }
+            let mut elem_tys = Vec::with_capacity(elements.len());
+            for element in elements {
+                let this_ty = infer_expr_in(env, local_names, element)?;
+                if !matches!(this_ty, Ty::Int | Ty::Bool | Ty::Float) {
+                    return Err(Diagnostic::error(
+                        "T0039",
+                        format!(
+                            "tuple element type `{}` is not compiled yet (D-116) -- only int/bool/float elements are",
+                            this_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                elem_tys.push(this_ty);
+            }
+            Ok(Ty::Tuple(Box::new(elem_tys)))
+        }
         HirExpr::Subscript { base, index } => {
             let base_ty = infer_expr_in(env, local_names, base)?;
             let index_ty = infer_expr_in(env, local_names, index)?;
@@ -1294,6 +1334,39 @@ fn infer_expr_in(
                         ));
                     }
                     Ok(val_ty)
+                }
+                // PR-11b Task 3 (D-116): `t[k]` requires `k` to be a
+                // literal, non-negative, in-bounds integer -- not merely
+                // `int`-typed, unlike `List`'s case above. A heterogeneous
+                // tuple's element type at position `k` is only knowable
+                // when `k` is known at compile time, so every failure shape
+                // (non-literal, negative, out-of-range) shares one code.
+                Ty::Tuple(elems) => {
+                    let HirExpr::IntLiteral(literal_index) = index.as_ref() else {
+                        return Err(Diagnostic::error(
+                            "T0040",
+                            "tuple index must be a non-negative literal integer within range"
+                                .to_string(),
+                            Span::new(0, 0),
+                        ));
+                    };
+                    let Ok(literal_index) = usize::try_from(*literal_index) else {
+                        return Err(Diagnostic::error(
+                            "T0040",
+                            "tuple index must be a non-negative literal integer within range"
+                                .to_string(),
+                            Span::new(0, 0),
+                        ));
+                    };
+                    let Some(elem_ty) = elems.get(literal_index) else {
+                        return Err(Diagnostic::error(
+                            "T0040",
+                            "tuple index must be a non-negative literal integer within range"
+                                .to_string(),
+                            Span::new(0, 0),
+                        ));
+                    };
+                    Ok(elem_ty.clone())
                 }
                 // PR-11 Task 7 (D-113): `Ty::Set` deliberately has no
                 // explicit arm here and falls through to this rejection --
@@ -5206,6 +5279,210 @@ mod tests {
             defs_rebound: HashSet::new(),
         };
         let expr = HirExpr::SetLiteral(vec![HirExpr::Name("missing".to_string())]);
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    // -- PR-11b Task 3 (D-116): tuple[...] construction + indexing --------
+
+    #[test]
+    fn a_tuple_literal_of_int_bool_float_infers_ty_tuple() {
+        let env = Environment::new();
+        let expr = HirExpr::TupleLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::BoolLiteral(true),
+            HirExpr::FloatLiteral(2.5),
+        ]);
+        assert_eq!(
+            infer_expr(&env, &expr),
+            Ok(Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float])))
+        );
+    }
+
+    #[test]
+    fn an_empty_tuple_literal_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let err = infer_expr(&env, &HirExpr::TupleLiteral(vec![])).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("empty tuple literal"));
+    }
+
+    #[test]
+    fn a_tuple_literal_with_a_string_element_is_rejected_as_t0039() {
+        let env = Environment::new();
+        let expr = HirExpr::TupleLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::StringLiteral("a".to_string()),
+        ]);
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0039");
+        assert_eq!(
+            err.message,
+            "tuple element type `str` is not compiled yet (D-116) -- only int/bool/float elements are"
+        );
+    }
+
+    #[test]
+    fn a_tuple_literal_propagates_an_ill_typed_element_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::TupleLiteral(vec![HirExpr::Name("undefined".to_string())]);
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn tuple_index_with_a_literal_in_range_int_infers_the_positional_element_type() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "t".to_string(),
+                    value: HirExpr::TupleLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::BoolLiteral(true),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Subscript {
+                        base: Box::new(HirExpr::Name("t".to_string())),
+                        index: Box::new(HirExpr::IntLiteral(1)),
+                    },
+                }),
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn subscripting_a_tuple_with_a_literal_index_infers_the_positional_element_type() {
+        let mut env = Environment::new();
+        env.bind(
+            "t".to_string(),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool, Ty::Float])),
+        );
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("t".to_string())),
+            index: Box::new(HirExpr::IntLiteral(2)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn tuple_index_with_a_non_literal_expression_is_rejected_as_t0040() {
+        let mut env = Environment::new();
+        env.bind("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])));
+        env.bind("i".to_string(), Ty::Int);
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("t".to_string())),
+            index: Box::new(HirExpr::Name("i".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0040");
+        assert_eq!(
+            err.message,
+            "tuple index must be a non-negative literal integer within range"
+        );
+    }
+
+    #[test]
+    fn tuple_index_out_of_range_is_rejected_as_t0040() {
+        let mut env = Environment::new();
+        env.bind("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("t".to_string())),
+            index: Box::new(HirExpr::IntLiteral(5)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0040");
+    }
+
+    #[test]
+    fn a_negative_literal_tuple_index_is_rejected_as_t0040() {
+        let mut env = Environment::new();
+        env.bind("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])));
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("t".to_string())),
+            index: Box::new(HirExpr::IntLiteral(-1)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0040");
+    }
+
+    #[test]
+    fn a_bad_tuple_literal_is_still_rejected_when_the_solver_path_runs_first() {
+        // The tuple-shaped counterpart to
+        // `a_bad_set_literal_is_still_rejected_when_the_solver_path_runs_first`:
+        // `collect_expr_constraints`'s own `TupleLiteral` arm always returns
+        // `Ok(None)` (it has no unification-friendly representation for
+        // `Ty::Tuple` either), so an unrelated private helper with an
+        // unresolved (`Ty::Infer`) signature must not let the solver's own
+        // leniency swallow a genuine T0039 -- it has to fall through to the
+        // real, tuple-aware check pass.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::TupleLiteral(vec![HirExpr::StringLiteral("a".to_string())]),
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0039");
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_tuple_literal_as_unconstrained_but_recurses_into_elements()
+    {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1)]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_tuple_literal_element() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::TupleLiteral(vec![HirExpr::Name("missing".to_string())]);
 
         let err = collect_expr_constraints(
             &signatures,

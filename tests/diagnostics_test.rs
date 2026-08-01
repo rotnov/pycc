@@ -197,6 +197,16 @@ fn d0038_set_element_type_not_int() {
 }
 
 #[test]
+fn d0039_tuple_element_type_not_int_bool_float() {
+    assert_diagnostic_matches_fixture("d0039_tuple_element_type_not_int_bool_float");
+}
+
+#[test]
+fn d0040_tuple_index_not_a_literal() {
+    assert_diagnostic_matches_fixture("d0040_tuple_index_not_a_literal");
+}
+
+#[test]
 fn cli_spec_example() {
     assert_diagnostic_matches_fixture("cli_spec_example");
 }
