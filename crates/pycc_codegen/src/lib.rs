@@ -4377,9 +4377,12 @@ fn emit_stmt<'ctx>(
         // D-117) -- a *fourth* intentional inline duplicate of `ForRange`'s
         // own loop-building shape (see `ForList`'s own doc comment, which
         // already names `ForList`/`ForDict`/`ForSet` as the first three):
-        // this arm differs from every `For*` arm above in (a) allocating
-        // and storing the target's own empty backing list before the loop
-        // starts, (b) branching *internally* on `source`'s own kind for
+        // this arm differs from every `For*` arm above in (a) allocating the
+        // target's own empty backing list as a free-standing SSA pointer
+        // before the loop starts, but deliberately **not** storing it into
+        // `target`'s own slot until the entire loop has finished (see point
+        // 1's own comment below for why this ordering is load-bearing, not
+        // cosmetic), (b) branching *internally* on `source`'s own kind for
         // which per-iteration `_get`/`_len` FFI pair backs the loop test/
         // body (mirroring `MirExpr::Subscript`'s own "one MIR node, one
         // codegen arm, branch internally on the resolved kind" precedent,
@@ -4424,21 +4427,49 @@ fn emit_stmt<'ctx>(
         } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
 
-            // 1. Allocate the target's own empty backing list and store it
-            //    in its already-declared slot (`collect_stmt_bindings`'s
-            //    own `ListCompAssign` arm guarantees this slot exists
-            //    before this arm ever runs, the same invariant every other
-            //    container-typed target already relies on) -- mirrors
-            //    `MirExpr::ListLiteral`'s own `rt.int_list_new` call.
-            //    `emit_assign`'s existing `Scalar::List` arm needs no
-            //    decref/incref (D-107's leak-only rule).
+            // 1. Allocate the target's own empty backing list as a
+            //    free-standing SSA pointer value (`new_list`) -- but do
+            //    **not** store it into `target`'s own slot yet. Python (and
+            //    this crate's own `MirStmt::Assign` arm) fully evaluates an
+            //    assignment's RHS before rebinding its target name; a
+            //    comprehension's own "RHS" is the entire loop below, not
+            //    just this allocation. `source` (a `CompSource::List`/
+            //    `Dict`/`Set` read, or a `CompSource::Range`'s own start/
+            //    stop/step expressions) and every iteration's `cond`/`elt`
+            //    can themselves reference `target`'s own name -- e.g. `xs =
+            //    [x for x in xs if x > 2]` or `xs = [i for i in
+            //    range(len(xs))]` -- and until this whole statement
+            //    finishes, `target` must still resolve to whatever it
+            //    already held, not to this not-yet-complete list. Storing
+            //    early here previously made a self-referential comprehension
+            //    read its own freshly emptied slot instead of the original
+            //    container (a confirmed regression, fixed in a review
+            //    round -- see `a_list_sourced_list_comprehension_that_
+            //    rebinds_its_own_source_name_reads_the_pre_existing_value`
+            //    and its neighboring tests below). `new_list` itself needs
+            //    no slot at all to stay live across the loop: it is defined
+            //    in this block, which dominates every block the loop below
+            //    creates (`test_bb`/`body_bb`/`after_bb` and the optional
+            //    `if_taken_bb`/`if_skip_bb`), so every `build_int_list_
+            //    append(builder, rt, new_list, ..)` call inside the loop can
+            //    reference it directly as an ordinary SSA value, exactly
+            //    like the loop's own induction `phi` is referenced without
+            //    living in a named slot either. `target`'s own
+            //    already-declared slot (`collect_stmt_bindings`'s own
+            //    `ListCompAssign` arm guarantees it exists before this arm
+            //    ever runs, the same invariant every other container-typed
+            //    target already relies on) is written once, at the very end
+            //    of this arm, only after the loop has fully completed --
+            //    mirrors `MirExpr::ListLiteral`'s own `rt.int_list_new` call
+            //    for the allocation itself; `emit_assign`'s existing
+            //    `Scalar::List` arm needs no decref/incref either way
+            //    (D-107's leak-only rule).
             let new_list = builder
                 .build_call(rt.int_list_new, &[], "comp_list_new")
                 .expect("build_call should not fail for a well-formed list allocation")
                 .try_as_basic_value()
                 .expect_basic("pycc_rt_int_list_new returns a non-void pointer")
                 .into_pointer_value();
-            emit_assign(context, builder, locals, target, Scalar::List(new_list));
 
             // Carries whatever the shared increment step (after the shared
             // filter/append step) needs to add the phi's back-edge value
@@ -4790,6 +4821,13 @@ fn emit_stmt<'ctx>(
             }
 
             builder.position_at_end(after_bb);
+            // 5. Only now -- after the loop has fully run to completion,
+            //    with every read of `target`'s own name during `source`/
+            //    `cond`/`elt` evaluation already having happened against
+            //    its pre-existing value -- bind `target` to the now-fully-
+            //    built list (see point 1's own comment above for why this
+            //    is deferred all the way to here).
+            emit_assign(context, builder, locals, target, Scalar::List(new_list));
             Ok(())
         }
         // Temporary placeholder so this exhaustive match keeps compiling
@@ -11744,6 +11782,197 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"3\n4\n");
+    }
+
+    #[test]
+    fn a_list_sourced_list_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value(
+    ) {
+        // Regression test (review round 1, post-Task-5a): `xs = [i for i in
+        // range(5)]` then `xs = [x for x in xs if x > 2]`, reusing the same
+        // name for both the source *and* the target of the second
+        // comprehension. Real CPython evaluates the entire RHS -- the whole
+        // loop over the pre-existing `xs` (`[0, 1, 2, 3, 4]`) -- before
+        // rebinding `xs` to the result (`[3, 4]`), exactly like an ordinary
+        // `xs = xs + [1]` never sees its own partially-updated target mid-
+        // expression. An earlier version of this arm stored the target's
+        // freshly allocated *empty* list into `xs`'s own slot before
+        // evaluating `source`, so `emit_list_name_read(..., "xs")` read the
+        // brand-new empty list instead of the original one, and this
+        // produced `len(xs) == 0` instead of `2`. Fixed by deferring
+        // `emit_assign(target, ..)` until after the loop (see this arm's own
+        // "point 1"/"point 5" doc comments above).
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::ListCompAssign {
+                    target: "xs".to_string(),
+                    var: "i".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Range {
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::IntLiteral(5),
+                        step: MirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    elt: Box::new(MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ListCompAssign {
+                    target: "xs".to_string(),
+                    var: "x".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::List("xs".to_string()),
+                    cond: Some(Box::new(MirExpr::Compare {
+                        op: CmpOpKind::Gt,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(2)),
+                        ty: Ty::Bool,
+                    })),
+                    elt: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_each_int("xs")),
+            ],
+        };
+        let dir = tempfile_dir("listcomp_self_referential_source");
+        let obj_path = dir.join("listcomp_self_referential_source.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("listcomp_self_referential_source");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3\n4\n");
+    }
+
+    #[test]
+    fn a_range_sourced_list_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length(
+    ) {
+        // Regression test (review round 1, post-Task-5a): `xs = [i for i in
+        // range(5)]` then `xs = [i * 2 for i in range(len(xs))]`. `source`
+        // is `CompSource::Range` here, not `CompSource::List` -- distinct
+        // from the test directly above, since it exercises `source`'s own
+        // `stop` expression (`len(xs)`) reading `target`'s pre-existing
+        // value during the *preheader*, before `test_bb` even exists, not
+        // `var`'s own per-iteration container read. Real CPython evaluates
+        // `range(len(xs))` once, against the original 5-element `xs`,
+        // before the comprehension loop runs at all, giving a 5-element
+        // result (`[0, 2, 4, 6, 8]`); the same premature-rebind bug this
+        // file's neighboring regression test documents would instead have
+        // read the just-emptied `xs` here, giving `range(0)` and an empty
+        // result.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::ListCompAssign {
+                    target: "xs".to_string(),
+                    var: "i".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Range {
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::IntLiteral(5),
+                        step: MirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    elt: Box::new(MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ListCompAssign {
+                    target: "xs".to_string(),
+                    var: "i".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Range {
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::Call {
+                            callee: "len".to_string(),
+                            args: vec![MirExpr::Name {
+                                name: "xs".to_string(),
+                                ty: Ty::List(Box::new(Ty::Int)),
+                            }],
+                            ty: Ty::Int,
+                        },
+                        step: MirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    elt: Box::new(MirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(2)),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_each_int("xs")),
+            ],
+        };
+        let dir = tempfile_dir("listcomp_self_referential_range_bound");
+        let obj_path = dir.join("listcomp_self_referential_range_bound.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("listcomp_self_referential_range_bound");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"0\n2\n4\n6\n8\n");
+    }
+
+    #[test]
+    fn a_list_comprehensions_elt_reading_its_own_rebound_target_reads_the_pre_existing_value() {
+        // Regression test (review round 1, post-Task-5a): `xs = [1, 2, 3]`
+        // then `xs = [xs[0] for i in range(2)]`. Distinct from both tests
+        // above: `elt` (not `source`) reads `target`'s own name here,
+        // *inside* the loop body, once per iteration. Real CPython gives
+        // `[1, 1]` (`xs[0]` is `1` throughout, since the original `xs` is
+        // untouched until the whole comprehension finishes). The
+        // premature-rebind bug this file's other two regression tests above
+        // document made this specific shape crash outright, not merely
+        // print the wrong value: `xs`'s slot held the freshly allocated
+        // *empty* list for the entire loop, so the very first
+        // `xs[0]` read inside `elt` panicked with `pycc_rt`'s own honest
+        // "list index out of range" before any element was ever appended.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: MirExpr::ListLiteral(vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(3),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ListCompAssign {
+                    target: "xs".to_string(),
+                    var: "i".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Range {
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::IntLiteral(2),
+                        step: MirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    elt: Box::new(MirExpr::Subscript {
+                        base: Box::new(MirExpr::Name {
+                            name: "xs".to_string(),
+                            ty: Ty::List(Box::new(Ty::Int)),
+                        }),
+                        index: Box::new(MirExpr::IntLiteral(0)),
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_each_int("xs")),
+            ],
+        };
+        let dir = tempfile_dir("listcomp_self_referential_elt");
+        let obj_path = dir.join("listcomp_self_referential_elt.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("listcomp_self_referential_elt");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n1\n");
     }
 
     #[test]
