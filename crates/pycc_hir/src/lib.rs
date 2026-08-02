@@ -199,6 +199,21 @@ pub enum FStringPart {
     Interpolation(Box<HirExpr>),
 }
 
+/// A comprehension's iterable source (PR-12, D-117): reuses
+/// `HirStmt::ForList`'s own iterable polymorphism verbatim (a bare name is
+/// resolved to `Ty::List`/`Ty::Dict`/`Ty::Set` downstream by
+/// `pycc_types`/`pycc_mir`, exactly like a plain `for` loop) rather than
+/// inventing a narrower, comprehension-specific iterable gate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompIter {
+    Range {
+        start: HirExpr,
+        stop: HirExpr,
+        step: HirExpr,
+    },
+    Name(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirStmt {
     ExprStmt(HirExpr),
@@ -253,6 +268,48 @@ pub enum HirStmt {
         dict: String,
         key: HirExpr,
         value: HirExpr,
+    },
+    /// `target = [elt for var in iter [if cond]]` (PR-12, D-117). Scoped to
+    /// exactly one `for` clause and at most one `if` filter; only lowered
+    /// when the comprehension is the direct RHS of a bare-name
+    /// `Stmt::Assign` (see that arm's own handling below) -- anywhere else
+    /// a comprehension expression appears, `lower_expr` has no arm for it
+    /// and it falls through to that function's existing generic
+    /// "expression kind not supported yet" catch-all. `var` is already the
+    /// D-117 synthesized internal name, not the source spelling -- every
+    /// occurrence of the source name inside `cond`/`elt` has already been
+    /// rewritten by `rename_name_in_expr` before this node is constructed,
+    /// so downstream crates never see the user's own loop-variable
+    /// spelling at all.
+    ListCompAssign {
+        target: String,
+        var: String,
+        iter: CompIter,
+        cond: Option<Box<HirExpr>>,
+        elt: Box<HirExpr>,
+    },
+    /// `target = {key: value for var in iter [if cond]}` (PR-12, D-117).
+    /// Mirrors `ListCompAssign` exactly except for the key/value split
+    /// (Python's dict-comprehension grammar has no direct list-comp analog
+    /// of a single `elt`).
+    DictCompAssign {
+        target: String,
+        var: String,
+        iter: CompIter,
+        cond: Option<Box<HirExpr>>,
+        key: Box<HirExpr>,
+        value: Box<HirExpr>,
+    },
+    /// `target = {elt for var in iter [if cond]}` (PR-12, D-117). Mirrors
+    /// `ListCompAssign` exactly -- a set comprehension's own shape is
+    /// identical to a list comprehension's, differing only in which
+    /// runtime constructor/insert pair `pycc_codegen` ends up calling.
+    SetCompAssign {
+        target: String,
+        var: String,
+        iter: CompIter,
+        cond: Option<Box<HirExpr>>,
+        elt: Box<HirExpr>,
     },
     Return(Option<HirExpr>),
 }
@@ -437,9 +494,24 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                 ));
             };
             match target {
-                Expr::Name(name) => HirStmt::Assign {
-                    target: name.id.as_str().to_string(),
-                    value: lower_expr(&assign.value)?,
+                Expr::Name(name) => match assign.value.as_ref() {
+                    // Comprehension expressions are recognized only in this
+                    // one position: the direct RHS of a bare-name
+                    // `Stmt::Assign` (PR-12, D-117). Every other position
+                    // (function args, nested expressions, `return`,
+                    // `Expr::Subscript` assignment targets) still routes
+                    // through plain `lower_expr`, which has no arm for
+                    // `Expr::ListComp`/`SetComp`/`DictComp`/`GeneratorExp`
+                    // and falls through to that function's existing
+                    // generic "expression kind not supported yet"
+                    // catch-all.
+                    Expr::ListComp(comp) => lower_list_comp_assign(name.id.as_str(), comp)?,
+                    Expr::SetComp(comp) => lower_set_comp_assign(name.id.as_str(), comp)?,
+                    Expr::DictComp(comp) => lower_dict_comp_assign(name.id.as_str(), comp)?,
+                    _ => HirStmt::Assign {
+                        target: name.id.as_str().to_string(),
+                        value: lower_expr(&assign.value)?,
+                    },
                 },
                 // `<bare name>[key] = value`, PR-11 Task 3 (D-113): unlike
                 // `list[int]`'s own read-only-indexing consequence (D-105),
@@ -836,14 +908,102 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
     Ok(lowered)
 }
 
+/// Rewrites every occurrence of the bare name `from` inside `expr` to `to`
+/// (PR-12, D-117) -- used to give a comprehension's own loop variable a
+/// synthesized, collision-proof internal name (see `synthesize_comp_var_name`
+/// below) without inventing real lexical scoping. Exhaustive over `HirExpr`
+/// on purpose: a future variant added to this enum must add its own arm here
+/// too, the same "let the compiler enumerate every site" discipline this
+/// project's own `Scalar::List` precedent (D-107) already established for
+/// `pycc_codegen`. Safe to apply blindly (no risk of renaming an unrelated
+/// same-named binding from some other nested scope) because v0.2's
+/// comprehension grammar has no nested comprehensions, no lambda, and no
+/// nested function defs inside a comprehension's own `elt`/`cond`/`key`/
+/// `value` -- none of those are expressible here at all yet.
+fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExpr {
+    let recurse = |e: HirExpr| rename_name_in_expr(e, from, to);
+    match expr {
+        HirExpr::Name(n) => HirExpr::Name(if n == from { to.to_string() } else { n }),
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_) => expr,
+        HirExpr::Call { callee, args } => HirExpr::Call {
+            callee,
+            args: args.into_iter().map(recurse).collect(),
+        },
+        HirExpr::BinOp { op, left, right } => HirExpr::BinOp {
+            op,
+            left: Box::new(recurse(*left)),
+            right: Box::new(recurse(*right)),
+        },
+        HirExpr::Compare { op, left, right } => HirExpr::Compare {
+            op,
+            left: Box::new(recurse(*left)),
+            right: Box::new(recurse(*right)),
+        },
+        HirExpr::FString(parts) => HirExpr::FString(
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    FStringPart::Literal(s) => FStringPart::Literal(s),
+                    FStringPart::Interpolation(e) => {
+                        FStringPart::Interpolation(Box::new(recurse(*e)))
+                    }
+                })
+                .collect(),
+        ),
+        HirExpr::ListLiteral(es) => HirExpr::ListLiteral(es.into_iter().map(recurse).collect()),
+        HirExpr::Subscript { base, index } => HirExpr::Subscript {
+            base: Box::new(recurse(*base)),
+            index: Box::new(recurse(*index)),
+        },
+        HirExpr::ListAppend { list, value } => HirExpr::ListAppend {
+            list: if list == from { to.to_string() } else { list },
+            value: Box::new(recurse(*value)),
+        },
+        HirExpr::DictLiteral(pairs) => HirExpr::DictLiteral(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (recurse(k), recurse(v)))
+                .collect(),
+        ),
+        HirExpr::SetLiteral(es) => HirExpr::SetLiteral(es.into_iter().map(recurse).collect()),
+        HirExpr::TupleLiteral(es) => HirExpr::TupleLiteral(es.into_iter().map(recurse).collect()),
+    }
+}
+
+/// Synthesizes a collision-proof internal name for a comprehension's loop
+/// variable (D-117): a leading digit can never begin a valid Python
+/// identifier (confirmed against the vendored `ruff_python_parser`'s own
+/// tokenizer -- a `NAME` token cannot start with a decimal digit), so this
+/// string can never be produced by lowering real Python source, no matter
+/// what the user names their own variables -- no new lexical-scoping
+/// machinery is needed; this is just another ordinary entry in the existing
+/// flat, name-keyed slot model. Seeded by the loop target's own byte offset,
+/// not a mutable counter: two distinct comprehensions in one file can never
+/// share a target's start offset, so this needs no threaded lowering state
+/// and stays fully deterministic across repeated compiles of the same
+/// source.
+///
+/// Takes a plain `u32` byte offset (from `pycc_ast::expr_range`) rather than
+/// naming `ruff_text_size::TextSize` directly -- `pycc_hir` depends only on
+/// `pycc_ast`, never on `ruff_text_size` (Step 0's own re-export widening is
+/// this crate's one and only upstream-crate seam), and `pycc_ast`'s own
+/// `expr_range`/`stmt_range` exist specifically to keep that boundary from
+/// leaking (see their doc comments).
+fn synthesize_comp_var_name(target_start: u32, source_name: &str) -> String {
+    format!("0comp_{target_start}_{source_name}")
+}
+
 /// Parses `range(...)`'s argument list into `(start, stop, step)` `HirExpr`s,
 /// defaulting `start`/`step` per Python's own `range()` overloads. Shared by
-/// `Stmt::For`'s own lowering and a future comprehension-iterable lowering
-/// step (PR-12) -- factored out rather than duplicated a second time.
-/// Callers are responsible for checking the callee is actually `range` and
-/// carries no keyword arguments first (their own diagnostics may differ in
-/// wording between call sites), so this helper only ever inspects
-/// `call.arguments.args`.
+/// `Stmt::For`'s own lowering and `lower_comprehension_iter` below (PR-12) --
+/// factored out rather than duplicated a second time. Callers are
+/// responsible for checking the callee is actually `range` and carries no
+/// keyword arguments first (their own diagnostics differ in wording between
+/// a plain `for` loop and a comprehension's `for` clause), so this helper
+/// only ever inspects `call.arguments.args`.
 fn lower_range_call(call: &pycc_ast::ExprCall) -> Result<(HirExpr, HirExpr, HirExpr), Diagnostic> {
     match &*call.arguments.args {
         [stop] => Ok((
@@ -862,6 +1022,169 @@ fn lower_range_call(call: &pycc_ast::ExprCall) -> Result<(HirExpr, HirExpr, HirE
             call.range,
         )),
     }
+}
+
+/// Resolves a comprehension's `for var in <iter>` clause into a `CompIter`,
+/// reusing `Stmt::For`'s own iterable-shape acceptance verbatim (D-117):
+/// `range(...)` or a bare name (resolved to `Ty::List`/`Ty::Dict`/`Ty::Set`
+/// downstream by `pycc_types`/`pycc_mir`, exactly like a plain `for` loop).
+/// Any other shape is rejected with the existing generic `C0001` path,
+/// mirroring `Stmt::For`'s own "only `for x in range(...)` or `for x in
+/// <list>` is supported so far" message.
+fn lower_comprehension_iter(iter_expr: &Expr) -> Result<CompIter, Diagnostic> {
+    if let Expr::Name(name) = iter_expr {
+        return Ok(CompIter::Name(name.id.as_str().to_string()));
+    }
+    let Expr::Call(call) = iter_expr else {
+        return Err(unsupported(
+            format!(
+                "only `range(...)` or a bare-name iterable is supported so far in a comprehension: {iter_expr:?}"
+            ),
+            pycc_ast::expr_range(iter_expr),
+        ));
+    };
+    let Expr::Name(callee) = call.func.as_ref() else {
+        return Err(unsupported(
+            "only calling `range(...)` is supported so far in a comprehension",
+            pycc_ast::expr_range(&call.func),
+        ));
+    };
+    if callee.id.as_str() != "range" {
+        return Err(unsupported(
+            format!(
+                "only iterating over `range(...)` is supported so far in a comprehension, got `{}`",
+                callee.id
+            ),
+            call.range,
+        ));
+    }
+    if !call.arguments.keywords.is_empty() {
+        return Err(unsupported(
+            "keyword arguments to range() are not supported yet",
+            call.range,
+        ));
+    }
+    let (start, stop, step) = lower_range_call(call)?;
+    Ok(CompIter::Range { start, stop, step })
+}
+
+/// Validates and lowers a comprehension's shared shape (D-117): exactly one
+/// generator clause, no `async for`, a bare-name loop target, at most one
+/// `if` filter. Returns the loop target's *source* name, its synthesized
+/// internal replacement, the resolved `CompIter`, and the (not-yet-renamed)
+/// lowered `if`-filter expression, if present -- renaming is the caller's
+/// job (`lower_list_comp_assign`/`lower_set_comp_assign`/
+/// `lower_dict_comp_assign` below), since `elt`/`key`/`value` also need the
+/// identical rename and this helper has no visibility into which of those
+/// the caller is building.
+fn lower_comprehension_header(
+    generators: &[pycc_ast::Comprehension],
+) -> Result<(String, String, CompIter, Option<HirExpr>), Diagnostic> {
+    // Named `generator`, not `gen` -- `gen` is a reserved keyword as of the
+    // 2024 edition (this workspace's own edition, reserved for a future
+    // generator-block feature), so the brief's own `gen` binding does not
+    // compile here.
+    let [generator] = generators else {
+        return Err(unsupported(
+            "a comprehension with more than one `for` clause is not supported yet",
+            generators.first().map(|g| g.range).unwrap_or_default(),
+        ));
+    };
+    if generator.is_async {
+        return Err(unsupported(
+            "async comprehensions are not supported yet",
+            generator.range,
+        ));
+    }
+    let Expr::Name(var) = &generator.target else {
+        return Err(unsupported(
+            "only a bare name comprehension target is supported so far",
+            pycc_ast::expr_range(&generator.target),
+        ));
+    };
+    let cond = match generator.ifs.as_slice() {
+        [] => None,
+        [single] => Some(lower_expr(single)?),
+        _ => {
+            return Err(unsupported(
+                "a comprehension with more than one `if` filter is not supported yet",
+                generator.range,
+            ));
+        }
+    };
+    let iter = lower_comprehension_iter(&generator.iter)?;
+    let source_name = var.id.as_str().to_string();
+    let synth_var =
+        synthesize_comp_var_name(pycc_ast::expr_range(&generator.target).start, &source_name);
+    Ok((source_name, synth_var, iter, cond))
+}
+
+fn lower_list_comp_assign(
+    target: &str,
+    comp: &pycc_ast::ExprListComp,
+) -> Result<HirStmt, Diagnostic> {
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let elt = rename_name_in_expr(lower_expr(&comp.elt)?, &source_name, &synth_var);
+    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
+    Ok(HirStmt::ListCompAssign {
+        target: target.to_string(),
+        var: synth_var,
+        iter,
+        cond: cond.map(Box::new),
+        elt: Box::new(elt),
+    })
+}
+
+fn lower_set_comp_assign(
+    target: &str,
+    comp: &pycc_ast::ExprSetComp,
+) -> Result<HirStmt, Diagnostic> {
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let elt = rename_name_in_expr(lower_expr(&comp.elt)?, &source_name, &synth_var);
+    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
+    Ok(HirStmt::SetCompAssign {
+        target: target.to_string(),
+        var: synth_var,
+        iter,
+        cond: cond.map(Box::new),
+        elt: Box::new(elt),
+    })
+}
+
+fn lower_dict_comp_assign(
+    target: &str,
+    comp: &pycc_ast::ExprDictComp,
+) -> Result<HirStmt, Diagnostic> {
+    // Real Python's dict-comprehension grammar (`{k: v for ...}`) has no
+    // `**`-unpacking form the way a plain `Expr::Dict` literal does -- but
+    // unlike that literal case, the parser does *not* reject
+    // `{**x for k in y}`-shaped source at parse time: confirmed directly
+    // against the vendored `ruff_python_parser` (0.0.6), which parses it
+    // successfully as `ExprDictComp { key: None, value: Name("x"), .. }`,
+    // silently dropping the `**` token rather than erroring. The brief this
+    // task followed assumed `key: None` was unreachable from real parsed
+    // source and modeled it with an `unreachable!()`/`.expect()` internal
+    // panic; that assumption is false, so this is a real (if unusual)
+    // C0001 capability diagnostic, mirroring `Expr::Dict`'s own analogous
+    // `**`-unpacking rejection, not an internal-error panic.
+    let Some(key_expr) = comp.key.as_deref() else {
+        return Err(unsupported(
+            "dict-unpacking (`**expr`) inside a dict comprehension is not supported yet",
+            pycc_ast::expr_range(&comp.value),
+        ));
+    };
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let key = rename_name_in_expr(lower_expr(key_expr)?, &source_name, &synth_var);
+    let value = rename_name_in_expr(lower_expr(&comp.value)?, &source_name, &synth_var);
+    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
+    Ok(HirStmt::DictCompAssign {
+        target: target.to_string(),
+        var: synth_var,
+        iter,
+        cond: cond.map(Box::new),
+        key: Box::new(key),
+        value: Box::new(value),
+    })
 }
 
 fn unsupported<R>(message: impl Into<String>, range: R) -> Diagnostic
@@ -2412,6 +2735,558 @@ mod tests {
         assert_capability_error_message(
             "x = (1, lambda: 1)\n",
             "expression kind not supported yet",
+        );
+    }
+
+    // -- PR-12 Task 2 (D-117): comprehension frontend HIR forms ----------
+
+    #[test]
+    fn lowers_a_list_comprehension_over_range_to_list_comp_assign() {
+        let module = pycc_parser_test_helper::parse("y = [i for i in range(3)]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_list_comprehension_with_an_if_filter() {
+        let module = pycc_parser_test_helper::parse("y = [i for i in range(5) if i]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(5),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("0comp_11_i".to_string()))),
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_dict_comprehension_with_an_f_string_key_renaming_the_interpolation() {
+        // Confirms `FString`'s own `rename_name_in_expr` arm actually
+        // rewrites an interpolated loop-variable reference, not just a bare
+        // `Name` expression.
+        let module = pycc_parser_test_helper::parse("y = {f\"n{i}\": i for i in range(3)}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_20_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                key: Box::new(HirExpr::FString(vec![
+                    FStringPart::Literal("n".to_string()),
+                    FStringPart::Interpolation(Box::new(HirExpr::Name("0comp_20_i".to_string()))),
+                ])),
+                value: Box::new(HirExpr::Name("0comp_20_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_set_comprehension_to_set_comp_assign() {
+        let module = pycc_parser_test_helper::parse("y = {i for i in range(3)}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_set_comprehension_with_an_if_filter() {
+        // `SetCompAssign`'s own `cond` field needs a dedicated if-filter
+        // test distinct from the plain set-comprehension test above: the
+        // `cond.map(|c| rename_name_in_expr(...))` closure inside
+        // `lower_set_comp_assign` is only reached when `cond.is_some()`.
+        let module = pycc_parser_test_helper::parse("y = {i for i in range(5) if i}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(5),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("0comp_11_i".to_string()))),
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_dict_comprehension_with_an_if_filter() {
+        // Same reasoning as `lowers_a_set_comprehension_with_an_if_filter`
+        // above, for `lower_dict_comp_assign`'s own `cond.map(...)` closure.
+        let module = pycc_parser_test_helper::parse("y = {i: i for i in range(5) if i}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_14_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(5),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("0comp_14_i".to_string()))),
+                key: Box::new(HirExpr::Name("0comp_14_i".to_string())),
+                value: Box::new(HirExpr::Name("0comp_14_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn a_comprehension_with_two_for_clauses_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in range(3) for j in range(3)]\n",
+            "a comprehension with more than one `for` clause is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_with_two_if_filters_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in range(5) if i if i]\n",
+            "a comprehension with more than one `if` filter is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_with_a_non_bare_name_target_is_unsupported() {
+        assert_capability_error_message(
+            "y = [a for (a, b) in xs]\n",
+            "only a bare name comprehension target is supported so far",
+        );
+    }
+
+    #[test]
+    fn an_async_for_comprehension_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i async for i in xs]\n",
+            "async comprehensions are not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_used_as_a_call_argument_is_not_specially_recognized() {
+        // Pins the "only `Stmt::Assign`-RHS position" restriction (D-117): a
+        // comprehension anywhere else still falls through to `lower_expr`'s
+        // existing generic catch-all, not a new comprehension-specific
+        // error path.
+        assert_capability_error_message(
+            "print([i for i in range(3)])\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iterating_a_bare_name_produces_comp_iter_name() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = [i for i in xs]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_26_i".to_string(),
+                iter: CompIter::Name("xs".to_string()),
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_26_i".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iterating_a_list_literal_is_unsupported() {
+        // Neither a bare name nor a call -- exercises
+        // `lower_comprehension_iter`'s own "not Name, not Call" branch,
+        // which is not shared with `Stmt::For`'s separate (textually
+        // similar but distinct) iterable-shape checks.
+        assert_capability_error_message(
+            "y = [i for i in [1, 2]]\n",
+            "only `range(...)` or a bare-name iterable is supported so far in a comprehension",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iterating_a_non_name_callee_call_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in f()()]\n",
+            "only calling `range(...)` is supported so far in a comprehension",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iterating_a_non_range_call_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in foo(3)]\n",
+            "only iterating over `range(...)` is supported so far in a comprehension, got `foo`",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_range_call_with_keyword_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in range(stop=3)]\n",
+            "keyword arguments to range() are not supported yet",
+        );
+    }
+
+    // The eight tests below each exercise one `?`-propagation region on its
+    // own `?` operator's specific call site (mirroring this file's existing
+    // "the five tests below exercise each new arm's own `?`-propagation
+    // path specifically" precedent above): `lower_set_comp_assign` and
+    // `lower_dict_comp_assign` are structurally near-identical to
+    // `lower_list_comp_assign`, but each function's own `?` is a distinct
+    // coverage region, so an error test against one function's call site
+    // does not also cover its sibling's.
+
+    #[test]
+    fn a_set_comprehension_with_an_unsupported_header_propagates_the_header_error() {
+        // Exercises both `Stmt::Assign`'s own `Expr::SetComp(comp) =>
+        // lower_set_comp_assign(...)?` call site and
+        // `lower_set_comp_assign`'s own internal
+        // `lower_comprehension_header(&comp.generators)?` call site in one
+        // test, since the header error propagates through both in the same
+        // nested call.
+        assert_capability_error_message(
+            "y = {i for i in range(3) for j in range(3)}\n",
+            "a comprehension with more than one `for` clause is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iter_range_call_with_too_many_arguments_is_unsupported() {
+        // Exercises `lower_comprehension_iter`'s own
+        // `lower_range_call(call)?` call site specifically -- distinct from
+        // `Stmt::For`'s own separate call site to the same shared helper
+        // (already covered by `range_with_too_many_arguments_is_not_supported`
+        // above).
+        assert_capability_error_message(
+            "y = [i for i in range(1, 2, 3, 4)]\n",
+            "range() with 4 arguments is not supported",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_if_filter_with_an_unsupported_expression_propagates_the_filter_error() {
+        assert_capability_error_message(
+            "y = [i for i in range(3) if (lambda: 1)]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_list_comprehension_element_that_fails_to_lower_propagates_the_element_error() {
+        assert_capability_error_message(
+            "y = [(lambda: 1) for i in range(3)]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_set_comprehension_element_that_fails_to_lower_propagates_the_element_error() {
+        assert_capability_error_message(
+            "y = {(lambda: 1) for i in range(3)}\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_comprehension_with_an_unsupported_header_propagates_the_header_error() {
+        assert_capability_error_message(
+            "y = {i: i for i in range(3) for j in range(3)}\n",
+            "a comprehension with more than one `for` clause is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_comprehension_key_that_fails_to_lower_propagates_the_key_error() {
+        assert_capability_error_message(
+            "y = {(lambda: 1): i for i in range(3)}\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_comprehension_value_that_fails_to_lower_propagates_the_value_error() {
+        assert_capability_error_message(
+            "y = {i: (lambda: 1) for i in range(3)}\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn dict_comp_key_unpacking_parses_successfully_and_is_rejected_at_lowering() {
+        // The task-2 brief this test suite followed assumed
+        // `{**x for k in y}`-shaped source could never actually parse (so
+        // `comp.key == None` would be unreachable, modeled with an internal
+        // panic). Verified false directly against the vendored
+        // `ruff_python_parser`: it parses this successfully as
+        // `ExprDictComp { key: None, value: Name("x"), .. }`, silently
+        // dropping the `**` rather than erroring -- so `pycc_parser::parse`
+        // itself succeeds here, and `lower_dict_comp_assign` is the one
+        // that must reject it, with an ordinary `C0001` capability
+        // diagnostic instead of a panic.
+        assert!(pycc_parser::parse("y = {**x for k in z}\n").is_ok());
+        assert_capability_error_message(
+            "y = {**x for k in z}\n",
+            "dict-unpacking (`**expr`) inside a dict comprehension is not supported yet",
+        );
+    }
+
+    #[test]
+    fn lower_comprehension_header_rejects_an_empty_generators_slice() {
+        // Real parsed source can never produce a comprehension with zero
+        // generators -- this is the only way to reach the `[generator] =
+        // generators else { ... }` arm's failure branch and its own
+        // `generators.first().map(|g| g.range).unwrap_or_default()`
+        // span-fallback expression at all (D-014's region coverage gate
+        // would otherwise flag that fallback as an uncoverable dead
+        // branch).
+        let err = lower_comprehension_header(&[]).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message
+                .contains("a comprehension with more than one `for` clause is not supported yet")
+        );
+        assert_eq!(err.span, Some(Span::new(0, 0)));
+    }
+
+    #[test]
+    fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
+        // Exhaustiveness-pinning test for `rename_name_in_expr`'s own
+        // "let the compiler enumerate every site" discipline (D-117,
+        // mirroring D-107's `Scalar::List` precedent) -- every arm must be
+        // hit by at least one case, and every conditional inside an arm
+        // (name matches `from` vs. doesn't) must be hit on both sides.
+
+        // Name: renamed when it matches `from`, left alone otherwise.
+        assert_eq!(
+            rename_name_in_expr(HirExpr::Name("old".to_string()), "old", "new"),
+            HirExpr::Name("new".to_string())
+        );
+        assert_eq!(
+            rename_name_in_expr(HirExpr::Name("other".to_string()), "old", "new"),
+            HirExpr::Name("other".to_string())
+        );
+
+        // The four grouped literal variants are returned unchanged.
+        assert_eq!(
+            rename_name_in_expr(HirExpr::IntLiteral(1), "old", "new"),
+            HirExpr::IntLiteral(1)
+        );
+        assert_eq!(
+            rename_name_in_expr(HirExpr::FloatLiteral(1.5), "old", "new"),
+            HirExpr::FloatLiteral(1.5)
+        );
+        assert_eq!(
+            rename_name_in_expr(HirExpr::BoolLiteral(true), "old", "new"),
+            HirExpr::BoolLiteral(true)
+        );
+        assert_eq!(
+            rename_name_in_expr(HirExpr::StringLiteral("s".to_string()), "old", "new"),
+            HirExpr::StringLiteral("s".to_string())
+        );
+
+        // Call: renames every argument.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("old".to_string())],
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("new".to_string())],
+            }
+        );
+
+        // BinOp: renames both sides.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("old".to_string())),
+                    right: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::Name("new".to_string())),
+                right: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // Compare: renames both sides.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::Compare {
+                    op: CmpOpKind::Eq,
+                    left: Box::new(HirExpr::Name("old".to_string())),
+                    right: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::Compare {
+                op: CmpOpKind::Eq,
+                left: Box::new(HirExpr::Name("new".to_string())),
+                right: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // FString: covers both a `Literal` part (passed through unchanged)
+        // and an `Interpolation` part (recursed into) in the same tree.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::FString(vec![
+                    FStringPart::Literal("text".to_string()),
+                    FStringPart::Interpolation(Box::new(HirExpr::Name("old".to_string()))),
+                ]),
+                "old",
+                "new",
+            ),
+            HirExpr::FString(vec![
+                FStringPart::Literal("text".to_string()),
+                FStringPart::Interpolation(Box::new(HirExpr::Name("new".to_string()))),
+            ])
+        );
+
+        // ListLiteral: renames every element.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListLiteral(vec![HirExpr::Name("old".to_string())]),
+                "old",
+                "new",
+            ),
+            HirExpr::ListLiteral(vec![HirExpr::Name("new".to_string())])
+        );
+
+        // Subscript: renames both base and index.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::Subscript {
+                    base: Box::new(HirExpr::Name("old".to_string())),
+                    index: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::Subscript {
+                base: Box::new(HirExpr::Name("new".to_string())),
+                index: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // ListAppend: covers both the `list` field matching `from` and not
+        // matching it, plus renaming `value` in both cases.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListAppend {
+                    list: "old".to_string(),
+                    value: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::ListAppend {
+                list: "new".to_string(),
+                value: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListAppend {
+                    list: "other".to_string(),
+                    value: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::ListAppend {
+                list: "other".to_string(),
+                value: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // DictLiteral: renames both key and value of every pair.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::DictLiteral(vec![(
+                    HirExpr::Name("old".to_string()),
+                    HirExpr::Name("old".to_string()),
+                )]),
+                "old",
+                "new",
+            ),
+            HirExpr::DictLiteral(vec![(
+                HirExpr::Name("new".to_string()),
+                HirExpr::Name("new".to_string()),
+            )])
+        );
+
+        // SetLiteral: renames every element.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::SetLiteral(vec![HirExpr::Name("old".to_string())]),
+                "old",
+                "new",
+            ),
+            HirExpr::SetLiteral(vec![HirExpr::Name("new".to_string())])
+        );
+
+        // TupleLiteral: renames every element.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::TupleLiteral(vec![HirExpr::Name("old".to_string())]),
+                "old",
+                "new",
+            ),
+            HirExpr::TupleLiteral(vec![HirExpr::Name("new".to_string())])
         );
     }
 }
