@@ -4,7 +4,7 @@
     {
       "path": ".github/workflows/ci.yml",
       "source_path": ".github/workflows/ci.yml",
-      "sha256": "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
+      "sha256": "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
@@ -19,7 +19,7 @@
     {
       "path": "scripts/check_roadmap_evidence.rb",
       "source_path": "scripts/check_roadmap_evidence.rb",
-      "sha256": "f7e5b618b5801d0ea07fcd354cdfbbcdf341bdfeb3c6c0b06c62c4b209682f97"
+      "sha256": "954e232a2c812e8031194330c82a593494bf9410808222da43875d15dd8f796c"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -44,7 +44,7 @@
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
       "source_path": "scripts/test_check_roadmap_evidence.rb",
-      "sha256": "03db12e8529ff32c2c200f66da10b171102201f0234fdaa6efa6cabea85d44b6"
+      "sha256": "3625fd495063cdf39c6df175f01cd90b0178f3ce8d282ba1d9d9cebae79cc54a"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
@@ -60,6 +60,11 @@
       "path": "tests/fixtures/d100-compose-d91-d99-ci.yml",
       "source_path": "tests/fixtures/d100-compose-d91-d99-ci.yml",
       "sha256": "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
+    },
+    {
+      "path": "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml",
+      "source_path": "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml",
+      "sha256": "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
     },
     {
       "path": "tests/fixtures/d51-paired-ci.yml",

@@ -258,6 +258,26 @@ class AgentAssetValidationTests(unittest.TestCase):
                     any("malformed eval" in item for item in failures)
                 )
 
+    def test_validate_alpha_skill_contracts_covers_issue_implement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "pycc",
+                "pycc-feedback",
+                "issue-to-plan",
+                "issue-implement",
+                "issue-select",
+            ):
+                shutil.copytree(validator.SKILLS_ROOT / name, root / name)
+            evals_path = root / "issue-implement" / "evals" / "evals.json"
+            evals_data = json.loads(evals_path.read_text(encoding="utf-8"))
+            evals_data["evals"][1]["id"] = evals_data["evals"][0]["id"]
+            evals_path.write_text(json.dumps(evals_data), encoding="utf-8")
+
+            failures: list[str] = []
+            validator.validate_alpha_skill_contracts(root, failures, root=root)
+            self.assertTrue(any("eval ids must be unique" in item for item in failures))
+
     def write_skill(
         self,
         root: Path,

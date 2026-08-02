@@ -135,10 +135,11 @@ retired immediately if later repository requirements make that workflow
 incomplete; a transition window is valid only while both versions satisfy the
 current contract.
 
-The live workflow currently matches the D-100 fixture, which composes D-091
+D-100 composes D-091
 (release-mode `pycc_rt` build step, relaxed `frontend-perf-measure` manifest
 classification) with D-099 (Windows vcpkg binary cache) into one reviewed
-digest. D-099 activated on `main` independently of PR-8's own work, briefly
+digest; the live workflow matched this fixture until D-112 activated (see
+below), and D-100's own digest remains reviewed audit evidence. D-099 activated on `main` independently of PR-8's own work, briefly
 retiring D-091's own digest before D-100 composed the two -- both D-091's and
 D-099's pre-composition digests remain reviewed pre-D-100 audit fixtures, no
 longer publicly authorized on their own. D-099 is the retired D-084 workflow
@@ -188,13 +189,19 @@ fixed sample plan and comparator. Artifact and checkout actions remain immutable
 reviewed pins.
 
 The active `.github/workflows/ci.yml` is byte-identical to
-`tests/fixtures/d100-compose-d91-d99-ci.yml`. Its performance jobs remain
-byte-identical to the reviewed D-062 fixture. The checker allowlist contains
-only active D-100, while structural mutation tests exercise the active
-fixed-replicate and cache boundaries plus D-091's, D-099's, and D-056's
-retained audit fixtures. The retired D-051, D-056, D-062, D-080, D-084,
-pre-D-100 D-091, and pre-D-100 D-099 whole-file digests remain historical
-audit evidence, but the public policy rejects them.
+`tests/fixtures/d112-ubuntu-frontend-perf-ci.yml` (D-112: `frontend-perf-measure`/
+`frontend-perf-gate` moved from `macos-14` to `ubuntu-latest`, confirmed by
+five real shadow-measurement runs before activation -- see `docs/DECISIONS.md`).
+Its performance jobs keep D-062's comparator logic and five-replicate/`>2%`
+contract unchanged, but their runner and LLVM install step differ from the
+D-062 fixture, so job content is no longer byte-identical to it. The checker
+allowlist currently accepts both active D-112 and D-100 (a deliberate D-103
+coexist window pending a later, separate round that retires D-100), while
+structural mutation tests exercise the active fixed-replicate and cache
+boundaries plus D-100's, D-091's, D-099's, and D-056's retained audit
+fixtures. The retired D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091, and
+pre-D-100 D-099 whole-file digests remain historical audit evidence, but the
+public policy rejects them.
 The D-048 steady-state, pre-split, and activation fixtures, their digests, and
 their bootstrap tests are absent.
 The retired D-048 mean comparator and its standalone test are absent too;
@@ -263,21 +270,24 @@ input keeps the same greater-than-2% failure. Boolean validation, complete-path
 classification, step ordering, output propagation, comparator binding, and
 the unchanged failure path have focused positive and negative tests.
 
-This identity rule remains current in the active D-100 workflow: its
-performance-job content is still byte-identical to the reviewed D-062 fixture,
-while the whole-file digest changed for later conformance, throughput-floor,
-and vcpkg-cache steps. D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091, and
-pre-D-100 D-099 are retained as audit fixtures and have public-CLI rejection
-tests; active D-100 has positive and mutation tests, and its live bytes must
-remain exact.
+This identity rule remained current through D-100 (its performance-job
+content stayed byte-identical to the reviewed D-062 fixture, while the
+whole-file digest changed for later conformance, throughput-floor, and
+vcpkg-cache steps), and D-112 inherits the same classifier logic unchanged --
+only the runner and LLVM install step differ (see above). D-051, D-056,
+D-062, D-080, D-084, pre-D-100 D-091, and pre-D-100 D-099 are retained as
+audit fixtures and have public-CLI rejection tests; active D-112 has positive
+and mutation tests, and its live bytes must remain exact, while D-100 has
+moved into the same retained-fixture category pending its own retirement
+round.
 
 D-062 addresses the residual single-observation defect tracked in #109 without
 changing D-056's identity rule or threshold. PR run `30200982922` and immediate
 post-merge main run `30201385971` measured the same changed-source pair at
 `+0.10%` and `+3.66%` respectively, even though every provenance and artifact
 check succeeded. D-056 correctly leaves such a pair in the blocking `false`
-path, so D-062's contract within active D-100 fixes that path's sample plan
-before execution: five full
+path, so D-062's contract -- carried unchanged from D-100 into the now-active
+D-112 workflow -- fixes that path's sample plan before execution: five full
 Criterion runs for the exact predecessor, immutable upload of all five JSON
 files, then five full candidate runs. Exact `true` remains non-blocking
 telemetry. The gate requires the exact
@@ -302,8 +312,9 @@ changed-input `>2%` failure is a real, validated gate result, not
 presumptively known-noise.
 
 The byte-exact activation retired the D-048 workflow digest and fixture. No
-administrative bootstrap is required because each D-100 run uses D-062's
-embedded contract to measure both sides of its own comparison. D-054's one-shot
+administrative bootstrap is required because each run of the active workflow
+(D-112, formerly D-100) uses D-062's embedded contract to measure both sides
+of its own comparison. D-054's one-shot
 staging recovery is historical audit
 evidence only; normal `audit` plus `ci-gate` protection was restored before this
 activation branch was created and is not encoded in repository configuration.
@@ -360,7 +371,18 @@ tree without touching an unrelated sibling. Windows-only junction and native 8.3
 short-path regressions cover reparse redirection and lexical aliasing. Platform-neutral
 mount simulations prove that neither a
 mounted configuration ancestor nor a mounted generated-hook ancestor can redirect
-writes or deletion outside the worktree. Matching duplicate values for all intent
+writes or deletion outside the worktree. The raw `--root` CLI argument itself is
+covered separately from every path *underneath* an already-accepted root
+(D-113, the #169 follow-up that supersedes D-081's original leaf-only fix):
+a symlinked leaf and a symlink anywhere in `--root`'s
+ancestor chain are each rejected through the real CLI before `main()` ever resolves
+the argument, with a Windows junction sibling for both the leaf and the ancestor
+case; a mounted `--root` leaf is proven directly against the new
+ancestor-walk function in-process, since a real mount point cannot be created
+portably in a test. A direct, non-CLI call to
+`disable()` with a symlinked root argument proves `ensure_root_is_a_real_directory`'s
+own, narrower contract for library callers independently of the CLI-boundary check.
+Matching duplicate values for all intent
 fields are accepted by localize, check, disable, and the policy parser, while missing
 or conflicting values fail closed before every lifecycle mutation.
 `scripts/validate_agent_policies.py` additionally requires both

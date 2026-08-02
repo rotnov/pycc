@@ -11,6 +11,175 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-01 — Hardened the three autopilot skills after a 5-dimension adversarial audit
+
+**Authoritative checkpoint:** `origin/main`'s tip is `26e415e` (same commit
+the three skills merged at, below). This session's work lives on branch
+`claude/issue-skill-hardening`, not yet merged — see its own pull request
+once opened for the exact commit range and CI/review outcome.
+
+**What happened:** while shipping issue #256 (`pycc init` rollback fix,
+separate work, not part of this entry), a real gap surfaced live:
+`issue-implement`'s "one CI re-run" instruction didn't distinguish a job
+that gathers fresh data from one that only recomputes an already-uploaded
+upstream artifact — the latter reproduces an identical failure on rerun by
+construction, which is not evidence the failure "persisted." That prompted
+a broader question: what else in the three skills has this shape? A
+5-dimension parallel audit (33 agents: 5 finders, then an adversarial
+verifier per candidate finding) read all three skills' full text against
+`AGENTS.md`, `docs/DECISIONS.md`, `docs/AGENT_TOOLING.md`, and the eval/
+oracle scripts. 28 candidate findings, 12 confirmed after independent
+re-verification against the live text (16 refuted).
+
+**Design correction worth recording:** the first design draft routed most
+of the newly-found gaps to a full autopilot halt ("stop and report"). The
+user pushed back directly ("не похоже это на автопилот цикл", "слишком
+много стопов") — the standing directive is full autopilot, stop only on a
+genuinely unsolvable problem. The design was reworked around a strict test:
+would a *different* issue hit this same wall? Only "the pinned reviewer
+cannot be bound" does (an environment failure, not an issue-specific one);
+every other stop condition became **per-issue** — `issue-select`'s loop now
+carries forward an in-run denylist of issues that hit a per-issue stop
+condition, sets that one issue aside, and keeps working the rest of the
+pool instead of halting or reselecting and re-failing it every iteration.
+
+**14 fixes shipped** (design: `docs/superpowers/specs/2026-08-01-issue-autopilot-skill-hardening-design.md`;
+plan: `docs/superpowers/plans/2026-08-01-issue-autopilot-skill-hardening.md`):
+review-thread resolution now distinguishes bot-authored (self-resolvable)
+from human-authored (reply only) threads; `issue-to-plan`'s delegation
+exception is a closed, named list instead of an open self-declared class;
+`issue-implement` reciprocally acknowledges `issue-select`'s
+standing-directive closure authority (previously asserted only on
+`issue-select`'s side); a two-tier issue-trust policy (owner-authored or
+`approved`-labeled is trusted, otherwise an explicit security check is
+required) across all three skills; the systemic/per-issue stop-condition
+split above; a live re-check of the target issue's own state before
+opening the PR and before merging; a bounded retry on a rejected merge;
+`issue-to-plan` gained a 5-round review-loop cap it previously lacked
+entirely; a concrete "at or near tip" definition replacing an undefined
+proximity feel; a new capability letting `issue-implement` execute this
+repository's established two-PR CI-digest stage-then-activate pattern
+(D-080), chosen as full automation after the trust-anchor blast-radius risk
+was raised and the user confirmed that choice explicitly; the informal
+`P1:`/`P2:`/`P3:` priority-title-prefix convention promoted into D-111 (no
+GitHub priority labels exist in this repository — live-verified, 85/104
+open issues); `scripts/validate_agent_assets.py`'s structural eval-contract
+check extended from 2 to all 5 alpha skills; and the previously-untestable
+"Inconclusive" triage outcome now has real eval coverage and a
+`triage_action` oracle that can actually distinguish it from "Still
+current."
+
+**Verified before this entry:** full local gate set green —
+`scripts/test_run_alpha_skill_evals.py` (30 tests) and
+`scripts/test_validate_agent_assets.py` (138 tests, 363 subtests) via
+`python3 -m pytest`, both `validate_agent_assets.py`/
+`validate_agent_policies.py`, `ruby scripts/check_roadmap_evidence.rb`, both
+marketplace checkers, and `run_alpha_skill_evals.py --client claude`/
+`--client codex` end to end against a locally built `pycc` binary — all
+exit 0, checked directly (no pipe hiding a real exit code, per this
+session's own earlier-learned lesson).
+
+**Second audit pass, run before this entry:** 10 independent checkers
+re-verified all 12 originally-confirmed findings against the actual
+committed text, not the design's stated intent. 8 were genuinely resolved
+outright; 2 were not, and 3 more were resolved but flagged thin regression
+coverage — all 5 fixed and re-verified locally before this entry:
+
+- **#1 not resolved on the first pass:** item 4's bot/human thread-resolution
+  split never made it into step 7's own procedural text, which still said
+  "resolve the thread afterwards" unconditionally — an agent following the
+  workflow section (as opposed to the authorization summary) would have
+  reproduced the exact original defect. Fixed, and bot detection tightened
+  to a concrete signal (GitHub API author `type: Bot` / a known reviewer-bot
+  login) instead of one named example.
+- **#3 not resolved on the first pass:** the "at or near tip" evidence-bar
+  fix landed only in `issue-select`; `issue-implement`'s own near-identical
+  step 2 text — which the original finding's evidence explicitly cited —
+  was untouched, so a direct `/issue-implement` invocation bypassing
+  `issue-select`'s screen still hit the pre-fix behavior. Fixed.
+- **#8, #11, #12:** resolved, but each had a real regression-coverage gap
+  the checkers demonstrated empirically (deleting the fix's own text left
+  every test green). All three closed with a pin or a targeted mutation
+  test.
+
+**Next session:** push the branch, open the pull request, D-078 monitoring,
+merge, then resume the `issue-select` autopilot loop per the user's standing
+directive.
+
+---
+
+## 2026-08-01 — Three new autopilot skills; four issues closed via them
+
+**Authoritative checkpoint:** `main`'s tip is `e026fc6` (merge of
+[PR #254](https://github.com/rotnov/pycc/pull/254)). This session added three
+new project-local alpha skills — `issue-to-plan`, `issue-implement`,
+`issue-select` — recorded in `docs/AGENT_TOOLING.md`'s "Project-local alpha
+skills" section, plus a language rule in `AGENTS.md` (English for every
+durable artifact, the user's own language for conversation). This entry's
+own branch (`claude/new-skill-development-86a548`) is what carries that
+work into `main`; see its pull request for the exact commit range.
+
+**What each skill does:** `issue-to-plan` turns one GitHub issue into a
+verified implementation plan, re-establishing the default branch and open
+pull requests, treating the issue's own text as dated evidence to
+re-verify rather than trust, and running an adversarial review loop before
+publishing the plan as an issue comment. `issue-implement` takes one issue
+end to end — staleness triage, plan acquisition, implementation under
+D-021's preflight, the pinned D-068 deep-review loop, PR creation,
+D-078-checkpointed CI/thread monitoring, and merge — with an enumerated,
+issue-scoped public-write authorization so the run needs no per-step
+confirmation. `issue-select` chooses the next issue for that pipeline:
+full open-list inventory, a staleness screen that closes every provably
+stale issue it finds, a blocker screen (dependency, roadmap/delivery-plan
+mismatch, open-PR collision, maintainer-only authority), P1>P2>P3-then-
+smaller-wins scoring, and an adversarial advisor round that answers "does
+this need the maintainer?" so that question is never escalated to the
+user.
+
+**Four issues closed via this pipeline this session**, each merged
+individually with its own PR, plan comment, and pinned-review history —
+not summarized further here since each PR's own description is the
+authoritative record:
+[#238](https://github.com/rotnov/pycc/pull/238) (`pycc version --verbose`
+contract, closing #38),
+[#252](https://github.com/rotnov/pycc/pull/252) (module-value-binding
+call-shadowing, D-110, closing #133 — 7 review rounds, 2 real blockers
+found and fixed),
+[#253](https://github.com/rotnov/pycc/pull/253) (`pycc init` overwrite
+refusal, closing #237 — `issue-select`'s first live pick),
+[#254](https://github.com/rotnov/pycc/pull/254) (missing-linker-driver
+diagnostic, closing #250 — `issue-select`'s second pick).
+
+**Lessons folded back into the skills as they were learned** (each skill's
+own git history carries the full reasoning): `issue-to-plan` learned to
+judge documentation-currency by a document's own granularity convention,
+not by grepping for literal mentions, and to publish decision-log-entry
+numbers derived from an open pull request as indicative rather than fixed.
+`issue-implement` learned to verify review findings by reproducing the
+predicted failure rather than re-deriving it, to treat a fix to a review
+finding as *more* suspect than the original diff (the #133 run's two real
+blockers were both introduced by fixes to earlier findings), and that a
+shell pipeline can silently destroy a gate's real exit code
+(`cmd | tail; echo $?` reports the pager's exit, not the gate's — this
+nearly shipped a failing coverage run as green once). `issue-select`
+learned to enumerate the complete same-priority peer set for its
+adversarial advisor round rather than a curated shortlist, and to state
+collision claims per layer (code vs. docs) rather than as an unqualified
+"zero collision."
+
+**Known gap, honestly recorded:** none of the three skills has bound
+executable eval runners yet (`scripts/run_alpha_skill_evals.py` declares
+no case for any of them), matching `pycc`/`pycc-feedback`'s own promotion
+gate — binding those evals is a prerequisite before any of the three can
+leave the project-local alpha set.
+
+**Next session:** the `issue-select` loop is designed to keep running
+(pick → plan → implement → merge → re-baseline) until the user stops it or
+the pool has no survivors; resuming it needs no special setup beyond
+invoking `/issue-select` again from a refreshed `main`.
+
+---
+
 ## 2026-08-01 — v0.2 PR-10 content-complete, still blocked on #109; both candidate fixes found to be governance-gated; pivoting to PR-11
 
 **Snapshot evidence:** branch `feat/v0-2-pr10-ty-representation-migration`, PR [#236](https://github.com/rotnov/pycc/pull/236), head `6029fae`. Since the entry below: merged a second round of fresh `origin/main` (PR #253 `pycc init` no-overwrite fix, PR #254 linker-diagnostic fix, range `da1ad48..e026fc6`) — auto-merged cleanly (only `docs/ROADMAP.md` needed auto-merge), full `cargo build --workspace`/`cargo test --workspace` green (0 failed) before pushing. `origin/main` has not advanced past `e026fc6` since.

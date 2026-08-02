@@ -114,12 +114,15 @@ does not remove. The active source-aware five-replicate successor uses:
 median-of-five per revision when inputs changed, D-056's non-blocking telemetry
 when they are identical, all ten JSON files retained, predecessor samples
 sealed before candidate execution, and no result-dependent retries. The
-checker authorizes only the exact active D-100 whole workflow (composing
-D-091's release-runtime/manifest-relaxation changes with D-099's Windows
-vcpkg cache after D-099 activated first on `main`), which is byte-identical
-to its reviewed fixture; its performance-job content remains byte-identical
-to the D-062 fixture. D-056 and D-062 remain historical audit evidence but
-their whole-workflow digests are retired. The 2% threshold,
+checker authorizes the exact active D-112 whole workflow (`frontend-perf-measure`/
+`frontend-perf-gate` moved from `macos-14` to `ubuntu-latest`, confirmed by
+five real shadow-measurement runs before activation), which is byte-identical
+to its reviewed fixture; its performance-job content keeps D-062's comparator
+logic unchanged, though the runner and LLVM install step now differ from the
+D-062 fixture. D-100 (composing D-091's release-runtime/manifest-relaxation
+changes with D-099's Windows vcpkg cache) was the prior active digest and, like
+D-056 and D-062, remains historical audit evidence, coexisting in the checker
+allowlist pending its own retirement round. The 2% threshold,
 `ci-gate` fan-in, benchmark contract, artifact-ID binding, and isolated
 predecessor-owned comparison boundary remain unchanged.
 
