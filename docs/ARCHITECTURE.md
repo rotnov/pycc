@@ -82,7 +82,7 @@ Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by o
 - Parallelism: per-module `rayon` pipeline; codegen units like rustc CGUs.
 - Incremental: salsa-style query graph; red-green re-validation; on-disk cache in `.pycc/`.
 - Memory: arenas + interned strings/types; no `Rc<RefCell<…>>` in hot paths.
-- Benchmarks in CI on every PR; >2% frontend regression blocks merge.
+- Benchmarks in CI on every PR; >7% frontend regression blocks merge (raised from 2% by D-114 to absorb v0.2's one-time `Ty` representation migration cost — see `docs/DECISIONS.md`).
 
 The check-only frontend path validates the original HIR against its inferred
 signature table without materializing a resolved HIR clone. Compiler stages

@@ -61,7 +61,7 @@ GitHub Action (`corpus-bot`):
 
 ## Benchmarks
 
-- Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
+- Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >7% regression fails PR (raised from 2% by D-114 to absorb v0.2's one-time `Ty` representation migration cost).
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
 
 ## Roadmap acceptance evidence
@@ -205,6 +205,22 @@ their bootstrap tests are absent.
 The retired D-048 mean comparator and its standalone test are absent too;
 references to those paths in the historical D-042/D-044 decisions describe
 the repository state when those decisions were accepted, not active tooling.
+
+The active `.github/workflows/ci.yml` is now byte-identical to
+`tests/fixtures/d114-frontend-perf-threshold-ci.yml` (D-114: raises the
+regression threshold from 2.0% to 7.0% via an explicit fourth argument on
+`frontend-perf-gate`'s own comparison step, to absorb v0.2 PR-10's real,
+locally-confirmed, one-time `Ty` representation migration cost -- see
+`docs/DECISIONS.md`). `scripts/check_replicated_paired_perf_regression.rb`
+and its test file are untouched by this change; only `ci.yml`'s own
+invocation differs. The checker allowlist now accepts D-114, D-112, and
+D-100 (a further deliberate D-103 coexist window, non-shrinking per this
+array's own established convention, pending a later, separate round that
+retires D-100 and D-112). `frontend-perf-shadow.yml` still calls the
+checker without a `threshold_percent` argument, so it keeps reporting
+against the checker's own unchanged 2.0% default -- a deliberate asymmetry,
+since the shadow workflow measures hosted-runner noise on unchanged
+source, not this migration's cost.
 
 The paired lifecycle is fail-closed and predecessor-owned without an external
 baseline. Both performance jobs remain exact literal-success dependencies of
