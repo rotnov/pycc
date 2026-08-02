@@ -31,9 +31,16 @@ Excluded by design: `eval`, `exec`, `compile`, `globals`, `locals`, `vars`, `set
 | `asyncio` (subset) | v0.9 | surface for state-machine async |
 | `zlib`, `gzip`, `bz2`, `lzma`, `compression.zstd` (PEP 784) | v0.8 | rust crates underneath |
 
-## Tier 2 — via CPython interop escape hatch
+## Tier 2 — via transparent CPython interop
 
-Everything else (`tkinter`, `multiprocessing`, `ctypes`, …) reachable through `pycc.interop` (RUNTIME.md) — explicit, typed at the boundary, never silent.
+Everything else (`numpy`, `tkinter`, `multiprocessing`, `ctypes`, …) remains
+ordinary standard-Python source (`import numpy`, not a required
+`pycc.interop` rewrite). Planned v0.7 classifies these imports as
+CPython-backed, bundles their pinned runtime/package closure, and keeps values
+typed at the generated boundary according to [RUNTIME.md](./RUNTIME.md) and
+D-114. Runtime inclusion is automatic under the default `auto` policy but
+never invisible in build metadata or `pycc.lock`; `allowlist` and
+`deny`/`--pure` provide stricter deployment policies.
 
 ## Compatibility policy
 

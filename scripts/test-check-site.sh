@@ -652,6 +652,12 @@ checker = repo_root / "scripts" / "check-site.sh"
 mutations = (
     (
         site_dir / "index.html",
+        "planned permitted CPython interop emits a self-contained",
+        "permitted interop is rejected instead of bundled in a",
+        "landing page without the native-versus-interop artifact contract",
+    ),
+    (
+        site_dir / "index.html",
         "<code>pycc check</code> now runs the v0.1 frontend",
         "<code>pycc check</code> is not implemented",
         "landing page without the current frontend status",
@@ -770,6 +776,12 @@ mutations = (
     ),
     (
         site_dir / "architecture" / "index.html",
+        "Planned permitted CPython interop instead adds the",
+        "No interop artifact path exists beyond the",
+        "architecture page without the planned interop artifact path",
+    ),
+    (
+        site_dir / "architecture" / "index.html",
         "<strong>Resolve and type-check</strong>",
         "<strong>Pass through the type stage</strong>",
         "architecture page without the implemented checker stage",
@@ -779,6 +791,26 @@ mutations = (
         "MIR and code generation cover the implemented v0.1",
         "MIR and code generation remain slice-only",
         "architecture page with a superseded backend boundary",
+    ),
+    (
+        site_dir / "python-aot-compilers" / "index.html",
+        (
+            "Native and pure pycc builds target a standalone runtime; "
+            "planned permitted interop carries a pinned CPython runtime "
+            "in the application bundle."
+        ),
+        "pycc targets only a standalone runtime without CPython.",
+        "comparison positioning with an unconditional native-only runtime",
+    ),
+    (
+        site_dir / "python-aot-compilers" / "index.html",
+        (
+            "Standalone native executable without CPython for native and "
+            "pure builds; planned permitted interop bundles a pinned "
+            "CPython runtime"
+        ),
+        "Standalone native executable without CPython is the design target",
+        "comparison page with an unconditional CPython-free artifact claim",
     ),
     (
         site_dir / "python-aot-compilers" / "index.html",
@@ -806,6 +838,16 @@ mutations = (
         "pycc is not an AI\nor machine-learning compiler.",
         "pycc is an AI\nand machine-learning compiler.",
         "llms.txt that misclassifies the product as an AI compiler",
+    ),
+    (
+        site_dir / "index.html.md",
+        (
+            "Native and pure builds emit standalone executables; planned "
+            "permitted CPython\ninterop emits a self-contained bundle with "
+            "its pinned runtime."
+        ),
+        "Every build emits only a standalone native executable.",
+        "Markdown landing page without the interop artifact distinction",
     ),
     (
         site_dir / "index.html.md",
@@ -941,6 +983,43 @@ fi
 
 cp "$repo_root/site/python-aot-compilers/index.html" \
   "$fixture_root/site/python-aot-compilers/index.html"
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+entry = """    <loc>https://rotnov.github.io/pycc/</loc>
+    <lastmod>2026-08-02</lastmod>"""
+assert entry in content
+path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a sitemap URL entry with duplicate lastmod elements" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+entry = """    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>
+    <lastmod>2026-08-02</lastmod>"""
+assert entry in content
+path.write_text(content.replace(entry, entry.replace("2026-08-02", "2026-07-27"), 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a sitemap lastmod that disagrees with page dateModified" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
 from pathlib import Path
 import sys

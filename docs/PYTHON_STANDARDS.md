@@ -193,7 +193,9 @@ For each newly observed upstream release:
 | [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
 | [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics -- pycc has no bytecode/frame model to "inline" the way CPython's own PEP 709 change does; this row instead verifies the one CPython-observable, statically-testable guarantee PEP 709 depends on: a comprehension's own loop variable does not leak into an enclosing same-named binding (D-117/D-120) | sem | `pep_0709_comp_inline.py` | ✅ |
 
-*n/a: PEP 684 (per-interpreter GIL — pycc binaries have no GIL at all).*
+*n/a for native execution: PEP 684 configures CPython interpreter GILs, while
+pycc-native code has no GIL. A planned embedded CPython interop boundary keeps
+the pinned interpreter's own GIL only for CPython-backed operations (D-114).*
 
 ## Python 3.13
 
@@ -255,7 +257,7 @@ Each entry must produce the documented error code, tested in `tests/diagnostics/
 | `eval` / `exec` / `compile` | `E0100` | `d0100_eval.py` |
 | Monkey-patching (attribute assignment on foreign classes/modules) | `E0101` | `d0101_monkeypatch.py` |
 | Untyped public function signature | `T0001` | `d0001_missing_public_annotation.py` |
-| `Any` outside a declared interop boundary | `T0002` | `d0002_any_forbidden.py` |
+| `Any` outside a compiler-classified CPython interop boundary (planned v0.7; the current v0.1 snapshot retains its legacy “declared boundary” wording) | `T0002` | `d0002_any_forbidden.py` |
 | Dynamic attribute injection on non-`dict`-like objects | `E0102` | `d0102_dyn_attr.py` |
 | `type()` three-arg dynamic class creation | `E0103` | `d0103_dyn_class.py` |
 | Wildcard `import *` | `E0104` | `d0104_star_import.py` |

@@ -53,6 +53,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `E0107` | error | `sys.getrefcount` unavailable |
 | `E0108` | error | import cycle in top-level init |
 | `I0401` | error | untyped value leaks across interop boundary |
+| `I0402` | error | CPython-backed direct import root rejected by the effective v0.7 `allowlist` or `deny` policy (planned; not emitted by the current compiler) |
 | `W1001` | warning | unreachable code |
 | `W1002` | warning | boxed fallback in hot loop (`--memstats` hint) |
 
