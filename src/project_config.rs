@@ -247,8 +247,7 @@ python = "3.15"
     #[test]
     fn accepts_a_file_with_not_yet_implemented_sections() {
         // [interop] and [test] are documented in docs/CLI_SPEC.md for later
-        // milestones -- a file using the planned D-114 policy schema must
-        // still parse today even though neither section is consumed yet.
+        // milestones -- a file using the full schema must still parse today.
         let toml = r#"
 [project]
 name = "myapp"
@@ -256,7 +255,6 @@ entry = "src/main.py"
 python = "3.14"
 
 [interop]
-policy = "allowlist"
 allow = ["numpy"]
 
 [test]
