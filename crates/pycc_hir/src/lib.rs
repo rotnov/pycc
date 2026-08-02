@@ -587,25 +587,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     call.range,
                 ));
             }
-            let (start, stop, step) = match &*call.arguments.args {
-                [stop] => (
-                    HirExpr::IntLiteral(0),
-                    lower_expr(stop)?,
-                    HirExpr::IntLiteral(1),
-                ),
-                [start, stop] => (
-                    lower_expr(start)?,
-                    lower_expr(stop)?,
-                    HirExpr::IntLiteral(1),
-                ),
-                [start, stop, step] => (lower_expr(start)?, lower_expr(stop)?, lower_expr(step)?),
-                other => {
-                    return Err(unsupported(
-                        format!("range() with {} arguments is not supported", other.len()),
-                        call.range,
-                    ));
-                }
-            };
+            let (start, stop, step) = lower_range_call(call)?;
             HirStmt::ForRange {
                 var: var.id.to_string(),
                 start,
@@ -852,6 +834,34 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
         }
     };
     Ok(lowered)
+}
+
+/// Parses `range(...)`'s argument list into `(start, stop, step)` `HirExpr`s,
+/// defaulting `start`/`step` per Python's own `range()` overloads. Shared by
+/// `Stmt::For`'s own lowering and a future comprehension-iterable lowering
+/// step (PR-12) -- factored out rather than duplicated a second time.
+/// Callers are responsible for checking the callee is actually `range` and
+/// carries no keyword arguments first (their own diagnostics may differ in
+/// wording between call sites), so this helper only ever inspects
+/// `call.arguments.args`.
+fn lower_range_call(call: &pycc_ast::ExprCall) -> Result<(HirExpr, HirExpr, HirExpr), Diagnostic> {
+    match &*call.arguments.args {
+        [stop] => Ok((
+            HirExpr::IntLiteral(0),
+            lower_expr(stop)?,
+            HirExpr::IntLiteral(1),
+        )),
+        [start, stop] => Ok((
+            lower_expr(start)?,
+            lower_expr(stop)?,
+            HirExpr::IntLiteral(1),
+        )),
+        [start, stop, step] => Ok((lower_expr(start)?, lower_expr(stop)?, lower_expr(step)?)),
+        other => Err(unsupported(
+            format!("range() with {} arguments is not supported", other.len()),
+            call.range,
+        )),
+    }
 }
 
 fn unsupported<R>(message: impl Into<String>, range: R) -> Diagnostic
