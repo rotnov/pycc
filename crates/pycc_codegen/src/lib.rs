@@ -2958,19 +2958,43 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                 .entry(target.clone())
                 .or_insert(pycc_mir::Ty::List(Box::new(elt.ty())));
         }
-        // Temporary placeholder so this exhaustive match keeps compiling
-        // between PR-12 Task 5a (`ListCompAssign` only, immediately above)
-        // and Task 5b, which replaces this arm with `DictCompAssign`'s and
-        // `SetCompAssign`'s own real binding-collection logic (mirroring
-        // `ListCompAssign`'s own arm above, substituting `Ty::Dict(Box::new((
-        // key.ty(), value.ty())))`/`Ty::Set(Box::new(elt.ty()))` for
-        // `target`'s own bound type). Not real behavior: a real, reachable
-        // dict/set comprehension reaches `emit_stmt`'s own matching
-        // placeholder arm below and panics there first, so this arm being a
-        // no-op rather than binding `var`/`target` is unobservable until
-        // Task 5b lands. Delete this arm entirely in Task 5b rather than
-        // editing it in place.
-        MirStmt::DictCompAssign { .. } | MirStmt::SetCompAssign { .. } => {}
+        // `target = {key: value for var in <source> [if cond]}` (PR-12 Task
+        // 5b, D-117): mirrors `ListCompAssign`'s own arm above exactly,
+        // substituting `target`'s derived type (`Ty::Dict`, from `key`'s and
+        // `value`'s own types, mirroring `MirExpr::DictLiteral`'s own `ty()`
+        // derivation) for `Ty::List`. Same reasoning as `ListCompAssign`'s
+        // own arm for everything else: `var_ty` is carried explicitly by
+        // Task 4's own lowering, not re-derived; no recursion into
+        // `cond`/`key`/`value`, none of which can ever contain a nested
+        // statement.
+        MirStmt::DictCompAssign {
+            target,
+            var,
+            var_ty,
+            key,
+            value,
+            ..
+        } => {
+            bindings.entry(var.clone()).or_insert_with(|| var_ty.clone());
+            bindings
+                .entry(target.clone())
+                .or_insert(pycc_mir::Ty::Dict(Box::new((key.ty(), value.ty()))));
+        }
+        // `target = {elt for var in <source> [if cond]}` (PR-12 Task 5b,
+        // D-117): mirrors `ListCompAssign`'s own arm above exactly,
+        // substituting `Ty::Set` for `Ty::List`.
+        MirStmt::SetCompAssign {
+            target,
+            var,
+            var_ty,
+            elt,
+            ..
+        } => {
+            bindings.entry(var.clone()).or_insert_with(|| var_ty.clone());
+            bindings
+                .entry(target.clone())
+                .or_insert(pycc_mir::Ty::Set(Box::new(elt.ty())));
+        }
         MirStmt::ExprStmt(_) | MirStmt::Return(_) | MirStmt::NoOp => {}
     }
 }
@@ -4830,28 +4854,763 @@ fn emit_stmt<'ctx>(
             emit_assign(context, builder, locals, target, Scalar::List(new_list));
             Ok(())
         }
-        // Temporary placeholder so this exhaustive match keeps compiling
-        // between PR-12 Task 5a (`ListCompAssign` only, immediately above)
-        // and Task 5b, which replaces this single arm with
-        // `DictCompAssign`'s and `SetCompAssign`'s own real codegen
-        // (mirroring `ListCompAssign`'s own arm above: same
-        // allocate-then-loop-then-conditionally-insert shape, substituting
-        // `rt.dict_new`/`build_dict_set` or `rt.int_set_new`/
-        // `build_int_set_add` for `rt.int_list_new`/`build_int_list_append`,
-        // plus `DictCompAssign`'s own required `incref_if_str_duplicate`
-        // call on `key` before `build_dict_set`, per D-117's own recorded
-        // consequence). This arm exists *only* so `pycc_codegen` compiles
-        // in the interval between these two tasks -- it is not a v0.2
-        // feature gap in the sense every other "not supported yet" panic in
-        // this file is (a permanent, documented capability boundary); it is
-        // a mid-PR placeholder, deleted (along with its own dedicated test
-        // below) the moment Task 5b lands real arms in its place.
-        MirStmt::DictCompAssign { .. } | MirStmt::SetCompAssign { .. } => {
-            panic!(
-                "pycc_codegen: internal error: dict/set comprehension codegen is not implemented \
-                 yet -- this arm is a temporary placeholder between PR-12 Task 5a and Task 5b, \
-                 which replaces it with real DictCompAssign/SetCompAssign codegen"
-            )
+        // `target = {elt for var in <source> [if cond]}` (PR-12 Task 5b,
+        // D-117): structurally identical to `ListCompAssign`'s own arm
+        // above -- same allocate-a-free-standing-pointer-then-loop-then-
+        // bind-`target`-only-at-`after_bb` shape (see that arm's own doc
+        // comments, "point 1"/"point 5", for why the ordering is
+        // load-bearing, not cosmetic: it is copied here unchanged, not
+        // re-derived), substituting `rt.int_set_new`/`build_int_set_add`
+        // for `rt.int_list_new`/`build_int_list_append`. `CompLoopTail` is
+        // redeclared here rather than shared with `ListCompAssign`'s own
+        // arm-local type of the same shape -- this file's existing `For*`
+        // arms already duplicate their own loop skeletons inline rather
+        // than factor out a shared helper for a second consumer (see
+        // `ListCompAssign`'s own doc comment: "wait for a third consumer"),
+        // and this arm is exactly that established precedent, not a new
+        // one. Block names use a `setcomp_` prefix (distinct from
+        // `ListCompAssign`'s own `listcomp_` prefix, per that arm's own
+        // handoff note) purely for readable disassembly/IR dumps; the
+        // strings themselves have no observable behavior.
+        MirStmt::SetCompAssign {
+            target,
+            var,
+            var_ty: _,
+            source,
+            cond,
+            elt,
+        } => {
+            let function = builder.get_insert_block().unwrap().get_parent().unwrap();
+
+            // 1. Allocate the target's own empty backing set as a
+            //    free-standing SSA pointer (`new_set`) -- not stored into
+            //    `target`'s own slot until the whole loop has completed
+            //    (see `ListCompAssign`'s own "point 1" comment above for
+            //    why).
+            let new_set = builder
+                .build_call(rt.int_set_new, &[], "comp_set_new")
+                .expect("build_call should not fail for a well-formed set allocation")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_int_set_new returns a non-void pointer")
+                .into_pointer_value();
+
+            enum CompLoopTail<'ctx> {
+                Range {
+                    induction: inkwell::values::PhiValue<'ctx>,
+                    current: IntValue<'ctx>,
+                    step_v: IntValue<'ctx>,
+                },
+                Indexed {
+                    induction: inkwell::values::PhiValue<'ctx>,
+                    current: IntValue<'ctx>,
+                },
+            }
+
+            // 2. Build the loop's own test/body/after basic blocks,
+            //    parametrized internally on `source`'s own kind -- mirrors
+            //    `ListCompAssign`'s own `match source` exactly (see that
+            //    arm's own doc comment for which `For*` arm each branch
+            //    mirrors).
+            let (test_bb, after_bb, tail) = match source {
+                CompSource::Range { start, stop, step } => {
+                    let start_v = range_operand_to_tagged_int(
+                        context,
+                        builder,
+                        emit_expr(context, builder, module, rt, user_functions, locals, start),
+                        "start",
+                    );
+                    let stop_v = range_operand_to_tagged_int(
+                        context,
+                        builder,
+                        emit_expr(context, builder, module, rt, user_functions, locals, stop),
+                        "stop",
+                    );
+                    let step_v = range_operand_to_tagged_int(
+                        context,
+                        builder,
+                        emit_expr(context, builder, module, rt, user_functions, locals, step),
+                        "step",
+                    );
+                    let preheader = builder.get_insert_block().unwrap();
+
+                    let test_bb = context.append_basic_block(function, "setcomp_test");
+                    let body_bb = context.append_basic_block(function, "setcomp_body");
+                    let after_bb = context.append_basic_block(function, "setcomp_after");
+
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail entering the loop test",
+                    );
+                    builder.position_at_end(test_bb);
+                    let induction = builder
+                        .build_phi(context.i64_type(), "setcomp_current")
+                        .expect("build_phi should not fail in a fresh loop-test block");
+                    induction.add_incoming(&[(&start_v, preheader)]);
+                    let current = induction.as_basic_value().into_int_value();
+                    let cont = builder
+                        .build_call(
+                            rt.range_continue,
+                            &[current.into(), stop_v.into(), step_v.into()],
+                            "range_continue",
+                        )
+                        .expect("build_call should not fail for a well-formed range_continue check")
+                        .try_as_basic_value()
+                        .expect_basic("pycc_rt_range_continue returns a non-void i8")
+                        .into_int_value();
+                    let cont_i1 = builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            cont,
+                            context.i8_type().const_int(0, false),
+                            "setcomp_cont",
+                        )
+                        .expect("build_int_compare should not fail comparing two i8 operands");
+                    builder
+                        .build_conditional_branch(cont_i1, body_bb, after_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+
+                    builder.position_at_end(body_bb);
+                    emit_assign(context, builder, locals, var, Scalar::Int(current));
+
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Range {
+                            induction,
+                            current,
+                            step_v,
+                        },
+                    )
+                }
+                CompSource::List(name) => {
+                    let list_ptr = emit_list_name_read(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        name,
+                    );
+                    let preheader = builder.get_insert_block().unwrap();
+
+                    let test_bb = context.append_basic_block(function, "setcomp_test");
+                    let body_bb = context.append_basic_block(function, "setcomp_body");
+                    let after_bb = context.append_basic_block(function, "setcomp_after");
+
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail entering the loop test",
+                    );
+                    builder.position_at_end(test_bb);
+                    let induction = builder
+                        .build_phi(context.i64_type(), "setcomp_index")
+                        .expect("build_phi should not fail in a fresh loop-test block");
+                    let zero = context.i64_type().const_zero();
+                    induction.add_incoming(&[(&zero, preheader)]);
+                    let current = induction.as_basic_value().into_int_value();
+                    let len = build_int_list_len(builder, rt, list_ptr);
+                    let cont = builder
+                        .build_int_compare(IntPredicate::SLT, current, len, "setcomp_cont")
+                        .expect("build_int_compare should not fail comparing two i64 operands");
+                    builder
+                        .build_conditional_branch(cont, body_bb, after_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+
+                    builder.position_at_end(body_bb);
+                    let raw_element = build_int_list_get(builder, rt, list_ptr, current);
+                    let element = raw_i64_to_tagged_int(context, builder, raw_element);
+                    emit_assign(context, builder, locals, var, Scalar::Int(element));
+
+                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                }
+                CompSource::Dict(name) => {
+                    // `set[int]`'s own element type is always `Ty::Int`
+                    // (T0038), so no reachable, type-checked `set[int]`
+                    // comprehension can have a `Dict` source (this compiler
+                    // has no `str`-to-`int` builtin) -- identical
+                    // unreachable-from-real-source situation to
+                    // `ListCompAssign`'s own `CompSource::Dict` branch (see
+                    // that arm's own doc comment). Copied here unchanged:
+                    // the per-iteration key read/incref/bind must still be
+                    // correct regardless of what `elt` does with `var`
+                    // afterward.
+                    let dict_ptr = emit_dict_name_read(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        name,
+                    );
+                    let preheader = builder.get_insert_block().unwrap();
+
+                    let test_bb = context.append_basic_block(function, "setcomp_test");
+                    let body_bb = context.append_basic_block(function, "setcomp_body");
+                    let after_bb = context.append_basic_block(function, "setcomp_after");
+
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail entering the loop test",
+                    );
+                    builder.position_at_end(test_bb);
+                    let induction = builder
+                        .build_phi(context.i64_type(), "setcomp_index")
+                        .expect("build_phi should not fail in a fresh loop-test block");
+                    let zero = context.i64_type().const_zero();
+                    induction.add_incoming(&[(&zero, preheader)]);
+                    let current = induction.as_basic_value().into_int_value();
+                    let len = build_dict_len(builder, rt, dict_ptr);
+                    let cont = builder
+                        .build_int_compare(IntPredicate::SLT, current, len, "setcomp_cont")
+                        .expect("build_int_compare should not fail comparing two i64 operands");
+                    builder
+                        .build_conditional_branch(cont, body_bb, after_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+
+                    builder.position_at_end(body_bb);
+                    let key_ptr = builder
+                        .build_call(
+                            rt.dict_key_at,
+                            &[dict_ptr.into(), current.into()],
+                            "dict_key_at",
+                        )
+                        .expect("build_call should not fail for a well-formed dict key read")
+                        .try_as_basic_value()
+                        .expect_basic("pycc_rt_dict_key_at returns a non-void pointer")
+                        .into_pointer_value();
+                    builder
+                        .build_call(
+                            rt.str_incref,
+                            &[key_ptr.into()],
+                            "setcomp_dict_key_incref",
+                        )
+                        .expect("build_call should not fail for a well-formed incref");
+                    emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
+
+                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                }
+                CompSource::Set(name) => {
+                    let set_ptr = emit_set_name_read(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        name,
+                    );
+                    let preheader = builder.get_insert_block().unwrap();
+
+                    let test_bb = context.append_basic_block(function, "setcomp_test");
+                    let body_bb = context.append_basic_block(function, "setcomp_body");
+                    let after_bb = context.append_basic_block(function, "setcomp_after");
+
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail entering the loop test",
+                    );
+                    builder.position_at_end(test_bb);
+                    let induction = builder
+                        .build_phi(context.i64_type(), "setcomp_index")
+                        .expect("build_phi should not fail in a fresh loop-test block");
+                    let zero = context.i64_type().const_zero();
+                    induction.add_incoming(&[(&zero, preheader)]);
+                    let current = induction.as_basic_value().into_int_value();
+                    let len = build_int_set_len(builder, rt, set_ptr);
+                    let cont = builder
+                        .build_int_compare(IntPredicate::SLT, current, len, "setcomp_cont")
+                        .expect("build_int_compare should not fail comparing two i64 operands");
+                    builder
+                        .build_conditional_branch(cont, body_bb, after_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+
+                    builder.position_at_end(body_bb);
+                    let raw_element = build_int_set_get(builder, rt, set_ptr, current);
+                    let element = raw_i64_to_tagged_int(context, builder, raw_element);
+                    emit_assign(context, builder, locals, var, Scalar::Int(element));
+
+                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                }
+            };
+
+            // 3. Inside the loop body: identical filter-then-insert shape
+            //    to `ListCompAssign`'s own shared step (see that arm's own
+            //    doc comment), substituting `build_int_set_add` for
+            //    `build_int_list_append`. `pycc_rt_int_set_add`'s own
+            //    dedup check (D-111) makes a repeated element collapse to
+            //    one, unconditionally, with no extra logic needed here.
+            match cond {
+                Some(cond_expr) => {
+                    let cond_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, cond_expr);
+                    let cond_i1 = truthy(context, builder, rt, cond_scalar);
+                    let if_taken_bb = context.append_basic_block(function, "setcomp_if_taken");
+                    let if_skip_bb = context.append_basic_block(function, "setcomp_if_skip");
+                    builder
+                        .build_conditional_branch(cond_i1, if_taken_bb, if_skip_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+                    builder.position_at_end(if_taken_bb);
+                    let elt_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, elt);
+                    let elt_tagged = to_tagged_int(context, builder, elt_scalar);
+                    let elt_raw = build_untag_checked(builder, rt, elt_tagged, "setcomp_untag_elt");
+                    build_int_set_add(builder, rt, new_set, elt_raw);
+                    builder.build_unconditional_branch(if_skip_bb).expect(
+                        "build_unconditional_branch should not fail on a block with no terminator yet",
+                    );
+                    builder.position_at_end(if_skip_bb);
+                }
+                None => {
+                    let elt_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, elt);
+                    let elt_tagged = to_tagged_int(context, builder, elt_scalar);
+                    let elt_raw = build_untag_checked(builder, rt, elt_tagged, "setcomp_untag_elt");
+                    build_int_set_add(builder, rt, new_set, elt_raw);
+                }
+            }
+
+            // 4. Increment and branch back to the loop test -- no
+            //    terminator-safety guard, for the identical reason
+            //    `ListCompAssign`'s own arm gives (a comprehension's own
+            //    "body" is only `cond`/`elt`, never a `Return`).
+            match tail {
+                CompLoopTail::Range {
+                    induction,
+                    current,
+                    step_v,
+                } => {
+                    let next = builder
+                        .build_call(rt.int_add, &[current.into(), step_v.into()], "setcomp_next")
+                        .expect("build_call should not fail for a well-formed int add")
+                        .try_as_basic_value()
+                        .expect_basic("pycc_rt_int_add returns a non-void i64")
+                        .into_int_value();
+                    let body_end = builder.get_insert_block().unwrap();
+                    induction.add_incoming(&[(&next, body_end)]);
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail on a block with no terminator yet",
+                    );
+                }
+                CompLoopTail::Indexed { induction, current } => {
+                    let next = builder
+                        .build_int_add(
+                            current,
+                            context.i64_type().const_int(1, false),
+                            "setcomp_next",
+                        )
+                        .expect("build_int_add should not fail for two i64 operands");
+                    let body_end = builder.get_insert_block().unwrap();
+                    induction.add_incoming(&[(&next, body_end)]);
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail on a block with no terminator yet",
+                    );
+                }
+            }
+
+            builder.position_at_end(after_bb);
+            // 5. Only now -- after the loop has fully run to completion --
+            //    bind `target` to the now-fully-built set (see
+            //    `ListCompAssign`'s own "point 5" comment above for why this
+            //    is deferred all the way to here).
+            emit_assign(context, builder, locals, target, Scalar::Set(new_set));
+            Ok(())
+        }
+        // `target = {key: value for var in <source> [if cond]}` (PR-12 Task
+        // 5b, D-117): same allocate-then-loop-then-bind-`target`-at-
+        // `after_bb` shape as `ListCompAssign`/`SetCompAssign` above,
+        // differing only in evaluating **two** expressions (`key`/`value`)
+        // per taken iteration instead of one (`elt`), and in one additional,
+        // genuinely new correctness requirement: `incref_if_str_duplicate`
+        // on the evaluated `key`, unconditionally, before `build_dict_set`
+        // -- exactly mirroring `MirStmt::DictSet`'s own call (see that
+        // arm's own doc comment above, and D-114): `pycc_rt_dict_set` adopts
+        // whatever key pointer it is given as `new_dict`'s own permanent
+        // reference without incref'ing it itself, so a bare-`Name` key
+        // (`{k: 1 for k in d}`, `key.ty() == Ty::Str` -- the only shape
+        // T0036 allows a `Dict`-sourced `DictCompAssign` to reach real
+        // source through) must be incref'd here first, establishing `new_
+        // dict`'s own reference as genuinely independent of whatever `var`'s
+        // own per-iteration binding or the source dict itself do
+        // afterward. A no-op for any other `key` shape (e.g. an f-string --
+        // already fresh, already owning exactly one reference from its own
+        // construction, `str_value_is_a_duplicate_reference`'s own gate), so
+        // no `source`-kind-specific branching is needed for this half of the
+        // fix.
+        MirStmt::DictCompAssign {
+            target,
+            var,
+            var_ty: _,
+            source,
+            cond,
+            key,
+            value,
+        } => {
+            let function = builder.get_insert_block().unwrap().get_parent().unwrap();
+
+            let new_dict = builder
+                .build_call(rt.dict_new, &[], "comp_dict_new")
+                .expect("build_call should not fail for a well-formed dict allocation")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_dict_new returns a non-void pointer")
+                .into_pointer_value();
+
+            enum CompLoopTail<'ctx> {
+                Range {
+                    induction: inkwell::values::PhiValue<'ctx>,
+                    current: IntValue<'ctx>,
+                    step_v: IntValue<'ctx>,
+                },
+                Indexed {
+                    induction: inkwell::values::PhiValue<'ctx>,
+                    current: IntValue<'ctx>,
+                },
+            }
+
+            let (test_bb, after_bb, tail) = match source {
+                CompSource::Range { start, stop, step } => {
+                    let start_v = range_operand_to_tagged_int(
+                        context,
+                        builder,
+                        emit_expr(context, builder, module, rt, user_functions, locals, start),
+                        "start",
+                    );
+                    let stop_v = range_operand_to_tagged_int(
+                        context,
+                        builder,
+                        emit_expr(context, builder, module, rt, user_functions, locals, stop),
+                        "stop",
+                    );
+                    let step_v = range_operand_to_tagged_int(
+                        context,
+                        builder,
+                        emit_expr(context, builder, module, rt, user_functions, locals, step),
+                        "step",
+                    );
+                    let preheader = builder.get_insert_block().unwrap();
+
+                    let test_bb = context.append_basic_block(function, "dictcomp_test");
+                    let body_bb = context.append_basic_block(function, "dictcomp_body");
+                    let after_bb = context.append_basic_block(function, "dictcomp_after");
+
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail entering the loop test",
+                    );
+                    builder.position_at_end(test_bb);
+                    let induction = builder
+                        .build_phi(context.i64_type(), "dictcomp_current")
+                        .expect("build_phi should not fail in a fresh loop-test block");
+                    induction.add_incoming(&[(&start_v, preheader)]);
+                    let current = induction.as_basic_value().into_int_value();
+                    let cont = builder
+                        .build_call(
+                            rt.range_continue,
+                            &[current.into(), stop_v.into(), step_v.into()],
+                            "range_continue",
+                        )
+                        .expect("build_call should not fail for a well-formed range_continue check")
+                        .try_as_basic_value()
+                        .expect_basic("pycc_rt_range_continue returns a non-void i8")
+                        .into_int_value();
+                    let cont_i1 = builder
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            cont,
+                            context.i8_type().const_int(0, false),
+                            "dictcomp_cont",
+                        )
+                        .expect("build_int_compare should not fail comparing two i8 operands");
+                    builder
+                        .build_conditional_branch(cont_i1, body_bb, after_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+
+                    builder.position_at_end(body_bb);
+                    emit_assign(context, builder, locals, var, Scalar::Int(current));
+
+                    (
+                        test_bb,
+                        after_bb,
+                        CompLoopTail::Range {
+                            induction,
+                            current,
+                            step_v,
+                        },
+                    )
+                }
+                CompSource::List(name) => {
+                    let list_ptr = emit_list_name_read(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        name,
+                    );
+                    let preheader = builder.get_insert_block().unwrap();
+
+                    let test_bb = context.append_basic_block(function, "dictcomp_test");
+                    let body_bb = context.append_basic_block(function, "dictcomp_body");
+                    let after_bb = context.append_basic_block(function, "dictcomp_after");
+
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail entering the loop test",
+                    );
+                    builder.position_at_end(test_bb);
+                    let induction = builder
+                        .build_phi(context.i64_type(), "dictcomp_index")
+                        .expect("build_phi should not fail in a fresh loop-test block");
+                    let zero = context.i64_type().const_zero();
+                    induction.add_incoming(&[(&zero, preheader)]);
+                    let current = induction.as_basic_value().into_int_value();
+                    let len = build_int_list_len(builder, rt, list_ptr);
+                    let cont = builder
+                        .build_int_compare(IntPredicate::SLT, current, len, "dictcomp_cont")
+                        .expect("build_int_compare should not fail comparing two i64 operands");
+                    builder
+                        .build_conditional_branch(cont, body_bb, after_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+
+                    builder.position_at_end(body_bb);
+                    let raw_element = build_int_list_get(builder, rt, list_ptr, current);
+                    let element = raw_i64_to_tagged_int(context, builder, raw_element);
+                    emit_assign(context, builder, locals, var, Scalar::Int(element));
+
+                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                }
+                CompSource::Dict(name) => {
+                    // The one `source` kind this arm's own `key`/`value`
+                    // can make reachable from real, type-checked source
+                    // (T0036 forces the loop variable's own type, `Ty::Str`
+                    // for a `Dict` source, to satisfy `dict[str, ..]`'s own
+                    // key-type gate directly) -- see this arm's own doc
+                    // comment above and this task's dedicated end-to-end
+                    // test below. Otherwise identical to `ListCompAssign`'s/
+                    // `SetCompAssign`'s own `CompSource::Dict` branch: the
+                    // `pycc_rt_str_incref` on the read key before `var`'s own
+                    // per-iteration bind is the *source*-side incref (`d`'s
+                    // own key becoming a genuinely independent duplicate
+                    // reference for `var`'s own slot) -- a distinct concern
+                    // from this arm's own required `incref_if_str_duplicate`
+                    // on `key` below (the *target*-side incref, making
+                    // `new_dict`'s own stored key genuinely independent of
+                    // `var`'s slot in turn).
+                    let dict_ptr = emit_dict_name_read(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        name,
+                    );
+                    let preheader = builder.get_insert_block().unwrap();
+
+                    let test_bb = context.append_basic_block(function, "dictcomp_test");
+                    let body_bb = context.append_basic_block(function, "dictcomp_body");
+                    let after_bb = context.append_basic_block(function, "dictcomp_after");
+
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail entering the loop test",
+                    );
+                    builder.position_at_end(test_bb);
+                    let induction = builder
+                        .build_phi(context.i64_type(), "dictcomp_index")
+                        .expect("build_phi should not fail in a fresh loop-test block");
+                    let zero = context.i64_type().const_zero();
+                    induction.add_incoming(&[(&zero, preheader)]);
+                    let current = induction.as_basic_value().into_int_value();
+                    let len = build_dict_len(builder, rt, dict_ptr);
+                    let cont = builder
+                        .build_int_compare(IntPredicate::SLT, current, len, "dictcomp_cont")
+                        .expect("build_int_compare should not fail comparing two i64 operands");
+                    builder
+                        .build_conditional_branch(cont, body_bb, after_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+
+                    builder.position_at_end(body_bb);
+                    let key_ptr = builder
+                        .build_call(
+                            rt.dict_key_at,
+                            &[dict_ptr.into(), current.into()],
+                            "dict_key_at",
+                        )
+                        .expect("build_call should not fail for a well-formed dict key read")
+                        .try_as_basic_value()
+                        .expect_basic("pycc_rt_dict_key_at returns a non-void pointer")
+                        .into_pointer_value();
+                    builder
+                        .build_call(
+                            rt.str_incref,
+                            &[key_ptr.into()],
+                            "dictcomp_dict_key_incref",
+                        )
+                        .expect("build_call should not fail for a well-formed incref");
+                    emit_assign(context, builder, locals, var, Scalar::Str(key_ptr));
+
+                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                }
+                CompSource::Set(name) => {
+                    let set_ptr = emit_set_name_read(
+                        context,
+                        builder,
+                        module,
+                        rt,
+                        user_functions,
+                        locals,
+                        name,
+                    );
+                    let preheader = builder.get_insert_block().unwrap();
+
+                    let test_bb = context.append_basic_block(function, "dictcomp_test");
+                    let body_bb = context.append_basic_block(function, "dictcomp_body");
+                    let after_bb = context.append_basic_block(function, "dictcomp_after");
+
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail entering the loop test",
+                    );
+                    builder.position_at_end(test_bb);
+                    let induction = builder
+                        .build_phi(context.i64_type(), "dictcomp_index")
+                        .expect("build_phi should not fail in a fresh loop-test block");
+                    let zero = context.i64_type().const_zero();
+                    induction.add_incoming(&[(&zero, preheader)]);
+                    let current = induction.as_basic_value().into_int_value();
+                    let len = build_int_set_len(builder, rt, set_ptr);
+                    let cont = builder
+                        .build_int_compare(IntPredicate::SLT, current, len, "dictcomp_cont")
+                        .expect("build_int_compare should not fail comparing two i64 operands");
+                    builder
+                        .build_conditional_branch(cont, body_bb, after_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+
+                    builder.position_at_end(body_bb);
+                    let raw_element = build_int_set_get(builder, rt, set_ptr, current);
+                    let element = raw_i64_to_tagged_int(context, builder, raw_element);
+                    emit_assign(context, builder, locals, var, Scalar::Int(element));
+
+                    (test_bb, after_bb, CompLoopTail::Indexed { induction, current })
+                }
+            };
+
+            // 3. Inside the loop body: evaluate `key` then `value` (in that
+            //    order -- matching `MirStmt::DictSet`'s own arm exactly),
+            //    applying this arm's own required `incref_if_str_duplicate`
+            //    fix to `key` before it is stored (see this arm's own doc
+            //    comment above), then insert via `build_dict_set`. Wrapped
+            //    in the identical `cond`-gated if/skip shape `ListCompAssign`/
+            //    `SetCompAssign` share.
+            match cond {
+                Some(cond_expr) => {
+                    let cond_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, cond_expr);
+                    let cond_i1 = truthy(context, builder, rt, cond_scalar);
+                    let if_taken_bb = context.append_basic_block(function, "dictcomp_if_taken");
+                    let if_skip_bb = context.append_basic_block(function, "dictcomp_if_skip");
+                    builder
+                        .build_conditional_branch(cond_i1, if_taken_bb, if_skip_bb)
+                        .expect(
+                            "build_conditional_branch should not fail for a well-formed i1 condition",
+                        );
+                    builder.position_at_end(if_taken_bb);
+                    let key_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, key);
+                    let key_scalar = incref_if_str_duplicate(builder, rt, key, key_scalar);
+                    let Scalar::Str(key_ptr) = key_scalar else {
+                        panic!(
+                            "pycc_codegen: internal error: dict comprehension key did not evaluate \
+                             to str -- pycc_types::check (T0036) should have rejected this before \
+                             codegen"
+                        )
+                    };
+                    let value_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, value);
+                    let tagged = to_tagged_int(context, builder, value_scalar);
+                    let raw = build_untag_checked(builder, rt, tagged, "dictcomp_untag_value");
+                    build_dict_set(builder, rt, new_dict, key_ptr, raw);
+                    builder.build_unconditional_branch(if_skip_bb).expect(
+                        "build_unconditional_branch should not fail on a block with no terminator yet",
+                    );
+                    builder.position_at_end(if_skip_bb);
+                }
+                None => {
+                    let key_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, key);
+                    let key_scalar = incref_if_str_duplicate(builder, rt, key, key_scalar);
+                    let Scalar::Str(key_ptr) = key_scalar else {
+                        panic!(
+                            "pycc_codegen: internal error: dict comprehension key did not evaluate \
+                             to str -- pycc_types::check (T0036) should have rejected this before \
+                             codegen"
+                        )
+                    };
+                    let value_scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, value);
+                    let tagged = to_tagged_int(context, builder, value_scalar);
+                    let raw = build_untag_checked(builder, rt, tagged, "dictcomp_untag_value");
+                    build_dict_set(builder, rt, new_dict, key_ptr, raw);
+                }
+            }
+
+            // 4. Increment and branch back to the loop test -- no
+            //    terminator-safety guard, for the identical reason
+            //    `ListCompAssign`'s own arm gives.
+            match tail {
+                CompLoopTail::Range {
+                    induction,
+                    current,
+                    step_v,
+                } => {
+                    let next = builder
+                        .build_call(rt.int_add, &[current.into(), step_v.into()], "dictcomp_next")
+                        .expect("build_call should not fail for a well-formed int add")
+                        .try_as_basic_value()
+                        .expect_basic("pycc_rt_int_add returns a non-void i64")
+                        .into_int_value();
+                    let body_end = builder.get_insert_block().unwrap();
+                    induction.add_incoming(&[(&next, body_end)]);
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail on a block with no terminator yet",
+                    );
+                }
+                CompLoopTail::Indexed { induction, current } => {
+                    let next = builder
+                        .build_int_add(
+                            current,
+                            context.i64_type().const_int(1, false),
+                            "dictcomp_next",
+                        )
+                        .expect("build_int_add should not fail for two i64 operands");
+                    let body_end = builder.get_insert_block().unwrap();
+                    induction.add_incoming(&[(&next, body_end)]);
+                    builder.build_unconditional_branch(test_bb).expect(
+                        "build_unconditional_branch should not fail on a block with no terminator yet",
+                    );
+                }
+            }
+
+            builder.position_at_end(after_bb);
+            // 5. Only now -- after the loop has fully run to completion --
+            //    bind `target` to the now-fully-built dict (see
+            //    `ListCompAssign`'s own "point 5" comment above for why this
+            //    is deferred all the way to here).
+            emit_assign(context, builder, locals, target, Scalar::Dict(new_dict));
+            Ok(())
         }
     }
 }
@@ -11682,6 +12441,29 @@ mod tests {
         }
     }
 
+    /// `MirStmt::ForSet { var: "v", set: <set>, body: [print(v)] }` -- the
+    /// `SetCompAssign` test suite's own analog of `print_each_int` above,
+    /// for the identical reason (container `to_str`/`truthy` remain
+    /// unimplemented, D-107/D-114, so a produced `set[int]` cannot be
+    /// printed directly and must be walked element-by-element via
+    /// `MirStmt::ForSet` instead, whose own insertion-order iteration this
+    /// crate's pre-existing `a_return_inside_a_for_set_body_returns_
+    /// immediately_without_looping` test already pins).
+    fn print_each_int_from_set(set: &str) -> MirStmt {
+        MirStmt::ForSet {
+            var: "v".to_string(),
+            set: set.to_string(),
+            body: vec![MirStmt::ExprStmt(MirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "v".to_string(),
+                    ty: Ty::Int,
+                }],
+                ty: Ty::None,
+            })],
+        }
+    }
+
     #[test]
     fn a_range_sourced_list_comprehension_with_no_filter_computes_every_element() {
         // `xs = [i * 2 for i in range(5)]` (PR-12 Task 5a, D-117):
@@ -12136,23 +12918,582 @@ mod tests {
         assert_eq!(output.stdout, b"7\n7\n");
     }
 
+    // ---- PR-12 Task 5b: `SetCompAssign` codegen tests ----
+
     #[test]
-    #[should_panic(
-        expected = "pycc_codegen: internal error: dict/set comprehension codegen is not \
-                    implemented yet"
-    )]
-    fn a_dict_comprehension_panics_with_the_task_5b_placeholder_message() {
-        // Covers `emit_stmt`'s own temporary `DictCompAssign`/
-        // `SetCompAssign` placeholder arm (PR-12 Task 5a) -- deleted, along
-        // with this test, the moment Task 5b lands real codegen for both
-        // variants. Hand-built MIR: no real `pycc_hir`/`pycc_types` path can
-        // reach this yet either way (Task 2/3 already produce
-        // `HirStmt`/`MirStmt::DictCompAssign` from real dict-comprehension
-        // syntax), but this task's own scope is `ListCompAssign` only.
+    fn a_range_sourced_set_comprehension_with_a_filter_only_keeps_matching_elements() {
+        // `evens = {x for x in range(10) if x % 2 == 0}` (PR-12 Task 5b,
+        // D-117): exercises `MirStmt::SetCompAssign`'s own `Range` branch
+        // (mirrors `ListCompAssign`'s own `Range` branch exactly) and the
+        // `cond: Some(..)` filtered-insert path. Expected output verified
+        // against `python3` on this exact source (`set[int]`'s own
+        // insertion order is pinned by this crate's own
+        // `a_return_inside_a_for_set_body_returns_immediately_without_
+        // looping` test, so the filtered evens print back in ascending
+        // order here).
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                    target: "evens".to_string(),
+                    var: "x".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Range {
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::IntLiteral(10),
+                        step: MirExpr::IntLiteral(1),
+                    },
+                    cond: Some(Box::new(MirExpr::Compare {
+                        op: CmpOpKind::Eq,
+                        left: Box::new(MirExpr::BinOp {
+                            op: BinOpKind::Mod,
+                            left: Box::new(MirExpr::Name {
+                                name: "x".to_string(),
+                                ty: Ty::Int,
+                            }),
+                            right: Box::new(MirExpr::IntLiteral(2)),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(0)),
+                        ty: Ty::Bool,
+                    })),
+                    elt: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_each_int_from_set("evens")),
+            ],
+        };
+        let dir = tempfile_dir("setcomp_range_with_filter");
+        let obj_path = dir.join("setcomp_range_with_filter.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("setcomp_range_with_filter");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"0\n2\n4\n6\n8\n");
+    }
+
+    #[test]
+    fn a_list_sourced_set_comprehension_with_no_filter_deduplicates_repeated_elements() {
+        // `xs = [1, 2, 2, 3]` then `s = {x for x in xs}` (PR-12 Task 5b,
+        // D-117): exercises `MirStmt::SetCompAssign`'s own `List` branch and
+        // the `cond: None` unconditional-insert path, and confirms
+        // `pycc_rt_int_set_add`'s own dedup check (D-111) collapses the
+        // repeated `2` to a single entry -- `len(s) == 3`, not `4`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: MirExpr::ListLiteral(vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(3),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                    target: "s".to_string(),
+                    var: "x".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::List("xs".to_string()),
+                    cond: None,
+                    elt: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![set_name("s")],
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_each_int_from_set("s")),
+            ],
+        };
+        let dir = tempfile_dir("setcomp_list_no_filter_dedup");
+        let obj_path = dir.join("setcomp_list_no_filter_dedup.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("setcomp_list_no_filter_dedup");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3\n1\n2\n3\n");
+    }
+
+    #[test]
+    fn a_set_sourced_set_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value(
+    ) {
+        // `s = {1, 2, 3}` then `s = {x for x in s if x > 1}`, reusing the
+        // same name for both the source *and* the target (PR-12 Task 5b,
+        // D-117): the direct `SetCompAssign` analog of `ListCompAssign`'s
+        // own review-round-1 regression (see that arm's own "point 1"/
+        // "point 5" comments, and this crate's `a_list_sourced_list_
+        // comprehension_that_rebinds_its_own_source_name_reads_the_pre_
+        // existing_value` test) -- a premature `emit_assign(target, ..)`
+        // before the loop runs would make `emit_set_name_read(..., "s")`
+        // read the freshly allocated, still-empty set instead of the
+        // original `{1, 2, 3}`, producing an empty result instead of
+        // `{2, 3}`. Also exercises `SetCompAssign`'s own `Set` branch and
+        // the `cond: Some(..)` filtered path.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::SetLiteral(vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(3),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                    target: "s".to_string(),
+                    var: "x".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Set("s".to_string()),
+                    cond: Some(Box::new(MirExpr::Compare {
+                        op: CmpOpKind::Gt,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(1)),
+                        ty: Ty::Bool,
+                    })),
+                    elt: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_each_int_from_set("s")),
+            ],
+        };
+        let dir = tempfile_dir("setcomp_self_referential_rebind");
+        let obj_path = dir.join("setcomp_self_referential_rebind.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("setcomp_self_referential_rebind");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"2\n3\n");
+    }
+
+    #[test]
+    fn a_range_sourced_set_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length(
+    ) {
+        // `s = {1, 2, 3, 4, 5}` then `s = {i * 2 for i in range(len(s))}`
+        // (PR-12 Task 5b, D-117): the `SetCompAssign` analog of
+        // `ListCompAssign`'s own `a_range_sourced_list_comprehension_whose_
+        // bound_reads_its_own_rebound_target_uses_the_pre_existing_length`
+        // regression test -- distinct from the test directly above, since
+        // it exercises `source`'s own `stop` expression (`len(s)`) reading
+        // `target`'s pre-existing value during the *preheader*, before
+        // `test_bb` even exists, not `var`'s own per-iteration container
+        // read (`source` here is `CompSource::Range`, not `CompSource::
+        // Set`). Real CPython evaluates `range(len(s))` once, against the
+        // original 5-element `s`, before the comprehension loop runs at
+        // all, giving a 5-element result (`{0, 2, 4, 6, 8}`); the premature-
+        // rebind bug this file's `ListCompAssign` neighbor documents would
+        // instead have read the just-emptied `s` here, giving `range(0)`
+        // and an empty result.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::SetLiteral(vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::IntLiteral(2),
+                        MirExpr::IntLiteral(3),
+                        MirExpr::IntLiteral(4),
+                        MirExpr::IntLiteral(5),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                    target: "s".to_string(),
+                    var: "i".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Range {
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::Call {
+                            callee: "len".to_string(),
+                            args: vec![set_name("s")],
+                            ty: Ty::Int,
+                        },
+                        step: MirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    elt: Box::new(MirExpr::BinOp {
+                        op: BinOpKind::Mul,
+                        left: Box::new(MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(2)),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_each_int_from_set("s")),
+            ],
+        };
+        let dir = tempfile_dir("setcomp_self_referential_range_bound");
+        let obj_path = dir.join("setcomp_self_referential_range_bound.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("setcomp_self_referential_range_bound");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"0\n2\n4\n6\n8\n");
+    }
+
+    #[test]
+    fn a_dict_sourced_set_comprehension_binds_its_key_without_crashing() {
+        // `CompSource::Dict` reaching `MirStmt::SetCompAssign` is
+        // unreachable from real, type-checked source for the identical
+        // reason `ListCompAssign`'s own analogous test gives (`set[int]`'s
+        // own element type is always `Ty::Int`, T0038, and this compiler has
+        // no `str`-to-`int` builtin) -- hand-built MIR, mirroring this
+        // crate's own `a_dict_sourced_list_comprehension_binds_its_key_
+        // without_crashing` test exactly. `elt` is a constant (`7`), not a
+        // read of the bound key; `pycc_rt_int_set_add`'s own dedup collapses
+        // the two (identical) inserted `7`s to one entry, confirming the
+        // dict-sourced per-iteration binding path -- the
+        // `pycc_rt_str_incref` call on the read key -- does not crash.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "d".to_string(),
+                    value: MirExpr::DictLiteral(vec![
+                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(1)),
+                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(2)),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                    target: "zs".to_string(),
+                    var: "k".to_string(),
+                    var_ty: Ty::Str,
+                    source: CompSource::Dict("d".to_string()),
+                    cond: None,
+                    elt: Box::new(MirExpr::IntLiteral(7)),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![set_name("zs")],
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_each_int_from_set("zs")),
+            ],
+        };
+        let dir = tempfile_dir("setcomp_dict_source_no_crash");
+        let obj_path = dir.join("setcomp_dict_source_no_crash.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("setcomp_dict_source_no_crash");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n7\n");
+    }
+
+    // ---- PR-12 Task 5b: `DictCompAssign` codegen tests ----
+
+    #[test]
+    fn a_range_sourced_dict_comprehension_with_an_fstring_key_computes_every_entry() {
+        // `named = {f"n{i}": i for i in range(3)}` (PR-12 Task 5b, D-117):
+        // the common, no-aliasing-hazard shape -- `key` is a fresh
+        // `MirExpr::FString` (already owning exactly one reference from its
+        // own construction), so this arm's own `incref_if_str_duplicate`
+        // call on `key` is a no-op here (see that arm's own doc comment
+        // above). Exercises `MirStmt::DictCompAssign`'s own `Range` branch
+        // and the `cond: None` unconditional-insert path.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::DictCompAssign {
+                    target: "named".to_string(),
+                    var: "i".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Range {
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::IntLiteral(3),
+                        step: MirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    key: Box::new(MirExpr::FString(vec![
+                        pycc_mir::MirFStringPart::Literal("n".to_string()),
+                        pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        })),
+                    ])),
+                    value: Box::new(MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![dict_name("named")],
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("named")),
+                    key: Box::new(MirExpr::StringLiteral("n0".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("named")),
+                    key: Box::new(MirExpr::StringLiteral("n1".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("named")),
+                    key: Box::new(MirExpr::StringLiteral("n2".to_string())),
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dictcomp_range_fstring_key");
+        let obj_path = dir.join("dictcomp_range_fstring_key.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dictcomp_range_fstring_key");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3\n0\n1\n2\n");
+    }
+
+    #[test]
+    fn a_dict_sourced_dict_comprehension_builds_an_independent_copy_and_leaves_the_source_intact()
+    {
+        // `d = {"a": 10, "b": 20}` then `d2 = {k: 1 for k in d}` (PR-12 Task
+        // 5b, D-117's own dedicated safety test, brief item (d)): `d`, a
+        // pre-existing `dict[str, int]`, is the one `Dict`-sourced
+        // `DictCompAssign` shape reachable from real, type-checked source
+        // (T0036: `var`/`k` is `Ty::Str`, satisfying `dict[str, int]`'s own
+        // key-type gate directly -- see this arm's own doc comment above for
+        // the full argument). Confirms two things: `d2`'s own contents are
+        // correct and independently readable, and building `d2` leaves `d`'s
+        // own contents unaffected -- exactly what this arm's own
+        // `incref_if_str_duplicate` call on `key` (mirroring `MirStmt::
+        // DictSet`'s own identical call, D-114) exists to guarantee: `d2`'s
+        // own stored key becomes a genuinely independent reference, not a
+        // bare, uncounted alias of `d`'s own key pointer.
+        //
+        // This is a functional-correctness test, not a use-after-free
+        // detector: this compiler's container model keeps `dict[K, V]`
+        // leak-only (D-114) and has no key-removal operation of any kind
+        // (`del`, `.pop()`, ...) yet, so nothing currently implemented can
+        // ever bring a dict's own claim on one of its keys down to zero --
+        // the missing incref this test guards against cannot be forced into
+        // an observable crash via any currently-reachable pycc-language
+        // operation (see this task's own report for the full analysis). The
+        // fix is still required by D-114's ownership contract and is
+        // unconditionally applied here, independent of what this one test
+        // can currently observe.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "d".to_string(),
+                    value: MirExpr::DictLiteral(vec![
+                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(10)),
+                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(20)),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::DictCompAssign {
+                    target: "d2".to_string(),
+                    var: "k".to_string(),
+                    var_ty: Ty::Str,
+                    source: CompSource::Dict("d".to_string()),
+                    cond: None,
+                    key: Box::new(MirExpr::Name {
+                        name: "k".to_string(),
+                        ty: Ty::Str,
+                    }),
+                    value: Box::new(MirExpr::IntLiteral(1)),
+                }),
+                // `d`'s own contents, read back after `d2` was built.
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d")),
+                    key: Box::new(MirExpr::StringLiteral("a".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d")),
+                    key: Box::new(MirExpr::StringLiteral("b".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![dict_name("d")],
+                    ty: Ty::Int,
+                })),
+                // `d2`'s own contents, independently.
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d2")),
+                    key: Box::new(MirExpr::StringLiteral("a".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d2")),
+                    key: Box::new(MirExpr::StringLiteral("b".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![dict_name("d2")],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dictcomp_dict_source_independent_copy");
+        let obj_path = dir.join("dictcomp_dict_source_independent_copy.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dictcomp_dict_source_independent_copy");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"10\n20\n2\n1\n1\n2\n");
+    }
+
+    #[test]
+    fn a_list_sourced_dict_comprehension_with_a_filter_only_keeps_matching_entries() {
+        // `xs = [10, 20, 30]` then `named2 = {f"v{x}": x for x in xs if x >
+        // 15}` (PR-12 Task 5b, D-117): exercises `MirStmt::DictCompAssign`'s
+        // own `List` branch (reachable from real, type-checked source:
+        // `list[int]`'s element type, T0034, satisfies `var`'s own
+        // `Ty::Int`, and an f-string key is always `Ty::Str`, satisfying
+        // T0036) and the `cond: Some(..)` filtered-insert path -- `10` must
+        // be dropped, `20`/`30` kept.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: MirExpr::ListLiteral(vec![
+                        MirExpr::IntLiteral(10),
+                        MirExpr::IntLiteral(20),
+                        MirExpr::IntLiteral(30),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::DictCompAssign {
+                    target: "named2".to_string(),
+                    var: "x".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::List("xs".to_string()),
+                    cond: Some(Box::new(MirExpr::Compare {
+                        op: CmpOpKind::Gt,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(15)),
+                        ty: Ty::Bool,
+                    })),
+                    key: Box::new(MirExpr::FString(vec![
+                        pycc_mir::MirFStringPart::Literal("v".to_string()),
+                        pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        })),
+                    ])),
+                    value: Box::new(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![dict_name("named2")],
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("named2")),
+                    key: Box::new(MirExpr::StringLiteral("v20".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("named2")),
+                    key: Box::new(MirExpr::StringLiteral("v30".to_string())),
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dictcomp_list_with_filter");
+        let obj_path = dir.join("dictcomp_list_with_filter.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dictcomp_list_with_filter");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"2\n20\n30\n");
+    }
+
+    #[test]
+    fn a_set_sourced_dict_comprehension_with_a_filter_only_keeps_matching_entries() {
+        // `ys = {5, 6, 7, 10}` then `named3 = {f"s{y}": y for y in ys if y <
+        // 10}` (PR-12 Task 5b, D-117): exercises `MirStmt::DictCompAssign`'s
+        // own `Set` branch (reachable from real, type-checked source:
+        // `set[int]`'s element type, T0038, satisfies `var`'s own `Ty::Int`)
+        // and the `cond: Some(..)` filtered-insert path -- `10` must be
+        // dropped, `5`/`6`/`7` kept.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: MirExpr::SetLiteral(vec![
+                        MirExpr::IntLiteral(5),
+                        MirExpr::IntLiteral(6),
+                        MirExpr::IntLiteral(7),
+                        MirExpr::IntLiteral(10),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::DictCompAssign {
+                    target: "named3".to_string(),
+                    var: "y".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Set("ys".to_string()),
+                    cond: Some(Box::new(MirExpr::Compare {
+                        op: CmpOpKind::Lt,
+                        left: Box::new(MirExpr::Name {
+                            name: "y".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(10)),
+                        ty: Ty::Bool,
+                    })),
+                    key: Box::new(MirExpr::FString(vec![
+                        pycc_mir::MirFStringPart::Literal("s".to_string()),
+                        pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::Name {
+                            name: "y".to_string(),
+                            ty: Ty::Int,
+                        })),
+                    ])),
+                    value: Box::new(MirExpr::Name {
+                        name: "y".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![dict_name("named3")],
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("named3")),
+                    key: Box::new(MirExpr::StringLiteral("s5".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("named3")),
+                    key: Box::new(MirExpr::StringLiteral("s6".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("named3")),
+                    key: Box::new(MirExpr::StringLiteral("s7".to_string())),
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dictcomp_set_with_filter");
+        let obj_path = dir.join("dictcomp_set_with_filter.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dictcomp_set_with_filter");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3\n5\n6\n7\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "dict comprehension key did not evaluate to str")]
+    fn a_dict_comprehension_with_a_non_str_key_is_an_internal_error() {
+        // `pycc_types` rejects a mismatched dict-comprehension key type with
+        // T0036 before codegen ever runs, so this is hand-built malformed
+        // MIR -- covers `MirStmt::DictCompAssign`'s own inline key-
+        // extraction panic (mirrors `MirStmt::DictSet`'s own identical panic
+        // and its own dedicated `a_dict_set_with_a_non_str_key_is_an_
+        // internal_error` test).
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::DictCompAssign {
                 target: "zs".to_string(),
-                var: "k".to_string(),
+                var: "i".to_string(),
                 var_ty: Ty::Int,
                 source: CompSource::Range {
                     start: MirExpr::IntLiteral(0),
@@ -12164,13 +13505,192 @@ mod tests {
                 value: Box::new(MirExpr::IntLiteral(2)),
             })],
         };
-        let dir = tempfile_dir("dict_comp_placeholder_panics");
+        let dir = tempfile_dir("dictcomp_non_str_key_panics");
+        let _ = compile_to_object(&mir, &dir.join("dictcomp_non_str_key_panics.o"), None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "dict comprehension key did not evaluate to str")]
+    fn a_dict_comprehension_with_a_non_str_key_under_a_filter_is_an_internal_error() {
+        // Same defect as `a_dict_comprehension_with_a_non_str_key_is_an_
+        // internal_error` above, but with `cond: Some(..)` rather than
+        // `cond: None`: this arm's own key-extraction `let-else` panic is
+        // written once inside each of the two `match cond` branches (not
+        // shared, mirroring `ListCompAssign`'s/`SetCompAssign`'s own
+        // `elt`-evaluation-and-append duplication across those same two
+        // branches), so it is two separate coverage regions -- this test
+        // covers the `Some(..)` branch's own copy, which the `cond: None`
+        // test above does not reach.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::DictCompAssign {
+                target: "zs".to_string(),
+                var: "i".to_string(),
+                var_ty: Ty::Int,
+                source: CompSource::Range {
+                    start: MirExpr::IntLiteral(0),
+                    stop: MirExpr::IntLiteral(1),
+                    step: MirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(MirExpr::BoolLiteral(true))),
+                key: Box::new(MirExpr::IntLiteral(1)),
+                value: Box::new(MirExpr::IntLiteral(2)),
+            })],
+        };
+        let dir = tempfile_dir("dictcomp_non_str_key_filtered_panics");
         let _ = compile_to_object(
             &mir,
-            &dir.join("dict_comp_placeholder_panics.o"),
+            &dir.join("dictcomp_non_str_key_filtered_panics.o"),
             None,
             false,
         );
+    }
+
+    #[test]
+    fn a_dict_sourced_dict_comprehension_that_rebinds_its_own_source_name_reads_the_pre_existing_value(
+    ) {
+        // `d = {"a": 5, "b": 6}` then `d = {k: 9 for k in d}`, reusing the
+        // same name for both the source *and* the target (PR-12 Task 5b,
+        // D-117): the direct `DictCompAssign` analog of `ListCompAssign`'s
+        // own review-round-1 regression (see that arm's own "point 1"/
+        // "point 5" comments and this crate's `a_list_sourced_list_
+        // comprehension_that_rebinds_its_own_source_name_reads_the_pre_
+        // existing_value` test) -- a premature `emit_assign(target, ..)`
+        // before the loop runs would make `emit_dict_name_read(..., "d")`
+        // read the freshly allocated, still-empty dict instead of the
+        // original `{"a": 5, "b": 6}`, producing an empty result instead of
+        // two entries. Distinct from `a_dict_sourced_dict_comprehension_
+        // builds_an_independent_copy_and_leaves_the_source_intact` above,
+        // which uses distinct names (`d`/`d2`) and therefore does not
+        // exercise this ordering fix at all -- this test is what actually
+        // guards against reintroducing Task 5a's own review-round-1 defect
+        // in this arm.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "d".to_string(),
+                    value: MirExpr::DictLiteral(vec![
+                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(5)),
+                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(6)),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::DictCompAssign {
+                    target: "d".to_string(),
+                    var: "k".to_string(),
+                    var_ty: Ty::Str,
+                    source: CompSource::Dict("d".to_string()),
+                    cond: None,
+                    key: Box::new(MirExpr::Name {
+                        name: "k".to_string(),
+                        ty: Ty::Str,
+                    }),
+                    value: Box::new(MirExpr::IntLiteral(9)),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![dict_name("d")],
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d")),
+                    key: Box::new(MirExpr::StringLiteral("a".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d")),
+                    key: Box::new(MirExpr::StringLiteral("b".to_string())),
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dictcomp_self_referential_rebind");
+        let obj_path = dir.join("dictcomp_self_referential_rebind.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dictcomp_self_referential_rebind");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"2\n9\n9\n");
+    }
+
+    #[test]
+    fn a_range_sourced_dict_comprehension_whose_bound_reads_its_own_rebound_target_uses_the_pre_existing_length(
+    ) {
+        // `d = {"a": 1, "b": 2, "c": 3}` then `d = {f"n{i}": i for i in
+        // range(len(d))}` (PR-12 Task 5b, D-117): the `DictCompAssign`
+        // analog of `ListCompAssign`'s own `a_range_sourced_list_
+        // comprehension_whose_bound_reads_its_own_rebound_target_uses_the_
+        // pre_existing_length` regression test -- distinct from
+        // `a_dict_sourced_dict_comprehension_that_rebinds_its_own_source_
+        // name_reads_the_pre_existing_value` above, since it exercises
+        // `source`'s own `stop` expression (`len(d)`) reading `target`'s
+        // pre-existing value during the *preheader*, before `test_bb` even
+        // exists, not `var`'s own per-iteration container read (`source`
+        // here is `CompSource::Range`, not `CompSource::Dict`). Real
+        // CPython evaluates `range(len(d))` once, against the original
+        // 3-entry `d`, before the comprehension loop runs at all, giving a
+        // 3-entry result (`{"n0": 0, "n1": 1, "n2": 2}`); the premature-
+        // rebind bug this file's `ListCompAssign` neighbor documents would
+        // instead have read the just-emptied `d` here, giving `range(0)`
+        // and an empty result.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "d".to_string(),
+                    value: MirExpr::DictLiteral(vec![
+                        (MirExpr::StringLiteral("a".to_string()), MirExpr::IntLiteral(1)),
+                        (MirExpr::StringLiteral("b".to_string()), MirExpr::IntLiteral(2)),
+                        (MirExpr::StringLiteral("c".to_string()), MirExpr::IntLiteral(3)),
+                    ]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::DictCompAssign {
+                    target: "d".to_string(),
+                    var: "i".to_string(),
+                    var_ty: Ty::Int,
+                    source: CompSource::Range {
+                        start: MirExpr::IntLiteral(0),
+                        stop: MirExpr::Call {
+                            callee: "len".to_string(),
+                            args: vec![dict_name("d")],
+                            ty: Ty::Int,
+                        },
+                        step: MirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    key: Box::new(MirExpr::FString(vec![
+                        pycc_mir::MirFStringPart::Literal("n".to_string()),
+                        pycc_mir::MirFStringPart::Interpolation(Box::new(MirExpr::Name {
+                            name: "i".to_string(),
+                            ty: Ty::Int,
+                        })),
+                    ])),
+                    value: Box::new(MirExpr::Name {
+                        name: "i".to_string(),
+                        ty: Ty::Int,
+                    }),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![dict_name("d")],
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d")),
+                    key: Box::new(MirExpr::StringLiteral("n0".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d")),
+                    key: Box::new(MirExpr::StringLiteral("n1".to_string())),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGet {
+                    dict: Box::new(dict_name("d")),
+                    key: Box::new(MirExpr::StringLiteral("n2".to_string())),
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dictcomp_self_referential_range_bound");
+        let obj_path = dir.join("dictcomp_self_referential_range_bound.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dictcomp_self_referential_range_bound");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3\n0\n1\n2\n");
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {
