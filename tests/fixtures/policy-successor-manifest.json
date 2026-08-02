@@ -43,7 +43,7 @@
     },
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
-      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
+      "source_path": "scripts/test_check_roadmap_evidence.rb",
       "sha256": "3625fd495063cdf39c6df175f01cd90b0178f3ce8d282ba1d9d9cebae79cc54a"
     },
     {
