@@ -118,6 +118,23 @@ pub enum MirExpr {
     /// its own terms rather than baking in an assumption this crate has no
     /// way to verify independently.
     TupleLiteral(Vec<MirExpr>),
+    /// `base[start:stop:step]` (mirrors `HirExpr::Slice`, PR-12 Task 8,
+    /// D-118). Each bound is independently optional, exactly like
+    /// `HirExpr::Slice` itself. No `ty` field: `ty()` below returns
+    /// `base.ty()` unchanged -- slicing a `list[int]` always produces
+    /// another `list[int]`, unlike `Subscript`'s own element-type-narrowing
+    /// `ty()` derivation above. This lowering is purely structural (recurse
+    /// into `base` and every present bound, same as every other MIR node in
+    /// this enum); it does not implement the runtime clamping/panic
+    /// behavior D-118 requires (non-negative check, clamp into `[0, len]`,
+    /// positive-step check) -- that is `pycc_codegen`'s job (a later task),
+    /// operating on this already-lowered shape.
+    Slice {
+        base: Box<MirExpr>,
+        start: Option<Box<MirExpr>>,
+        stop: Option<Box<MirExpr>>,
+        step: Option<Box<MirExpr>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -229,6 +246,13 @@ impl MirExpr {
                 }
                 Ty::Tuple(Box::new(elements.iter().map(MirExpr::ty).collect()))
             }
+            // A slice of a `list[int]` is still a `list[int]` -- `ty()`
+            // passes `base.ty()` through unchanged, matching
+            // `pycc_types::infer_expr_in`'s own `HirExpr::Slice` arm, which
+            // returns `base_ty.clone()` after validating the base is
+            // `Ty::List(Int)` (that validation already happened in
+            // `pycc_types`; this crate only re-derives the resulting type).
+            MirExpr::Slice { base, .. } => base.ty(),
         }
     }
 }
@@ -843,6 +867,24 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
         HirExpr::TupleLiteral(elements) => {
             MirExpr::TupleLiteral(elements.iter().map(|e| lower_expr(e, scopes)).collect())
         }
+        // PR-12 Task 8 (D-118): purely structural -- recurse into `base` and
+        // every present bound, same as every other MIR-lowering site in this
+        // function. `pycc_types` already validated the base is
+        // `Ty::List(Int)` and every present bound is `int`-assignable
+        // (Task 7); this lowering does not re-validate or apply the runtime
+        // clamping/panic behavior D-118 requires -- that is
+        // `pycc_codegen`'s job, operating on this already-lowered shape.
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => MirExpr::Slice {
+            base: Box::new(lower_expr(base, scopes)),
+            start: start.as_deref().map(|e| Box::new(lower_expr(e, scopes))),
+            stop: stop.as_deref().map(|e| Box::new(lower_expr(e, scopes))),
+            step: step.as_deref().map(|e| Box::new(lower_expr(e, scopes))),
+        },
     }
 }
 
@@ -1980,6 +2022,19 @@ mod tests {
             MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1), MirExpr::BoolLiteral(true)]).ty(),
             Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool]))
         );
+        assert_eq!(
+            MirExpr::Slice {
+                base: Box::new(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::List(Box::new(Ty::Int)),
+                }),
+                start: Some(Box::new(MirExpr::IntLiteral(1))),
+                stop: None,
+                step: None,
+            }
+            .ty(),
+            Ty::List(Box::new(Ty::Int))
+        );
     }
 
     #[test]
@@ -2904,5 +2959,296 @@ mod tests {
             ],
         };
         build(&hir);
+    }
+
+    // -- Task 8 (D-118): `HirExpr::Slice` -> `MirExpr::Slice` lowering ----
+
+    /// Builds `xs = [1, 2, 3]` followed by `y = <slice>` for some
+    /// `HirExpr::Slice` reading `xs`, mirroring the fixture every Task 6
+    /// (`pycc_hir`) slicing test starts from, so this lowering is exercised
+    /// against the same shapes those frontend tests already pin.
+    fn xs_list_then_slice(slice: HirExpr) -> HirModule {
+        HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                        HirExpr::IntLiteral(3),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: slice,
+                }),
+            ],
+        }
+    }
+
+    #[test]
+    fn a_slice_expression_with_both_bounds_present_lowers_with_both_bounds_some() {
+        // `xs[1:3]` (mirrors `pycc_hir`'s
+        // `lowers_a_slice_expression_with_both_bounds_present`).
+        let hir = xs_list_then_slice(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(1))),
+            stop: Some(Box::new(HirExpr::IntLiteral(3))),
+            step: None,
+        });
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Slice {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    start: Some(Box::new(MirExpr::IntLiteral(1))),
+                    stop: Some(Box::new(MirExpr::IntLiteral(3))),
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_expression_with_only_the_stop_bound_lowers_with_start_and_step_none() {
+        // `xs[:3]` (mirrors `pycc_hir`'s
+        // `lowers_a_slice_expression_with_only_the_stop_bound`).
+        let hir = xs_list_then_slice(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: Some(Box::new(HirExpr::IntLiteral(3))),
+            step: None,
+        });
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Slice {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    start: None,
+                    stop: Some(Box::new(MirExpr::IntLiteral(3))),
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_expression_with_only_the_start_bound_lowers_with_stop_and_step_none() {
+        // `xs[2:]` (mirrors `pycc_hir`'s
+        // `lowers_a_slice_expression_with_only_the_start_bound`).
+        let hir = xs_list_then_slice(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(2))),
+            stop: None,
+            step: None,
+        });
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Slice {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    start: Some(Box::new(MirExpr::IntLiteral(2))),
+                    stop: None,
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_expression_with_all_bounds_omitted_lowers_with_every_bound_none() {
+        // `xs[:]` (mirrors `pycc_hir`'s
+        // `lowers_a_slice_expression_with_all_bounds_omitted`).
+        let hir = xs_list_then_slice(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        });
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Slice {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    start: None,
+                    stop: None,
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_expression_with_only_a_step_lowers_with_start_and_stop_none() {
+        // `xs[::2]` (mirrors `pycc_hir`'s
+        // `lowers_a_slice_expression_with_a_step`).
+        let hir = xs_list_then_slice(HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: None,
+            step: Some(Box::new(HirExpr::IntLiteral(2))),
+        });
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Slice {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    start: None,
+                    stop: None,
+                    step: Some(Box::new(MirExpr::IntLiteral(2))),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_expressions_base_and_every_present_bound_are_recursively_lowered() {
+        // `f()`/`g()`/`h()` stand in for "some already-lowerable non-literal
+        // shape" -- confirms `base`/`start`/`stop`/`step` are each passed
+        // through the real `lower_expr` recursively (mirroring
+        // `pycc_hir`'s own `a_slice_expressions_base_and_bounds_are_recursively_lowered`),
+        // not merely accepted as raw literals or the base's bare `Name`.
+        // Registers `f`/`g`/`h` as zero-arg functions returning `int` so
+        // `lower_expr`'s `HirExpr::Call` arm resolves their `ty` via the
+        // real `$fn:` lookup instead of panicking.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(0)))],
+                },
+                HirItem::Function {
+                    name: "g".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(0)))],
+                },
+                HirItem::Function {
+                    name: "h".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(0)))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                        HirExpr::IntLiteral(3),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Slice {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        start: Some(Box::new(HirExpr::Call {
+                            callee: "f".to_string(),
+                            args: vec![],
+                        })),
+                        stop: Some(Box::new(HirExpr::Call {
+                            callee: "g".to_string(),
+                            args: vec![],
+                        })),
+                        step: Some(Box::new(HirExpr::Call {
+                            callee: "h".to_string(),
+                            args: vec![],
+                        })),
+                    },
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[4],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Slice {
+                    base: Box::new(MirExpr::Name {
+                        name: "xs".to_string(),
+                        ty: Ty::List(Box::new(Ty::Int)),
+                    }),
+                    start: Some(Box::new(MirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    })),
+                    stop: Some(Box::new(MirExpr::Call {
+                        callee: "g".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    })),
+                    step: Some(Box::new(MirExpr::Call {
+                        callee: "h".to_string(),
+                        args: vec![],
+                        ty: Ty::Int,
+                    })),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slices_ty_derives_from_the_actual_base_type_not_hardcoded_list_of_int() {
+        // Mirrors this file's own genericity test for `Subscript`/`ForList`
+        // (`list_literal_subscript_and_for_list_derive_their_type_from_actual_elements_not_hardcoded_int`):
+        // `MirExpr::Slice`'s `ty()` must derive its result from the actual
+        // `base.ty()`, not assume `Ty::List(Box::new(Ty::Int))`.
+        // `pycc_types`' T0034 gate means only `list[int]` ever reaches this
+        // crate from a real compiled program (a `list[str]` slice is
+        // rejected before `pycc_mir` ever sees it), but this crate's own
+        // `ty()` must not bake in that assumption independently of the type
+        // it actually observes -- so this test bypasses that gate with a
+        // hand-built `MirExpr::Slice` over a `list[str]` base, exactly like
+        // the `Subscript`/`DictGet` panic tests above bypass gates that
+        // can't be reached from a real, type-checked program.
+        let slice = MirExpr::Slice {
+            base: Box::new(MirExpr::ListLiteral(vec![MirExpr::StringLiteral(
+                "a".to_string(),
+            )])),
+            start: Some(Box::new(MirExpr::IntLiteral(0))),
+            stop: None,
+            step: None,
+        };
+        assert_eq!(slice.ty(), Ty::List(Box::new(Ty::Str)));
+
+        // Presence/absence of bounds must not affect `ty()` either --
+        // Task 8's brief requirement (c). Compare the all-bounds-omitted
+        // shape against the same base.
+        let slice_no_bounds = MirExpr::Slice {
+            base: Box::new(MirExpr::ListLiteral(vec![MirExpr::StringLiteral(
+                "a".to_string(),
+            )])),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        assert_eq!(slice.ty(), slice_no_bounds.ty());
     }
 }
