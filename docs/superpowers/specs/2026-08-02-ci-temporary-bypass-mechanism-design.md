@@ -56,7 +56,25 @@ hold, verified fresh, not assumed:
 2. The same failure **reproduces fresh** (not from a stale cached CI
    result — see the 2026-08-02 `docs/SESSION_LOG.md` entries for why
    staleness matters here) on another open pull request unrelated to the
-   one motivating the relaxation.
+   one motivating the relaxation, **and** the reproduction genuinely
+   isolates external state from the motivating PR's own content: this
+   condition is not satisfied by finding *a* second failing PR whose
+   error text superficially matches — it requires actively constructing
+   and testing the alternative hypothesis "this candidate's own diff
+   explains the failure" and refuting it, not merely failing to think of
+   it. A real, confirmed near-miss this scope boundary must reject: a PR
+   proposing a genuinely new, not-yet-recognized manifest transition can
+   fail `check_ci_permissions.rb`'s `validate_policy_successor_transition`
+   with error text that pattern-matches an already-documented class,
+   purely because *that PR's own content* introduces a digest or target
+   the base checker does not yet recognize — a correct, single-PR-fixable
+   defect, not external state, even though "candidate protected policy
+   target ... lacks a base-staged successor" looks identical to the
+   genuine cross-PR deadlock this mechanism exists for. Distinguishing
+   these two requires checking whether the *specific* file(s) implicated
+   in the failure are ones the motivating PR itself modifies; if so, the
+   failure's cause cannot be external to that PR by construction, and
+   condition 2 fails regardless of what a second PR shows.
 3. The causal mechanism is read directly in the checker's own source
    (e.g. `scripts/check_ci_permissions.rb`), not inferred from the error
    text alone.
@@ -70,6 +88,10 @@ Hard exclusions, never eligible regardless of the above:
 - Any check that fails only on the PR motivating the relaxation and not
   on the independent comparison PR — that is evidence of a real, PR-
   specific defect, not external state.
+- Any check whose failure implicates a file the motivating PR itself
+  modifies, even when a second PR also currently fails the same check —
+  two independently broken PRs are not evidence of one shared external
+  cause; each must be diagnosed on its own.
 - Any situation where a `[ci-bypass]`-prefixed incident issue is already
   open.
 

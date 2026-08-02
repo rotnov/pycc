@@ -891,7 +891,22 @@ never assumed:
    see `docs/SESSION_LOG.md`'s 2026-08-02 entries for why a `pull_request_target`
    check's last recorded result can be stale after the base branch moves)
    on another open pull request that has nothing to do with the one
-   motivating this relaxation.
+   motivating this relaxation, **and** the reproduction genuinely isolates
+   external state from the motivating PR's own content -- this is not
+   satisfied by finding a second failing PR whose error text superficially
+   matches. Actively construct and refute the alternative hypothesis "this
+   candidate's own diff explains the failure" -- do not merely fail to
+   think of it. Concrete near-miss this must reject: a PR proposing a
+   genuinely new, not-yet-recognized manifest transition can fail
+   `check_ci_permissions.rb`'s `validate_policy_successor_transition` with
+   error text that pattern-matches an already-documented class, purely
+   because *that PR's own content* introduces a digest or target the base
+   checker does not yet recognize -- a correct, single-PR-fixable defect,
+   not external state, even though the error text looks identical to a
+   genuine cross-PR deadlock. Check whether the specific file(s) implicated
+   in the failure are ones the motivating PR itself modifies; if so, the
+   failure's cause cannot be external to that PR by construction, and this
+   condition fails regardless of what a second PR shows.
 3. The causal mechanism is read directly in the checker's own source (e.g.
    `scripts/check_ci_permissions.rb`), not inferred from the error text.
 
@@ -899,8 +914,12 @@ Never eligible, regardless of the above: `ci-gate` itself or any check
 reflecting the PR's own build/test/coverage result; any check whose failure
 cannot be traced to an unambiguous cause in the checker's source; any check
 that fails only on the motivating PR and not on the independent comparison
-PR (that is evidence of a real, PR-specific defect); any check when a
-`[ci-bypass]`-prefixed incident issue is already open.
+PR (that is evidence of a real, PR-specific defect); any check whose
+failure implicates a file the motivating PR itself modifies, even when a
+second PR also currently fails the same check (two independently broken
+PRs are not evidence of one shared external cause -- each must be
+diagnosed on its own); any check when a `[ci-bypass]`-prefixed incident
+issue is already open.
 
 **Even once the named check is relaxed, that does not mean the pull request
 is safe to merge.** Before merging, independently re-check the PR's overall
@@ -918,13 +937,17 @@ check as a green light for the whole PR.
 
 Dispatch a fresh, isolated `Agent()` -- never `advisor()`, which shares this
 session's own transcript and could inherit its framing. Give it only raw
-evidence: the exact failure text, the checker's source file path, and the
-other PR number to reproduce against. Its explicit brief: try to prove the
-claim false. It must re-run the reproduction itself (not trust this
-session's report) and read the checker code itself (not trust this
-session's explanation). If it cannot be dispatched, or returns anything
-other than an unambiguous CONFIRMED verdict on all three scope-boundary
-conditions, treat that as REFUTED -- fail closed, do not proceed.
+evidence: the exact failure text, the checker's source file path, the
+motivating PR's own number and changed-file list, and the other PR number
+to reproduce against. Its explicit brief: try to prove the claim false. It
+must re-run the reproduction itself (not trust this session's report),
+read the checker code itself (not trust this session's explanation), and
+explicitly check whether the failure's implicated file(s) are ones the
+*motivating* PR itself modifies -- if so, verdict REFUTED regardless of
+what the other PR shows, per the Scope Boundary section's own worked
+near-miss. If it cannot be dispatched, or returns anything other than an
+unambiguous CONFIRMED verdict on all three scope-boundary conditions,
+treat that as REFUTED -- fail closed, do not proceed.
 
 On REFUTED: stop, report through the normal path (exactly as this
 repository did for issue #243/PR #278 before this skill existed). Do not
@@ -1080,8 +1103,15 @@ Append (using the resolved number from Step 1 in place of `D-1XX` below):
   credential is provisioned or stored. Every use requires, in order: a
   fresh, isolated adversarial `Agent()` dispatch (never `advisor()`)
   independently confirming the failure matches an already-documented
-  class, reproduces fresh on an unrelated open PR, and has an
-  unambiguous cause read directly in the checker's own source; a public
+  class, reproduces fresh on an unrelated open PR while genuinely
+  isolating external state from the motivating PR's own content -- not
+  satisfied by a superficial text match; a concurrent D-114/PR #291
+  incident on this same repository surfaced a real near-miss the
+  mechanism must reject (PR #290's own `validate_policy_successor_transition`
+  failure, caused entirely by content #290 itself introduced, would have
+  pattern-matched this mechanism's trigger class exactly as convincingly
+  as a genuine cross-PR deadlock) -- and has an unambiguous cause read
+  directly in the checker's own source; a public
   `[ci-bypass]`-prefixed incident issue created *before* the relaxation,
   containing the pre-relax snapshot, reason, evidence, and an explicit
   expiry; the scoped `PATCH .../protection/required_status_checks` call
