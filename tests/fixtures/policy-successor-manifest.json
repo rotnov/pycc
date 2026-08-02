@@ -67,6 +67,11 @@
       "sha256": "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
     },
     {
+      "path": "tests/fixtures/d114-frontend-perf-threshold-ci.yml",
+      "source_path": "tests/fixtures/d114-frontend-perf-threshold-ci.yml",
+      "sha256": "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
+    },
+    {
       "path": "tests/fixtures/d51-paired-ci.yml",
       "source_path": "tests/fixtures/d51-paired-ci.yml",
       "sha256": "4b1d11afba108745a2bc375e3447d92ecde843376c3bea95ab32f76b3fc53249"
