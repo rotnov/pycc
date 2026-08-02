@@ -977,20 +977,24 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
-  def test_tier1_workflow_authorization_is_the_active_d100_digest
+  # ci.yml now matches D112 (this round's own activation) -- D100 remains
+  # in the accepted array below only because retiring it is a separate,
+  # later propose-then-activate round for check_roadmap_evidence.rb's own
+  # bytes (the same self-authorization boundary this whole array already
+  # exists to enforce).
+  def test_tier1_workflow_authorization_is_the_active_d112_digest
     assert_equal(
-      D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
+      D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
     )
   end
 
-  # D-112's own ci.yml activation (a later task) will retire D100 and
-  # shrink this back to a single entry -- until then both coexist,
-  # mirroring D-090's own coexist-then-retire precedent for this exact
-  # array, because the audit's base-owned checker must already accept
-  # D112 before any PR can change ci.yml's live bytes to match it.
+  # D100's own retirement (a later, separate propose-then-activate round
+  # for check_roadmap_evidence.rb's own bytes) will shrink this back to a
+  # single entry -- until then both coexist, mirroring D-090's own
+  # coexist-then-retire precedent for this exact array.
   def test_tier1_workflow_authorization_contains_exactly_d100_and_d112
     assert_equal(
       [D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256, D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256],
@@ -1445,18 +1449,14 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d100_composed_workflow_is_active_and_reviewed
+  # D100's own digest remains in REVIEWED_PERF_CI_WORKFLOW_SHA256S (see
+  # the coexist test above), but the live ci.yml file itself now matches
+  # D112, not D100 -- this round only activates ci.yml's own bytes; D100's
+  # retirement from the checker's array is a separate, later round.
+  def test_d100_composed_workflow_fixture_matches_its_own_digest
     assert_equal(
       D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
       Digest::SHA256.file(D100_COMPOSED_WORKFLOW_FIXTURE).hexdigest
-    )
-    assert_equal(
-      D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
-    )
-    assert_equal(
-      D100_COMPOSED_WORKFLOW_FIXTURE.read,
-      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
     )
     assert_equal(
       REPLICATED_PERF_CHECKER_SHA256,
@@ -1471,6 +1471,29 @@ class RoadmapEvidenceCliTest < Minitest::Test
         Pathname(__dir__).parent /
           "scripts/test_check_replicated_paired_perf_regression.rb"
       ).hexdigest
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      D100_COMPOSED_WORKFLOW_FIXTURE.read,
+      D100_COMPOSED_WORKFLOW_FIXTURE.to_s
+    )
+    assert coverage_gate_present?(
+      D100_COMPOSED_WORKFLOW_FIXTURE.read,
+      D100_COMPOSED_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_d112_ubuntu_frontend_perf_workflow_is_active_and_reviewed
+    assert_equal(
+      D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_equal(
+      D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
+    )
+    assert_equal(
+      D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
     )
     assert validate_source_aware_perf_gate_lifecycle(
       ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
