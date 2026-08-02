@@ -195,7 +195,7 @@ For each newly observed upstream release:
 
 *n/a for native execution: PEP 684 configures CPython interpreter GILs, while
 pycc-native code has no GIL. A planned embedded CPython interop boundary keeps
-the pinned interpreter's own GIL only for CPython-backed operations (D-115).*
+the pinned interpreter's own GIL only for CPython-backed operations (D-127).*
 
 ## Python 3.13
 
