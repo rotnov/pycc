@@ -36,6 +36,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
     "tests/fixtures/d100-compose-d91-d99-ci.yml"
   D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml"
+  D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE =
+    Pathname(__dir__).parent /
+    "tests/fixtures/d114-frontend-perf-threshold-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -995,9 +998,16 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # for check_roadmap_evidence.rb's own bytes) will shrink this back to a
   # single entry -- until then both coexist, mirroring D-090's own
   # coexist-then-retire precedent for this exact array.
-  def test_tier1_workflow_authorization_contains_exactly_d100_and_d112
+  # D-114 (propose round) stages a third accepted digest alongside D100 and
+  # D112 -- a non-shrinking coexist window, same precedent as D100/D112
+  # above -- before any PR changes ci.yml's live bytes to match it.
+  def test_tier1_workflow_authorization_contains_exactly_d100_d112_and_d114
     assert_equal(
-      [D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256, D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256],
+      [
+        D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
+        D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
+        D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+      ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
@@ -1530,6 +1540,42 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert validate_source_aware_perf_gate_lifecycle(
       workflow_text, D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE.to_s
     )
+  end
+
+  # D-114 (propose round): stages a reviewed successor fixture -- identical
+  # to the live D112 shape except the gate job's own comparison step gains
+  # an explicit "7.0" threshold_percent argument -- without touching the
+  # live `.github/workflows/ci.yml` at all. The live file still matches
+  # D112 exactly (see the test above); this fixture and its digest are the
+  # reviewed target a later, separate activation round copies into place.
+  def test_d114_frontend_perf_threshold_workflow_fixture_matches_its_own_digest
+    assert_equal(
+      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE).hexdigest
+    )
+  end
+
+  def test_d114_frontend_perf_threshold_workflow_is_a_staged_successor
+    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
+                    D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+    refute_equal(
+      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
+    )
+  end
+
+  def test_d114_frontend_perf_threshold_workflow_structure_is_recognized
+    workflow_text = D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.read
+    assert validate_source_aware_perf_gate_lifecycle(
+      workflow_text, D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.to_s
+    )
+  end
+
+  def test_d114_frontend_perf_threshold_workflow_compare_step_has_the_new_argument
+    workflow = Psych.safe_load(D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.read)
+    steps = workflow.dig("jobs", "frontend-perf-gate", "steps")
+    compare = steps.find { |step| step["name"] == "Compare exact predecessor and candidate" }
+    assert_includes compare["run"], "\"7.0\""
   end
 
   def test_rejects_d112_measurement_job_with_a_different_runner
