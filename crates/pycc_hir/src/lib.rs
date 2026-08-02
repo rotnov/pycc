@@ -135,6 +135,35 @@ pub enum HirExpr {
         base: Box<HirExpr>,
         index: Box<HirExpr>,
     },
+    /// `base[start:stop:step]` (PR-12, D-118). Each bound is independently
+    /// optional, matching Python's own slice grammar (`xs[:3]`, `xs[2:]`,
+    /// `xs[:]`, `xs[::2]` all parse). Unlike `Subscript`'s `index` (a plain
+    /// `HirExpr`), each bound here is an `Option<Box<HirExpr>>` -- an
+    /// omitted bound has no source expression to lower at all, and
+    /// defaulting it to a literal `0`/some sentinel here would be
+    /// incorrect: `stop`'s default is `len(base)`, which needs `base`'s own
+    /// already-lowered value to compute, not a value knowable at this
+    /// lowering step in isolation. `pycc_types`/`pycc_mir`/`pycc_codegen`
+    /// each apply the actual default at the point they have enough context
+    /// to do so correctly.
+    ///
+    /// Like `Subscript` above, this variant is only ever constructed in
+    /// Load (value) position. A slice **assignment target**
+    /// (`xs[1:3] = value`) never reaches it: `Stmt::Assign`'s own
+    /// `Expr::Subscript` target arm (see that arm's own handling below)
+    /// calls `lower_expr(&sub.slice)` directly on the bare `Expr::Slice`
+    /// node, and `lower_expr`'s outer match has no top-level arm for
+    /// `Expr::Slice` (only the nested one inside this file's own
+    /// `Expr::Subscript` value-position arm) -- so it falls through to the
+    /// generic "expression kind not supported yet" `C0001` catch-all,
+    /// unchanged by this task. This is intentional, not an oversight: D-118
+    /// scopes this PR's slicing support to reads only.
+    Slice {
+        base: Box<HirExpr>,
+        start: Option<Box<HirExpr>>,
+        stop: Option<Box<HirExpr>>,
+        step: Option<Box<HirExpr>>,
+    },
     /// `list.append(value)`, recognized as a single dedicated node rather
     /// than through any general method-call mechanism (D-105). Unlike
     /// `Subscript` above, this arm is *not* structurally restricted to any
@@ -757,9 +786,38 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                 .map(lower_expr)
                 .collect::<Result<Vec<_>, _>>()?,
         ),
-        Expr::Subscript(sub) => HirExpr::Subscript {
-            base: Box::new(lower_expr(&sub.value)?),
-            index: Box::new(lower_expr(&sub.slice)?),
+        Expr::Subscript(sub) => match sub.slice.as_ref() {
+            // A colon-containing subscript (`xs[a:b:c]`) parses its `slice`
+            // field as `Expr::Slice`, distinct from the plain single-
+            // expression `slice` an ordinary index (`xs[0]`) produces
+            // (PR-12, D-118). Each bound is independently optional in real
+            // Python's own grammar, so each is lowered through
+            // `Option::map`/`.transpose()` rather than assumed present.
+            Expr::Slice(slice) => HirExpr::Slice {
+                base: Box::new(lower_expr(&sub.value)?),
+                start: slice
+                    .lower
+                    .as_deref()
+                    .map(lower_expr)
+                    .transpose()?
+                    .map(Box::new),
+                stop: slice
+                    .upper
+                    .as_deref()
+                    .map(lower_expr)
+                    .transpose()?
+                    .map(Box::new),
+                step: slice
+                    .step
+                    .as_deref()
+                    .map(lower_expr)
+                    .transpose()?
+                    .map(Box::new),
+            },
+            _ => HirExpr::Subscript {
+                base: Box::new(lower_expr(&sub.value)?),
+                index: Box::new(lower_expr(&sub.slice)?),
+            },
         },
         Expr::Call(call) => {
             if !call.arguments.keywords.is_empty() {
@@ -963,6 +1021,17 @@ fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExpr {
         HirExpr::Subscript { base, index } => HirExpr::Subscript {
             base: Box::new(recurse(*base)),
             index: Box::new(recurse(*index)),
+        },
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => HirExpr::Slice {
+            base: Box::new(recurse(*base)),
+            start: start.map(|s| Box::new(recurse(*s))),
+            stop: stop.map(|s| Box::new(recurse(*s))),
+            step: step.map(|s| Box::new(recurse(*s))),
         },
         HirExpr::ListAppend { list, value } => HirExpr::ListAppend {
             list: if list == from { to.to_string() } else { list },
@@ -3176,6 +3245,202 @@ mod tests {
         assert_eq!(err.span, Some(Span::new(0, 0)));
     }
 
+    // -- Task 6 (D-118): list[int] slicing frontend HIR forms ------------
+
+    #[test]
+    fn lowers_a_slice_expression_with_both_bounds_present() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[1:3]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: Some(Box::new(HirExpr::IntLiteral(1))),
+                    stop: Some(Box::new(HirExpr::IntLiteral(3))),
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_with_only_the_stop_bound() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[:3]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: None,
+                    stop: Some(Box::new(HirExpr::IntLiteral(3))),
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_with_only_the_start_bound() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[2:]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: Some(Box::new(HirExpr::IntLiteral(2))),
+                    stop: None,
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_with_all_bounds_omitted() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[:]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: None,
+                    stop: None,
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_with_a_step() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[::2]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: None,
+                    stop: None,
+                    step: Some(Box::new(HirExpr::IntLiteral(2))),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn an_ordinary_single_expression_subscript_still_lowers_to_subscript_not_slice() {
+        // Regression pin for Step 2's new `match sub.slice.as_ref() { ... }`
+        // dispatch (D-118): a colon-free subscript must keep taking the `_`
+        // arm and producing the pre-existing `HirExpr::Subscript` shape,
+        // unaffected by the new `Expr::Slice` arm added alongside it.
+        // (Already exercised incidentally by `lowers_a_read_subscript`
+        // above; pinned again here, by name, as the dedicated regression
+        // test for this specific change.)
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[0]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Subscript {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    index: Box::new(HirExpr::IntLiteral(0)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_expressions_base_and_bounds_are_recursively_lowered() {
+        // `f()`/`g()` stand in for "some already-lowerable non-literal
+        // shape" -- confirms `base`/`start`/`stop` are each passed through
+        // the real `lower_expr` recursively, not merely accepted as raw
+        // literals.
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[f():g()]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: Some(Box::new(HirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                    })),
+                    stop: Some(Box::new(HirExpr::Call {
+                        callee: "g".to_string(),
+                        args: vec![],
+                    })),
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_with_an_unsupported_base_propagates_the_base_error() {
+        // Exercises the `Expr::Slice(slice) => ...` arm's own
+        // `lower_expr(&sub.value)?` call site specifically -- a distinct
+        // region from the `_` arm's identically-worded call site, already
+        // covered by `a_subscript_with_an_unsupported_base_propagates_the_base_error`.
+        assert_capability_error_message(
+            "y = (lambda: 1)[0:1]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_slice_with_an_unsupported_start_bound_propagates_the_start_error() {
+        assert_capability_error_message(
+            "xs = [1, 2, 3]\ny = xs[(lambda: 1):3]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_slice_with_an_unsupported_stop_bound_propagates_the_stop_error() {
+        assert_capability_error_message(
+            "xs = [1, 2, 3]\ny = xs[1:(lambda: 1)]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_slice_with_an_unsupported_step_propagates_the_step_error() {
+        assert_capability_error_message(
+            "xs = [1, 2, 3]\ny = xs[1:3:(lambda: 1)]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_slice_assignment_target_is_not_specially_recognized() {
+        // Pins `HirExpr::Slice`'s own documented "Load position only"
+        // restriction (D-118): unlike a plain-index assignment target
+        // (`xs[0] = 1`, which reaches `HirStmt::DictSet` via `Stmt::Assign`'s
+        // own `Expr::Subscript` target arm), a slice assignment target
+        // (`xs[1:3] = value`) calls `lower_expr` directly on the bare
+        // `Expr::Slice` node -- which has no top-level arm -- and falls
+        // through to the same generic catch-all as any other unsupported
+        // expression kind. This is intentional (slicing ships read-only in
+        // this PR), not a regression to fix later without revisiting D-118.
+        assert_capability_error_message(
+            "xs = [1, 2, 3]\nxs[1:3] = [4, 5]\n",
+            "expression kind not supported yet",
+        );
+    }
+
     #[test]
     fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
         // Exhaustiveness-pinning test for `rename_name_in_expr`'s own
@@ -3304,6 +3569,31 @@ mod tests {
             HirExpr::Subscript {
                 base: Box::new(HirExpr::Name("new".to_string())),
                 index: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // Slice: renames `base` and every present bound. Only the `Some`
+        // side of each `Option::map` is exercised here -- the `None` side
+        // has no closure body of its own to cover (it is just the same
+        // `start`/`stop`/`step` value flowing through unchanged), and is
+        // separately pinned by `lowers_a_slice_expression_with_all_bounds_omitted`
+        // above at the `lower_expr` level.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("old".to_string())),
+                    start: Some(Box::new(HirExpr::Name("old".to_string()))),
+                    stop: Some(Box::new(HirExpr::Name("old".to_string()))),
+                    step: Some(Box::new(HirExpr::Name("old".to_string()))),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::Slice {
+                base: Box::new(HirExpr::Name("new".to_string())),
+                start: Some(Box::new(HirExpr::Name("new".to_string()))),
+                stop: Some(Box::new(HirExpr::Name("new".to_string()))),
+                step: Some(Box::new(HirExpr::Name("new".to_string()))),
             }
         );
 
