@@ -34,7 +34,7 @@ RC alone leaks cycles. Decision (D-004): lightweight incremental **trial-deletio
 
 Native pycc execution has no GIL; `threading.Thread` = OS thread. A planned
 CPython interop boundary owns CPython's GIL only while executing CPython-backed
-operations and does not weaken the rules below for native values (D-114).
+operations and does not weaken the rules below for native values (D-115).
 Safety model (the "fishечка"):
 
 - Compiler classifies every type: **`Shareable`** (deeply immutable: `int`, `str`, `frozen` dataclasses, `tuple` of Shareable…) or **`ThreadLocal`**.

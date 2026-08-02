@@ -38,7 +38,7 @@ ordinary standard-Python source (`import numpy`, not a required
 `pycc.interop` rewrite). Planned v0.7 classifies these imports as
 CPython-backed, bundles their pinned runtime/package closure, and keeps values
 typed at the generated boundary according to [RUNTIME.md](./RUNTIME.md) and
-D-114. Runtime inclusion is automatic under the default `auto` policy but
+D-115. Runtime inclusion is automatic under the default `auto` policy but
 never invisible in build metadata or `pycc.lock`; `allowlist` and
 `deny`/`--pure` provide stricter deployment policies.
 
