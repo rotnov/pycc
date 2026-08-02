@@ -10909,15 +10909,28 @@ mod tests {
     }
 
     #[test]
-    fn private_slice_base_propagates_nested_constraint_errors() {
-        // PR-12 Task 7 (D-118): proves `collect_block_constraints`'s `Return`
-        // handling reaches this task's new `Slice` constraint-collection arm
-        // *inside a private helper's own body* (not just at module top
-        // level, which the pair above this whole group already covers), and
-        // that the arm's own `collect_expr_constraints(..., base)?` call
-        // really does propagate a genuine solver-stage conflict from `base`
-        // rather than swallowing it -- the exact regression class Task 3's
-        // own ledger recorded once already for a sibling arm.
+    fn private_slice_base_wrapping_a_conflict_is_rejected_end_to_end() {
+        // PR-12 Task 7 (D-118). NOTE what this test does and does NOT pin:
+        // it proves `check()`'s real, end-to-end pipeline still rejects a
+        // nested private-helper call conflict when it sits inside a
+        // `Slice`'s `base`, *inside a private helper's own body* (not just
+        // at module top level, which the pair above this whole group
+        // already covers) -- a real and valuable thing to test on its own.
+        // It does NOT, on its own, prove that `collect_expr_constraints`'s
+        // `Slice` arm itself recurses into `base`: `check_with_environment`'s
+        // Pass 3 independently re-type-checks every function body via
+        // `infer_expr_in` regardless of what the solver's own
+        // constraint-collection pass did or didn't visit, so this exact
+        // conflict is still caught by Pass 3 even with the solver arm's
+        // recursion mutated away to a bare `Ok(None)` no-op (confirmed by
+        // temporarily making that mutation and rerunning this test: it kept
+        // passing). `private_slice_base_recursion_pins_an_otherwise_unconstrained_parameter`
+        // below is the test that actually is sensitive to the solver arm's
+        // own recursion, using a construction where Pass 3 cannot mask a
+        // missing visit (a `Ty::Infer` parameter whose *only* constraining
+        // use anywhere in the module is inside a `Slice`'s `base`, so
+        // signature resolution itself -- which gates whether Pass 3 ever
+        // runs at all -- depends on the solver reaching it).
         let stmt = HirStmt::Return(Some(HirExpr::Slice {
             base: Box::new(nested_private_call_conflict()),
             start: None,
@@ -10933,10 +10946,12 @@ mod tests {
     }
 
     #[test]
-    fn private_slice_bound_propagates_nested_constraint_errors() {
+    fn private_slice_bound_wrapping_a_conflict_is_rejected_end_to_end() {
         // Same as above, but the conflict is nested inside a bound
-        // (`start`), not `base` -- proves the arm's per-bound recursion loop
-        // propagates too, not just the `base` call.
+        // (`start`), not `base`. Same caveat applies: this alone doesn't
+        // pin the solver arm's own recursion (Pass 3 masks it identically),
+        // see `private_slice_start_bound_recursion_pins_an_otherwise_unconstrained_parameter`
+        // below for the test that actually does.
         let stmt = HirStmt::Return(Some(HirExpr::Slice {
             base: Box::new(HirExpr::IntLiteral(1)),
             start: Some(Box::new(nested_private_call_conflict())),
@@ -10949,6 +10964,101 @@ mod tests {
                 .code,
             "T0021"
         );
+    }
+
+    #[test]
+    fn private_slice_base_recursion_pins_an_otherwise_unconstrained_parameter() {
+        // Load-bearing counterpart to the pair above (added after review:
+        // those two tests' original doc comments overclaimed what they
+        // pinned -- Pass 3 independently re-type-checks every function body
+        // regardless of solver recursion, so a genuine conflict is caught
+        // either way; verified by temporarily gutting the `Slice` arm in
+        // `collect_expr_constraints` to a bare `Ok(None)` and confirming
+        // those two tests still passed).
+        //
+        // This test's construction is different in a way that matters:
+        // `_forward`'s own parameter `xs` is `Ty::Infer`, and its *only*
+        // appearance anywhere in this module is wrapped in a call
+        // (`_id_list(xs)`) embedded in a `Slice`'s `base`. Nothing else ever
+        // constrains `xs`'s type. `collect_expr_constraints`'s `Call` arm is
+        // the one place that performs real unification (`unify_terms`)
+        // between an argument's term and the callee's own (here: concretely
+        // annotated) parameter term -- so `xs`'s term becomes concretely
+        // `list[int]` if and only if the solver actually visits
+        // `_id_list(xs)`, which only happens if the outer `Slice` arm
+        // recurses into `base`.
+        //
+        // If that recursion is missing, `xs`'s term never resolves, and
+        // `infer_function_signatures_with_solver`'s own final resolution
+        // loop raises "cannot infer type of parameter `xs`... add an
+        // annotation" *before `check_with_signatures`/Pass 3 ever runs for
+        // this function* -- Pass 3 cannot mask a failure that happens
+        // before Pass 3 is even reached. Confirmed empirically: gutting the
+        // `Slice` arm to a bare `Ok(None)` flips this test from `Ok(())` to
+        // exactly that `Err`; restoring the real arm makes it pass again.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_id_list".to_string(),
+                    params: vec![("v".to_string(), Ty::List(Box::new(Ty::Int)))],
+                    return_ty: Ty::List(Box::new(Ty::Int)),
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("v".to_string())))],
+                },
+                HirItem::Function {
+                    name: "_forward".to_string(),
+                    params: vec![("xs".to_string(), Ty::Infer)],
+                    return_ty: Ty::List(Box::new(Ty::Int)),
+                    body: vec![HirStmt::Return(Some(HirExpr::Slice {
+                        base: Box::new(HirExpr::Call {
+                            callee: "_id_list".to_string(),
+                            args: vec![HirExpr::Name("xs".to_string())],
+                        }),
+                        start: Some(Box::new(HirExpr::IntLiteral(1))),
+                        stop: None,
+                        step: None,
+                    }))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn private_slice_start_bound_recursion_pins_an_otherwise_unconstrained_parameter() {
+        // Same load-bearing shape as the test above, but the embedded call
+        // sits in a bound (`start`) rather than `base`: `_forward`'s own
+        // parameter `x` is `Ty::Infer` and is used *only* wrapped in
+        // `_id(x)` inside the slice's `start` bound. A bare `Name("x")`
+        // bound would NOT be load-bearing here -- looking up a name in
+        // `collect_expr_constraints` performs no unification of its own,
+        // only the `Call` arm does, which is why this test wraps `x` in a
+        // call rather than mirroring the brief-review's own bare `xs[x:]`
+        // sketch literally.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_id".to_string(),
+                    params: vec![("v".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("v".to_string())))],
+                },
+                HirItem::Function {
+                    name: "_forward".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::List(Box::new(Ty::Int)),
+                    body: vec![HirStmt::Return(Some(HirExpr::Slice {
+                        base: Box::new(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
+                        start: Some(Box::new(HirExpr::Call {
+                            callee: "_id".to_string(),
+                            args: vec![HirExpr::Name("x".to_string())],
+                        })),
+                        stop: None,
+                        step: None,
+                    }))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
     }
 
     #[test]
