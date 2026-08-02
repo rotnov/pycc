@@ -2,7 +2,7 @@ use pycc_diag::{Diagnostic, Span};
 #[cfg(test)]
 use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
-use pycc_hir::{BinOpKind, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
+use pycc_hir::{BinOpKind, CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -132,6 +132,23 @@ fn collect_local_names<'a>(body: &'a [HirStmt], names: &mut Vec<&'a str>) {
                     names.push(var);
                 }
                 collect_local_names(body, names);
+            }
+            // PR-12 Task 3 (D-117): a comprehension introduces two new local
+            // names where a plain `for` loop introduces one -- its own
+            // `target` (the comprehension's result) and its synthesized
+            // `var` (the loop variable, already collision-proof by
+            // construction, see `pycc_hir`'s `synthesize_comp_var_name`).
+            // Neither has a body to recurse into (a comprehension is not a
+            // nested block of statements).
+            HirStmt::ListCompAssign { target, var, .. }
+            | HirStmt::SetCompAssign { target, var, .. }
+            | HirStmt::DictCompAssign { target, var, .. } => {
+                if !is_local(names, target) {
+                    names.push(target);
+                }
+                if !is_local(names, var) {
+                    names.push(var);
+                }
             }
             // `d[k] = v` (PR-11 Task 3) reassigns an existing binding's
             // contents, not a name -- unlike `Assign`/`AnnAssign`/`ForList`
@@ -475,6 +492,63 @@ fn collect_expr_constraints(
     }
 }
 
+/// Binds a comprehension's synthesized loop variable (PR-12 Task 3, D-117)
+/// in the constraint solver's environment, mirroring `collect_block_constraints`'s
+/// own `ForRange`/`ForList` arms exactly rather than duplicating their logic
+/// a third time: a `CompIter::Range` iterable gives the loop variable the
+/// concrete `Ty::Int` fact (unifying against any existing term, exactly like
+/// `ForRange`'s own loop variable), while a `CompIter::Name` iterable gives
+/// it a fresh, unconstrained term (exactly like `ForList`'s own loop
+/// variable) since this solver doesn't track a list/dict/set-typed name's
+/// element type at all. Shared by all three comprehension statement kinds.
+fn bind_comp_loop_var(
+    signatures: &HashMap<String, SignatureTerms>,
+    parents: &mut Vec<usize>,
+    concrete: &mut Vec<Option<Ty>>,
+    binops: &mut Vec<BinOpConstraint>,
+    env: &mut ConstraintEnvironment<'_, '_>,
+    var: &str,
+    iter: &CompIter,
+) -> Result<(), Diagnostic> {
+    match iter {
+        CompIter::Range { start, stop, step } => {
+            for (position, expr) in [("start", start), ("stop", stop), ("step", step)] {
+                if let Some(term @ Err(_)) =
+                    collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?
+                {
+                    unify_terms(
+                        term,
+                        Ok(Ty::Int),
+                        parents,
+                        concrete,
+                        "T0021",
+                        &format!("comprehension range {position}"),
+                    )?;
+                }
+            }
+            if let Some(existing) = env.bindings.get(var).cloned() {
+                unify_terms(
+                    existing,
+                    Ok(Ty::Int),
+                    parents,
+                    concrete,
+                    "T0023",
+                    &format!("assignment to comprehension loop variable `{var}`"),
+                )?;
+            } else {
+                env.bindings.insert(var.to_string(), Ok(Ty::Int));
+            }
+        }
+        CompIter::Name(_) => {
+            if !env.bindings.contains_key(var) {
+                let term = fresh_term(parents, concrete);
+                env.bindings.insert(var.to_string(), term);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn collect_block_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
@@ -654,6 +728,60 @@ fn collect_block_constraints(
                 collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
                 collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
             }
+            // PR-12 Task 3 (D-117): no unification term is registered for
+            // `target` -- per D-116's own correction note ("a
+            // container-literal assignment's target never receives a solver
+            // binding at all... confirmed empirically for all four container
+            // types"), a comprehension's own `target` gets that same
+            // treatment, matching `ListLiteral`/`DictLiteral`/`SetLiteral`
+            // above. Unlike a bare no-op, though, this arm still binds the
+            // loop variable (mirroring `ForRange`/`ForList` above, via the
+            // shared `bind_comp_loop_var` helper) and recurses into
+            // `cond`/`elt` (or `key`/`value`) to keep propagating genuine
+            // errors and, critically, to let a call inside a comprehension's
+            // own sub-expressions still participate in this solver's
+            // argument<->parameter unification (self-review finding: an
+            // earlier no-op-only version of this arm made an unannotated
+            // private-helper parameter used only inside a comprehension's
+            // `elt` spuriously fail to infer with "cannot infer type of
+            // parameter ...; add an annotation", since the call inside `elt`
+            // was never visited at all -- see
+            // `private_helper_parameter_is_inferred_through_a_comprehension_s_elt`).
+            HirStmt::ListCompAssign {
+                var,
+                iter,
+                cond,
+                elt,
+                ..
+            }
+            | HirStmt::SetCompAssign {
+                var,
+                iter,
+                cond,
+                elt,
+                ..
+            } => {
+                bind_comp_loop_var(signatures, parents, concrete, binops, env, var, iter)?;
+                if let Some(cond) = cond {
+                    collect_expr_constraints(signatures, parents, concrete, binops, env, cond)?;
+                }
+                collect_expr_constraints(signatures, parents, concrete, binops, env, elt)?;
+            }
+            HirStmt::DictCompAssign {
+                var,
+                iter,
+                cond,
+                key,
+                value,
+                ..
+            } => {
+                bind_comp_loop_var(signatures, parents, concrete, binops, env, var, iter)?;
+                if let Some(cond) = cond {
+                    collect_expr_constraints(signatures, parents, concrete, binops, env, cond)?;
+                }
+                collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
+                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            }
         }
     }
     Ok(())
@@ -669,7 +797,10 @@ fn contains_return(body: &[HirStmt]) -> bool {
         HirStmt::ExprStmt(_)
         | HirStmt::Assign { .. }
         | HirStmt::AnnAssign { .. }
-        | HirStmt::DictSet { .. } => false,
+        | HirStmt::DictSet { .. }
+        | HirStmt::ListCompAssign { .. }
+        | HirStmt::SetCompAssign { .. }
+        | HirStmt::DictCompAssign { .. } => false,
     })
 }
 
@@ -1520,6 +1651,43 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     Ok(())
 }
 
+/// Resolves a comprehension's iterable (`pycc_hir::CompIter`) to the loop
+/// variable's type, without binding it -- mirrors `HirStmt::ForList`'s own
+/// resolution exactly (`check_stmt`/`check_stmt_in_function`'s existing
+/// `ForList` arms), reused rather than duplicated a third time (PR-12,
+/// D-117). Range/list/dict/set element-type resolution is identical to
+/// `ForList`'s; a comprehension adds nothing new here.
+fn resolve_comp_iter(
+    env: &Environment,
+    local_names: &[&str],
+    iter: &CompIter,
+) -> Result<Ty, Diagnostic> {
+    match iter {
+        CompIter::Range { start, stop, step } => {
+            check_range_operand_in(env, local_names, "start", start)?;
+            check_range_operand_in(env, local_names, "stop", stop)?;
+            check_range_operand_in(env, local_names, "step", step)?;
+            Ok(Ty::Int)
+        }
+        CompIter::Name(name) => {
+            let base_ty = lookup_bound_name(env, local_names, name)?;
+            match base_ty {
+                Ty::List(elem_ty) => Ok(*elem_ty),
+                Ty::Dict(kv) => Ok(kv.0),
+                Ty::Set(elem_ty) => Ok(*elem_ty),
+                other => Err(Diagnostic::error(
+                    "T0033",
+                    format!(
+                        "`{}` cannot be iterated with `for ... in ...` (only list[T]/dict[K, V]/set[T] supports this)",
+                        other.name()
+                    ),
+                    Span::new(0, 0),
+                )),
+            }
+        }
+    }
+}
+
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Assign { target, value } => {
@@ -1635,6 +1803,101 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                 check_stmt(env, stmt)?;
             }
             Ok(())
+        }
+        // PR-12 Task 3 (D-117): `target = [elt for var in iter [if cond]]`
+        // at module scope. `var` is resolved and bound exactly like
+        // `ForList`'s own loop variable above (via the shared
+        // `resolve_comp_iter` helper) *before* `cond`/`elt` are checked, so
+        // a reference to the loop variable inside either sub-expression
+        // resolves correctly. The produced element type is gated to
+        // `Ty::Int` -- identical rule to `ListLiteral`'s own `T0034` gate
+        // (D-105/D-112), just reached via a new code path (D-119); no new
+        // diagnostic code is minted.
+        HirStmt::ListCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt,
+        } => {
+            let var_ty = resolve_comp_iter(env, &[], iter)?;
+            check_assignment(env, var, var_ty)?;
+            if let Some(cond) = cond {
+                infer_expr(env, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+            }
+            let elt_ty = infer_expr(env, elt)?;
+            if elt_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0034",
+                    format!(
+                        "list codegen only supports `list[int]` in v0.2, got a comprehension producing `list[{}]`",
+                        elt_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            check_assignment(env, target, Ty::List(Box::new(Ty::Int)))
+        }
+        // PR-12 Task 3 (D-117): `target = {elt for var in iter [if cond]}`
+        // at module scope. Mirrors `ListCompAssign` above exactly except for
+        // the produced type and diagnostic code (D-119: reuses `T0038`,
+        // identical to `SetLiteral`'s own gate).
+        HirStmt::SetCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt,
+        } => {
+            let var_ty = resolve_comp_iter(env, &[], iter)?;
+            check_assignment(env, var, var_ty)?;
+            if let Some(cond) = cond {
+                infer_expr(env, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+            }
+            let elt_ty = infer_expr(env, elt)?;
+            if elt_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0038",
+                    format!(
+                        "set codegen only supports `set[int]` in v0.2, got a comprehension producing `set[{}]`",
+                        elt_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            check_assignment(env, target, Ty::Set(Box::new(Ty::Int)))
+        }
+        // PR-12 Task 3 (D-117): `target = {key: value for var in iter [if
+        // cond]}` at module scope. Mirrors `ListCompAssign` above except for
+        // the key/value split (D-119: reuses `T0036`, identical to
+        // `DictLiteral`'s own gate).
+        HirStmt::DictCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            key,
+            value,
+        } => {
+            let var_ty = resolve_comp_iter(env, &[], iter)?;
+            check_assignment(env, var, var_ty)?;
+            if let Some(cond) = cond {
+                infer_expr(env, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+            }
+            let key_ty = infer_expr(env, key)?;
+            let value_ty = infer_expr(env, value)?;
+            if key_ty != Ty::Str || value_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0036",
+                    format!(
+                        "dict codegen only supports `dict[str, int]` in v0.2, got a comprehension producing `dict[{}, {}]`",
+                        key_ty.name(),
+                        value_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            check_assignment(env, target, Ty::Dict(Box::new((Ty::Str, Ty::Int))))
         }
         HirStmt::Return(_) => Err(Diagnostic::error(
             "T0024",
@@ -1777,7 +2040,14 @@ fn block_always_returns(body: &[HirStmt]) -> bool {
         | HirStmt::While { .. }
         | HirStmt::ForRange { .. }
         | HirStmt::ForList { .. }
-        | HirStmt::DictSet { .. } => false,
+        | HirStmt::DictSet { .. }
+        // PR-12 Task 3 (D-117): a comprehension statement never contains a
+        // `return` (its `elt`/`cond`/`key`/`value` are expressions, not
+        // statements), so it can never make a block always return, exactly
+        // like `Assign`/`ForList`/`DictSet` above.
+        | HirStmt::ListCompAssign { .. }
+        | HirStmt::SetCompAssign { .. }
+        | HirStmt::DictCompAssign { .. } => false,
     })
 }
 
@@ -1874,6 +2144,90 @@ fn check_stmt_in_function(
                 check_stmt_in_function(env, local_names, s, return_ty.clone())?;
             }
             Ok(())
+        }
+        // PR-12 Task 3 (D-117): function-scope counterparts of the
+        // module-scope `check_stmt` arms above, `local_names`-aware
+        // (`resolve_comp_iter`/`infer_expr_in` in place of the module-scope
+        // helpers/`&[]`) -- otherwise identical, mirroring exactly how
+        // `ForList`'s own two arms (module vs. function scope) already
+        // differ only in that respect.
+        HirStmt::ListCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt,
+        } => {
+            let var_ty = resolve_comp_iter(env, local_names, iter)?;
+            check_assignment(env, var, var_ty)?;
+            if let Some(cond) = cond {
+                infer_expr_in(env, local_names, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+            }
+            let elt_ty = infer_expr_in(env, local_names, elt)?;
+            if elt_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0034",
+                    format!(
+                        "list codegen only supports `list[int]` in v0.2, got a comprehension producing `list[{}]`",
+                        elt_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            check_assignment(env, target, Ty::List(Box::new(Ty::Int)))
+        }
+        HirStmt::SetCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt,
+        } => {
+            let var_ty = resolve_comp_iter(env, local_names, iter)?;
+            check_assignment(env, var, var_ty)?;
+            if let Some(cond) = cond {
+                infer_expr_in(env, local_names, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+            }
+            let elt_ty = infer_expr_in(env, local_names, elt)?;
+            if elt_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0038",
+                    format!(
+                        "set codegen only supports `set[int]` in v0.2, got a comprehension producing `set[{}]`",
+                        elt_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            check_assignment(env, target, Ty::Set(Box::new(Ty::Int)))
+        }
+        HirStmt::DictCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            key,
+            value,
+        } => {
+            let var_ty = resolve_comp_iter(env, local_names, iter)?;
+            check_assignment(env, var, var_ty)?;
+            if let Some(cond) = cond {
+                infer_expr_in(env, local_names, cond)?; // any type is accepted as truthy, mirroring `If`/`While`
+            }
+            let key_ty = infer_expr_in(env, local_names, key)?;
+            let value_ty = infer_expr_in(env, local_names, value)?;
+            if key_ty != Ty::Str || value_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0036",
+                    format!(
+                        "dict codegen only supports `dict[str, int]` in v0.2, got a comprehension producing `dict[{}, {}]`",
+                        key_ty.name(),
+                        value_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            check_assignment(env, target, Ty::Dict(Box::new((Ty::Str, Ty::Int))))
         }
         HirStmt::Assign { target, value } => {
             let ty = infer_expr_in(env, local_names, value)?;
@@ -3940,6 +4294,632 @@ mod tests {
         assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0023");
     }
 
+    // -- PR-12 Task 3 (D-117): comprehension type-checking, module scope --
+
+    #[test]
+    fn a_list_comprehension_over_range_type_checks_and_binds_target_as_list_int() {
+        // Also pins that `var` is bound (via `check_assignment`) *before*
+        // `elt` is checked: `elt` references the loop variable, so this
+        // would fail as an unbound local if the ordering were wrong.
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("y"), Some(Ty::List(Box::new(Ty::Int))));
+        assert_eq!(env.lookup("0comp_11_i"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn check_accepts_a_module_level_comprehension_whose_target_is_read_afterward() {
+        // End-to-end pipeline pin, distinct from the hand-held-`Environment`
+        // test above: every other comprehension test in this file either
+        // drives `check_stmt`/`check_function` directly against a throwaway
+        // `Environment`, or runs the full `check`/`check_and_resolve`
+        // pipeline over a module expected to *fail*. This is the one test
+        // confirming the full `check` pipeline (`module_function_names` ->
+        // `concrete_function_environment` -> `check_with_environment` ->
+        // `check_stmt`) accepts a *valid* module-level comprehension and
+        // that its `target` binding genuinely survives into the next
+        // top-level statement's environment, exactly like an ordinary
+        // `Assign`'s binding already does.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                    target: "xs".to_string(),
+                    var: "0comp_11_i".to_string(),
+                    iter: CompIter::Range {
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(3),
+                        step: HirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![HirExpr::Name("xs".to_string())],
+                })),
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_list_comprehension_s_if_filter_of_a_non_bool_type_still_type_checks() {
+        // Mirrors `If`/`While`: any type is accepted as truthy, no static
+        // bool-convertibility restriction.
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: Some(Box::new(HirExpr::StringLiteral("truthy".to_string()))),
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("y"), Some(Ty::List(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn a_list_comprehension_producing_str_is_rejected_as_t0034() {
+        // Mirrors `ListLiteral`'s own existing genericity tests
+        // (`a_homogeneous_non_int_list_literal_is_rejected_as_t0034`).
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::StringLiteral("x".to_string())),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0034");
+        assert!(err.message.contains("list[str]"));
+    }
+
+    #[test]
+    fn a_list_comprehension_producing_float_is_rejected_as_t0034() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::FloatLiteral(1.5)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0034");
+        assert!(err.message.contains("list[float]"));
+    }
+
+    #[test]
+    fn a_list_comprehension_producing_bool_is_rejected_as_t0034() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::BoolLiteral(true)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0034");
+        assert!(err.message.contains("list[bool]"));
+    }
+
+    #[test]
+    fn a_list_comprehension_over_a_bare_list_name_type_checks_and_binds_target_as_list_int() {
+        // Exercises `resolve_comp_iter`'s `CompIter::Name` branch resolving
+        // to `Ty::List` (the `ListCompAssign` tests above all use
+        // `CompIter::Range`, never a bare-name list iterable).
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_20_x".to_string(),
+            iter: CompIter::Name("xs".to_string()),
+            cond: None,
+            elt: Box::new(HirExpr::Name("0comp_20_x".to_string())),
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("y"), Some(Ty::List(Box::new(Ty::Int))));
+        assert_eq!(env.lookup("0comp_20_x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_set_comprehension_over_a_bare_set_name_type_checks_and_binds_target_as_set_int() {
+        // Exercises `resolve_comp_iter`'s `CompIter::Name` branch resolving
+        // to `Ty::Set`.
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let stmt = HirStmt::SetCompAssign {
+            target: "y".to_string(),
+            var: "0comp_20_x".to_string(),
+            iter: CompIter::Name("s".to_string()),
+            cond: None,
+            elt: Box::new(HirExpr::Name("0comp_20_x".to_string())),
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("y"), Some(Ty::Set(Box::new(Ty::Int))));
+        assert_eq!(env.lookup("0comp_20_x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_set_comprehension_producing_a_non_int_element_is_rejected_as_t0038() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::SetCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::StringLiteral("x".to_string())),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0038");
+        assert!(err.message.contains("set[str]"));
+    }
+
+    #[test]
+    fn a_set_comprehension_s_if_filter_of_a_non_bool_type_still_type_checks() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::SetCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: Some(Box::new(HirExpr::StringLiteral("truthy".to_string()))),
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("y"), Some(Ty::Set(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn a_dict_comprehension_over_a_bare_dict_name_type_checks_and_binds_target_as_dict_str_int() {
+        // Exercises `resolve_comp_iter`'s `CompIter::Name` branch resolving
+        // to `Ty::Dict`, binding `var` as the dict's *key* type (mirroring
+        // `ForList`'s own `for k in d:` behavior, D-113).
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let stmt = HirStmt::DictCompAssign {
+            target: "y".to_string(),
+            var: "0comp_20_k".to_string(),
+            iter: CompIter::Name("d".to_string()),
+            cond: None,
+            key: Box::new(HirExpr::Name("0comp_20_k".to_string())),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(
+            env.lookup("y"),
+            Some(Ty::Dict(Box::new((Ty::Str, Ty::Int))))
+        );
+        assert_eq!(env.lookup("0comp_20_k"), Some(Ty::Str));
+    }
+
+    #[test]
+    fn a_dict_comprehension_producing_a_non_str_int_pair_is_rejected_as_t0036() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::DictCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            key: Box::new(HirExpr::IntLiteral(1)),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0036");
+        assert!(err.message.contains("dict[int, int]"));
+    }
+
+    #[test]
+    fn a_dict_comprehension_s_if_filter_of_a_non_bool_type_still_type_checks() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::DictCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: Some(Box::new(HirExpr::StringLiteral("truthy".to_string()))),
+            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(
+            env.lookup("y"),
+            Some(Ty::Dict(Box::new((Ty::Str, Ty::Int))))
+        );
+    }
+
+    #[test]
+    fn a_comprehension_over_a_non_list_dict_set_iterable_is_rejected_as_t0033() {
+        // Reuses `ForList`'s own existing message
+        // (`a_for_list_loop_over_a_non_list_value_is_rejected`).
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Name("x".to_string()),
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("cannot be iterated"));
+    }
+
+    #[test]
+    fn a_comprehension_over_an_undefined_iterable_name_is_rejected_as_not_defined() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Name("undefined".to_string()),
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not defined"));
+    }
+
+    #[test]
+    fn an_entirely_unannotated_private_helper_containing_a_comprehension_fails_with_t0021() {
+        // Per D-116's own correction note: a container-literal assignment's
+        // target never receives a solver binding at all (the solver only
+        // unifies scalar `Ty::Infer` parameters/returns) -- a comprehension's
+        // own `target` gets the identical treatment (Step 5's deliberate
+        // no-op in `collect_block_constraints`). `def _h(): xs = (10, 20);
+        // return xs` already fails T0021 "local name `t` is not bound before
+        // this use" for a bare tuple/list assignment reaching a `Return` --
+        // this reproduces the same shape with a comprehension in place of a
+        // literal, confirming it is the same pre-existing gap, not a new one
+        // introduced by this statement.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::ListCompAssign {
+                        target: "xs".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Range {
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(3),
+                            step: HirExpr::IntLiteral(1),
+                        },
+                        cond: None,
+                        elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("xs".to_string()))),
+                ],
+            }],
+        };
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
+    }
+
+    // `resolve_comp_iter`'s own `CompIter::Range` operand checks (shared by
+    // every comprehension kind and both scopes) -- exercised once here via
+    // a list comprehension, mirroring `a_for_range_loop_whose_start_is_
+    // undefined_propagates_the_error` and its stop/step siblings.
+
+    #[test]
+    fn a_comprehension_over_a_range_with_a_non_int_start_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::StringLiteral("x".to_string()),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("range start expects"));
+    }
+
+    #[test]
+    fn a_comprehension_over_a_range_with_a_non_int_stop_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::StringLiteral("x".to_string()),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("range stop expects"));
+    }
+
+    #[test]
+    fn a_comprehension_over_a_range_with_a_non_int_step_propagates_the_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::StringLiteral("x".to_string()),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("range step expects"));
+    }
+
+    // Per-arm error-propagation pins (module scope): each of `resolve_comp_iter`'s
+    // call, the loop-variable `check_assignment`, `cond`, and `elt`/`key`/`value`
+    // is its own `?`-guarded call site in each of the three comprehension arms,
+    // so each needs its own error-propagating test for D-014's coverage gate,
+    // distinct from the "rejected with a specific diagnostic" tests above.
+
+    #[test]
+    fn a_set_comprehension_over_a_non_list_dict_set_iterable_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let stmt = HirStmt::SetCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Name("x".to_string()),
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("cannot be iterated"));
+    }
+
+    #[test]
+    fn a_dict_comprehension_over_a_non_list_dict_set_iterable_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let stmt = HirStmt::DictCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Name("x".to_string()),
+            cond: None,
+            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("cannot be iterated"));
+    }
+
+    #[test]
+    fn a_list_comprehension_rejects_a_conflicting_reassignment_of_its_loop_variable() {
+        let mut env = Environment::new();
+        env.bind("0comp_11_i".to_string(), Ty::Str);
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn a_set_comprehension_rejects_a_conflicting_reassignment_of_its_loop_variable() {
+        let mut env = Environment::new();
+        env.bind("0comp_11_i".to_string(), Ty::Str);
+        let stmt = HirStmt::SetCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn a_dict_comprehension_rejects_a_conflicting_reassignment_of_its_loop_variable() {
+        let mut env = Environment::new();
+        env.bind("0comp_11_i".to_string(), Ty::Str);
+        let stmt = HirStmt::DictCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn a_list_comprehension_s_if_filter_propagates_an_ill_typed_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: Some(Box::new(HirExpr::Name("undefined".to_string()))),
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_set_comprehension_s_if_filter_propagates_an_ill_typed_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::SetCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: Some(Box::new(HirExpr::Name("undefined".to_string()))),
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_comprehension_s_if_filter_propagates_an_ill_typed_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::DictCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: Some(Box::new(HirExpr::Name("undefined".to_string()))),
+            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_list_comprehension_s_elt_propagates_an_ill_typed_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_set_comprehension_s_elt_propagates_an_ill_typed_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::SetCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_comprehension_s_key_propagates_an_ill_typed_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::DictCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            key: Box::new(HirExpr::Name("undefined".to_string())),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_comprehension_s_value_propagates_an_ill_typed_error() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::DictCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+            value: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
     #[test]
     fn referencing_an_assigned_name_infers_its_bound_type() {
         let mut env = Environment::new();
@@ -4866,6 +5846,823 @@ mod tests {
             value: HirExpr::IntLiteral(1),
         }];
         assert!(!block_always_returns(&body));
+    }
+
+    fn a_list_comp_assign_stmt() -> HirStmt {
+        HirStmt::ListCompAssign {
+            target: "xs".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+        }
+    }
+
+    fn a_set_comp_assign_stmt() -> HirStmt {
+        HirStmt::SetCompAssign {
+            target: "xs".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+        }
+    }
+
+    fn a_dict_comp_assign_stmt() -> HirStmt {
+        HirStmt::DictCompAssign {
+            target: "xs".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            key: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        }
+    }
+
+    #[test]
+    fn local_name_collection_includes_a_list_comp_assign_s_target_and_synthesized_var() {
+        // PR-12 Task 3 (D-117): unlike `DictSet` above, a comprehension
+        // introduces two brand-new local names (`target` and the
+        // synthesized `var`), not zero.
+        let params: Vec<(String, Ty)> = vec![];
+        let body = vec![a_list_comp_assign_stmt()];
+        let mut names = function_local_names(&params, &body);
+        names.sort_unstable();
+        assert_eq!(names, vec!["0comp_11_i", "xs"]);
+    }
+
+    #[test]
+    fn local_name_collection_skips_a_list_comp_assign_s_target_and_var_when_already_local() {
+        // Exercises the `!is_local(...)` guard's "already local" branch: a
+        // parameter sharing the comprehension's `target`/`var` names must
+        // not be pushed a second time.
+        let params: Vec<(String, Ty)> = vec![
+            ("xs".to_string(), Ty::Infer),
+            ("0comp_11_i".to_string(), Ty::Infer),
+        ];
+        let body = vec![a_list_comp_assign_stmt()];
+        let names = function_local_names(&params, &body);
+        assert_eq!(names, vec!["xs", "0comp_11_i"]);
+    }
+
+    #[test]
+    fn local_name_collection_includes_a_set_comp_assign_s_target_and_var() {
+        let params: Vec<(String, Ty)> = vec![];
+        let body = vec![a_set_comp_assign_stmt()];
+        let mut names = function_local_names(&params, &body);
+        names.sort_unstable();
+        assert_eq!(names, vec!["0comp_11_i", "xs"]);
+    }
+
+    #[test]
+    fn local_name_collection_includes_a_dict_comp_assign_s_target_and_var() {
+        let params: Vec<(String, Ty)> = vec![];
+        let body = vec![a_dict_comp_assign_stmt()];
+        let mut names = function_local_names(&params, &body);
+        names.sort_unstable();
+        assert_eq!(names, vec!["0comp_11_i", "xs"]);
+    }
+
+    #[test]
+    fn contains_return_treats_a_list_comp_assign_as_not_a_return() {
+        assert!(!contains_return(&[a_list_comp_assign_stmt()]));
+    }
+
+    #[test]
+    fn contains_return_treats_a_set_comp_assign_as_not_a_return() {
+        assert!(!contains_return(&[a_set_comp_assign_stmt()]));
+    }
+
+    #[test]
+    fn contains_return_treats_a_dict_comp_assign_as_not_a_return() {
+        assert!(!contains_return(&[a_dict_comp_assign_stmt()]));
+    }
+
+    #[test]
+    fn block_always_returns_treats_a_list_comp_assign_as_not_always_returning() {
+        assert!(!block_always_returns(&[a_list_comp_assign_stmt()]));
+    }
+
+    #[test]
+    fn block_always_returns_treats_a_set_comp_assign_as_not_always_returning() {
+        assert!(!block_always_returns(&[a_set_comp_assign_stmt()]));
+    }
+
+    #[test]
+    fn block_always_returns_treats_a_dict_comp_assign_as_not_always_returning() {
+        assert!(!block_always_returns(&[a_dict_comp_assign_stmt()]));
+    }
+
+    #[test]
+    fn collect_block_constraints_treats_a_list_comp_assign_target_as_a_no_op() {
+        // PR-12 Task 3 (D-117), Step 5: mirrors the dict/set/tuple-literal
+        // solver-gap precedent directly -- `collect_block_constraints`'s
+        // `ListCompAssign`/`SetCompAssign`/`DictCompAssign` arm registers no
+        // term for `target` at all (though it does, unlike a bare no-op,
+        // still recurse into `elt`/`cond` -- see
+        // `private_helper_parameter_is_inferred_through_a_comprehension_s_elt`
+        // below for that half). An unrelated private helper with an
+        // unresolved (`Ty::Infer`) signature elsewhere in the same module
+        // must not let the solver's own leniency swallow a genuine T0034 --
+        // it has to fall through to the real, comprehension-aware check pass
+        // (mirrors
+        // `a_bad_dict_literal_is_still_rejected_when_the_solver_path_runs_first`).
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                    target: "xs".to_string(),
+                    var: "0comp_11_i".to_string(),
+                    iter: CompIter::Range {
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(3),
+                        step: HirExpr::IntLiteral(1),
+                    },
+                    cond: None,
+                    elt: Box::new(HirExpr::StringLiteral("x".to_string())),
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0034");
+    }
+
+    #[test]
+    fn private_helper_parameter_is_inferred_through_a_comprehension_s_elt() {
+        // Regression test (pinned-reviewer finding, pre-merge, P1): an
+        // earlier version of `collect_block_constraints`'s comprehension arm
+        // was a bare no-op -- it never recursed into `iter`/`cond`/`elt`
+        // at all, unlike every sibling arm in this function (`ForRange`,
+        // `ForList`, `DictSet` above all still recurse into their own
+        // sub-expressions even though they don't register a term for their
+        // own container). That meant a call expression appearing only
+        // inside a comprehension's `elt` never participated in this
+        // solver's argument<->parameter unification (see
+        // `private_parameter_is_inferred_by_forwarding_into_an_annotated_callee`
+        // for the plain, non-comprehension version of this exact mechanism):
+        // `_forward`'s unannotated `x` parameter, used only as an argument
+        // to the fully-annotated `_sink`, used to spuriously fail with
+        // "cannot infer type of parameter `x`; add an annotation" even
+        // though `x: int` is the only type consistent with this program.
+        // `bind_comp_loop_var` + recursing into `elt` (Step 5's actual fix)
+        // makes this resolve correctly and reach the real check pass, which
+        // accepts the program (`_sink` returns `int`, satisfying the list
+        // comprehension's own `T0034` gate).
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_sink".to_string(),
+                    params: vec![("value".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+                },
+                HirItem::Function {
+                    name: "_forward".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ListCompAssign {
+                            target: "y".to_string(),
+                            var: "0comp_11_i".to_string(),
+                            iter: CompIter::Range {
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::IntLiteral(1),
+                                step: HirExpr::IntLiteral(1),
+                            },
+                            cond: None,
+                            elt: Box::new(HirExpr::Call {
+                                callee: "_sink".to_string(),
+                                args: vec![HirExpr::Name("x".to_string())],
+                            }),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn bind_comp_loop_var_unifies_a_range_comprehension_s_loop_variable_with_an_existing_term() {
+        // Exercises `bind_comp_loop_var`'s `unify_terms(existing, Ok(Ty::Int), ...)`
+        // branch (mirrors `ForRange`'s own analogous branch, exercised by
+        // `collect_block_constraints_unifies_a_for_range_loop_variable_s_existing_term`-
+        // style coverage elsewhere in this file): the loop variable is
+        // already bound to an inferred term (via forwarding into another
+        // annotated helper) before the comprehension re-binds it to `Ty::Int`.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_sink".to_string(),
+                    params: vec![("value".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
+                },
+                HirItem::Function {
+                    name: "_forward".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "_sink".to_string(),
+                            args: vec![HirExpr::Name("x".to_string())],
+                        }),
+                        HirStmt::ListCompAssign {
+                            target: "y".to_string(),
+                            var: "x".to_string(),
+                            iter: CompIter::Range {
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::IntLiteral(1),
+                                step: HirExpr::IntLiteral(1),
+                            },
+                            cond: None,
+                            elt: Box::new(HirExpr::IntLiteral(1)),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn collect_block_constraints_unifies_a_range_comprehension_s_stop_forwarded_from_an_unannotated_parameter()
+     {
+        // Exercises `bind_comp_loop_var`'s `CompIter::Range` operand-check
+        // branch (mirrors `ForRange`'s own analogous `start`/`stop`/`step`
+        // checks): the comprehension's own `stop` operand is itself an
+        // unresolved solver term (an unannotated parameter forwarded
+        // directly as the range bound), which this arm must still visit and
+        // unify against `Ty::Int` -- exactly like a plain `for i in
+        // range(n):` loop's own `ForRange` arm already does.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![("n".to_string(), Ty::Infer)],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::ListCompAssign {
+                        target: "y".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Range {
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::Name("n".to_string()),
+                            step: HirExpr::IntLiteral(1),
+                        },
+                        cond: None,
+                        elt: Box::new(HirExpr::IntLiteral(1)),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn collect_block_constraints_rejects_a_range_comprehension_whose_stop_was_already_resolved_to_an_incompatible_type()
+     {
+        // The failure half of the operand-check branch above: `n` is first
+        // forwarded into a `str`-typed parameter (resolving its solver term
+        // to `Ty::Str`), then reused as the comprehension's own `stop`
+        // operand -- `bind_comp_loop_var`'s `unify_terms(term, Ok(Ty::Int),
+        // ...)` call must propagate the resulting conflict rather than
+        // silently accepting it.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_sink_str".to_string(),
+                    params: vec![("value".to_string(), Ty::Str)],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::Return(None)],
+                },
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![("n".to_string(), Ty::Infer)],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "_sink_str".to_string(),
+                            args: vec![HirExpr::Name("n".to_string())],
+                        }),
+                        HirStmt::ListCompAssign {
+                            target: "y".to_string(),
+                            var: "0comp_11_i".to_string(),
+                            iter: CompIter::Range {
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::Name("n".to_string()),
+                                step: HirExpr::IntLiteral(1),
+                            },
+                            cond: None,
+                            elt: Box::new(HirExpr::IntLiteral(1)),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_rejects_a_range_comprehension_whose_loop_variable_conflicts_with_an_existing_binding()
+     {
+        // Exercises `bind_comp_loop_var`'s `CompIter::Range` "existing
+        // binding" branch's own *failure* path (mirrors `ForRange`'s own
+        // `T0023` branch): the comprehension's loop variable happens, in
+        // this hand-built test only, to share a name with the enclosing
+        // function's own `str`-typed parameter (real lowering's
+        // `synthesize_comp_var_name` never produces such a collision), so
+        // `Range`'s `Ty::Int` fact genuinely conflicts with the existing
+        // binding.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![("0comp_11_i".to_string(), Ty::Str)],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ListCompAssign {
+                            target: "y".to_string(),
+                            var: "0comp_11_i".to_string(),
+                            iter: CompIter::Range {
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::IntLiteral(3),
+                                step: HirExpr::IntLiteral(1),
+                            },
+                            cond: None,
+                            elt: Box::new(HirExpr::IntLiteral(1)),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+                HirItem::Function {
+                    name: "_trigger".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn collect_block_constraints_gives_a_name_iterable_comprehension_s_loop_variable_a_fresh_term()
+    {
+        // Exercises `bind_comp_loop_var`'s `CompIter::Name` branch (mirrors
+        // `ForList`'s own analogous branch): this solver doesn't track a
+        // list-typed name's element type, so the loop variable just gets an
+        // unconstrained fresh term here -- real element-type checking is
+        // the subsequent `check_with_signatures` pass's job. Every other
+        // solver-path comprehension test above uses `CompIter::Range`.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ListCompAssign {
+                            target: "y".to_string(),
+                            var: "0comp_11_i".to_string(),
+                            iter: CompIter::Name("xs".to_string()),
+                            cond: None,
+                            elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+                HirItem::Function {
+                    name: "_trigger".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn collect_block_constraints_visits_a_set_comp_assign_s_cond_and_elt() {
+        // The combined `HirStmt::ListCompAssign | HirStmt::SetCompAssign`
+        // solver arm is only exercised with `ListCompAssign` and a `None`
+        // `cond` by the tests above -- this pins the `SetCompAssign` half of
+        // that pattern and the `cond.is_some()` branch, both distinct
+        // coverage regions from the `ListCompAssign`/`cond: None` case.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::SetCompAssign {
+                            target: "y".to_string(),
+                            var: "0comp_11_i".to_string(),
+                            iter: CompIter::Range {
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::IntLiteral(3),
+                                step: HirExpr::IntLiteral(1),
+                            },
+                            cond: Some(Box::new(HirExpr::IntLiteral(1))),
+                            elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+                HirItem::Function {
+                    name: "_trigger".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn collect_block_constraints_visits_a_dict_comp_assign_s_cond_key_and_value() {
+        // Pins the `HirStmt::DictCompAssign` solver arm (its own separate
+        // key/value split, not shared with the list/set arm above), with a
+        // `cond` present so its own `cond.is_some()` branch is covered too.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::DictCompAssign {
+                            target: "y".to_string(),
+                            var: "0comp_11_i".to_string(),
+                            iter: CompIter::Range {
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::IntLiteral(3),
+                                step: HirExpr::IntLiteral(1),
+                            },
+                            cond: Some(Box::new(HirExpr::IntLiteral(1))),
+                            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                            value: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+                HirItem::Function {
+                    name: "_trigger".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn collect_block_constraints_visits_a_dict_comp_assign_s_key_and_value_with_no_cond() {
+        // Companion to the test above: pins the `DictCompAssign` solver
+        // arm's `cond.is_none()` branch, which that test's `cond: Some(...)`
+        // shape never reaches.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::DictCompAssign {
+                            target: "y".to_string(),
+                            var: "0comp_11_i".to_string(),
+                            iter: CompIter::Range {
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::IntLiteral(3),
+                                step: HirExpr::IntLiteral(1),
+                            },
+                            cond: None,
+                            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                            value: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+                HirItem::Function {
+                    name: "_trigger".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_range_comprehension_s_stop_operand() {
+        // Pins `bind_comp_loop_var`'s own `collect_expr_constraints(...)?`
+        // call for a `CompIter::Range` operand failing outright, distinct
+        // from the operand-resolves-but-conflicts tests above. Uses a
+        // forward reference to a name assigned *later* in the same body
+        // (mirrors `private_helper_inference_rejects_a_read_before_local_assignment`)
+        // rather than a plain undefined name: this solver's own
+        // `collect_expr_constraints` is deliberately lenient about a
+        // non-local undefined name (`None => Ok(None)`, no error -- real
+        // "not defined" checking is `infer_expr_in`'s job in the second
+        // pass), so only a genuine *local-but-not-yet-bound* read actually
+        // triggers this solver's own `unbound_local` error.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::ListCompAssign {
+                        target: "y".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Range {
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::Name("later".to_string()),
+                            step: HirExpr::IntLiteral(1),
+                        },
+                        cond: None,
+                        elt: Box::new(HirExpr::IntLiteral(1)),
+                    },
+                    HirStmt::Assign {
+                        target: "later".to_string(),
+                        value: HirExpr::IntLiteral(3),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_keeps_a_name_iterable_comprehension_s_loop_variable_s_existing_term()
+     {
+        // Companion to the "fresh term" test above: pins the
+        // `CompIter::Name` branch's `contains_key(var)` guard's *true*
+        // branch (variable already bound), mirroring
+        // `collect_block_constraints_keeps_a_for_list_loop_variable_s_existing_term`'s
+        // own analogous `ForList` coverage. The loop variable is given the
+        // same name as a real parameter (`0comp_11_i`), whose own term is
+        // seeded into the solver's environment before any statement in the
+        // body runs -- unlike a plain `ExprStmt` reference to an
+        // undeclared name (which this solver's own local-name tracking
+        // would instead reject as unbound, never reaching the
+        // comprehension at all).
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![
+                    ("0comp_11_i".to_string(), Ty::List(Box::new(Ty::Int))),
+                    ("ys".to_string(), Ty::List(Box::new(Ty::Int))),
+                ],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::ListCompAssign {
+                        target: "y".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Name("ys".to_string()),
+                        cond: None,
+                        elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+        };
+        // The real check pass still rejects this program overall (`0comp_11_i`
+        // is a `list[int]`-typed parameter, and the comprehension tries to
+        // rebind it to `int`) -- that is not what this test pins. What
+        // matters is that the *solver's* own `bind_comp_loop_var` reaches
+        // its `CompIter::Name` branch with `var` already a key in
+        // `env.bindings` (from the parameter seeding) and takes the
+        // "already bound, do nothing" path without itself erroring, which
+        // is what lets the module-wide solver pass complete and fall
+        // through to the real, comprehension-aware check pass that then
+        // reports the actual `T0023` conflict.
+        assert_eq!(check(&hir).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_list_comp_assign_s_cond() {
+        // See the range-stop-operand test above for why a forward reference
+        // to a same-body local, not a plain undefined name, is required to
+        // exercise this solver's own error path.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::ListCompAssign {
+                        target: "y".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Range {
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(3),
+                            step: HirExpr::IntLiteral(1),
+                        },
+                        cond: Some(Box::new(HirExpr::Name("later".to_string()))),
+                        elt: Box::new(HirExpr::IntLiteral(1)),
+                    },
+                    HirStmt::Assign {
+                        target: "later".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_list_comp_assign_s_elt() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::ListCompAssign {
+                        target: "y".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Range {
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(3),
+                            step: HirExpr::IntLiteral(1),
+                        },
+                        cond: None,
+                        elt: Box::new(HirExpr::Name("later".to_string())),
+                    },
+                    HirStmt::Assign {
+                        target: "later".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_loop_variable_binding()
+     {
+        // Pins `DictCompAssign`'s own `bind_comp_loop_var(...)?` call site
+        // (textually distinct from the list/set arm's own call site above)
+        // failing outright, using the same loop-variable-collision shape as
+        // the list-comprehension version above.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_h".to_string(),
+                    params: vec![("0comp_11_i".to_string(), Ty::Str)],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::DictCompAssign {
+                            target: "y".to_string(),
+                            var: "0comp_11_i".to_string(),
+                            iter: CompIter::Range {
+                                start: HirExpr::IntLiteral(0),
+                                stop: HirExpr::IntLiteral(3),
+                                step: HirExpr::IntLiteral(1),
+                            },
+                            cond: None,
+                            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                            value: Box::new(HirExpr::IntLiteral(1)),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+                HirItem::Function {
+                    name: "_trigger".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_cond() {
+        // See `collect_block_constraints_propagates_an_error_from_a_range_comprehension_s_stop_operand`
+        // above for why a forward reference to a same-body local, not a
+        // plain undefined name, is required to exercise this solver's own
+        // error path (rather than being leniently ignored as `Ok(None)`).
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::DictCompAssign {
+                        target: "y".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Range {
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(3),
+                            step: HirExpr::IntLiteral(1),
+                        },
+                        cond: Some(Box::new(HirExpr::Name("later".to_string()))),
+                        key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    },
+                    HirStmt::Assign {
+                        target: "later".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_key() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::DictCompAssign {
+                        target: "y".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Range {
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(3),
+                            step: HirExpr::IntLiteral(1),
+                        },
+                        cond: None,
+                        key: Box::new(HirExpr::Name("later".to_string())),
+                        value: Box::new(HirExpr::IntLiteral(1)),
+                    },
+                    HirStmt::Assign {
+                        target: "later".to_string(),
+                        value: HirExpr::StringLiteral("k".to_string()),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn collect_block_constraints_propagates_an_error_from_a_dict_comp_assign_s_value() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![
+                    HirStmt::DictCompAssign {
+                        target: "y".to_string(),
+                        var: "0comp_11_i".to_string(),
+                        iter: CompIter::Range {
+                            start: HirExpr::IntLiteral(0),
+                            stop: HirExpr::IntLiteral(3),
+                            step: HirExpr::IntLiteral(1),
+                        },
+                        cond: None,
+                        key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                        value: Box::new(HirExpr::Name("later".to_string())),
+                    },
+                    HirStmt::Assign {
+                        target: "later".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                    HirStmt::Return(None),
+                ],
+            }],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
 
     #[test]
@@ -7399,6 +9196,516 @@ mod tests {
             }],
         };
         assert_eq!(check_function(&function).unwrap_err().code, "T0023");
+    }
+
+    // -- PR-12 Task 3 (D-117): comprehension type-checking, function scope --
+
+    #[test]
+    fn a_list_comprehension_over_range_type_checks_in_a_function_body() {
+        // Also pins that `var` is bound before `elt` is checked at function
+        // scope (mirrors the module-scope sibling above): if the ordering
+        // were wrong, `elt`'s reference to the loop variable would fail as
+        // an unbound local.
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            }],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_list_comprehension_s_if_filter_of_a_non_bool_type_still_type_checks_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::StringLiteral("truthy".to_string()))),
+                elt: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_list_comprehension_producing_a_non_int_element_is_rejected_as_t0034_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::StringLiteral("x".to_string())),
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0034");
+        assert!(err.message.contains("list[str]"));
+    }
+
+    #[test]
+    fn a_set_comprehension_over_a_bare_set_parameter_type_checks_in_a_function_body() {
+        // Exercises `resolve_comp_iter`'s `CompIter::Name` branch resolving
+        // to `Ty::Set` at function scope.
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("s".to_string(), Ty::Set(Box::new(Ty::Int)))],
+            return_ty: Ty::None,
+            body: vec![HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_20_x".to_string(),
+                iter: CompIter::Name("s".to_string()),
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_20_x".to_string())),
+            }],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_set_comprehension_producing_a_non_int_element_is_rejected_as_t0038_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::StringLiteral("x".to_string())),
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0038");
+        assert!(err.message.contains("set[str]"));
+    }
+
+    #[test]
+    fn a_set_comprehension_s_if_filter_of_a_non_bool_type_still_type_checks_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::StringLiteral("truthy".to_string()))),
+                elt: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_dict_comprehension_over_a_bare_dict_parameter_type_checks_in_a_function_body() {
+        // Exercises `resolve_comp_iter`'s `CompIter::Name` branch resolving
+        // to `Ty::Dict` at function scope, binding `var` as the dict's key
+        // type.
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))))],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_20_k".to_string(),
+                iter: CompIter::Name("d".to_string()),
+                cond: None,
+                key: Box::new(HirExpr::Name("0comp_20_k".to_string())),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_dict_comprehension_producing_a_non_str_int_pair_is_rejected_as_t0036_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                key: Box::new(HirExpr::IntLiteral(1)),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0036");
+        assert!(err.message.contains("dict[int, int]"));
+    }
+
+    #[test]
+    fn a_dict_comprehension_s_if_filter_of_a_non_bool_type_still_type_checks_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::StringLiteral("truthy".to_string()))),
+                key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        check_function(&function).unwrap();
+    }
+
+    #[test]
+    fn a_comprehension_over_a_non_list_dict_set_iterable_is_rejected_as_t0033_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Name("x".to_string()),
+                cond: None,
+                elt: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("cannot be iterated"));
+    }
+
+    #[test]
+    fn a_comprehension_over_a_forward_referenced_iterable_is_rejected_as_unbound_local() {
+        // Mirrors `a_for_list_loop_over_a_forward_referenced_list...`-style
+        // behavior: `xs` is a genuine function-local name (assigned later in
+        // the same body), so referencing it before that assignment is
+        // `unbound_local`, not `not defined`.
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::ListCompAssign {
+                    target: "y".to_string(),
+                    var: "0comp_11_i".to_string(),
+                    iter: CompIter::Name("xs".to_string()),
+                    cond: None,
+                    elt: Box::new(HirExpr::IntLiteral(1)),
+                },
+                HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                },
+            ],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
+    }
+
+    // Per-arm error-propagation pins (function scope): the same set as the
+    // module-scope block above, `check_stmt_in_function`'s own three arms.
+
+    #[test]
+    fn a_set_comprehension_over_a_non_list_dict_set_iterable_is_rejected_as_t0033_in_a_function_body()
+     {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Name("x".to_string()),
+                cond: None,
+                elt: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("cannot be iterated"));
+    }
+
+    #[test]
+    fn a_dict_comprehension_over_a_non_list_dict_set_iterable_is_rejected_as_t0033_in_a_function_body()
+     {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Name("x".to_string()),
+                cond: None,
+                key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        let err = check_function(&function).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("cannot be iterated"));
+    }
+
+    #[test]
+    fn a_list_comprehension_rejects_a_conflicting_reassignment_of_its_loop_variable_in_a_function_body()
+     {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("0comp_11_i".to_string(), Ty::Str)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn a_set_comprehension_rejects_a_conflicting_reassignment_of_its_loop_variable_in_a_function_body()
+     {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("0comp_11_i".to_string(), Ty::Str)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn a_dict_comprehension_rejects_a_conflicting_reassignment_of_its_loop_variable_in_a_function_body()
+     {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("0comp_11_i".to_string(), Ty::Str)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0023");
+    }
+
+    #[test]
+    fn a_list_comprehension_s_if_filter_propagates_an_ill_typed_error_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("undefined".to_string()))),
+                elt: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_set_comprehension_s_if_filter_propagates_an_ill_typed_error_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("undefined".to_string()))),
+                elt: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_comprehension_s_if_filter_propagates_an_ill_typed_error_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("undefined".to_string()))),
+                key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_list_comprehension_s_elt_propagates_an_ill_typed_error_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("undefined".to_string())),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_set_comprehension_s_elt_propagates_an_ill_typed_error_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("undefined".to_string())),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_comprehension_s_key_propagates_an_ill_typed_error_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                key: Box::new(HirExpr::Name("undefined".to_string())),
+                value: Box::new(HirExpr::IntLiteral(1)),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_dict_comprehension_s_value_propagates_an_ill_typed_error_in_a_function_body() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                value: Box::new(HirExpr::Name("undefined".to_string())),
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
     }
 
     #[test]
