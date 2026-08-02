@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest import mock
 
 import manage_ci_bypass as mcb
@@ -98,6 +101,158 @@ class CliStatusTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             mcb.main(["status"])
         self.assertEqual(ctx.exception.code, 1)
+
+
+class CheckConclusionTests(unittest.TestCase):
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_finds_named_check(self, mock_run_gh):
+        mock_run_gh.return_value = json.dumps(
+            {"statusCheckRollup": [
+                {"name": "audit", "conclusion": "FAILURE", "status": "COMPLETED"},
+                {"name": "ci-gate", "conclusion": "SUCCESS", "status": "COMPLETED"},
+            ]}
+        )
+        self.assertEqual(mcb.check_conclusion("owner/repo", 279, "audit"), "FAILURE")
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_returns_none_for_missing_check(self, mock_run_gh):
+        mock_run_gh.return_value = json.dumps({"statusCheckRollup": []})
+        self.assertIsNone(mcb.check_conclusion("owner/repo", 279, "audit"))
+
+
+class FindOpenBypassIssueTests(unittest.TestCase):
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_returns_number_when_open(self, mock_run_gh):
+        mock_run_gh.return_value = json.dumps(
+            [{"number": 292, "title": "[ci-bypass] audit relaxed -- reason"}]
+        )
+        self.assertEqual(mcb.find_open_bypass_issue("owner/repo"), 292)
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_returns_none_when_no_open_issue(self, mock_run_gh):
+        mock_run_gh.return_value = "[]"
+        self.assertIsNone(mcb.find_open_bypass_issue("owner/repo"))
+
+
+class RelaxTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tmp_path = Path(self.tmp.name)
+        self.evidence_path = self.tmp_path / "evidence.txt"
+        self.evidence_path.write_text("Gate 1 verdict: CONFIRMED\n", encoding="utf-8")
+        self.state_path = self.tmp_path / "state.json"
+        self.body_path = self.tmp_path / "incident-body.md"
+        self.fixed_now = datetime(2026, 8, 2, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _run_gh_dispatch(self, script):
+        """Return a side_effect function dispatching on the first two gh args."""
+        def dispatch(args, input_text=None):
+            key = tuple(args[:2])
+            if key not in script:
+                raise AssertionError(f"unexpected gh call: {args}")
+            response = script[key]
+            if isinstance(response, Exception):
+                raise response
+            return response
+        return dispatch
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_relax_happy_path(self, mock_run_gh):
+        mock_run_gh.side_effect = self._run_gh_dispatch({
+            ("issue", "list"): "[]",
+            ("pr", "view"): json.dumps(
+                {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
+            ),
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
+            ),
+            ("issue", "create"): "https://github.com/owner/repo/issues/300\n",
+            ("api", "-X"): "{}",
+        })
+        issue_number = mcb.relax(
+            "owner/repo", "audit", "external state stuck", self.evidence_path,
+            pr_number=279, expiry_minutes=60,
+            state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
+        )
+        self.assertEqual(issue_number, 300)
+        state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(state["incident"], 300)
+        self.assertEqual(state["snapshot"], {"strict": True, "contexts": ["audit", "ci-gate"]})
+        self.assertIn("CONFIRMED", self.body_path.read_text(encoding="utf-8"))
+        self.assertIn("2026-08-02T13:00:00Z", self.body_path.read_text(encoding="utf-8"))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_relax_refuses_when_incident_already_open(self, mock_run_gh):
+        mock_run_gh.side_effect = self._run_gh_dispatch({
+            ("issue", "list"): json.dumps([{"number": 292, "title": "[ci-bypass] existing"}]),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.relax(
+                "owner/repo", "audit", "reason", self.evidence_path,
+                pr_number=279, expiry_minutes=60,
+                state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
+            )
+        self.assertIn("already open", str(ctx.exception))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_relax_refuses_when_check_not_failing(self, mock_run_gh):
+        mock_run_gh.side_effect = self._run_gh_dispatch({
+            ("issue", "list"): "[]",
+            ("pr", "view"): json.dumps(
+                {"statusCheckRollup": [{"name": "audit", "conclusion": "SUCCESS"}]}
+            ),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.relax(
+                "owner/repo", "audit", "reason", self.evidence_path,
+                pr_number=279, expiry_minutes=60,
+                state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
+            )
+        self.assertIn("is not currently failing", str(ctx.exception))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_relax_refuses_when_check_not_required(self, mock_run_gh):
+        mock_run_gh.side_effect = self._run_gh_dispatch({
+            ("issue", "list"): "[]",
+            ("pr", "view"): json.dumps(
+                {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
+            ),
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                {"required_status_checks": {"strict": True, "contexts": ["ci-gate"]}}
+            ),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.relax(
+                "owner/repo", "audit", "reason", self.evidence_path,
+                pr_number=279, expiry_minutes=60,
+                state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
+            )
+        self.assertIn("is not currently a required check", str(ctx.exception))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_relax_propagates_patch_failure(self, mock_run_gh):
+        mock_run_gh.side_effect = self._run_gh_dispatch({
+            ("issue", "list"): "[]",
+            ("pr", "view"): json.dumps(
+                {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
+            ),
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
+            ),
+            ("issue", "create"): "https://github.com/owner/repo/issues/300\n",
+            ("api", "-X"): mcb.CiBypassError("gh api ... failed (exit 1): rate limited"),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.relax(
+                "owner/repo", "audit", "reason", self.evidence_path,
+                pr_number=279, expiry_minutes=60,
+                state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
+            )
+        self.assertIn("rate limited", str(ctx.exception))
+        # The incident issue was still created (visible/auditable) even though
+        # the PATCH failed afterwards -- state file must not claim success.
+        self.assertFalse(self.state_path.exists())
 
 
 if __name__ == "__main__":
