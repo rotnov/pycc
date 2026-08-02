@@ -226,17 +226,26 @@ this is a deterministic procedure, not an LLM-response-evaluated one.
   session) execution path — this mechanism only works when a session
   with the owner's own authenticated `gh` access is actively running it.
 
-## Open question — standing autopilot authorization
+## Decision — standing autopilot authorization
 
-All of this design's clarifying questions were answered in the context
-of an interactive session with the repository owner actively present.
-It is not yet decided whether the standing autopilot loop
+Resolved explicitly by the repository owner (2026-08-02, same
+brainstorming session): the standing autopilot loop
 (`issue-select`/`issue-implement`, `docs/DECISIONS.md`'s own autopilot
-directive) is authorized to invoke `ci-temporary-bypass` on its own
-initiative when it hits a qualifying stuck check with nobody watching in
-real time, or whether invoking this specific skill always requires an
-explicit, in-the-moment instruction from the owner, separate from
-autopilot's own general standing authorization. This materially changes
-the mechanism's real-world risk profile (unattended vs. attended use) and
-needs an explicit answer before implementation, not a default assumed
-here.
+directive) **is** authorized to invoke `ci-temporary-bypass` on its own
+initiative, unattended, when it hits a qualifying stuck check — no
+in-the-moment owner instruction is required for a given invocation. This
+was a deliberate choice, not a default: the owner considered and rejected
+the more conservative alternative (attended-only, autopilot always stops
+and reports instead, matching its behavior today for issue #243/PR #278
+before this mechanism existed).
+
+This raises the real-world stakes of the two adversarial gates
+(Components §1) and the `AGENTS.md` fail-safe rule (Components §3): with
+no live human necessarily watching a given invocation, the gates are the
+*only* check standing between a genuine external-state failure and an
+agent incorrectly relaxing protection for a real, PR-specific defect, and
+the fail-safe rule's "some future session eventually runs preflight" bound
+may in practice mean a longer unattended window than in an attended
+session. Both should be implemented and tested to the corresponding
+higher standard — this is not a place to cut corners because "the owner
+will probably notice" applies less than it does for a live session.
