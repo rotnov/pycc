@@ -239,6 +239,16 @@ it was blocked (an unrelated manifest entry stuck mid-transition) no
 longer holds as of this update; a future session should re-verify #243's
 premise fresh rather than assume this stale account still applies.
 
+**Aside, still generally true regardless of #278's resolution:** while this
+block was live, PRs #258/#236 showed a stale `audit` **pass** even though a
+fresh run would have failed — their last run predated PR #277's merge, and
+`audit` triggers on `pull_request_target` only (`.github/workflows/workflow-policy.yml`),
+which (per this file's 2026-07-30 D-100 entry) reuses an already-completed
+run's resolved base-ref checkout on a bare `gh run rerun` rather than
+re-resolving `main` fresh — only an actual new `synchronize` event forces
+re-evaluation. Worth remembering next time any check's pass/fail history is
+read across a base-branch change.
+
 ---
 
 ## 2026-08-01 — v0.2 PR-11b complete: tuple[int|bool|float, ...] works end-to-end; PR-11's combined scope (dict/set/tuple) is now content-complete but still un-mergeable
