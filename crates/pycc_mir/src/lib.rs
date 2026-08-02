@@ -1,4 +1,4 @@
-use pycc_hir::{FStringPart, HirExpr, HirItem, HirModule, HirStmt};
+use pycc_hir::{CompIter, FStringPart, HirExpr, HirItem, HirModule, HirStmt};
 use std::collections::HashMap;
 
 // Re-exported (not just `use`d) because `pycc_codegen` doesn't depend on
@@ -298,7 +298,73 @@ pub enum MirStmt {
         set: String,
         body: Vec<MirStmt>,
     },
+    /// `target = [elt for var in <source> [if cond]]`, already fully
+    /// resolved (mirrors `HirStmt::ListCompAssign`, PR-12, D-117). `var_ty`
+    /// is the loop variable's own resolved type (`Ty::Int` for a `Range`
+    /// source; the iterated container's element/key type for a `List`/
+    /// `Dict`/`Set` source) -- carried explicitly, rather than requiring
+    /// `pycc_codegen` to re-derive it from `elt`, because `elt` need not
+    /// contain any `Name` reference to `var` at all in general (though in
+    /// practice it usually does) and re-deriving it by walking `elt` would
+    /// be a second, independent computation of a fact `resolve_comp_source`
+    /// (below) already has in hand once.
+    ListCompAssign {
+        target: String,
+        var: String,
+        var_ty: Ty,
+        source: CompSource,
+        cond: Option<Box<MirExpr>>,
+        elt: Box<MirExpr>,
+    },
+    /// `target = {key: value for var in <source> [if cond]}`, already fully
+    /// resolved (mirrors `HirStmt::DictCompAssign`, PR-12, D-117). Mirrors
+    /// `ListCompAssign` exactly except for the key/value split.
+    DictCompAssign {
+        target: String,
+        var: String,
+        var_ty: Ty,
+        source: CompSource,
+        cond: Option<Box<MirExpr>>,
+        key: Box<MirExpr>,
+        value: Box<MirExpr>,
+    },
+    /// `target = {elt for var in <source> [if cond]}`, already fully
+    /// resolved (mirrors `HirStmt::SetCompAssign`, PR-12, D-117). Mirrors
+    /// `ListCompAssign` exactly -- a set comprehension's own shape is
+    /// identical to a list comprehension's, differing only in which
+    /// runtime constructor/insert pair `pycc_codegen` ends up calling.
+    SetCompAssign {
+        target: String,
+        var: String,
+        var_ty: Ty,
+        source: CompSource,
+        cond: Option<Box<MirExpr>>,
+        elt: Box<MirExpr>,
+    },
     Return(Option<MirExpr>),
+}
+
+/// A comprehension's already-resolved iterable source (PR-12, D-117) --
+/// the MIR-level counterpart to `pycc_hir::CompIter`, but with a
+/// bare-name iterable already split into its concrete container kind,
+/// mirroring `HirStmt::ForList`'s own split into `MirStmt::ForList`/
+/// `ForDict`/`ForSet` at this exact lowering stage. Kept as a field on
+/// each `*CompAssign` variant (not exploded into a full cross-product of
+/// top-level `MirStmt` variants per comprehension-kind x source-kind
+/// combination) -- mirrors the precedent `MirExpr::Subscript` already
+/// established (one node, internal branching on the resolved type in
+/// `pycc_codegen`), avoiding a 3x4 combinatorial explosion for no
+/// benefit.
+#[derive(Debug, PartialEq)]
+pub enum CompSource {
+    Range {
+        start: MirExpr,
+        stop: MirExpr,
+        step: MirExpr,
+    },
+    List(String),
+    Dict(String),
+    Set(String),
 }
 
 #[derive(Debug, PartialEq)]
@@ -398,6 +464,51 @@ fn lookup(scopes: &[HashMap<String, Ty>], name: &str) -> Ty {
         .rev()
         .find_map(|scope| scope.get(name).cloned())
         .unwrap_or_else(|| panic!("pycc_mir: internal error: `{name}` has no recorded type -- pycc_types::check should have rejected this HIR before it reached pycc_mir"))
+}
+
+/// Resolves a `pycc_hir::CompIter` into a fully-typed `CompSource`,
+/// lowering any range sub-expressions and binding `var`'s type into
+/// `scopes` -- mirrors `HirStmt::ForList`'s own resolution exactly
+/// (`lower_stmt`'s existing `ForList` arm), reused via this shared helper
+/// rather than duplicated three times (once per comprehension kind, PR-12,
+/// D-117). Takes `scopes` as `&mut [HashMap<String, Ty>]` (a slice), not
+/// `&mut Vec<..>` like `lower_stmt`/`lower_item` -- unlike those two
+/// (mutually self-recursive, so `clippy::ptr_arg` correctly leaves their
+/// signature alone), this helper never pushes/pops a scope itself and never
+/// calls back into `lower_stmt`, so nothing here actually needs the owned
+/// `Vec` type.
+fn resolve_comp_source(
+    iter: &CompIter,
+    var: &str,
+    scopes: &mut [HashMap<String, Ty>],
+) -> (CompSource, Ty) {
+    match iter {
+        CompIter::Range { start, stop, step } => {
+            let start = lower_expr(start, scopes);
+            let stop = lower_expr(stop, scopes);
+            let step = lower_expr(step, scopes);
+            bind_variable(scopes, var.to_string(), Ty::Int);
+            (CompSource::Range { start, stop, step }, Ty::Int)
+        }
+        CompIter::Name(name) => match lookup(scopes, name) {
+            Ty::List(elem_ty) => {
+                bind_variable(scopes, var.to_string(), (*elem_ty).clone());
+                (CompSource::List(name.clone()), *elem_ty)
+            }
+            Ty::Dict(kv) => {
+                bind_variable(scopes, var.to_string(), kv.0.clone());
+                (CompSource::Dict(name.clone()), kv.0)
+            }
+            Ty::Set(elem_ty) => {
+                bind_variable(scopes, var.to_string(), (*elem_ty).clone());
+                (CompSource::Set(name.clone()), *elem_ty)
+            }
+            other => panic!(
+                "pycc_mir: internal error: `{name}` is neither a list, dict, nor set (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                other.name()
+            ),
+        },
+    }
 }
 
 fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt {
@@ -553,6 +664,73 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
                     "pycc_mir: internal error: `{list}` is neither a list, dict, nor set (found `{}`) -- pycc_types::check should have rejected this HIR before it reached pycc_mir",
                     other.name()
                 ),
+            }
+        }
+        HirStmt::ListCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt,
+        } => {
+            let (source, var_ty) = resolve_comp_source(iter, var, scopes);
+            let cond = cond.as_deref().map(|c| lower_expr(c, scopes));
+            let elt = lower_expr(elt, scopes);
+            bind_variable(scopes, target.clone(), Ty::List(Box::new(elt.ty())));
+            MirStmt::ListCompAssign {
+                target: target.clone(),
+                var: var.clone(),
+                var_ty,
+                source,
+                cond: cond.map(Box::new),
+                elt: Box::new(elt),
+            }
+        }
+        HirStmt::SetCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt,
+        } => {
+            let (source, var_ty) = resolve_comp_source(iter, var, scopes);
+            let cond = cond.as_deref().map(|c| lower_expr(c, scopes));
+            let elt = lower_expr(elt, scopes);
+            bind_variable(scopes, target.clone(), Ty::Set(Box::new(elt.ty())));
+            MirStmt::SetCompAssign {
+                target: target.clone(),
+                var: var.clone(),
+                var_ty,
+                source,
+                cond: cond.map(Box::new),
+                elt: Box::new(elt),
+            }
+        }
+        HirStmt::DictCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            key,
+            value,
+        } => {
+            let (source, var_ty) = resolve_comp_source(iter, var, scopes);
+            let cond = cond.as_deref().map(|c| lower_expr(c, scopes));
+            let key = lower_expr(key, scopes);
+            let value = lower_expr(value, scopes);
+            bind_variable(
+                scopes,
+                target.clone(),
+                Ty::Dict(Box::new((key.ty(), value.ty()))),
+            );
+            MirStmt::DictCompAssign {
+                target: target.clone(),
+                var: var.clone(),
+                var_ty,
+                source,
+                cond: cond.map(Box::new),
+                key: Box::new(key),
+                value: Box::new(value),
             }
         }
         HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes))),
@@ -2471,5 +2649,260 @@ mod tests {
                 })],
             })
         );
+    }
+
+    // -- PR-12 Task 4 (D-117): comprehension lowering --
+
+    #[test]
+    fn a_range_sourced_list_comprehension_lowers_to_comp_source_range_with_var_ty_int_and_evaluates_its_filter()
+     {
+        // Exercises `resolve_comp_source`'s `CompIter::Range` branch and the
+        // `ListCompAssign` arm's `cond: Some(..)` path (both closures on
+        // that arm need at least one executing test for D-014's coverage
+        // gate).
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                    target: "y".to_string(),
+                    var: "i".to_string(),
+                    iter: CompIter::Range {
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(3),
+                        step: HirExpr::IntLiteral(1),
+                    },
+                    cond: Some(Box::new(HirExpr::BoolLiteral(true))),
+                    elt: Box::new(HirExpr::Name("i".to_string())),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![HirExpr::Name("y".to_string())],
+                })),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "i".to_string(),
+                var_ty: Ty::Int,
+                source: CompSource::Range {
+                    start: MirExpr::IntLiteral(0),
+                    stop: MirExpr::IntLiteral(3),
+                    step: MirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(MirExpr::BoolLiteral(true))),
+                elt: Box::new(MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int,
+                }),
+            })
+        );
+        // `target` is bound as `Ty::List(Ty::Int)`, derived from `elt`'s
+        // type -- confirmed via the following statement's own lowered type.
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "len".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "y".to_string(),
+                    ty: Ty::List(Box::new(Ty::Int)),
+                }],
+                ty: Ty::Int,
+            }))
+        );
+    }
+
+    #[test]
+    fn a_bare_name_list_sourced_list_comprehension_resolves_comp_source_list_with_the_lists_element_type()
+     {
+        // Exercises `resolve_comp_source`'s `CompIter::Name` branch resolving
+        // to `Ty::List` -- uses `str` elements specifically (mirroring this
+        // file's own `list_literal_subscript_and_for_list_derive_their_type_from_actual_elements_not_hardcoded_int`)
+        // so `var_ty` is trivially distinguishable from the `Ty::Int` a
+        // hardcoded bug would wrongly report.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::StringLiteral("a".to_string())]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                    target: "y".to_string(),
+                    var: "v".to_string(),
+                    iter: CompIter::Name("xs".to_string()),
+                    cond: None,
+                    elt: Box::new(HirExpr::Name("v".to_string())),
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "v".to_string(),
+                var_ty: Ty::Str,
+                source: CompSource::List("xs".to_string()),
+                cond: None,
+                elt: Box::new(MirExpr::Name {
+                    name: "v".to_string(),
+                    ty: Ty::Str,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn a_range_sourced_set_comprehension_lowers_to_comp_source_range_with_var_ty_int_and_evaluates_its_filter()
+     {
+        // Exercises the `SetCompAssign` arm's own `cond: Some(..)` path
+        // (distinct closures from `ListCompAssign`'s own, needing their own
+        // executing test for D-014's coverage gate).
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::BoolLiteral(true))),
+                elt: Box::new(HirExpr::Name("i".to_string())),
+            })],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "i".to_string(),
+                var_ty: Ty::Int,
+                source: CompSource::Range {
+                    start: MirExpr::IntLiteral(0),
+                    stop: MirExpr::IntLiteral(3),
+                    step: MirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(MirExpr::BoolLiteral(true))),
+                elt: Box::new(MirExpr::Name {
+                    name: "i".to_string(),
+                    ty: Ty::Int,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn a_bare_name_set_sourced_set_comprehension_resolves_comp_source_set() {
+        // Exercises `resolve_comp_source`'s `CompIter::Name` branch resolving
+        // to `Ty::Set`.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "s".to_string(),
+                    value: HirExpr::SetLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::SetCompAssign {
+                    target: "y".to_string(),
+                    var: "v".to_string(),
+                    iter: CompIter::Name("s".to_string()),
+                    cond: None,
+                    elt: Box::new(HirExpr::Name("v".to_string())),
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "v".to_string(),
+                var_ty: Ty::Int,
+                source: CompSource::Set("s".to_string()),
+                cond: None,
+                elt: Box::new(MirExpr::Name {
+                    name: "v".to_string(),
+                    ty: Ty::Int,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn a_bare_name_dict_sourced_dict_comprehension_resolves_comp_source_dict_with_var_ty_as_the_key_type_not_the_value_type()
+     {
+        // Exercises `resolve_comp_source`'s `CompIter::Name` branch resolving
+        // to `Ty::Dict`, and the `DictCompAssign` arm's own `cond: Some(..)`
+        // path (distinct closures from `ListCompAssign`/`SetCompAssign`'s
+        // own). Pins that `var_ty` is the dict's *key* type (`kv.0`), not its
+        // value type (`kv.1`) -- mirrors `ForList`'s own identical
+        // `Ty::Dict(kv) => kv.0` choice (`for_k_in_dict_lowers_to_mir_for_dict`
+        // above binds a `dict[str, int]`'s loop variable as `Ty::Str`, the
+        // key type, for the same reason).
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::DictCompAssign {
+                    target: "y".to_string(),
+                    var: "k".to_string(),
+                    iter: CompIter::Name("d".to_string()),
+                    cond: Some(Box::new(HirExpr::BoolLiteral(true))),
+                    key: Box::new(HirExpr::Name("k".to_string())),
+                    value: Box::new(HirExpr::IntLiteral(2)),
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "k".to_string(),
+                var_ty: Ty::Str,
+                source: CompSource::Dict("d".to_string()),
+                cond: Some(Box::new(MirExpr::BoolLiteral(true))),
+                key: Box::new(MirExpr::Name {
+                    name: "k".to_string(),
+                    ty: Ty::Str,
+                }),
+                value: Box::new(MirExpr::IntLiteral(2)),
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "neither a list, dict, nor set")]
+    fn a_comprehension_over_a_non_list_non_dict_non_set_binding_panics_with_an_internal_error() {
+        // Same reasoning as `a_for_list_loop_over_a_non_list_non_dict_non_set_binding_panics_with_an_internal_error`
+        // above: `pycc_types` already rejects a comprehension whose bare-name
+        // iterable is neither a list, dict, nor set (T0033), but
+        // `resolve_comp_source`'s own defensive panic path still needs
+        // direct coverage via a hand-built HIR that bypasses that guarantee.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                    target: "y".to_string(),
+                    var: "v".to_string(),
+                    iter: CompIter::Name("x".to_string()),
+                    cond: None,
+                    elt: Box::new(HirExpr::Name("v".to_string())),
+                }),
+            ],
+        };
+        build(&hir);
     }
 }
