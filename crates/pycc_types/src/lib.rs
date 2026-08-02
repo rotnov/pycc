@@ -454,6 +454,28 @@ fn collect_expr_constraints(
             collect_expr_constraints(signatures, parents, concrete, binops, env, index)?;
             Ok(None)
         }
+        // PR-12 Task 7 (D-118): structurally identical to `Subscript` above
+        // -- a slice's base/bounds are, like a subscript's base/index,
+        // ordinary sub-expressions this solver needs to keep walking into
+        // (e.g. `some_param[1:3]` inside a private helper, where
+        // `some_param`'s own type is exactly what the solver is trying to
+        // pin down), but a `Ty::List`/`Ty::Int` base-type or bound-type gate
+        // is `infer_expr_in`'s job, not this constraint collector's. Recurse
+        // into `base` and every present bound only to keep propagating
+        // genuine errors (e.g. an unbound local used as a bound); produce no
+        // term for the `Slice` expression's own overall type.
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
+            for bound in [start, stop, step].into_iter().flatten() {
+                collect_expr_constraints(signatures, parents, concrete, binops, env, bound)?;
+            }
+            Ok(None)
+        }
         HirExpr::ListAppend { list: _, value } => {
             collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
             Ok(None)
@@ -1511,6 +1533,73 @@ fn infer_expr_in(
                     Span::new(0, 0),
                 )),
             }
+        }
+        // PR-12 Task 7 (D-118): `base[start:stop:step]` read. Only
+        // `list[int]` ships slicing in v0.2 -- every other base (including
+        // `Ty::Dict`/`Ty::Set`, which real CPython also rejects for `[i:j]`,
+        // and `Ty::Tuple`, an explicit deferral rather than a "never
+        // supported" case) reuses the same `T0033` code `Subscript`'s own
+        // `other` fallthrough above already established for non-indexable
+        // bases, not a new one. A `list[T]` with `T != Ty::Int` reuses
+        // `ListLiteral`'s own `T0034` ("only list[int] is compiled") gate.
+        // Diagnostic order is deliberately base-type (`T0033`) before
+        // element-type (`T0034`) before any bound's own type (`T0021`),
+        // mirroring this file's existing "callee/base-type errors before
+        // argument errors" convention (D-110's callee-first precedent,
+        // applied here to base-type-before-bound-type) -- pinned by
+        // `slicing_reports_the_base_type_error_before_any_bound_error` and
+        // `slicing_reports_the_element_type_error_before_any_bound_error`
+        // below.
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            let base_ty = infer_expr_in(env, local_names, base)?;
+            let Ty::List(elem_ty) = &base_ty else {
+                return Err(Diagnostic::error(
+                    "T0033",
+                    format!(
+                        "`{}` does not support slicing (only list[int] does)",
+                        base_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            };
+            if **elem_ty != Ty::Int {
+                return Err(Diagnostic::error(
+                    "T0034",
+                    format!(
+                        "list codegen only supports `list[int]` in v0.2, cannot slice `list[{}]`",
+                        elem_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            // Each bound is independently optional (`xs[:]`, `xs[1:]`,
+            // `xs[:3]`, `xs[::2]` all parse) and, when present, an
+            // arbitrary runtime `int`-typed expression -- not a literal-only
+            // check -- so `is_assignable` (not exact `Ty` equality) applies
+            // here, same as `Subscript`'s own index check above: `xs[True:]`
+            // is ordinary, CPython-valid Python (`bool` is an `int`
+            // subtype, PEP 285), not a type error. `step`'s runtime
+            // positivity is deliberately not validated here -- it can't be,
+            // for a non-literal runtime expression, at compile time; that
+            // check is a later task's job (D-118).
+            for (label, bound) in [("start", start), ("stop", stop), ("step", step)] {
+                if let Some(bound) = bound {
+                    let bound_ty = infer_expr_in(env, local_names, bound)?;
+                    if !is_assignable(bound_ty.clone(), Ty::Int) {
+                        return Err(Diagnostic::error(
+                            "T0021",
+                            format!("slice {label} must be `int`, got `{}`", bound_ty.name()),
+                            Span::new(0, 0),
+                        ));
+                    }
+                }
+            }
+            Ok(base_ty.clone())
         }
         HirExpr::ListAppend { list, value } => {
             let list_ty = lookup_bound_name(env, local_names, list)?;
@@ -2661,6 +2750,134 @@ mod tests {
         assert!(check(&hir).is_ok());
     }
 
+    // PR-12 Task 7 (D-118): whole-module `check()` tests for `HirExpr::Slice`,
+    // exercising the real statement walkers (`check_with_environment`'s
+    // `check_stmt`, and `collect_block_constraints`'s `Assign` arm under the
+    // solver path) rather than calling `infer_expr`/`collect_expr_constraints`
+    // directly on a hand-built expression. Mirrors the list-literal pair
+    // immediately above: Task 3's own ledger records a real regression of
+    // exactly this shape (a solver arm that looked correct in isolation but
+    // was never actually reached by the block walker) -- these confirm the
+    // `Slice` arm added in this task is genuinely wired into both paths, not
+    // just correct when invoked directly.
+
+    #[test]
+    fn slicing_type_checks_through_the_full_check_pipeline_on_the_fast_path() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                        HirExpr::IntLiteral(3),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: HirExpr::Slice {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        start: Some(Box::new(HirExpr::IntLiteral(1))),
+                        stop: None,
+                        step: None,
+                    },
+                }),
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn slicing_a_list_of_str_is_rejected_through_the_full_check_pipeline() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::StringLiteral("a".to_string())]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: HirExpr::Slice {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        start: None,
+                        stop: None,
+                        step: None,
+                    },
+                }),
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0034");
+    }
+
+    #[test]
+    fn slicing_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path() {
+        // Companion to `a_list_literal_still_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path`
+        // above: proves `collect_block_constraints`'s ordinary `Assign` arm
+        // reaches this task's new `HirExpr::Slice` constraint-collection arm
+        // (which must stay lenient, `Ok(None)`, recursing only) without
+        // wrongly rejecting a valid slice, and that the real check pass
+        // (`check_with_signatures`) run afterward still type-checks it.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                        HirExpr::IntLiteral(3),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: HirExpr::Slice {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        start: Some(Box::new(HirExpr::IntLiteral(1))),
+                        stop: Some(Box::new(HirExpr::IntLiteral(3))),
+                        step: None,
+                    },
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn slicing_a_list_of_str_is_still_rejected_when_the_solver_path_runs_first() {
+        // Load-bearing counterpart: the solver's leniency for `Slice` must
+        // not swallow a genuine `T0034` -- it has to fall through to the
+        // real, list-aware check pass that runs after the solver.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::StringLiteral("a".to_string())]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: HirExpr::Slice {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        start: None,
+                        stop: None,
+                        step: None,
+                    },
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0034");
+    }
+
     #[test]
     fn collect_block_constraints_binds_the_initializer_term_for_an_annotated_assignment() {
         let signatures = HashMap::new();
@@ -2926,6 +3143,135 @@ mod tests {
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::IntLiteral(1)),
             index: Box::new(HirExpr::Name("missing".to_string())),
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_slice_as_unconstrained_but_recurses_into_base_and_bounds() {
+        // PR-12 Task 7 (D-118): mirrors `Subscript`'s own solver arm above --
+        // structurally identical recursion, no term produced for the slice
+        // itself.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::IntLiteral(1)),
+            start: Some(Box::new(HirExpr::IntLiteral(0))),
+            stop: Some(Box::new(HirExpr::IntLiteral(2))),
+            step: Some(Box::new(HirExpr::IntLiteral(1))),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_slice_with_every_bound_omitted_as_unconstrained() {
+        // Proves the `Option` loop's `None` branch is exercised too, not
+        // just the `Some` branch above (`xs[:]`).
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::IntLiteral(1)),
+            start: None,
+            stop: None,
+            step: None,
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_slice_base() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("missing".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_slice_bound() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::IntLiteral(1)),
+            start: Some(Box::new(HirExpr::Name("missing".to_string()))),
+            stop: None,
+            step: None,
         };
 
         let err = collect_expr_constraints(
@@ -5210,6 +5556,326 @@ mod tests {
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::Name("x".to_string())),
             index: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    // PR-12 Task 7 (D-118): `HirExpr::Slice` type-checking. Only
+    // `list[int]` ships slicing in v0.2 -- see the arm's own doc comment in
+    // `infer_expr_in` for the full base-type/element-type/bound-type
+    // diagnostic-order rationale.
+
+    #[test]
+    fn slicing_a_list_of_int_with_both_bounds_infers_list_of_int() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(1))),
+            stop: Some(Box::new(HirExpr::IntLiteral(3))),
+            step: None,
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::List(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn slicing_with_start_omitted_type_checks() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: Some(Box::new(HirExpr::IntLiteral(3))),
+            step: Some(Box::new(HirExpr::IntLiteral(1))),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::List(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn slicing_with_stop_omitted_type_checks() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(1))),
+            stop: None,
+            step: Some(Box::new(HirExpr::IntLiteral(1))),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::List(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn slicing_with_step_omitted_type_checks() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::IntLiteral(1))),
+            stop: Some(Box::new(HirExpr::IntLiteral(3))),
+            step: None,
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::List(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn slicing_with_every_bound_omitted_type_checks_as_xs_colon() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::List(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn slicing_a_dict_is_rejected_as_t0033() {
+        // Mirrors real CPython: `d[1:2]` raises `TypeError` there too (D-118
+        // -- dict/set reuse `Subscript`'s own `T0033` code, not a new one).
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("d".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(
+            err.message,
+            "`dict[str, int]` does not support slicing (only list[int] does)"
+        );
+    }
+
+    #[test]
+    fn slicing_a_set_is_rejected_as_t0033() {
+        // Mirrors real CPython: `s[1:2]` raises `TypeError` there too.
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("s".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(
+            err.message,
+            "`set[int]` does not support slicing (only list[int] does)"
+        );
+    }
+
+    #[test]
+    fn slicing_a_tuple_is_rejected_as_t0033_as_an_explicit_deferral() {
+        // D-118: unlike dict/set (never supported for slicing), `tuple[...]`
+        // slicing is a real, explicit v0.2 scope cut -- but it still reuses
+        // the same `T0033` code, not a distinct one.
+        let mut env = Environment::new();
+        env.bind("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Int])));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("t".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(
+            err.message,
+            "`tuple[int, int]` does not support slicing (only list[int] does)"
+        );
+    }
+
+    #[test]
+    fn slicing_a_scalar_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(
+            err.message,
+            "`int` does not support slicing (only list[int] does)"
+        );
+    }
+
+    #[test]
+    fn slicing_a_list_of_str_is_rejected_as_t0034() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Str)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0034");
+        assert_eq!(
+            err.message,
+            "list codegen only supports `list[int]` in v0.2, cannot slice `list[str]`"
+        );
+    }
+
+    #[test]
+    fn slicing_a_list_of_float_is_rejected_as_t0034() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Float)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0034");
+        assert_eq!(
+            err.message,
+            "list codegen only supports `list[int]` in v0.2, cannot slice `list[float]`"
+        );
+    }
+
+    #[test]
+    fn slicing_a_list_of_bool_is_rejected_as_t0034() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Bool)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0034");
+        assert_eq!(
+            err.message,
+            "list codegen only supports `list[int]` in v0.2, cannot slice `list[bool]`"
+        );
+    }
+
+    #[test]
+    fn slicing_with_a_non_int_start_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::StringLiteral("a".to_string()))),
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "slice start must be `int`, got `str`");
+    }
+
+    #[test]
+    fn slicing_with_a_non_int_stop_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: Some(Box::new(HirExpr::FloatLiteral(1.0))),
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "slice stop must be `int`, got `float`");
+    }
+
+    #[test]
+    fn slicing_with_a_non_int_step_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: None,
+            stop: None,
+            step: Some(Box::new(HirExpr::StringLiteral("a".to_string()))),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "slice step must be `int`, got `str`");
+    }
+
+    #[test]
+    fn slicing_with_a_bool_bound_is_accepted_since_bool_is_an_int_subtype() {
+        // D-086, mirroring `Subscript`'s own index check: `xs[True:]` is
+        // ordinary, CPython-valid Python (`bool` is an `int` subtype, PEP
+        // 285), not a type error.
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::BoolLiteral(true))),
+            stop: None,
+            step: None,
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::List(Box::new(Ty::Int))));
+    }
+
+    #[test]
+    fn slicing_reports_the_base_type_error_before_any_bound_error() {
+        // D-118 diagnostic-order pin: the base-type gate (T0033) fires
+        // before a bound's own type is ever inspected.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            start: Some(Box::new(HirExpr::StringLiteral("bad".to_string()))),
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+    }
+
+    #[test]
+    fn slicing_reports_the_element_type_error_before_any_bound_error() {
+        // D-118 diagnostic-order pin: the element-type gate (T0034) fires
+        // before a bound's own type is ever inspected.
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Str)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::StringLiteral("bad".to_string()))),
+            stop: None,
+            step: None,
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0034");
+    }
+
+    #[test]
+    fn slicing_propagates_an_ill_typed_base_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("undefined".to_string())),
+            start: None,
+            stop: None,
+            step: None,
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn slicing_propagates_an_ill_typed_bound_s_error() {
+        let mut env = Environment::new();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::Slice {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            start: Some(Box::new(HirExpr::Name("undefined".to_string()))),
+            stop: None,
+            step: None,
         };
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
     }
@@ -10234,6 +10900,49 @@ mod tests {
         let stmt = HirStmt::Return(Some(HirExpr::FString(vec![FStringPart::Interpolation(
             Box::new(nested_private_call_conflict()),
         )])));
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_slice_base_propagates_nested_constraint_errors() {
+        // PR-12 Task 7 (D-118): proves `collect_block_constraints`'s `Return`
+        // handling reaches this task's new `Slice` constraint-collection arm
+        // *inside a private helper's own body* (not just at module top
+        // level, which the pair above this whole group already covers), and
+        // that the arm's own `collect_expr_constraints(..., base)?` call
+        // really does propagate a genuine solver-stage conflict from `base`
+        // rather than swallowing it -- the exact regression class Task 3's
+        // own ledger recorded once already for a sibling arm.
+        let stmt = HirStmt::Return(Some(HirExpr::Slice {
+            base: Box::new(nested_private_call_conflict()),
+            start: None,
+            stop: None,
+            step: None,
+        }));
+        assert_eq!(
+            check(&private_constraint_error_fixture(stmt))
+                .unwrap_err()
+                .code,
+            "T0021"
+        );
+    }
+
+    #[test]
+    fn private_slice_bound_propagates_nested_constraint_errors() {
+        // Same as above, but the conflict is nested inside a bound
+        // (`start`), not `base` -- proves the arm's per-bound recursion loop
+        // propagates too, not just the `base` call.
+        let stmt = HirStmt::Return(Some(HirExpr::Slice {
+            base: Box::new(HirExpr::IntLiteral(1)),
+            start: Some(Box::new(nested_private_call_conflict())),
+            stop: None,
+            step: None,
+        }));
         assert_eq!(
             check(&private_constraint_error_fixture(stmt))
                 .unwrap_err()
