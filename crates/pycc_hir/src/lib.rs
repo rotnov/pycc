@@ -928,6 +928,12 @@ fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExpr {
         | HirExpr::FloatLiteral(_)
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_) => expr,
+        // `callee` (a bare `String`, never an `HirExpr::Name`) is
+        // deliberately left untouched even if it equals `from`: this HIR
+        // subset has no first-class functions, so `callee` always names a
+        // module-level function definition, never a local variable this
+        // rename could plausibly shadow -- unlike `args`, which are
+        // recursed into normally.
         HirExpr::Call { callee, args } => HirExpr::Call {
             callee,
             args: args.into_iter().map(recurse).collect(),
@@ -1077,6 +1083,25 @@ fn lower_comprehension_iter(iter_expr: &Expr) -> Result<CompIter, Diagnostic> {
 /// `lower_dict_comp_assign` below), since `elt`/`key`/`value` also need the
 /// identical rename and this helper has no visibility into which of those
 /// the caller is building.
+///
+/// `iter` (the resolved `CompIter` returned above) is deliberately **never**
+/// passed through `rename_name_in_expr` -- neither here nor by any caller --
+/// unlike `cond`/`elt`/`key`/`value`, which all are. This is not an
+/// oversight: it matches real CPython scoping. A comprehension's outermost
+/// iterable expression evaluates in the *enclosing* scope, before the
+/// comprehension's own scope exists at all -- `[i for i in range(i)]`'s
+/// `range(i)` reads the *enclosing* `i`, not the comprehension's own loop
+/// variable (confirmed directly against CPython). Renaming `iter`'s
+/// occurrences of the source loop-variable name would therefore be actively
+/// wrong, not merely redundant: it would make `range(i)` read the
+/// comprehension's own (not-yet-bound) synthesized variable instead of
+/// whatever `i` means in the enclosing scope. See
+/// `a_comprehension_range_iterable_referencing_the_loop_variables_own_source_name_is_not_renamed`
+/// and
+/// `a_comprehension_bare_name_iterable_sharing_the_loop_variables_own_source_name_is_not_renamed`
+/// below, which pin this behavior directly -- without them, a future change
+/// that "fixed" this asymmetry by renaming `iter` too would silently break
+/// correct scoping with every existing test still green.
 fn lower_comprehension_header(
     generators: &[pycc_ast::Comprehension],
 ) -> Result<(String, String, CompIter, Option<HirExpr>), Diagnostic> {
@@ -2930,6 +2955,66 @@ mod tests {
                 iter: CompIter::Name("xs".to_string()),
                 cond: None,
                 elt: Box::new(HirExpr::Name("0comp_26_i".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn a_comprehension_range_iterable_referencing_the_loop_variables_own_source_name_is_not_renamed()
+     {
+        // Pins `lower_comprehension_header`'s own documented asymmetry
+        // (D-117): `iter` is deliberately never passed through
+        // `rename_name_in_expr`, unlike `elt`/`cond`/`key`/`value` -- this
+        // is correct CPython scoping, since a comprehension's iterable
+        // expression evaluates in the *enclosing* scope, before the
+        // comprehension's own loop variable is ever bound.
+        // `[i for i in range(i)]`'s `range(i)` must read the *outer* `i`
+        // (here, the module-level `i = 5`), not the comprehension's own
+        // synthesized loop variable. Without this test, a future change
+        // that "fixed" this asymmetry by renaming `iter` too would silently
+        // break correct scoping with every other existing test (and 100%
+        // coverage) still green, since no other test uses an iterable
+        // expression that shares the loop variable's own source name.
+        let module = pycc_parser_test_helper::parse("i = 5\ny = [i for i in range(i)]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_17_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    // The un-renamed enclosing-scope `i`, not
+                    // `HirExpr::Name("0comp_17_i")`.
+                    stop: HirExpr::Name("i".to_string()),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_17_i".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn a_comprehension_bare_name_iterable_sharing_the_loop_variables_own_source_name_is_not_renamed()
+     {
+        // Same reasoning as the `range(i)` test above, for `CompIter::Name`
+        // instead of `CompIter::Range`: `[xs for xs in xs]`'s iterable `xs`
+        // must resolve to the un-renamed enclosing-scope name, not the
+        // comprehension's own synthesized loop variable, even though both
+        // are spelled identically in the source.
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = [xs for xs in xs]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_27_xs".to_string(),
+                // The un-renamed enclosing-scope `xs`, not
+                // `CompIter::Name("0comp_27_xs".to_string())`.
+                iter: CompIter::Name("xs".to_string()),
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_27_xs".to_string())),
             })
         );
     }
