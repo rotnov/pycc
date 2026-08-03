@@ -1360,6 +1360,45 @@ pub unsafe extern "C" fn pycc_rt_int_list_slice(
     int_list_slice(unsafe { &*list }, start, stop, step)
 }
 
+/// # Safety (panic-across-FFI note, same rationale as `int_list_get`'s own
+/// doc comment above)
+/// `pycc_rt_int_list_pop` below is a plain `extern "C" fn`, not `extern
+/// "C-unwind"` -- a panic that would otherwise unwind past its boundary is
+/// instead turned into a process abort. This private function holds the
+/// real, freely-panicking logic; tests exercising the panic call it
+/// directly, exactly like `int_list_get`'s own split.
+fn int_list_pop(list: &PyIntListObj) -> i64 {
+    let mut items = list.items.take();
+    let Some(value) = items.pop() else {
+        // Restore the (empty) payload before panicking, same rationale as
+        // `int_list_get`'s own "restore before panicking" comment.
+        list.items.set(items);
+        panic!("pycc_rt: pop from empty list");
+    };
+    list.items.set(items);
+    value
+}
+
+/// Removes and returns the list's **last** element (Python's `list.pop()`,
+/// PR-12, D-119). Panics if `list` is empty, matching this file's
+/// established "honest panic over silently wrong data" convention (CPython
+/// raises a catchable `IndexError` here; this compiler has no exception
+/// model, so this is an unrecoverable panic instead). The panic message is
+/// `"pycc_rt: pop from empty list"`.
+///
+/// # Element representation
+/// The returned value is a raw, untagged `i64` read straight out of the
+/// backing store -- a caller must `raw_i64_to_tagged_int` it before
+/// treating it as an ordinary `Ty::Int`, exactly like
+/// `pycc_rt_int_list_get`'s own return value.
+///
+/// # Safety
+/// `list` must be a live `PyIntListObj` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_list_pop(list: *mut PyIntListObj) -> i64 {
+    int_list_pop(unsafe { &*list })
+}
+
 /// `dict[str, int]`'s runtime representation (D-111): a dense,
 /// insertion-ordered array of `(key, value)` pairs. `Cell<Vec<...>>`
 /// mirrors `PyIntListObj`'s own choice over `RefCell` -- `Cell::take`/
@@ -1424,6 +1463,35 @@ fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pycc_rt_dict_get(dict: *mut PyDictObj, key: *mut PyStrObj) -> i64 {
     dict_get(unsafe { &*dict }, key)
+}
+
+fn dict_get_or_default(dict: &PyDictObj, key: *mut PyStrObj, default: i64) -> i64 {
+    let entries = dict.entries.take();
+    let found = entries
+        .iter()
+        .find(|(k, _)| unsafe { pycc_rt_str_cmp(*k, key) } == 0)
+        .map(|(_, v)| *v);
+    dict.entries.set(entries);
+    found.unwrap_or(default)
+}
+
+/// Returns the value stored for `key`, or `default` if `key` is absent
+/// (Python's `dict.get(key, default)`, PR-12, D-119) -- unlike
+/// `pycc_rt_dict_get`, this **never panics** on a missing key; that is the
+/// entire point of the two-argument form. `default` is passed through
+/// unchanged, so this function itself never panics either -- it is a total
+/// function given the type gate (`pycc_types`' T0021/T0033) already
+/// enforces `key`/`default`'s types.
+///
+/// # Safety
+/// Same as `pycc_rt_dict_get`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_dict_get_or_default(
+    dict: *mut PyDictObj,
+    key: *mut PyStrObj,
+    default: i64,
+) -> i64 {
+    dict_get_or_default(unsafe { &*dict }, key, default)
 }
 
 /// Number of entries. `Cell::take` followed by re-`set`ting it, mirroring
@@ -2695,6 +2763,58 @@ mod tests {
     }
 
     #[test]
+    fn pycc_rt_int_list_pop_removes_and_returns_the_last_element() {
+        // Python's `list.pop()`: `[1,2,3].pop() == 3`, and the list shrinks
+        // by one, leaving `[1,2]` -- the removed element is always the
+        // *last* one, D-119.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for v in [1, 2, 3] {
+                pycc_rt_int_list_append(list, v);
+            }
+            assert_eq!(pycc_rt_int_list_pop(list), 3);
+            assert_eq!(pycc_rt_int_list_len(list), 2);
+            assert_eq!(collect_list(list), vec![1, 2]);
+            pycc_rt_int_list_decref(list);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_list_pop_repeated_calls_keep_removing_the_new_last_element() {
+        // Two `.pop()`s in a row must each observe the *previous* pop's
+        // effect, not some stale snapshot -- exercises the same repeated-
+        // mutation-on-the-same-object concern this task's own brief flags
+        // for `xs = [xs.pop(), xs.pop()]`-shaped codegen, at the `pycc_rt`
+        // layer directly.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for v in [1, 2, 3] {
+                pycc_rt_int_list_append(list, v);
+            }
+            assert_eq!(pycc_rt_int_list_pop(list), 3);
+            assert_eq!(pycc_rt_int_list_pop(list), 2);
+            assert_eq!(pycc_rt_int_list_len(list), 1);
+            assert_eq!(collect_list(list), vec![1]);
+            pycc_rt_int_list_decref(list);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: pop from empty list")]
+    fn pycc_rt_int_list_pop_on_an_empty_list_panics_honestly() {
+        // Calls the private `int_list_pop` directly, not the public
+        // `pycc_rt_int_list_pop` wrapper -- the wrapper is a plain `unsafe
+        // extern "C" fn`, so a panic crossing its boundary aborts the whole
+        // test binary instead of unwinding into `#[should_panic]`'s own
+        // catch, exactly like `int_list_get_out_of_range_panics_honestly`'s
+        // own established convention above.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            int_list_pop(&*list);
+        }
+    }
+
+    #[test]
     fn pycc_rt_dict_set_then_get_round_trips_the_value() {
         unsafe {
             let dict = pycc_rt_dict_new();
@@ -2765,6 +2885,49 @@ mod tests {
             // into `#[should_panic]`'s own catch (see the private-logic/public-wrapper
             // split added above, same convention as `int_list_get_out_of_range_panics_honestly`).
             dict_get(&*dict, key);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_dict_get_or_default_on_a_present_key_returns_the_stored_value() {
+        // Python's `dict.get(key, default)` on a present key: the stored
+        // value wins, `default` is ignored -- the two-argument form's
+        // "found" path, D-119.
+        unsafe {
+            let dict = pycc_rt_dict_new();
+            let key = new_pystr(b"a");
+            pycc_rt_dict_set(dict, key, 42);
+            assert_eq!(pycc_rt_dict_get_or_default(dict, key, -1), 42);
+            pycc_rt_dict_decref(dict);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_dict_get_or_default_on_a_missing_key_returns_the_default_without_panicking() {
+        // Unlike `pycc_rt_dict_get`, a missing key never panics here -- it
+        // returns `default` instead, the entire point of the two-argument
+        // form, D-119.
+        unsafe {
+            let dict = pycc_rt_dict_new();
+            let key = new_pystr(b"a");
+            pycc_rt_dict_set(dict, key, 42);
+            let missing = new_pystr(b"missing");
+            assert_eq!(pycc_rt_dict_get_or_default(dict, missing, -1), -1);
+            pycc_rt_dict_decref(dict);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_dict_get_or_default_on_an_empty_dict_returns_the_default() {
+        // No entries at all -- the degenerate case of the missing-key path
+        // above, pinned separately since `dict_get_or_default`'s own linear
+        // scan over an empty `Vec` is a distinct code path worth its own
+        // executing test.
+        unsafe {
+            let dict = pycc_rt_dict_new();
+            let key = new_pystr(b"z");
+            assert_eq!(pycc_rt_dict_get_or_default(dict, key, 7), 7);
+            pycc_rt_dict_decref(dict);
         }
     }
 

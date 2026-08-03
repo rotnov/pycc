@@ -135,6 +135,33 @@ pub enum MirExpr {
         stop: Option<Box<MirExpr>>,
         step: Option<Box<MirExpr>>,
     },
+    /// `list.pop()` (mirrors `HirExpr::ListPop`, PR-12, D-119). `ty()` below
+    /// returns the list's own element type -- empirically always `Ty::Int`
+    /// (T0034 rejects every other `list[T]` before codegen), derived rather
+    /// than hardcoded for the identical reason `ListLiteral`'s own `ty()`
+    /// derives (D-105's own precedent).
+    ListPop {
+        list: String,
+        ty: Ty,
+    },
+    /// `dict.get(key, default)` (mirrors `HirExpr::DictGetOrDefault`, PR-12,
+    /// D-119). `ty()` below returns the dict's own value type, derived from
+    /// the `dict` name's binding rather than hardcoded, for the same reason
+    /// `ListPop` above derives its element type.
+    DictGetOrDefault {
+        dict: String,
+        key: Box<MirExpr>,
+        default: Box<MirExpr>,
+        ty: Ty,
+    },
+    /// `set.add(value)` (mirrors `HirExpr::SetAdd`, PR-12, D-119). `.add()`
+    /// always returns `None`, exactly like `ListAppend` -- a true invariant,
+    /// not narrowed by any gate, hardcoded on purpose (mirrors `ListAppend`'s
+    /// own `ty()` arm).
+    SetAdd {
+        set: String,
+        value: Box<MirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -253,6 +280,12 @@ impl MirExpr {
             // `Ty::List(Int)` (that validation already happened in
             // `pycc_types`; this crate only re-derives the resulting type).
             MirExpr::Slice { base, .. } => base.ty(),
+            MirExpr::ListPop { ty, .. } => ty.clone(),
+            MirExpr::DictGetOrDefault { ty, .. } => ty.clone(),
+            // `.add()` always returns `None`, exactly like `ListAppend`
+            // above -- a true invariant, not narrowed by any `pycc_types`
+            // gate, so this is hardcoded on purpose.
+            MirExpr::SetAdd { .. } => Ty::None,
         }
     }
 }
@@ -884,6 +917,37 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
             start: start.as_deref().map(|e| Box::new(lower_expr(e, scopes))),
             stop: stop.as_deref().map(|e| Box::new(lower_expr(e, scopes))),
             step: step.as_deref().map(|e| Box::new(lower_expr(e, scopes))),
+        },
+        // PR-12 Task 11 (D-119): `list`'s element type is resolved via the
+        // same `lookup` mechanism every other name reference in this file
+        // uses, mirroring `HirExpr::Subscript`'s own base-type lookup above.
+        HirExpr::ListPop { list } => {
+            let Ty::List(elem_ty) = lookup(scopes, list) else {
+                panic!(
+                    "pycc_mir: internal error: `{list}` is not list-typed -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
+                )
+            };
+            MirExpr::ListPop {
+                list: list.clone(),
+                ty: *elem_ty,
+            }
+        }
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            let Ty::Dict(kv) = lookup(scopes, dict) else {
+                panic!(
+                    "pycc_mir: internal error: `{dict}` is not dict-typed -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
+                )
+            };
+            MirExpr::DictGetOrDefault {
+                dict: dict.clone(),
+                key: Box::new(lower_expr(key, scopes)),
+                default: Box::new(lower_expr(default, scopes)),
+                ty: kv.1,
+            }
+        }
+        HirExpr::SetAdd { set, value } => MirExpr::SetAdd {
+            set: set.clone(),
+            value: Box::new(lower_expr(value, scopes)),
         },
     }
 }
@@ -2035,6 +2099,32 @@ mod tests {
             .ty(),
             Ty::List(Box::new(Ty::Int))
         );
+        assert_eq!(
+            MirExpr::ListPop {
+                list: "x".to_string(),
+                ty: Ty::Int,
+            }
+            .ty(),
+            Ty::Int
+        );
+        assert_eq!(
+            MirExpr::DictGetOrDefault {
+                dict: "d".to_string(),
+                key: Box::new(MirExpr::StringLiteral("a".to_string())),
+                default: Box::new(MirExpr::IntLiteral(0)),
+                ty: Ty::Int,
+            }
+            .ty(),
+            Ty::Int
+        );
+        assert_eq!(
+            MirExpr::SetAdd {
+                set: "s".to_string(),
+                value: Box::new(MirExpr::IntLiteral(1)),
+            }
+            .ty(),
+            Ty::None
+        );
     }
 
     #[test]
@@ -2156,6 +2246,151 @@ mod tests {
             mir.items[1],
             MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ListAppend {
                 list: "x".to_string(),
+                value: Box::new(MirExpr::IntLiteral(2)),
+            }))
+        );
+    }
+
+    #[test]
+    fn lowers_list_pop_to_mir_deriving_its_element_type_from_the_list_binding() {
+        // PR-12 Task 11 (D-119): `xs.pop()`'s `ty` is derived from `xs`'s
+        // own `Ty::List` binding via `lookup`, mirroring
+        // `HirExpr::Subscript`'s own base-type lookup.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                        HirExpr::IntLiteral(3),
+                    ]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::ListPop {
+                        list: "xs".to_string(),
+                    },
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::ListPop {
+                    list: "xs".to_string(),
+                    ty: Ty::Int,
+                },
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "`xs` is not list-typed")]
+    fn list_pop_over_a_non_list_binding_panics_with_an_internal_error() {
+        // `pycc_types` already rejects `.pop()` on a non-list base (T0033)
+        // before HIR reaches `pycc_mir`, but the defensive panic path in
+        // `lower_expr`'s own `HirExpr::ListPop` arm still needs direct
+        // coverage, mirroring `a_for_list_loop_over_a_non_list_non_dict_non_set_binding_panics_with_an_internal_error`
+        // above.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListPop {
+                    list: "xs".to_string(),
+                })),
+            ],
+        };
+        build(&hir);
+    }
+
+    #[test]
+    fn lowers_dict_get_or_default_to_mir_recursively_deriving_its_value_type() {
+        // PR-12 Task 11 (D-119): `d.get(key, default)`'s `ty` is derived
+        // from `d`'s own `Ty::Dict` binding's value type, and both `key`
+        // and `default` are recursively lowered.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::DictGetOrDefault {
+                        dict: "d".to_string(),
+                        key: Box::new(HirExpr::StringLiteral("z".to_string())),
+                        default: Box::new(HirExpr::IntLiteral(-1)),
+                    },
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::DictGetOrDefault {
+                    dict: "d".to_string(),
+                    key: Box::new(MirExpr::StringLiteral("z".to_string())),
+                    default: Box::new(MirExpr::IntLiteral(-1)),
+                    ty: Ty::Int,
+                },
+            })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "`d` is not dict-typed")]
+    fn dict_get_or_default_over_a_non_dict_binding_panics_with_an_internal_error() {
+        // Same reasoning as `list_pop_over_a_non_list_binding_panics_with_an_internal_error`
+        // above, for `HirExpr::DictGetOrDefault`'s own defensive panic path.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::IntLiteral(5),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
+                    dict: "d".to_string(),
+                    key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                    default: Box::new(HirExpr::IntLiteral(0)),
+                })),
+            ],
+        };
+        build(&hir);
+    }
+
+    #[test]
+    fn lowers_set_add_to_mir_recursively() {
+        // PR-12 Task 11 (D-119): `s.add(value)` mirrors `ListAppend`'s own
+        // shape exactly -- `set` is carried as a plain name, `value` is
+        // recursively lowered.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "s".to_string(),
+                    value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::SetAdd {
+                    set: "s".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(2)),
+                })),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::SetAdd {
+                set: "s".to_string(),
                 value: Box::new(MirExpr::IntLiteral(2)),
             }))
         );
