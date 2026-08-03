@@ -215,6 +215,12 @@ struct RtFns<'ctx> {
     /// already declares (`int_list_new`'s own `ptr_type.fn_type(&[], ..)`
     /// one line below shares that same return type).
     int_list_slice: FunctionValue<'ctx>,
+    /// PR-12 Task 11's own new `pycc_rt_int_list_pop` declaration
+    /// (`list.pop()`, D-119) -- mirrors `int_list_get`'s own shape exactly
+    /// (one `ptr_type` parameter, one `i64_type` raw-untagged-element
+    /// return), the only difference being no `index` parameter, since
+    /// `.pop()` always removes the list's own last element.
+    int_list_pop: FunctionValue<'ctx>,
     /// PR-11 Task 5's own new `pycc_rt_dict_*` declarations, mirroring the
     /// `int_list_*` cluster immediately above one-for-one: `dict_new` (no
     /// pre-sizing entry point, same reasoning as `int_list_new`),
@@ -226,6 +232,12 @@ struct RtFns<'ctx> {
     dict_new: FunctionValue<'ctx>,
     dict_set: FunctionValue<'ctx>,
     dict_get: FunctionValue<'ctx>,
+    /// PR-12 Task 11's own new `pycc_rt_dict_get_or_default` declaration
+    /// (`dict.get(key, default)`, D-119) -- mirrors `dict_get`'s own shape
+    /// plus one extra raw `i64` `default` parameter, matching
+    /// `pycc_rt_dict_get_or_default`'s real Rust signature
+    /// (`fn(*mut PyDictObj, *mut PyStrObj, i64) -> i64`) exactly.
+    dict_get_or_default: FunctionValue<'ctx>,
     dict_len: FunctionValue<'ctx>,
     dict_key_at: FunctionValue<'ctx>,
     /// PR-11 Task 9's own new `pycc_rt_int_set_*` declarations, mirroring
@@ -401,6 +413,10 @@ fn declare_rt_functions<'ctx>(
                 false,
             ),
         ),
+        int_list_pop: declare(
+            "pycc_rt_int_list_pop",
+            i64_type.fn_type(&[ptr_type.into()], false),
+        ),
         dict_new: declare("pycc_rt_dict_new", ptr_type.fn_type(&[], false)),
         // Returns nothing, exactly like `int_list_append` above: this
         // signature must match `pycc_rt_dict_set`'s real Rust one
@@ -415,6 +431,13 @@ fn declare_rt_functions<'ctx>(
         dict_get: declare(
             "pycc_rt_dict_get",
             i64_type.fn_type(&[ptr_type.into(), ptr_type.into()], false),
+        ),
+        dict_get_or_default: declare(
+            "pycc_rt_dict_get_or_default",
+            i64_type.fn_type(
+                &[ptr_type.into(), ptr_type.into(), i64_type.into()],
+                false,
+            ),
         ),
         dict_len: declare(
             "pycc_rt_dict_len",
@@ -723,6 +746,27 @@ fn build_int_list_get<'ctx>(
         .into_int_value()
 }
 
+/// Removes and returns the list's own last element (`list.pop()`, PR-12
+/// Task 11, D-119). Mirrors `build_int_list_get`'s own one-`build_call`
+/// shape exactly, minus the `index` parameter -- `.pop()` always targets
+/// the last element, so there is nothing else to pass. The returned value
+/// is on the **raw**, untagged side of D-106's boundary, exactly like
+/// `build_int_list_get`'s own return value: the caller
+/// (`MirExpr::ListPop`'s own `emit_expr` arm) tags it with
+/// `raw_i64_to_tagged_int` before treating it as a user-visible `Ty::Int`.
+fn build_int_list_pop<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    list_ptr: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_call(rt.int_list_pop, &[list_ptr.into()], "list_pop")
+        .expect("build_call should not fail for a well-formed list pop")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_int_list_pop returns a non-void i64")
+        .into_int_value()
+}
+
 /// A `PyIntListObj`'s current element count, as a **raw**, untagged `i64`
 /// (D-106). The `len(x)` builtin re-tags this before handing it back as a
 /// `Ty::Int` expression value; `MirStmt::ForList` uses it directly as its
@@ -833,6 +877,33 @@ fn build_dict_set<'ctx>(
         .expect("build_call should not fail for a well-formed dict set");
 }
 
+/// Returns the value stored for `key_ptr`, or `raw_default` if absent
+/// (`dict.get(key, default)`, PR-12 Task 11, D-119). Mirrors
+/// `build_int_list_pop`'s own one-`build_call` shape exactly, with one
+/// extra `i64` operand for the default. Both `raw_default` and the
+/// returned value are on the **raw**, untagged side of D-106's boundary:
+/// the caller (`MirExpr::DictGetOrDefault`'s own `emit_expr` arm) untags
+/// `default` before calling this, and tags the result with
+/// `raw_i64_to_tagged_int` before treating it as a user-visible `Ty::Int`.
+fn build_dict_get_or_default<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    dict_ptr: PointerValue<'ctx>,
+    key_ptr: PointerValue<'ctx>,
+    raw_default: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    builder
+        .build_call(
+            rt.dict_get_or_default,
+            &[dict_ptr.into(), key_ptr.into(), raw_default.into()],
+            "dict_get_or_default",
+        )
+        .expect("build_call should not fail for a well-formed dict get-or-default")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_dict_get_or_default returns a non-void i64")
+        .into_int_value()
+}
+
 /// A `PyDictObj`'s current entry count, as a **raw**, untagged `i64`
 /// (D-106), shared by the `len(d)` builtin's `Ty::Dict` branch and
 /// `MirStmt::ForDict`'s own loop bound -- mirrors `build_int_list_len`
@@ -870,13 +941,15 @@ fn expect_set_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'c
 }
 
 /// Inserts one already-untagged (D-106) `i64` value into a `PyIntSetObj`,
-/// shared by `MirExpr::SetLiteral`'s per-element construction (the only
-/// call site in v0.2 -- `set[int]` has no `.add()` method of its own yet,
-/// unlike `list[int]`'s `.append()`). Returns nothing: `pycc_rt_int_set_add`
-/// is declared `void`, exactly like `build_int_list_append`/`build_dict_set`
-/// above. The dedup check that makes repeated elements collapse to one
-/// (D-111) lives entirely inside `pycc_rt_int_set_add` itself -- this
-/// function (and its one caller) just calls it per element, unconditionally.
+/// shared by `MirExpr::SetLiteral`'s per-element construction and
+/// `MirExpr::SetAdd`'s own user-facing `s.add(value)` call (PR-12 Task 11,
+/// D-119 -- the second call site; `SetLiteral`'s per-element construction
+/// was the first and, until this task, only one). Returns nothing:
+/// `pycc_rt_int_set_add` is declared `void`, exactly like
+/// `build_int_list_append`/`build_dict_set` above. The dedup check that
+/// makes a repeated element collapse to one (D-111) lives entirely inside
+/// `pycc_rt_int_set_add` itself -- both callers just call it per value,
+/// unconditionally, with no dedup logic of their own.
 fn build_int_set_add<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
@@ -2313,6 +2386,122 @@ fn emit_expr<'ctx>(
             let result_ptr =
                 build_int_list_slice(builder, rt, base_ptr, start_i64, stop_i64, step_i64);
             Scalar::List(result_ptr)
+        }
+        // `list.pop()` (PR-12 Task 11, D-119): removes and returns `list`'s
+        // own last element. Mirrors `MirExpr::ListAppend`'s own shape (a
+        // plain-name base read through `emit_list_name_read`, D-106's
+        // output-side `raw_i64_to_tagged_int` conversion on the way out,
+        // exactly like `MirExpr::Subscript`'s own list-read branch and
+        // `MirExpr::DictGet` above) rather than `MirExpr::Slice`'s -- there
+        // is no sub-expression to recursively evaluate here at all, unlike
+        // `Slice`'s bounds.
+        //
+        // Safe under repeated self-reference within one statement (e.g.
+        // `xs = [xs.pop(), xs.pop()]`, this task's own brief flags this
+        // shape): `emit_list_name_read` always re-reads `xs`'s *current*
+        // slot value, which does not change mid-statement -- `MirStmt::
+        // Assign`'s own arm (see that arm's own call site) evaluates this
+        // whole right-hand-side expression to a finished `Scalar` *before*
+        // ever rebinding `xs`'s slot, exactly the ordering `MirExpr::Slice`'s
+        // own doc comment above already establishes is what keeps `xs =
+        // xs[1:3]` safe from Task 5a's confirmed self-referential-rebind
+        // regression. Each `.pop()` mutates the *pointee* `PyIntListObj`
+        // in place (via `pycc_rt_int_list_pop`'s own `Cell<Vec<i64>>`), not
+        // `xs`'s own slot, so two `.pop()`s emitted in source order run in
+        // that same order at runtime -- ordinary sequential `call`
+        // instructions, nothing deferred -- and each observes the
+        // previous one's mutation, matching CPython's own left-to-right
+        // evaluation of `[xs.pop(), xs.pop()]`. Verified empirically, not
+        // just by this reasoning: see this file's own
+        // `pop_twice_on_the_same_list_in_one_statement_removes_in_order`
+        // end-to-end test below.
+        MirExpr::ListPop { list, .. } => {
+            let list_ptr =
+                emit_list_name_read(context, builder, module, rt, user_functions, locals, list);
+            let raw = build_int_list_pop(builder, rt, list_ptr);
+            Scalar::Int(raw_i64_to_tagged_int(context, builder, raw))
+        }
+        // `dict.get(key, default)` (PR-12 Task 11, D-119): returns the
+        // stored value, or `default` if `key` is absent -- never panics on
+        // a missing key, unlike `MirExpr::DictGet`'s own `d[key]`. `dict`
+        // is a plain variable name (mirrors `HirExpr::DictGetOrDefault`),
+        // read through `emit_dict_name_read` exactly like
+        // `MirStmt::DictSet`'s own `dict` field; `key` and `default` are
+        // both arbitrary sub-expressions, evaluated left to right, matching
+        // Python's own left-to-right argument evaluation.
+        //
+        // `key`'s `Scalar::Str` is extracted with **no**
+        // `incref_if_str_duplicate` call, unlike `MirStmt::DictSet`'s own
+        // key -- following `MirExpr::DictGet`'s own no-incref precedent
+        // above, not `DictSet`'s: a read-only lookup never stores the key
+        // pointer anywhere persistent, so there is no new owning reference
+        // to protect (D-114's incref requirement exists only where a
+        // pointer is *adopted*, e.g. `pycc_rt_dict_set`'s own key
+        // parameter).
+        //
+        // `default` is read-only too -- unlike `key`, it never even reaches
+        // `pycc_rt` as a pointer (a dict's *value* is always a raw `i64`,
+        // D-106), so no incref question arises for it at all. Safe under
+        // nested self-reference within one statement (e.g. `d =
+        // d.get("k", d.get("j", 0))`, this task's own brief flags this
+        // shape): both the outer and inner `.get()` read `d`'s slot via
+        // `emit_dict_name_read`, and neither `.get()` call ever mutates
+        // `d`'s pointee (`pycc_rt_dict_get_or_default` is a pure lookup, no
+        // `Cell::set` on any success or failure path) -- so, unlike
+        // `ListPop`'s own mutating case just above, there is no ordering
+        // hazard to reason about here at all: every read observes the same
+        // unchanged dict. Verified empirically: see this file's own
+        // `dict_get_or_default_nested_in_its_own_default_argument_resolves_correctly`
+        // end-to-end test below.
+        MirExpr::DictGetOrDefault {
+            dict,
+            key,
+            default,
+            ..
+        } => {
+            let dict_ptr =
+                emit_dict_name_read(context, builder, module, rt, user_functions, locals, dict);
+            let key_scalar = emit_expr(context, builder, module, rt, user_functions, locals, key);
+            let Scalar::Str(key_ptr) = key_scalar else {
+                panic!(
+                    "pycc_codegen: internal error: dict.get() key did not evaluate to str -- \
+                     pycc_types::check (T0021) should have rejected this before codegen"
+                )
+            };
+            let default_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, default);
+            let tagged_default = to_tagged_int(context, builder, default_scalar);
+            let raw_default =
+                build_untag_checked(builder, rt, tagged_default, "dict_get_untag_default");
+            let raw = build_dict_get_or_default(builder, rt, dict_ptr, key_ptr, raw_default);
+            Scalar::Int(raw_i64_to_tagged_int(context, builder, raw))
+        }
+        // `set.add(value)` (PR-12 Task 11, D-119): mirrors `MirExpr::
+        // ListAppend`'s own shape exactly (a plain-name base read through
+        // `emit_set_name_read`, D-106's input-side `build_untag_checked`
+        // conversion on `value`, the canonical `Ty::None` `i8 0` result
+        // carrier) -- `set` is read only once, `build_int_set_add` is
+        // `MirExpr::SetLiteral`'s own already-existing helper (this is
+        // its second call site, not a new declaration), and the dedup
+        // check that makes a repeated `.add()` of an already-present value
+        // a no-op lives entirely inside `pycc_rt_int_set_add` itself, not
+        // here (see that function's own doc comment). Repeated `s.add(x);
+        // s.add(x)` calls across two separate statements need no special
+        // reasoning at all: each is its own fully independent `MirStmt`,
+        // executed strictly in source order, each re-reading `s`'s current
+        // (unchanged-by-`.add()`-itself-except-for-dedup-mutation) pointer
+        // -- verified empirically: see this file's own
+        // `add_the_same_value_twice_across_two_statements_still_dedups`
+        // end-to-end test below.
+        MirExpr::SetAdd { set, value } => {
+            let set_ptr =
+                emit_set_name_read(context, builder, module, rt, user_functions, locals, set);
+            let value_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, value);
+            let tagged = to_tagged_int(context, builder, value_scalar);
+            let raw = build_untag_checked(builder, rt, tagged, "set_untag_added");
+            build_int_set_add(builder, rt, set_ptr, raw);
+            Scalar::Bool(context.i8_type().const_int(0, false))
         }
     }
 }
@@ -14035,6 +14224,284 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"2\n3\n");
+    }
+
+    // -- PR-12 Task 11 (D-119): `list.pop()`/`dict.get(key, default)`/
+    // `set.add(value)` codegen -----------------------------------------
+
+    #[test]
+    fn list_pop_removes_and_returns_the_last_element_and_shrinks_len() {
+        // `xs = [1,2,3]\ny = xs.pop()\nprint(y)\nprint(len(xs))\n` end to
+        // end -- real `MirExpr::ListPop` codegen. Expected output verified
+        // against `python3` on this exact source: `3` then `2`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_list_literal_values("xs", &[1, 2, 3])),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "y".to_string(),
+                    value: MirExpr::ListPop {
+                        list: "xs".to_string(),
+                        ty: Ty::Int,
+                    },
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Name {
+                    name: "y".to_string(),
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![slice_list_name("xs")],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("list_pop_basic");
+        let obj_path = dir.join("list_pop_basic.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("list_pop_basic");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3\n2\n");
+    }
+
+    #[test]
+    fn pop_twice_on_the_same_list_in_one_statement_removes_in_order() {
+        // `xs = [1,2,3,4,5]\nys = [xs.pop(), xs.pop()]\n` -- this task's own
+        // brief flags exactly this shape as a place a Task-5a-class
+        // evaluation-order bug could hide (binding a target's storage slot
+        // before fully evaluating a self-referential right-hand side).
+        // Verified empirically here, not just by the `MirExpr::ListPop`
+        // arm's own doc comment reasoning: real CPython evaluates
+        // `[xs.pop(), xs.pop()]`'s two elements strictly left to right,
+        // each `.pop()` observing the previous one's mutation, so the
+        // first `.pop()` removes `5` (leaving `[1,2,3,4]`) and the second
+        // removes the new last element `4` (leaving `[1,2,3]`) --
+        // `ys == [5, 4]`, `xs == [1,2,3]`. A codegen bug that read `xs`'s
+        // pointer once and cached it, or that evaluated both `.pop()`
+        // calls against a stale snapshot, would produce a different
+        // result here (e.g. both calls popping the same element, or
+        // popping in the wrong order) -- this test would catch either.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_list_literal_values("xs", &[1, 2, 3, 4, 5])),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: MirExpr::ListLiteral(vec![
+                        MirExpr::ListPop {
+                            list: "xs".to_string(),
+                            ty: Ty::Int,
+                        },
+                        MirExpr::ListPop {
+                            list: "xs".to_string(),
+                            ty: Ty::Int,
+                        },
+                    ]),
+                }),
+                MirItem::TopLevelStmt(print_each_int("ys")),
+                MirItem::TopLevelStmt(print_each_int("xs")),
+            ],
+        };
+        let dir = tempfile_dir("list_pop_twice_same_statement");
+        let obj_path = dir.join("list_pop_twice_same_statement.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("list_pop_twice_same_statement");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"5\n4\n1\n2\n3\n");
+    }
+
+    #[test]
+    fn dict_get_or_default_on_a_present_key_returns_the_stored_value_codegens_and_runs() {
+        // `d = {"a": 1}\nprint(d.get("a", -1))\n` end to end -- real
+        // `MirExpr::DictGetOrDefault` codegen, found-key path. Expected
+        // output verified against `python3` on this exact source: `1`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "d".to_string(),
+                    value: MirExpr::DictLiteral(vec![(
+                        MirExpr::StringLiteral("a".to_string()),
+                        MirExpr::IntLiteral(1),
+                    )]),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGetOrDefault {
+                    dict: "d".to_string(),
+                    key: Box::new(MirExpr::StringLiteral("a".to_string())),
+                    default: Box::new(MirExpr::IntLiteral(-1)),
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dict_get_or_default_present");
+        let obj_path = dir.join("dict_get_or_default_present.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dict_get_or_default_present");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    fn dict_get_or_default_on_a_missing_key_returns_the_default_codegens_and_runs() {
+        // `d = {"a": 1}\nprint(d.get("z", -1))\n` end to end -- real
+        // `MirExpr::DictGetOrDefault` codegen, missing-key path (unlike
+        // `MirExpr::DictGet`, this never panics). Expected output verified
+        // against `python3` on this exact source: `-1`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "d".to_string(),
+                    value: MirExpr::DictLiteral(vec![(
+                        MirExpr::StringLiteral("a".to_string()),
+                        MirExpr::IntLiteral(1),
+                    )]),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::DictGetOrDefault {
+                    dict: "d".to_string(),
+                    key: Box::new(MirExpr::StringLiteral("z".to_string())),
+                    default: Box::new(MirExpr::IntLiteral(-1)),
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dict_get_or_default_missing");
+        let obj_path = dir.join("dict_get_or_default_missing.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dict_get_or_default_missing");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"-1\n");
+    }
+
+    #[test]
+    fn dict_get_or_default_nested_in_its_own_default_argument_resolves_correctly() {
+        // `d = {"a": 1}\ny = d.get("k", d.get("a", -1))\nprint(y)\n` --
+        // this task's own brief flags exactly this nested shape. Unlike
+        // `list.pop()`, `dict.get()` never mutates its dict, so there is
+        // no analogous ordering hazard to begin with (both the outer and
+        // inner `.get()` read the same unchanged `d`) -- verified
+        // empirically here rather than only by that reasoning: `"k"` is
+        // absent, so the outer call's `default` sub-expression
+        // (`d.get("a", -1)`) must itself be evaluated, and `"a"` is
+        // present, so it resolves to `1`. Expected output verified against
+        // `python3` on this exact source: `1`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "d".to_string(),
+                    value: MirExpr::DictLiteral(vec![(
+                        MirExpr::StringLiteral("a".to_string()),
+                        MirExpr::IntLiteral(1),
+                    )]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "y".to_string(),
+                    value: MirExpr::DictGetOrDefault {
+                        dict: "d".to_string(),
+                        key: Box::new(MirExpr::StringLiteral("k".to_string())),
+                        default: Box::new(MirExpr::DictGetOrDefault {
+                            dict: "d".to_string(),
+                            key: Box::new(MirExpr::StringLiteral("a".to_string())),
+                            default: Box::new(MirExpr::IntLiteral(-1)),
+                            ty: Ty::Int,
+                        }),
+                        ty: Ty::Int,
+                    },
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Name {
+                    name: "y".to_string(),
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dict_get_or_default_nested_default");
+        let obj_path = dir.join("dict_get_or_default_nested_default.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("dict_get_or_default_nested_default");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "dict.get() key did not evaluate to str")]
+    fn a_dict_get_or_default_with_a_non_str_key_is_an_internal_error() {
+        // `pycc_types` (T0021) rejects a mismatched `dict.get()` key type
+        // before codegen ever runs, so this is hand-built malformed MIR --
+        // covers `MirExpr::DictGetOrDefault`'s own inline key-extraction
+        // panic, mirroring `a_dict_get_with_a_non_str_key_is_an_internal_error`
+        // above for `MirExpr::DictGet`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "d".to_string(),
+                    value: MirExpr::DictLiteral(vec![(
+                        MirExpr::StringLiteral("a".to_string()),
+                        MirExpr::IntLiteral(1),
+                    )]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::DictGetOrDefault {
+                    dict: "d".to_string(),
+                    key: Box::new(MirExpr::IntLiteral(1)),
+                    default: Box::new(MirExpr::IntLiteral(0)),
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("dict_get_or_default_non_str_key_panics");
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("dict_get_or_default_non_str_key_panics.o"),
+            None,
+            false,
+        );
+    }
+
+    #[test]
+    fn set_add_grows_the_set_and_a_repeated_value_still_dedups_codegens_and_runs() {
+        // `s = {1,2}\ns.add(3)\nprint(len(s))\ns.add(1)\nprint(len(s))\n`
+        // end to end -- real `MirExpr::SetAdd` codegen, the second,
+        // user-facing call site for the already-existing
+        // `pycc_rt_int_set_add` (`SetLiteral`'s own per-element
+        // construction is the first). Two separate statements, each its
+        // own independent `MirStmt`, executed strictly in source order --
+        // this task's own brief flags `s.add(x); s.add(x)`-shaped repeated
+        // calls as a shape to verify dedup still holds for. Expected
+        // output verified against `python3` on this exact source: `3`
+        // then `3` again (the repeated `.add(1)` does not grow the set).
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "s".to_string(),
+                    value: MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::SetAdd {
+                    set: "s".to_string(),
+                    value: Box::new(MirExpr::IntLiteral(3)),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![set_name("s")],
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::SetAdd {
+                    set: "s".to_string(),
+                    value: Box::new(MirExpr::IntLiteral(1)),
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "len".to_string(),
+                    args: vec![set_name("s")],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("set_add_grows_and_dedups");
+        let obj_path = dir.join("set_add_grows_and_dedups.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("set_add_grows_and_dedups");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3\n3\n");
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {

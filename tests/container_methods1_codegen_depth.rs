@@ -1,0 +1,161 @@
+// PR-12 Task 11 (D-119): `list.pop()`/`dict.get(key, default)`/
+// `set.add(value)` end to end through the real `pycc build` CLI. Mirrors
+// `tests/slice1_codegen_depth.rs`'s own `build_and_run` convention exactly
+// (real Python source, not hand-built MIR): the hand-built-MIR tests that
+// actually count toward `cargo llvm-cov -p pycc_codegen` live inline in
+// `crates/pycc_codegen/src/lib.rs`'s own test module (a workspace-root
+// `tests/*.rs` integration binary is attributed to the `pycc` package, not
+// `pycc_codegen`) -- these real-source tests exist for genuine
+// front-to-back empirical confidence (parser -> hir -> types -> mir ->
+// codegen -> link -> run), not for coverage.
+
+use std::io::Write;
+use std::process::Command;
+
+fn pycc_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_pycc"))
+}
+
+fn write_fixture(dir: &std::path::Path, name: &str, source: &str) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(source.as_bytes()).unwrap();
+    path
+}
+
+fn build_and_run(label: &str, source: &str) -> std::process::Output {
+    let dir =
+        std::env::temp_dir().join(format!("pycc_container_methods1_{label}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, &format!("{label}.py"), source);
+    let out = dir.join(label);
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "`pycc build` failed for {label}");
+    Command::new(&out).output().unwrap()
+}
+
+#[test]
+fn list_pop_removes_and_returns_the_last_element() {
+    // Expected output verified against `python3` on this exact source.
+    let source = "\
+xs = [1, 2, 3]
+y = xs.pop()
+print(y)
+print(len(xs))
+";
+    let output = build_and_run("list_pop_basic", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n2\n");
+}
+
+#[test]
+fn list_pop_on_an_empty_list_traps_instead_of_a_catchable_index_error() {
+    // D-119's own honest-panic convention: CPython raises a catchable
+    // `IndexError` here; this compiler has no exception model, so the
+    // generated binary aborts instead. Verified against `python3` that the
+    // *source* is otherwise valid Python (it raises `IndexError` there,
+    // rather than failing to parse/type-check) -- the divergence is in the
+    // runtime failure mode, not in whether this is legal Python.
+    //
+    // Emptied via one `.pop()` rather than written as a literal `xs = []`:
+    // an empty list literal's element type cannot be inferred without an
+    // annotation (T0021, D-105 -- `list[T]` annotations are not supported
+    // yet), so this is the only way real, type-checked Python source can
+    // produce an empty `list[int]` here.
+    let source = "\
+xs = [1]
+xs.pop()
+y = xs.pop()
+print(y)
+";
+    let output = build_and_run("list_pop_empty_traps", source);
+    assert!(
+        !output.status.success(),
+        "popping from an empty list must trap rather than silently continuing"
+    );
+}
+
+#[test]
+fn pop_twice_on_the_same_list_in_one_statement_removes_in_order() {
+    // This task's own brief flags exactly this shape (`xs = [xs.pop(),
+    // xs.pop()]`) as a place a Task-5a-class evaluation-order bug could
+    // hide. Real CPython evaluates the two elements strictly left to
+    // right, each `.pop()` observing the previous one's mutation: the
+    // first removes `5` (leaving `[1,2,3,4]`), the second removes the new
+    // last element `4` (leaving `[1,2,3]`). Expected output verified
+    // against `python3` on this exact source.
+    let source = "\
+xs = [1, 2, 3, 4, 5]
+ys = [xs.pop(), xs.pop()]
+for v in ys:
+    print(v)
+for v in xs:
+    print(v)
+";
+    let output = build_and_run("list_pop_twice_same_statement", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"5\n4\n1\n2\n3\n");
+}
+
+#[test]
+fn dict_get_returns_the_stored_value_or_the_default() {
+    // `99` stands in for a sentinel "not found" default rather than a
+    // negative literal: unary negation (`-1`) is not itself implemented
+    // anywhere in this compiler yet (`error[C0001]: expression kind not
+    // supported yet`, confirmed independently of this task -- see
+    // `tests/slice1_codegen_depth.rs`'s own identical note), so a negative
+    // `int` literal cannot appear directly in real Python source here.
+    // Expected output verified against `python3` on this exact source:
+    // `1` (present key) then `99` (missing key, no `KeyError`, unlike
+    // plain `d["z"]`).
+    let source = "\
+d = {\"a\": 1}
+print(d.get(\"a\", 99))
+print(d.get(\"z\", 99))
+";
+    let output = build_and_run("dict_get_or_default_basic", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n99\n");
+}
+
+#[test]
+fn dict_get_nested_in_its_own_default_argument_resolves_correctly() {
+    // This task's own brief flags exactly this nested shape (`d =
+    // d.get("k", d.get("j", 0))`). `dict.get()` never mutates its dict, so
+    // there is no ordering hazard the way `list.pop()` has -- both the
+    // outer and inner `.get()` read the same unchanged `d`. `"k"` is
+    // absent, so the outer call's own `default` sub-expression
+    // (`d.get("a", 99)`) must itself be evaluated; `"a"` is present, so it
+    // resolves to `1`. Expected output verified against `python3` on this
+    // exact source.
+    let source = "\
+d = {\"a\": 1}
+y = d.get(\"k\", d.get(\"a\", 99))
+print(y)
+";
+    let output = build_and_run("dict_get_or_default_nested_default", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
+
+#[test]
+fn set_add_grows_the_set_and_a_repeated_value_still_dedups() {
+    // This task's own brief flags `s.add(x); s.add(x)`-shaped repeated
+    // calls as a shape to verify dedup still holds for, across two
+    // separate statements. Expected output verified against `python3` on
+    // this exact source: `3` then `3` again (the repeated `.add(1)` does
+    // not grow the set).
+    let source = "\
+s = {1, 2}
+s.add(3)
+print(len(s))
+s.add(1)
+print(len(s))
+";
+    let output = build_and_run("set_add_grows_and_dedups", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n3\n");
+}
