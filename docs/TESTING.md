@@ -390,8 +390,10 @@ lock entries, the root-local non-git fallback, a configuration edit observed
 before its replacement, a generated script changed between snapshots, a vendor entry
 inserted between initial validation and removal, an ancestor relocated and replaced
 with a symlink after snapshots, and successful deepest-first removal of a nested vendor
-tree without touching an unrelated sibling. Windows-only junction and native 8.3
-short-path regressions cover reparse redirection and lexical aliasing. Platform-neutral
+tree without touching an unrelated sibling. The Windows-only junction regression
+proves that reparse redirection blocks both smoke execution and disable deletion
+before either can touch the external tree; the native 8.3 short-path regression
+covers lexical aliasing. Platform-neutral
 mount simulations prove that neither a
 mounted configuration ancestor nor a mounted generated-hook ancestor can redirect
 writes or deletion outside the worktree. The raw `--root` CLI argument itself is
