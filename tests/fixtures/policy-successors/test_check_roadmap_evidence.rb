@@ -36,9 +36,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
     "tests/fixtures/d100-compose-d91-d99-ci.yml"
   D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE =
     Pathname(__dir__).parent / "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml"
-  D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE =
-    Pathname(__dir__).parent /
-    "tests/fixtures/d114-frontend-perf-threshold-ci.yml"
   COVERAGE_STEP_HEADER =
     "      - name: Hard coverage gate — 100% lines + regions (D-014)"
   COVERAGE_COMMAND =
@@ -166,6 +163,19 @@ class RoadmapEvidenceCliTest < Minitest::Test
         Marshal.load(Marshal.dump(D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB)),
       "frontend-perf-gate" =>
         Marshal.load(Marshal.dump(D112_UBUNTU_FRONTEND_PERF_GATE_JOB)),
+      "ci-gate" =>
+        Marshal.load(Marshal.dump(PAIRED_PERF_CI_GATE_JOB))
+    }
+    yield jobs if block_given?
+    { "jobs" => jobs }.to_yaml
+  end
+
+  def d114_raised_threshold_frontend_perf_workflow
+    jobs = {
+      "frontend-perf-measure" =>
+        Marshal.load(Marshal.dump(D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB)),
+      "frontend-perf-gate" =>
+        Marshal.load(Marshal.dump(D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB)),
       "ci-gate" =>
         Marshal.load(Marshal.dump(PAIRED_PERF_CI_GATE_JOB))
     }
@@ -998,16 +1008,9 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # for check_roadmap_evidence.rb's own bytes) will shrink this back to a
   # single entry -- until then both coexist, mirroring D-090's own
   # coexist-then-retire precedent for this exact array.
-  # D-114 (propose round) stages a third accepted digest alongside D100 and
-  # D112 -- a non-shrinking coexist window, same precedent as D100/D112
-  # above -- before any PR changes ci.yml's live bytes to match it.
-  def test_tier1_workflow_authorization_contains_exactly_d100_d112_and_d114
+  def test_tier1_workflow_authorization_contains_exactly_d100_and_d112
     assert_equal(
-      [
-        D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
-        D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-        D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
-      ],
+      [D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256, D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
   end
@@ -1542,42 +1545,6 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # D-114 (propose round): stages a reviewed successor fixture -- identical
-  # to the live D112 shape except the gate job's own comparison step gains
-  # an explicit "7.0" threshold_percent argument -- without touching the
-  # live `.github/workflows/ci.yml` at all. The live file still matches
-  # D112 exactly (see the test above); this fixture and its digest are the
-  # reviewed target a later, separate activation round copies into place.
-  def test_d114_frontend_perf_threshold_workflow_fixture_matches_its_own_digest
-    assert_equal(
-      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE).hexdigest
-    )
-  end
-
-  def test_d114_frontend_perf_threshold_workflow_is_a_staged_successor
-    assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
-                    D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
-    refute_equal(
-      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
-    )
-  end
-
-  def test_d114_frontend_perf_threshold_workflow_structure_is_recognized
-    workflow_text = D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.read
-    assert validate_source_aware_perf_gate_lifecycle(
-      workflow_text, D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.to_s
-    )
-  end
-
-  def test_d114_frontend_perf_threshold_workflow_compare_step_has_the_new_argument
-    workflow = Psych.safe_load(D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.read)
-    steps = workflow.dig("jobs", "frontend-perf-gate", "steps")
-    compare = steps.find { |step| step["name"] == "Compare exact predecessor and candidate" }
-    assert_includes compare["run"], "\"7.0\""
-  end
-
   def test_rejects_d112_measurement_job_with_a_different_runner
     workflow = d112_ubuntu_frontend_perf_workflow do |jobs|
       jobs.fetch("frontend-perf-measure")["runs-on"] = "ubuntu-24.04" # plausible near-miss, not the pinned value
@@ -1587,6 +1554,62 @@ class RoadmapEvidenceCliTest < Minitest::Test
       validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
     end
     assert_includes error.message, "reviewed source-aware measurement job"
+  end
+
+  # D-114: the same D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB measure job now
+  # authorizes either gate-job shape (D-112's 2.0%-implicit-threshold shape,
+  # still covered by the tests above, or this 7.0%-explicit-threshold
+  # shape) -- not yet the live `.github/workflows/ci.yml` shape, that
+  # activation is a later, separate round.
+  def test_d114_raised_threshold_frontend_perf_gate_job_structure_is_recognized
+    workflow = d114_raised_threshold_frontend_perf_workflow
+    assert validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+  end
+
+  def test_d114_raised_threshold_frontend_perf_gate_job_passes_the_raised_threshold
+    compare_step =
+      D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB
+      .fetch("steps")
+      .find { |step| step["name"] == "Compare exact predecessor and candidate" }
+    assert_includes compare_step.fetch("run"), '"7.0"'
+  end
+
+  def test_rejects_d114_measurement_job_with_a_different_runner
+    workflow = d114_raised_threshold_frontend_perf_workflow do |jobs|
+      jobs.fetch("frontend-perf-measure")["runs-on"] = "ubuntu-24.04" # plausible near-miss, not the pinned value
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware measurement job"
+  end
+
+  def test_rejects_d112_measurement_job_paired_with_an_unreviewed_gate_job_shape
+    workflow = d112_ubuntu_frontend_perf_workflow do |jobs|
+      jobs.fetch("frontend-perf-gate")["runs-on"] = "macos-14" # neither accepted gate-job shape
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware comparison job"
+  end
+
+  # D-114's array-membership widening is scoped to the D112 measure-job
+  # branch only -- a different measure job (REPLICATED_PERF_MEASURE_JOB
+  # here) must still reject D114's gate-job shape, proving the new
+  # permissiveness didn't leak across branches.
+  def test_rejects_replicated_measurement_job_paired_with_the_d114_gate_job_shape
+    workflow = replicated_perf_workflow do |jobs|
+      jobs["frontend-perf-gate"] =
+        Marshal.load(Marshal.dump(D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB))
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware comparison job"
   end
 
   def test_d84_throughput_floor_workflow_remains_a_retired_audit_fixture
