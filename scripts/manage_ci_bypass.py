@@ -300,9 +300,11 @@ def relax(
             f"never external repository state) -- refusing before any "
             f"incident is created or protection is touched"
         )
-    if find_open_bypass_issue(repo) is not None:
+    existing_open = find_open_bypass_issue(repo)
+    if existing_open is not None:
         raise CiBypassError(
-            "a [ci-bypass] incident is already open; this mechanism cannot stack"
+            f"a [ci-bypass] incident is already open (#{existing_open}); "
+            f"this mechanism cannot stack"
         )
     conclusion = check_conclusion(repo, pr_number, check_name)
     if conclusion not in FAILING_CONCLUSIONS:
@@ -460,10 +462,12 @@ def restore(repo: str, issue_number: int, comment_path: Path) -> dict:
 
 
 def restore_to_baseline(repo: str, body_path: Path, comment_path: Path) -> dict:
-    if find_open_bypass_issue(repo) is not None:
+    existing_open = find_open_bypass_issue(repo)
+    if existing_open is not None:
         raise CiBypassError(
-            "a [ci-bypass] incident is already open; refusing to create a "
-            "second one -- investigate and clean up the existing incident first"
+            f"a [ci-bypass] incident is already open (#{existing_open}); "
+            f"refusing to create a second one -- investigate and clean up "
+            f"the existing incident first"
         )
     protection = get_protection(repo)
     before = protection_snapshot(protection)

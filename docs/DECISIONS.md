@@ -1157,4 +1157,34 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
   a hard infrastructure time bound, in exchange for introducing no new
   standing secret. `docs/REPOSITORY_GOVERNANCE.md`'s existing manual
   Emergency path is unchanged and remains available for anything this
-  narrower mechanism does not cover.
+  narrower mechanism does not cover. `relax()`'s stacking guard
+  (`find_open_bypass_issue`) is called once before any work starts and
+  again immediately before the mutating `PATCH`, narrowing but not
+  eliminating the window where two concurrent sessions could both pass
+  the first check before either creates its incident; a residual race
+  remains between the second check and the `PATCH` call itself, and
+  `relax()` fails closed (aborts before mutating protection, leaving a
+  manual-cleanup pointer) if it detects a different incident appeared in
+  that window. Accepted, documented follow-ups from the pinned reviewer's
+  adversarial passes on PR #303, all P2/P3 and none altering the
+  mechanism's core safety properties: `find_open_bypass_issue` and
+  `restore_to_baseline`'s stacking guards are deliberately left
+  unauthenticated by issue author (unlike `status()`'s live-incident
+  suppression check, which is authenticated) -- a forged public issue
+  there only makes the tool refuse and escalate to a human, which is
+  fail-closed and correct, but it also means an outsider can wedge both
+  the mechanism and its own documented repair path (`restore
+  --to-baseline`) simultaneously by opening one issue titled
+  `[ci-bypass] ...` with a past Expiry; a future session should consider
+  a documented human-acknowledgement path that cannot be locked out this
+  way. `status()`'s cached `trusted_login` uses `None` as a "not yet
+  looked up" sentinel, which could in principle collide with a
+  genuinely-`None` authenticated login. `restore()`'s post-PATCH readback
+  comparison still includes the four snapshot fields it never PATCHes
+  (`enforce_admins`, `required_pull_request_reviews`,
+  `required_conversation_resolution`, `allow_force_pushes`/`allow_deletions`),
+  so a trusted incident body edited to flip one of them produces a false
+  "DRIFT after restore" alarm on a restore that actually succeeded, rather
+  than being excluded from that specific comparison. `--expiry-minutes`
+  has no upper bound, so an arbitrarily distant expiry defeats the stale-
+  incident detector for that long; a sanity cap would be cheap insurance.

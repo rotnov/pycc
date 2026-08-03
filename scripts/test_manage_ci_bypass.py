@@ -818,7 +818,10 @@ class RelaxTests(unittest.TestCase):
                 pr_number=279, expiry_minutes=60,
                 state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
             )
-        self.assertIn("already open", str(ctx.exception))
+        message = str(ctx.exception)
+        self.assertIn("already open", message)
+        # Names the blocking issue so a human knows which one to investigate.
+        self.assertIn("#292", message)
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_relax_refuses_when_check_not_failing(self, mock_run_gh):
@@ -1475,7 +1478,10 @@ class RestoreToBaselineTests(unittest.TestCase):
             mcb.restore_to_baseline(
                 "owner/repo", body_path=self.body_path, comment_path=self.comment_path,
             )
-        self.assertIn("already open", str(ctx.exception))
+        message = str(ctx.exception)
+        self.assertIn("already open", message)
+        # Names the blocking issue so a human knows which one to investigate.
+        self.assertIn("#292", message)
         # Must refuse before touching protection or creating a second issue --
         # the only gh call made is the open-incident check itself.
         self.assertEqual(
