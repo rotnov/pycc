@@ -13,6 +13,10 @@ use pycc_mir::{CompSource, MirExpr, MirItem, MirModule, MirStmt};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+const RELEASE_PASS_PIPELINE: &str = "default<O3>";
+type CodegenObserver<'observer> =
+    dyn for<'ctx> FnMut(&inkwell::module::Module<'ctx>, Option<&'static str>) + 'observer;
+
 /// One MIR-level value during codegen. Extended (never replaced) by later
 /// tasks: `Str` (Task 7) is a pointer to an opaque `pycc_rt::PyStrObj` --
 /// `pycc_codegen` never inspects its layout (D-059's inline/heap
@@ -503,8 +507,8 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         pycc_mir::Ty::Str => context.ptr_type(inkwell::AddressSpace::default()).into(),
         // LLVM `void` cannot be a parameter type. v0.1 therefore carries
         // Python's singleton unit value across user-function parameter and
-        // local-storage boundaries as the canonical `i8 0`; a `None` return
-        // is still emitted as LLVM `void` by `compile_to_object`.
+        // assignment-storage boundaries as the canonical `i8 0`; a `None`
+        // return is still emitted as LLVM `void` by `compile_to_object`.
         pycc_mir::Ty::None => context.i8_type().into(),
         // `list[T]`'s runtime object (Task 11) is heap-allocated and always
         // referenced by pointer -- exactly the same storage/parameter
@@ -1829,6 +1833,29 @@ fn emit_expr<'ctx>(
                 // `MirStmt::ForList`'s own use of the same runtime call,
                 // which keeps it raw as a private loop bound.
                 return Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_len));
+            }
+            if callee == "float" && !user_functions.contains_key(callee.as_str()) {
+                // Hand-recognized builtin -- but, unlike `len` above, only when
+                // no `user_functions` entry claims the name first (mirrors
+                // `pycc_types`/`pycc_mir`'s own identical guard; see
+                // `pycc_types::infer_expr_in`'s comment for why `float`, unlike
+                // `len`/`print`, needs one). Reuses `to_float`, which already dispatches
+                // `Scalar::Int`/`Scalar::Bool`/`Scalar::Float` correctly (the same
+                // helper arithmetic-promotion already calls) and already panics
+                // correctly for `Scalar::Str`/`List`/`Dict`/`Set`/`Tuple` -- no new conversion
+                // logic, only a new caller. `pycc_types` already rejects a
+                // non-numeric or mis-arity call with T0021 before codegen ever runs;
+                // this arity check is a defensive backstop against malformed MIR,
+                // mirroring `len`'s own internal-error convention immediately above.
+                let [arg] = args.as_slice() else {
+                    panic!(
+                        "pycc_codegen: internal error: `float` takes exactly 1 argument, got {} \
+                         -- pycc_types::check (T0021) should have rejected this before codegen",
+                        args.len()
+                    )
+                };
+                let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+                return Scalar::Float(to_float(context, builder, rt, scalar));
             }
             // Unlike `emit_stmt`'s void-call arm below, there is no
             // `Result` here to propagate a clean, user-facing error
@@ -3177,13 +3204,15 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
             // `storage_slot_at_entry`) depends on this slot already
             // existing, and `x = (1, 2)` is exactly the form D-116 ships.
             // Each is a real, deliberate inclusion, not just a louder panic
-            // elsewhere. Only `Ty::None`/`Ty::Infer` remain excluded.
+            // elsewhere. `Ty::None` is also storable via D-075's canonical
+            // unit carrier; only `Ty::Infer` remains excluded.
             if matches!(
                 ty,
                 pycc_mir::Ty::Int
                     | pycc_mir::Ty::Bool
                     | pycc_mir::Ty::Float
                     | pycc_mir::Ty::Str
+                    | pycc_mir::Ty::None
                     | pycc_mir::Ty::List(_)
                     | pycc_mir::Ty::Dict(_)
                     | pycc_mir::Ty::Set(_)
@@ -3391,6 +3420,15 @@ fn declare_module_globals<'ctx>(
                     context.i8_type().into(),
                     context.i8_type().const_zero().into(),
                 ),
+                // D-075's canonical unit carrier extends to ordinary
+                // assignment storage: `None` has no payload, so an `i8 0`
+                // is sufficient. The separate `initialized` flag created
+                // below, not this zero initializer, distinguishes a binding
+                // whose assignment has executed from an uninitialized one.
+                pycc_mir::Ty::None => (
+                    context.i8_type().into(),
+                    context.i8_type().const_zero().into(),
+                ),
                 pycc_mir::Ty::Float => (
                     context.f64_type().into(),
                     context.f64_type().const_zero().into(),
@@ -3542,6 +3580,16 @@ pub fn compile_to_object(
     output_path: &Path,
     target_triple: Option<&str>,
     release: bool,
+) -> Result<(), String> {
+    compile_to_object_with_observer(mir, output_path, target_triple, release, None)
+}
+
+fn compile_to_object_with_observer(
+    mir: &MirModule,
+    output_path: &Path,
+    target_triple: Option<&str>,
+    release: bool,
+    mut observer: Option<&mut CodegenObserver<'_>>,
 ) -> Result<(), String> {
     let context = Context::create();
     let module = context.create_module("pycc_module");
@@ -3865,13 +3913,23 @@ pub fn compile_to_object(
     // vanishingly narrow chance this ever legitimately panics on Windows,
     // the `LLVMString`'s `Drop` would run during unwinding (D-029's crash)
     // -- an accepted, currently unreachable risk, not a silently ignored one.
-    if release {
+    let applied_pipeline = if release {
         module
-            .run_passes("default<O3>", &target_machine, PassBuilderOptions::create())
+            .run_passes(
+                RELEASE_PASS_PIPELINE,
+                &target_machine,
+                PassBuilderOptions::create(),
+            )
             .expect(
                 "LLVM's \"default<O3>\" pipeline should never fail against a module this \
                  function has already verified, using a fixed, always-valid pipeline string",
             );
+        Some(RELEASE_PASS_PIPELINE)
+    } else {
+        None
+    };
+    if let Some(observer) = observer.as_mut() {
+        observer(&module, applied_pipeline);
     }
     target_machine
         .write_to_file(&module, FileType::Object, output_path)
@@ -3983,10 +4041,12 @@ fn emit_print_arg<'ctx>(
 
 /// Handles every `MirStmt` shape (this match is exhaustive over
 /// `MirStmt`, no catch-all arm): a `print()` call of any number of
-/// `int`/`float`/`bool`/`str` arguments plus `None` from either a direct
-/// user-function result or a D-075 parameter value (Task 10, space-separated,
-/// one trailing newline, matching CPython's `print(*args)`; D-072 still
-/// excludes using `print()` itself as a nested expression), any
+/// `int`/`float`/`bool`/`str` arguments plus any supported materializable
+/// non-`print()` `None` expression, including direct user-function,
+/// `ListAppend`, and `SetAdd` results, a D-075 parameter, or ordinary
+/// assignment storage (space-separated, one trailing newline, matching
+/// CPython's `print(*args)`; D-072 still excludes using `print()` itself as a
+/// nested expression), any
 /// other bare expression statement (a user-function call with any number of
 /// arguments included -- see `emit_expr`'s `Call` arm, which this now
 /// delegates to uniformly instead of special-casing zero-arg calls here), a
@@ -4416,8 +4476,9 @@ fn emit_stmt<'ctx>(
                     let scalar =
                         coerce_scalar_to_type(context, builder, scalar, expected_return_ty.clone());
                     if expected_return_ty == pycc_mir::Ty::None {
-                        // `None` parameters and call results use a canonical
-                        // `i8 0` carrier inside expressions, but a function
+                        // `None` parameters, call results, and stored names
+                        // use a canonical `i8 0` carrier inside expressions,
+                        // but a function
                         // declared to return `None` has an LLVM `void`
                         // signature. Evaluating above preserves any call or
                         // name-load side effects; the carrier itself is
@@ -5999,8 +6060,8 @@ mod tests {
     /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
     /// shape reused by many of this file's older tests (`emit_stmt`'s
     /// `print` dispatch itself now handles any number of arguments of any
-    /// v0.1 scalar type, plus `None` from direct user-function results and
-    /// D-075 parameter values; see its own doc comment, Task 10).
+    /// v0.1 scalar type, plus `None` from direct user-function results,
+    /// D-075 parameter values, and assignment storage; see its own doc comment).
     fn call_print(n: i64) -> MirStmt {
         MirStmt::ExprStmt(MirExpr::Call {
             callee: "print".to_string(),
@@ -6019,11 +6080,34 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a `None`-typed module binding is not supported yet")]
-    fn a_none_typed_module_binding_has_no_storage_representation() {
+    fn a_none_typed_module_binding_gets_a_zero_unit_global_slot() {
         let context = Context::create();
-        let module = context.create_module("unsupported_global");
+        let module = context.create_module("none_global");
         let bindings = BTreeMap::from([("x".to_string(), Ty::None)]);
+        let globals = declare_module_globals(&context, &module, &bindings);
+        let slot = globals
+            .get("x")
+            .expect("declare_module_globals should bind `x`");
+        assert_eq!(slot.ty, Ty::None);
+        assert!(
+            slot.initialized.is_some(),
+            "zero is the None carrier, not proof that the binding was assigned"
+        );
+        let initializer = module
+            .get_global("pyglobal_x")
+            .expect("the global is named pyglobal_<name>")
+            .get_initializer()
+            .expect("declare_module_globals always sets an initializer")
+            .into_int_value();
+        assert_eq!(initializer.get_zero_extended_constant(), Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "a `<inferred>`-typed module binding is not supported yet")]
+    fn an_infer_typed_module_binding_remains_an_internal_error() {
+        let context = Context::create();
+        let module = context.create_module("infer_global");
+        let bindings = BTreeMap::from([("x".to_string(), Ty::Infer)]);
         let _ = declare_module_globals(&context, &module, &bindings);
     }
 
@@ -6250,19 +6334,10 @@ mod tests {
         assert!(!err.is_empty());
     }
 
-    /// `x = 1.0`; `i = 0`; `while i < 1000: x = x * 1.0000001; i = i + 1`;
-    /// `print(x)` -- as top-level statements directly in the synthetic
-    /// entry `main`, rather than a separately defined-and-called user
-    /// function: this crate's own test module has no helper for building a
-    /// `MirModule` from a Python source string (`pycc_codegen`'s
-    /// `Cargo.toml` depends only on `pycc_mir`, not the frontend crates
-    /// `pycc_parser`/`pycc_hir`/`pycc_types` that would be needed to parse
-    /// one), so every other test in this file hand-builds its `MirModule`
-    /// the same way -- this one does too, matching the shape of the
-    /// compute-heavy loop the plan's own brief describes: repeated float
-    /// multiplication in a loop is exactly the kind of code `"default<O3>"`
-    /// constant-folds/vectorizes/unrolls very differently from an
-    /// unoptimized build.
+    /// A hand-built compute-heavy loop whose final `print(float)` references
+    /// `pycc_rt_float_to_str`, while nothing references `pycc_rt_int_sub`.
+    /// Debug codegen preserves both declarations; the release pipeline must
+    /// retain the used declaration and remove the unused one.
     fn release_flag_fixture() -> MirModule {
         MirModule {
             items: vec![
@@ -6329,17 +6404,46 @@ mod tests {
 
         let debug_dir = tempfile_dir("release_flag_debug");
         let debug_obj_path = debug_dir.join("release_flag_debug.o");
-        compile_to_object(&mir, &debug_obj_path, None, false).expect("codegen should succeed");
-        let debug_obj = std::fs::read(&debug_obj_path).expect("object file should be readable");
+        let mut debug_observations = Vec::new();
+        let mut debug_observer = |module: &inkwell::module::Module<'_>, applied_pipeline| {
+            debug_observations.push((
+                applied_pipeline,
+                module.get_function("pycc_rt_float_to_str").is_some(),
+                module.get_function("pycc_rt_int_sub").is_some(),
+            ));
+        };
+        compile_to_object_with_observer(
+            &mir,
+            &debug_obj_path,
+            None,
+            false,
+            Some(&mut debug_observer),
+        )
+        .expect("debug codegen should succeed");
 
         let release_dir = tempfile_dir("release_flag_release");
         let release_obj_path = release_dir.join("release_flag_release.o");
-        compile_to_object(&mir, &release_obj_path, None, true).expect("codegen should succeed");
-        let release_obj = std::fs::read(&release_obj_path).expect("object file should be readable");
+        let mut release_observations = Vec::new();
+        let mut release_observer = |module: &inkwell::module::Module<'_>, applied_pipeline| {
+            release_observations.push((
+                applied_pipeline,
+                module.get_function("pycc_rt_float_to_str").is_some(),
+                module.get_function("pycc_rt_int_sub").is_some(),
+            ));
+        };
+        compile_to_object_with_observer(
+            &mir,
+            &release_obj_path,
+            None,
+            true,
+            Some(&mut release_observer),
+        )
+        .expect("release codegen should succeed");
 
-        assert_ne!(
-            debug_obj, release_obj,
-            "release and debug object files must differ -- optimization passes did not run"
+        assert_eq!(debug_observations, vec![(None, true, true)]);
+        assert_eq!(
+            release_observations,
+            vec![(Some("default<O3>"), true, false)]
         );
     }
 
@@ -8382,13 +8486,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "every assignment target must have a predeclared storage slot")]
-    fn a_none_typed_call_result_cannot_be_stored_as_a_general_value() {
-        // D-072 leaves general `None` storage outside v0.1. `emit_expr`
-        // preserves the call side effect with an internal placeholder, but
-        // binding collection deliberately creates no slot for `Ty::None`;
-        // the assignment invariant must therefore fail loudly instead of
-        // silently materializing a bool local.
+    fn a_none_typed_call_result_can_be_stored_and_printed() {
         let mir = MirModule {
             items: vec![
                 MirItem::Function {
@@ -8397,19 +8495,44 @@ mod tests {
                     return_ty: Ty::None,
                     body: vec![MirStmt::Return(None)],
                 },
-                MirItem::TopLevelStmt(MirStmt::Assign {
-                    target: "x".to_string(),
-                    value: MirExpr::Call {
-                        callee: "f".to_string(),
-                        args: vec![],
-                        ty: Ty::None,
-                    },
-                }),
+                MirItem::Function {
+                    name: "store".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        MirStmt::Assign {
+                            target: "x".to_string(),
+                            value: MirExpr::Call {
+                                callee: "f".to_string(),
+                                args: vec![],
+                                ty: Ty::None,
+                            },
+                        },
+                        MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::Name {
+                                name: "x".to_string(),
+                                ty: Ty::None,
+                            }],
+                            ty: Ty::None,
+                        }),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "store".to_string(),
+                    args: vec![],
+                    ty: Ty::None,
+                })),
             ],
         };
-        let dir = tempfile_dir("none_typed_call_result_has_no_storage");
-        let obj_path = dir.join("none_typed_call_result_has_no_storage.o");
-        let _ = compile_to_object(&mir, &obj_path, None, false);
+        let dir = tempfile_dir("none_typed_call_result_storage");
+        let obj_path = dir.join("none_typed_call_result_storage.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("none_typed_call_result_storage");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"None\n");
     }
 
     #[test]
@@ -8902,6 +9025,24 @@ mod tests {
     }
 
     #[test]
+    fn collect_stmt_bindings_includes_a_none_typed_assignment_target() {
+        let stmt = MirStmt::Assign {
+            target: "result".to_string(),
+            value: MirExpr::Name {
+                name: "result".to_string(),
+                ty: Ty::None,
+            },
+        };
+        let mut bindings = BTreeMap::new();
+        collect_stmt_bindings(&stmt, &mut bindings);
+        assert_eq!(
+            bindings.get("result"),
+            Some(&Ty::None),
+            "a None-typed assignment target needs a real storage slot"
+        );
+    }
+
+    #[test]
     fn collect_stmt_bindings_includes_a_dict_typed_assignment_target() {
         // PR-11 Task 5 joins `Ty::Dict(_)` to this allow-list, mirroring
         // `Ty::List(_)`'s own inclusion directly above for the identical
@@ -9309,6 +9450,24 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "`float` takes exactly 1 argument, got 0")]
+    fn a_float_call_with_the_wrong_argument_count_is_an_internal_error() {
+        // `pycc_types` already rejects a mis-arity `float` call with T0021
+        // (its own `float` arm checks `arg_tys.len() != 1` before anything
+        // else), so this is hand-built malformed MIR exercising codegen's
+        // own defensive backstop, mirroring
+        // `a_len_call_with_the_wrong_argument_count_is_an_internal_error`
+        // immediately above.
+        let mir = list_fixture_module(vec![MirStmt::ExprStmt(MirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![],
+            ty: Ty::Float,
+        })]);
+        let dir = tempfile_dir("float_wrong_arity_panics");
+        let _ = compile_to_object(&mir, &dir.join("float_wrong_arity_panics.o"), None, false);
+    }
+
+    #[test]
     #[should_panic(expected = "`len`'s argument did not evaluate to a list")]
     fn a_len_call_on_a_non_list_argument_is_an_internal_error() {
         // The other half of `pycc_types`' own T0033 `len` check (a
@@ -9433,6 +9592,78 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"2\n");
+    }
+
+    #[test]
+    fn float_call_codegens_and_runs() {
+        // `x = 3\nprint(float(x))\n` end to end through `compile_to_object`
+        // -- #181's `float()` hand-recognized builtin, mirroring
+        // `dict_literal_construction_codegens_and_runs`'s own shape
+        // immediately above. Expected output verified against `python3` on
+        // this exact source.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::IntLiteral(3),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "float".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::Float,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("float_call");
+        let obj_path = dir.join("float_call.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("float_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3.0\n");
+    }
+
+    #[test]
+    fn a_user_defined_float_function_codegens_and_runs_instead_of_the_builtin() {
+        // Post-merge review finding: `def float(x: int) -> int: return x +
+        // 1` was a valid, working program on `main` immediately before this
+        // builtin landed -- reproduced directly against a pristine
+        // checkout, printing `6`. Without the `user_functions.contains_key`
+        // guard, this would silently emit the builtin's own float
+        // conversion instead of a real call to the user's function.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "float".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(1)),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "float".to_string(),
+                    args: vec![MirExpr::IntLiteral(5)],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("user_defined_float_call");
+        let obj_path = dir.join("user_defined_float_call.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("user_defined_float_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"6\n");
     }
 
     #[test]
@@ -11003,13 +11234,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "using print()'s result as a nested expression is not supported yet")]
     fn nesting_a_print_call_inside_another_expression_is_not_yet_supported() {
-        // `x = print(1)` -- v0.1's `print()` always returns `None`, and
-        // nothing implements using a `None` value as an operand yet.
-        // `emit_stmt`'s own `print`-call arm builds a `pycc_rt_int_print`
-        // call directly and never routes the outer `print(...)` itself
-        // through `emit_expr` -- so the only way a `print` call can reach
-        // `emit_expr`'s `Call` arm at all is nested one level deeper than
-        // that, inside another expression, exercised here via `Assign`.
+        // `x = print(1)` remains D-072's explicit exception: ordinary
+        // materializable `None` results now support assignment storage,
+        // but `print()`'s own result is still rejected as a nested
+        // expression. `emit_stmt`'s own `print`-call arm builds a
+        // `pycc_rt_int_print` call directly and never routes the outer
+        // `print(...)` itself through `emit_expr` -- so the only way a
+        // `print` call can reach `emit_expr`'s `Call` arm at all is nested
+        // one level deeper than that, inside another expression, exercised
+        // here via `Assign`.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),

@@ -14,6 +14,23 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 6. Corpus (OSS projects) | nightly CI | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
 
+The focused D-094 release regression in `pycc_codegen` observes the same
+production codegen helper immediately before object emission. Debug codegen
+reports no applied pass pipeline and retains both a used and an unused runtime
+declaration; release codegen reports the exact `default<O3>` pipeline, retains
+the used declaration, and removes the unused one. This distinguishes a real
+pass-pipeline run from the aggressive target-machine setting alone; differing
+object bytes are not sufficient evidence that `Module::run_passes` executed.
+
+Issue #242's permanent regression source lives at
+`tests/regress/issue_242.py` and is executed through the public `pycc build`
+path by `tests/slice1_codegen_depth.rs`. Companion controls cover both
+function-local and module-global `None` assignment slots, the independent
+`set.add()` result route, and a module-global read before assignment that must
+trap rather than treating the canonical zero carrier as initialized. The
+existing D-072 should-panic unit test remains the negative control that
+`print()` itself is still rejected as a nested expression.
+
 ## Conformance harness (`pycc_testkit`)
 
 - Each test = single `.py` file, header comment: PEP, category, min pycc milestone.

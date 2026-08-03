@@ -440,6 +440,114 @@ print(\"x\", 1, 2.5, True)
 }
 
 #[test]
+fn float_of_an_int_bool_and_float_prints_the_correct_value() {
+    // #181: `float(x)` for `x: int | float | bool` in a public,
+    // fully-annotated function body. Expected output verified directly
+    // against CPython 3.14.6: `str(float(3))` == "3.0", `str(float(True))`
+    // == "1.0", `str(float(2.5))` == "2.5" -- identity for an
+    // already-`float` argument, not just narrowing.
+    let source = "\
+print(float(3))
+print(float(True))
+print(float(2.5))
+";
+    let output = build_and_run("float_int_bool_float", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3.0\n1.0\n2.5\n");
+}
+
+#[test]
+fn float_used_as_a_nested_call_argument_compiles_and_runs() {
+    // #181 explicitly requires codegen to emit a real conversion usable as
+    // a nested expression (e.g. a call argument), not just a statement --
+    // `print(...)`'s own codegen arm rejects a nested `print` result, so
+    // this proves `float(...)` doesn't hit that same restriction.
+    let source = "\
+def f(x: float) -> float:
+    return x
+
+print(f(float(3)))
+";
+    let output = build_and_run("float_nested_call_argument", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3.0\n");
+}
+
+#[test]
+fn float_satisfies_the_d086_int_to_float_boundary() {
+    // The actual motivating scenario from D-086: `is_assignable` requires
+    // an explicit conversion for an `int` value crossing a `float`-typed
+    // boundary (parameter/return/assignment); `float(x)` is now that
+    // conversion's real, working, in-language remedy.
+    let source = "\
+def to_float(x: int) -> float:
+    return float(x)
+
+print(to_float(3))
+";
+    let output = build_and_run("float_d086_boundary", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3.0\n");
+}
+
+#[test]
+fn a_user_defined_float_function_shadows_the_builtin_end_to_end() {
+    // Post-merge review finding: `def float(x: int) -> int: return x + 1`
+    // is a valid Python program that compiled and ran correctly (printing
+    // `6`) on `main` immediately before this builtin landed -- reproduced
+    // directly against a pristine checkout before this fix. The hand-
+    // recognized builtin must defer to a user's own definition of the same
+    // name through the full CLI pipeline (parser -> HIR -> pycc_types ->
+    // pycc_mir -> pycc_codegen), not just at the unit-test level.
+    let source = "\
+def float(x: int) -> int:
+    return x + 1
+
+print(float(5))
+";
+    let output = build_and_run("float_user_defined_shadow", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"6\n");
+}
+
+#[test]
+fn a_float_call_on_a_bigint_argument_aborts_honestly() {
+    // Post-merge review finding: `float(x)` for a bigint-valued `x` (an
+    // `int` promoted past the tagged smallint range by arithmetic
+    // overflow) reaches `to_float`'s `Scalar::Int` arm, which calls
+    // `pycc_rt_int_to_float` -> `require_smallint`, aborting -- the exact
+    // same pre-existing "no bigint-to-float" limitation ordinary arithmetic
+    // promotion already has (confirmed directly: `fib_iter(100) + 1.5` hits
+    // the identical abort on `main` before this PR), not a new gap
+    // `float()` introduces. Mirrors `list_append_bigint_aborts`'s own
+    // "executing test, not just a documented gap" convention (D-106).
+    let source = "\
+def fib_iter(n: int) -> int:
+    a = 0
+    b = 1
+    i = 0
+    while i < n:
+        temp = a + b
+        a = b
+        b = temp
+        i = i + 1
+    return a
+
+print(float(fib_iter(100)))
+";
+    let output = build_and_run("float_bigint_aborts", source);
+    assert!(
+        !output.status.success(),
+        "a bigint-valued argument to float() must fail loudly, not silently produce a wrong value"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("converting a bigint-valued `int` is not supported yet"),
+        "expected pycc_rt's honest bigint message, got: {stderr}"
+    );
+}
+
+#[test]
 fn backend_representation_boundaries_match_the_checked_v0_1_contract() {
     let source = "\
 def read_later_global() -> int:
@@ -781,6 +889,62 @@ print(_total())
     let output = build_and_run("list_module_global", source);
     assert!(output.status.success());
     assert_eq!(output.stdout, b"4\n3\n10\n");
+}
+
+#[test]
+fn none_typed_list_append_result_from_issue_242_matches_cpython() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/regress/issue_242.py");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", fixture.display()));
+    let output = build_and_run("issue_242_none_local", &source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"None\n");
+}
+
+#[test]
+fn none_typed_module_global_list_append_result_is_storable() {
+    let source = "\
+xs = [1]
+result = xs.append(2)
+print(result)
+print(len(xs))
+";
+    let output = build_and_run("none_typed_module_global", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"None\n2\n");
+}
+
+#[test]
+fn none_typed_set_add_result_is_storable() {
+    let source = "\
+def _run() -> None:
+    values = {1}
+    result = values.add(2)
+    print(result)
+    print(len(values))
+
+_run()
+";
+    let output = build_and_run("none_typed_set_add_result", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"None\n2\n");
+}
+
+#[test]
+fn none_global_read_before_assignment_traps() {
+    let source = "\
+def _show() -> None:
+    print(result)
+
+_show()
+values = [1]
+result = values.append(2)
+";
+    let output = build_and_run("none_global_read_before_assignment", source);
+    assert!(
+        !output.status.success(),
+        "a zero-initialized None carrier must not look assigned before its statement runs"
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 1. Every public function/method: parameters and return type annotated, else `T0001`.
 2. Locals and private helpers: inferred (Hindley-Milner-flavored local inference; annotations always win).
 3. `Any` does not exist in pure pycc code — it is a compile error (`T0002`) except at compiler-classified CPython interop boundaries (see RUNTIME.md § interop). Planned v0.7 creates that boundary behind ordinary standard-Python imports; it does not require a pycc-specific import spelling (D-128).
-4. No implicit `Optional`, no implicit numeric narrowing **or widening** (D-086 — includes `int` at a `float`-annotated boundary; pycc has no callable `float(...)`/`int(...)` conversion yet, so this boundary currently has no in-language remedy — tracked in #181), no untyped containers (`x = []` requires inferable or annotated element type).
+4. No implicit `Optional`, no implicit numeric narrowing **or widening** (D-086 — includes `int` at a `float`-annotated boundary; `float(x)` for `x: int | float | bool` is now a real callable builtin conversion, D-086's own remedy for that boundary, correctly deferring to a user-defined `float` of the same name if one exists — `int(...)` remains unimplemented and out of scope, and a bigint-valued `int` argument aborts, the same pre-existing limitation every other numeric promotion to `float` already has), no untyped containers (`x = []` requires inferable or annotated element type).
 5. Unreachable code after exhaustive `match` / `Never` is verified (`assert_never` pattern supported).
 6. `==`/`!=` require operands to be comparable under the same numeric-like-or-`str` grouping ordering operators use (`int`/`float`/`bool` interchangeably, or `str`/`str`) — looser than the exact-type rule assignment/parameter/return boundaries enforce (rule 4), but still strict enough to reject genuinely incompatible pairs. Heterogeneous equality across categories (`1 == "1"`) is `T0021`, not `bool`, matching `mypy --strict`'s own `comparison-overlap` check (D-086). Ordering operators (`<`/`>`/`<=`/`>=`) use this identical grouping but are always rejected across it when CPython itself would raise `TypeError` at runtime for the pair.
 
@@ -20,6 +20,21 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   assignments, returns, `range` operands, and arithmetic expressions. The
   resulting helper signature is monomorphic within the module. Conflicting
   call-site constraints are `T0021`; conflicting inferred returns are `T0022`.
+- An initialized scalar-annotated local with no earlier representation binding
+  binds its target to the declaration type, while the initializer keeps its
+  independently inferred type and is checked directionally afterward. A
+  compatible re-declaration retains the first representation binding.
+  Scalar declaration bounds act only as deferred fallbacks for
+  otherwise-unresolved initializer variables: all bounds for the same
+  inference root are aggregated and the most-specific compatible type wins,
+  so `bool` evidence is never widened to `int` merely because an annotation or
+  helper body was visited first. A value-less annotation still creates no
+  initialized binding; that separate state-model limitation is tracked by
+  [#245](https://github.com/rotnov/pycc/issues/245).
+  Non-scalar annotated targets receive local-only unresolved solver bindings;
+  an inference root joined to one cannot resolve an otherwise-inferred private
+  parameter or return as a container, even through hard call evidence. Existing
+  container inference from explicit function-signature evidence is unchanged.
 - An unconstrained parameter or return variable is rejected with `T0021` and
   an instruction to add an annotation. It never silently becomes `Any` or
   `None`; only a helper with no value-returning path infers `None`.
@@ -51,7 +66,7 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 | `bool` | subtype of `int` | `i8`, unboxed; `i1` is transient control-flow state only — see D-061/D-074 |
 | `str` | immutable Unicode | UTF-8 heap, small-string opt — see D-007 |
 | `bytes` / `bytearray` | per CPython | raw buffer |
-| `None` | unit | LLVM `void` for returns; canonical `i8 0` carrier for the v0.1 user-function parameter ABI and parameter entry slots; `T \| None` = nullable/tagged repr |
+| `None` | unit | LLVM `void` for returns; canonical `i8 0` carrier for the v0.1 user-function parameter ABI plus parameter, local-assignment, and module-assignment storage; the MIR/static `Ty::None` tag keeps that carrier distinct from `False`; `T \| None` = nullable/tagged repr |
 | `tuple[A, B]` | fixed heterogeneous | inline struct (stack when non-escaping) |
 | `list[T]` / `set[T]` / `dict[K, V]` | homogeneous, invariant | native vec / swiss-table (insertion-ordered dict) |
 | `class` | nominal | struct; fields fixed at compile time (`__slots__` semantics implicit) |

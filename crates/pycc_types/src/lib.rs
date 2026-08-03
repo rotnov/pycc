@@ -176,6 +176,23 @@ type TypeTerm = Result<Ty, usize>;
 type SignatureTerms = (Vec<String>, Vec<TypeTerm>, TypeTerm);
 type BinOpConstraint = (BinOpKind, TypeTerm, TypeTerm, TypeTerm);
 
+fn is_private_solver_scalar(ty: &Ty) -> bool {
+    matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::None)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct AnnotationDefaultConstraint {
+    initializer: TypeTerm,
+    annotation: Ty,
+}
+
+#[derive(Debug, Default)]
+struct SolverConstraints {
+    binops: Vec<BinOpConstraint>,
+    annotation_defaults: Vec<AnnotationDefaultConstraint>,
+    non_scalar_local_terms: Vec<usize>,
+}
+
 #[derive(Debug)]
 struct ConstraintEnvironment<'scope, 'hir> {
     bindings: HashMap<String, TypeTerm>,
@@ -187,11 +204,15 @@ struct ConstraintEnvironment<'scope, 'hir> {
     defs_rebound: HashSet<String>,
 }
 
-fn fresh_term(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> TypeTerm {
+fn fresh_variable(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> usize {
     let id = parents.len();
     parents.push(id);
     concrete.push(None);
-    Err(id)
+    id
+}
+
+fn fresh_term(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> TypeTerm {
+    Err(fresh_variable(parents, concrete))
 }
 
 fn root(parents: &mut [usize], var: usize) -> usize {
@@ -209,6 +230,23 @@ fn resolved_term(term: TypeTerm, parents: &mut [usize], concrete: &[Option<Ty>])
     match term {
         Ok(ty) => Some(ty),
         Err(var) => concrete[root(parents, var)].clone(),
+    }
+}
+
+fn resolved_private_signature_term(
+    term: TypeTerm,
+    parents: &mut [usize],
+    concrete: &[Option<Ty>],
+    non_scalar_local_roots: &HashSet<usize>,
+) -> Option<Ty> {
+    match term {
+        Ok(ty) => Some(ty),
+        Err(var) => {
+            let term_root = root(parents, var);
+            let resolved = concrete[term_root].clone()?;
+            (!non_scalar_local_roots.contains(&term_root) || is_private_solver_scalar(&resolved))
+                .then_some(resolved)
+        }
     }
 }
 
@@ -402,6 +440,40 @@ fn collect_expr_constraints(
                 }
                 return Ok(Some(Ok(Ty::Int)));
             }
+            if callee == "float" && !signatures.contains_key(callee) {
+                // A user-defined `float` takes priority over the builtin -- see
+                // `infer_expr_in`'s own identical guard and its comment for why
+                // this differs from `len`/`print`, which need no such guard.
+                // Mirrors the `len` arm immediately above for the same reason (D-105
+                // point 3's rationale applies identically): `float`'s own return type
+                // (`Ty::Float`) never depends on the argument's resolved type, so it
+                // is always producible here regardless of whether the argument's own
+                // term has resolved yet. Only an already-concretely-resolved argument
+                // can be validated at this point (union-find resolution hasn't run);
+                // an unresolved argument is left to the real check pass
+                // (`infer_expr_in`) above, matching this solver's existing
+                // lenient-until-known pattern.
+                if arg_terms.len() != 1 {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!("`float` expects exactly 1 argument, got {}", arg_terms.len()),
+                        Span::new(0, 0),
+                    ));
+                }
+                if let Some(Ok(arg_ty)) = &arg_terms[0]
+                    && !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool)
+                {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "`float` expects an `int`, `float`, or `bool` argument, got `{}`",
+                            arg_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                return Ok(Some(Ok(Ty::Float)));
+            }
             let Some(signature) = signatures.get(callee) else {
                 return Ok(None);
             };
@@ -594,7 +666,7 @@ fn collect_block_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
     concrete: &mut Vec<Option<Ty>>,
-    binops: &mut Vec<BinOpConstraint>,
+    constraints: &mut SolverConstraints,
     env: &mut ConstraintEnvironment<'_, '_>,
     body: &[HirStmt],
     return_term: Option<TypeTerm>,
@@ -605,43 +677,87 @@ fn collect_block_constraints(
                 // A value assignment re-shadows any earlier same-named `def`
                 // (D-110), independent of the first-term-wins rule below.
                 env.defs_rebound.remove(target.as_str());
-                if let Some(term) =
-                    collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
-                {
+                if let Some(term) = collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    value,
+                )? {
                     env.bindings.entry(target.clone()).or_insert(term);
                 }
             }
             HirStmt::AnnAssign {
                 target,
                 value: Some(value),
-                annotation: _,
+                annotation,
             } => {
-                // KNOWN GAP (PR-9 Task 4 review, 2026-07-30): binds the solver term to the
-                // initializer's own inferred term, discarding `annotation` entirely. A private
-                // helper mixing type inference with an annotated local whose annotation diverges
-                // from the naturally-inferred term (e.g. `def _h(x): y: int = x; return y` called
-                // as `_h(True)`) can get a spurious T0022 rejection of otherwise-legal Python --
-                // not a soundness hole (nothing incorrect is silently accepted), and confirmed
-                // unreachable by any fixture PR-9 itself ships (this path only runs for
-                // underscore-prefixed private helpers with Ty::Infer signatures). Cheap fix if
-                // ever needed: unify the term with `Ok(*annotation)` instead of discarding it.
-                if let Some(term) =
-                    collect_expr_constraints(signatures, parents, concrete, binops, env, value)?
-                {
-                    env.bindings.entry(target.clone()).or_insert(term);
+                if let Some(term) = collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    value,
+                )? {
+                    // The annotation is a directional bound on the initializer,
+                    // not a symmetric equality. Defer it until every hard
+                    // call/operator constraint has been collected so later
+                    // `bool` evidence is not widened to `int` merely because
+                    // this body was visited first.
+                    constraints
+                        .annotation_defaults
+                        .push(AnnotationDefaultConstraint {
+                            initializer: term,
+                            annotation: annotation.clone(),
+                        });
+                }
+                // A scalar target has the declared type even when the
+                // collector cannot produce an initializer term. A non-scalar
+                // target is still bound, but deliberately remains unresolved:
+                // otherwise a hand-built HIR module could use that annotation
+                // to materialize an inferred container signature through a
+                // later `return target`. Keep the existing first-binding-wins
+                // representation rule; final validation checks initializer
+                // compatibility and re-declarations whenever signature
+                // inference can otherwise complete.
+                if !env.bindings.contains_key(target) {
+                    let target_term = if is_private_solver_scalar(annotation) {
+                        Ok(annotation.clone())
+                    } else {
+                        let var = fresh_variable(parents, concrete);
+                        constraints.non_scalar_local_terms.push(var);
+                        Err(var)
+                    };
+                    env.bindings.insert(target.clone(), target_term);
                 }
             }
             HirStmt::AnnAssign { value: None, .. } => {}
             HirStmt::ExprStmt(expr) => {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?;
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    expr,
+                )?;
             }
             HirStmt::If { test, body, orelse } => {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, test)?;
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    test,
+                )?;
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    binops,
+                    constraints,
                     env,
                     body,
                     return_term.clone(),
@@ -650,19 +766,26 @@ fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    binops,
+                    constraints,
                     env,
                     orelse,
                     return_term.clone(),
                 )?;
             }
             HirStmt::While { test, body } => {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, test)?;
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    test,
+                )?;
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    binops,
+                    constraints,
                     env,
                     body,
                     return_term.clone(),
@@ -676,9 +799,14 @@ fn collect_block_constraints(
                 body,
             } => {
                 for (position, expr) in [("start", start), ("stop", stop), ("step", step)] {
-                    if let Some(term @ Err(_)) =
-                        collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?
-                    {
+                    if let Some(term @ Err(_)) = collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        expr,
+                    )? {
                         unify_terms(
                             term,
                             Ok(Ty::Int),
@@ -705,7 +833,7 @@ fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    binops,
+                    constraints,
                     env,
                     body,
                     return_term.clone(),
@@ -729,7 +857,7 @@ fn collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
-                    binops,
+                    constraints,
                     env,
                     body,
                     return_term.clone(),
@@ -740,9 +868,14 @@ fn collect_block_constraints(
                     continue;
                 };
                 let actual = match value {
-                    Some(expr) => {
-                        collect_expr_constraints(signatures, parents, concrete, binops, env, expr)?
-                    }
+                    Some(expr) => collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        expr,
+                    )?,
                     None => Some(Ok(Ty::None)),
                 };
                 if let Some(actual) = actual {
@@ -766,8 +899,22 @@ fn collect_block_constraints(
                 key,
                 value,
             } => {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
-                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    key,
+                )?;
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    value,
+                )?;
             }
             // PR-12 Task 3 (D-117): no unification term is registered for
             // `target` -- per D-116's own correction note ("a
@@ -802,11 +949,33 @@ fn collect_block_constraints(
                 elt,
                 ..
             } => {
-                bind_comp_loop_var(signatures, parents, concrete, binops, env, var, iter)?;
+                bind_comp_loop_var(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    var,
+                    iter,
+                )?;
                 if let Some(cond) = cond {
-                    collect_expr_constraints(signatures, parents, concrete, binops, env, cond)?;
+                    collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        cond,
+                    )?;
                 }
-                collect_expr_constraints(signatures, parents, concrete, binops, env, elt)?;
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    elt,
+                )?;
             }
             HirStmt::DictCompAssign {
                 var,
@@ -816,14 +985,153 @@ fn collect_block_constraints(
                 value,
                 ..
             } => {
-                bind_comp_loop_var(signatures, parents, concrete, binops, env, var, iter)?;
+                bind_comp_loop_var(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    var,
+                    iter,
+                )?;
                 if let Some(cond) = cond {
-                    collect_expr_constraints(signatures, parents, concrete, binops, env, cond)?;
+                    collect_expr_constraints(
+                        signatures,
+                        parents,
+                        concrete,
+                        &mut constraints.binops,
+                        env,
+                        cond,
+                    )?;
                 }
-                collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
-                collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    key,
+                )?;
+                collect_expr_constraints(
+                    signatures,
+                    parents,
+                    concrete,
+                    &mut constraints.binops,
+                    env,
+                    value,
+                )?;
             }
         }
+    }
+    Ok(())
+}
+
+fn propagate_binop_constraints(
+    binops: &[BinOpConstraint],
+    parents: &mut [usize],
+    concrete: &mut [Option<Ty>],
+) -> Result<(), Diagnostic> {
+    loop {
+        let mut changed = false;
+        for &(op, ref left_term, ref right_term, ref result_term) in binops {
+            let left = resolved_term(left_term.clone(), parents, concrete);
+            let right = resolved_term(right_term.clone(), parents, concrete);
+            let result = resolved_term(result_term.clone(), parents, concrete);
+            if let (Some(left), Some(right)) = (left, right) {
+                let result_ty = numeric_result_type(op, left, right)?;
+                changed |= unify_terms(
+                    result_term.clone(),
+                    Ok(result_ty),
+                    parents,
+                    concrete,
+                    "T0021",
+                    "binary expression",
+                )?;
+                continue;
+            }
+
+            // Propagate constraints backward when the result determines a
+            // unique operand representation. In particular, an annotated
+            // `int` result for a non-division binary expression rules out
+            // floats and strings, so unresolved operands are int-like and
+            // use the merged `int` representation. This makes
+            // `def _inc(x) -> int: return x + 1` infer `x: int` without a
+            // call-site constraint (D-045).
+            if result == Some(Ty::Int) && op != BinOpKind::Div {
+                let left_changed = unify_terms(
+                    left_term.clone(),
+                    Ok(Ty::Int),
+                    parents,
+                    concrete,
+                    "T0021",
+                    "left operand of int binary expression",
+                )?;
+                let right_changed = unify_terms(
+                    right_term.clone(),
+                    Ok(Ty::Int),
+                    parents,
+                    concrete,
+                    "T0021",
+                    "right operand of int binary expression",
+                )?;
+                changed |= left_changed || right_changed;
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+    }
+}
+
+fn apply_annotation_defaults(
+    constraints: &[AnnotationDefaultConstraint],
+    parents: &mut [usize],
+    concrete: &mut [Option<Ty>],
+) -> Result<(), Diagnostic> {
+    let mut bounds_by_root = vec![Vec::new(); parents.len()];
+    for constraint in constraints {
+        let Err(var) = &constraint.initializer else {
+            continue;
+        };
+        if !is_private_solver_scalar(&constraint.annotation) {
+            // Private-helper inference is deliberately scalar-only. A
+            // hand-built HIR module must not use an annotated local to leak a
+            // container type into an otherwise-unresolved signature.
+            continue;
+        }
+        let root = root(parents, *var);
+        if concrete[root].is_none() {
+            bounds_by_root[root].push(constraint.annotation.clone());
+        }
+    }
+
+    for (root, bounds) in bounds_by_root.iter_mut().enumerate() {
+        if bounds.is_empty() {
+            continue;
+        }
+        bounds.sort_by_key(Ty::name);
+        bounds.dedup();
+        let fallback = bounds.iter().find(|candidate| {
+            bounds
+                .iter()
+                .all(|bound| is_assignable((*candidate).clone(), bound.clone()))
+        });
+        let Some(fallback) = fallback else {
+            let bounds = bounds
+                .iter()
+                .map(|bound| format!("`{}`", bound.name()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Diagnostic::error(
+                "T0021",
+                format!("annotated initializer has incompatible directional constraints: {bounds}"),
+                Span::new(0, 0),
+            ));
+        };
+        // This root was deliberately selected only while unresolved, and
+        // defaults never union roots. Install the chosen directional fallback
+        // directly instead of routing it through symmetric type merging.
+        concrete[root] = Some(fallback.clone());
     }
     Ok(())
 }
@@ -930,7 +1238,7 @@ fn infer_function_signatures_with_solver(
         }
     }
 
-    let mut binops = Vec::new();
+    let mut constraints = SolverConstraints::default();
     let mut globals = ConstraintEnvironment {
         bindings: HashMap::new(),
         local_names: &[],
@@ -943,7 +1251,7 @@ fn infer_function_signatures_with_solver(
                     &signatures,
                     &mut parents,
                     &mut concrete,
-                    &mut binops,
+                    &mut constraints,
                     &mut globals,
                     std::slice::from_ref(stmt),
                     None,
@@ -985,7 +1293,7 @@ fn infer_function_signatures_with_solver(
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             body,
             Some(signature.2.clone()),
@@ -1002,56 +1310,23 @@ fn infer_function_signatures_with_solver(
         }
     }
 
-    loop {
-        let mut changed = false;
-        for &(op, ref left_term, ref right_term, ref result_term) in &binops {
-            let left = resolved_term(left_term.clone(), &mut parents, &concrete);
-            let right = resolved_term(right_term.clone(), &mut parents, &concrete);
-            let result = resolved_term(result_term.clone(), &mut parents, &concrete);
-            if let (Some(left), Some(right)) = (left, right) {
-                let result_ty = numeric_result_type(op, left, right)?;
-                changed |= unify_terms(
-                    result_term.clone(),
-                    Ok(result_ty),
-                    &mut parents,
-                    &mut concrete,
-                    "T0021",
-                    "binary expression",
-                )?;
-                continue;
-            }
+    // Annotation bounds are directional defaults, not hard equalities. Let
+    // every call/operator fact settle first, aggregate all remaining bounds
+    // per union-find root, then propagate any selected fallback back through
+    // operators. This keeps inference independent of body/declaration order.
+    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)?;
+    apply_annotation_defaults(
+        &constraints.annotation_defaults,
+        &mut parents,
+        &mut concrete,
+    )?;
+    propagate_binop_constraints(&constraints.binops, &mut parents, &mut concrete)?;
 
-            // Propagate constraints backward when the result determines a
-            // unique operand representation. In particular, an annotated
-            // `int` result for a non-division binary expression rules out
-            // floats and strings, so unresolved operands are int-like and
-            // use the merged `int` representation. This makes
-            // `def _inc(x) -> int: return x + 1` infer `x: int` without a
-            // call-site constraint (D-045).
-            if result == Some(Ty::Int) && op != BinOpKind::Div {
-                let left_changed = unify_terms(
-                    left_term.clone(),
-                    Ok(Ty::Int),
-                    &mut parents,
-                    &mut concrete,
-                    "T0021",
-                    "left operand of int binary expression",
-                )?;
-                let right_changed = unify_terms(
-                    right_term.clone(),
-                    Ok(Ty::Int),
-                    &mut parents,
-                    &mut concrete,
-                    "T0021",
-                    "right operand of int binary expression",
-                )?;
-                changed |= left_changed || right_changed;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
+    let non_scalar_local_roots = constraints
+        .non_scalar_local_terms
+        .iter()
+        .map(|&var| root(&mut parents, var))
+        .collect::<HashSet<_>>();
 
     let mut resolved = HashMap::new();
     for (name, signature) in &signatures {
@@ -1060,7 +1335,13 @@ fn infer_function_signatures_with_solver(
             .iter()
             .zip(signature.1.iter().cloned())
             .map(|(param_name, term)| {
-                resolved_term(term, &mut parents, &concrete).ok_or_else(|| {
+                resolved_private_signature_term(
+                    term,
+                    &mut parents,
+                    &concrete,
+                    &non_scalar_local_roots,
+                )
+                .ok_or_else(|| {
                     Diagnostic::error(
                         "T0021",
                         format!(
@@ -1071,7 +1352,13 @@ fn infer_function_signatures_with_solver(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let return_ty = resolved_term(signature.2.clone(), &mut parents, &concrete).ok_or_else(|| {
+        let return_ty = resolved_private_signature_term(
+            signature.2.clone(),
+            &mut parents,
+            &concrete,
+            &non_scalar_local_roots,
+        )
+        .ok_or_else(|| {
             Diagnostic::error(
                 "T0021",
                 format!("cannot infer return type of private helper `{name}`; add an annotation"),
@@ -1235,6 +1522,42 @@ fn infer_expr_in(
                     ));
                 }
                 return Ok(Ty::Int);
+            }
+            if callee == "float" && env.lookup_function(callee).is_none() {
+                // D-086's own remedy for the int-to-float boundary: a hand-recognized
+                // builtin, same as `len` above, not a user-declarable signature --
+                // except, unlike `print`/`len`, a program can predate this builtin's
+                // introduction with its own `def float(...)`. Reviewer finding
+                // (post-merge review): unlike `print`/`len`, which have been
+                // hand-recognized since before this compiler could compile
+                // user-declared functions at all, `float` was undefined until
+                // this issue, so a user-defined `float` was a valid, working
+                // program on `main` immediately before this change landed --
+                // silently reinterpreting it as this builtin would be a real
+                // regression, not an inherited, already-accepted precedent.
+                // `env.lookup_function` takes priority; only fall through to the
+                // builtin when no such definition exists.
+                // Always returns `Ty::Float` regardless of the argument's own type,
+                // once that argument is numeric-like -- unlike `len`, there is no
+                // homogeneity/element-type question to defer.
+                if arg_tys.len() != 1 {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!("`float` expects exactly 1 argument, got {}", arg_tys.len()),
+                        Span::new(0, 0),
+                    ));
+                }
+                if !matches!(arg_tys[0], Ty::Int | Ty::Float | Ty::Bool) {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "`float` expects an `int`, `float`, or `bool` argument, got `{}`",
+                            arg_tys[0].name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                return Ok(Ty::Float);
             }
             let Some((param_tys, return_ty)) = env.lookup_function(callee) else {
                 return Err(Diagnostic::error(
@@ -1718,7 +2041,8 @@ fn infer_expr_in(
             Ok(kv.1.clone())
         }
         // PR-12 Task 10 (D-119): `set.add(value)`. Mirrors `ListAppend`
-        // exactly -- always `Ty::None`, same D-072 value-position gap.
+        // exactly -- always `Ty::None`, with D-131's ordinary assignment
+        // storage available when that result is bound to a name.
         HirExpr::SetAdd { set, value } => {
             let set_ty = lookup_bound_name(env, local_names, set)?;
             let Ty::Set(elem_ty) = &set_ty else {
@@ -2983,11 +3307,11 @@ mod tests {
     }
 
     #[test]
-    fn collect_block_constraints_binds_the_initializer_term_for_an_annotated_assignment() {
+    fn collect_block_constraints_binds_the_annotation_and_records_the_initializer_default() {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
             bindings: HashMap::new(),
@@ -3003,7 +3327,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
@@ -3011,20 +3335,58 @@ mod tests {
         .unwrap();
 
         assert_eq!(env.bindings.get("y"), Some(&Ok(Ty::Int)));
+        assert_eq!(
+            constraints.annotation_defaults,
+            vec![AnnotationDefaultConstraint {
+                initializer: Ok(Ty::Int),
+                annotation: Ty::Int,
+            }]
+        );
     }
 
     #[test]
-    fn collect_block_constraints_skips_binding_when_the_initializer_term_is_unresolved() {
-        // `unresolved_global` is neither already bound nor a declared local of
-        // this scope, so `collect_expr_constraints` returns `Ok(None)` for it
-        // (the same "punt, nothing to unify yet" case a plain `Assign` to an
-        // unresolved global would hit) -- the new `AnnAssign` arm must skip
-        // the `env.bindings` insert in that case rather than recording a
-        // binding for an unresolved term.
+    fn collect_block_constraints_preserves_an_existing_annotated_target_binding() {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            defs_rebound: HashSet::new(),
+            bindings: HashMap::from([("y".to_string(), Ok(Ty::Str))]),
+            local_names: &["y"],
+        };
+        let body = vec![HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::Str,
+            value: Some(HirExpr::StringLiteral("again".to_string())),
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(env.bindings.get("y"), Some(&Ok(Ty::Str)));
+    }
+
+    #[test]
+    fn collect_block_constraints_binds_the_annotation_when_the_initializer_has_no_term() {
+        // `unresolved_global` is neither already bound nor a declared local of
+        // this scope, so `collect_expr_constraints` returns `Ok(None)` for it
+        // (the same "punt, nothing to unify yet" case a plain `Assign` to an
+        // unresolved global would hit). The new `AnnAssign` arm cannot record
+        // an initializer default without a term, but the annotation still
+        // gives `y` a concrete solver binding.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
             bindings: HashMap::new(),
@@ -3040,14 +3402,15 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
         )
         .unwrap();
 
-        assert!(!env.bindings.contains_key("y"));
+        assert_eq!(env.bindings.get("y"), Some(&Ok(Ty::Int)));
+        assert!(constraints.annotation_defaults.is_empty());
     }
 
     #[test]
@@ -3055,7 +3418,7 @@ mod tests {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
             bindings: HashMap::new(),
@@ -3071,7 +3434,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
@@ -3079,6 +3442,7 @@ mod tests {
         .unwrap();
 
         assert!(!env.bindings.contains_key("y"));
+        assert!(constraints.annotation_defaults.is_empty());
     }
 
     #[test]
@@ -3090,7 +3454,7 @@ mod tests {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
             bindings: HashMap::new(),
@@ -3106,7 +3470,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
@@ -3765,11 +4129,177 @@ mod tests {
     }
 
     #[test]
-    fn collect_block_constraints_gives_a_for_list_loop_variable_a_fresh_term_when_unbound() {
+    fn constraint_collection_float_call_returns_float_regardless_of_argument_resolution() {
+        // Mirrors `constraint_collection_len_call_returns_int_for_a_
+        // concretely_bound_list`: a directly concrete `TypeTerm`
+        // (`Ok(Ty::Int)`) validates cleanly and produces `Ty::Float`.
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
         let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Float)));
+    }
+
+    #[test]
+    fn constraint_collection_float_call_defers_an_unresolved_argument_to_the_real_check_pass() {
+        // Mirrors `constraint_collection_len_call_defers_an_unresolved_
+        // argument_to_the_real_check_pass`: a genuinely unresolved
+        // inference variable is left to `infer_expr_in`, but the call's
+        // own return type (`Ty::Float`) is still produced unconditionally.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let unresolved = fresh_term(&mut parents, &mut concrete);
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("x".to_string(), unresolved)]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Float)));
+    }
+
+    #[test]
+    fn constraint_collection_float_call_rejects_the_wrong_arity() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![],
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`float` expects exactly 1 argument, got 0");
+    }
+
+    #[test]
+    fn constraint_collection_float_call_rejects_a_concretely_known_non_numeric_argument() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::StringLiteral("hello".to_string())],
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "`float` expects an `int`, `float`, or `bool` argument, got `str`"
+        );
+    }
+
+    #[test]
+    fn constraint_collection_honors_a_user_defined_float_signature_over_the_builtin() {
+        // Same post-merge review finding as `infer_expr_in`'s own
+        // `a_user_defined_float_function_takes_priority_over_the_builtin`:
+        // a registered `float` signature (e.g. one accepting `str`, which
+        // the builtin itself would reject) must resolve through the normal
+        // signature lookup, not the hand-recognized builtin arm.
+        let signatures = HashMap::from([(
+            "float".to_string(),
+            (vec!["x".to_string()], vec![Ok(Ty::Str)], Ok(Ty::Str)),
+        )]);
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::StringLiteral("hello".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Str)));
+    }
+
+    #[test]
+    fn collect_block_constraints_gives_a_for_list_loop_variable_a_fresh_term_when_unbound() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             bindings: HashMap::new(),
             local_names: &["i"],
@@ -3785,7 +4315,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
@@ -3800,7 +4330,7 @@ mod tests {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             bindings: HashMap::from([("i".to_string(), Ok(Ty::Int))]),
             local_names: &["i"],
@@ -3816,7 +4346,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
@@ -3831,7 +4361,7 @@ mod tests {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             bindings: HashMap::new(),
             local_names: &["i", "z"],
@@ -3847,7 +4377,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
@@ -3878,6 +4408,516 @@ mod tests {
         };
 
         assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn an_annotated_private_local_preserves_known_bool_initializer_evidence() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_identity".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::Int,
+                            value: Some(HirExpr::Name("x".to_string())),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                    ],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_identity".to_string(),
+                    args: vec![HirExpr::BoolLiteral(true)],
+                })),
+            ],
+        };
+
+        check(&hir).unwrap();
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { params, return_ty, .. }
+                if params[0].1 == Ty::Bool && *return_ty == Ty::Int
+        ));
+    }
+
+    #[test]
+    fn an_annotated_private_local_does_not_retag_the_returned_initializer() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_echo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::Int,
+                            value: Some(HirExpr::Name("x".to_string())),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_echo".to_string(),
+                    args: vec![HirExpr::BoolLiteral(true)],
+                })),
+            ],
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { params, return_ty, .. }
+                if params[0].1 == Ty::Bool && *return_ty == Ty::Bool
+        ));
+    }
+
+    #[test]
+    fn an_annotated_private_local_supplies_a_fallback_without_call_site_evidence() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("x".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::AnnAssign {
+                        target: "y".to_string(),
+                        annotation: Ty::Int,
+                        value: Some(HirExpr::Name("x".to_string())),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                ],
+            }],
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { params, return_ty, .. }
+                if params[0].1 == Ty::Int && *return_ty == Ty::Int
+        ));
+    }
+
+    #[test]
+    fn a_container_annotation_cannot_escape_the_scalar_only_private_solver() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("x".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::AnnAssign {
+                        target: "y".to_string(),
+                        annotation: Ty::List(Box::new(Ty::Int)),
+                        value: Some(HirExpr::Name("x".to_string())),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                ],
+            }],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot infer type of parameter `x`"));
+    }
+
+    #[test]
+    fn a_container_annotated_target_cannot_resolve_an_inferred_private_return() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::AnnAssign {
+                        target: "y".to_string(),
+                        annotation: Ty::List(Box::new(Ty::Int)),
+                        value: Some(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                ],
+            }],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message
+                .contains("cannot infer return type of private helper `_helper`")
+        );
+    }
+
+    #[test]
+    fn hard_call_evidence_cannot_turn_a_container_local_into_an_inferred_signature() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_sink".to_string(),
+                    params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "_helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::List(Box::new(Ty::Int)),
+                            value: Some(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
+                        },
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "_sink".to_string(),
+                            args: vec![HirExpr::Name("y".to_string())],
+                        }),
+                        HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                    ],
+                },
+            ],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message
+                .contains("cannot infer return type of private helper `_helper`")
+        );
+    }
+
+    #[test]
+    fn an_unrelated_container_local_does_not_block_scalar_signature_inference() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_helper".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::List(Box::new(Ty::Int)),
+                            value: Some(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_helper".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+            ],
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { params, return_ty, .. }
+                if params[0].1 == Ty::Int && *return_ty == Ty::Int
+        ));
+    }
+
+    #[test]
+    fn scalar_hard_evidence_on_a_container_local_reaches_final_validation() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_sink".to_string(),
+                    params: vec![("value".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "_helper".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::List(Box::new(Ty::Int)),
+                            value: Some(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
+                        },
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "_sink".to_string(),
+                            args: vec![HirExpr::Name("y".to_string())],
+                        }),
+                        HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                    ],
+                },
+            ],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message
+                .contains("argument 1 of `_sink` expects `int`, got `list[int]`")
+        );
+    }
+
+    #[test]
+    fn an_annotated_private_local_fallback_propagates_through_a_binary_expression() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("x".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::AnnAssign {
+                        target: "y".to_string(),
+                        annotation: Ty::Int,
+                        value: Some(HirExpr::BinOp {
+                            op: BinOpKind::Add,
+                            left: Box::new(HirExpr::Name("x".to_string())),
+                            right: Box::new(HirExpr::IntLiteral(1)),
+                        }),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                ],
+            }],
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { params, .. } if params[0].1 == Ty::Int
+        ));
+    }
+
+    #[test]
+    fn an_annotated_private_local_fallback_rechecks_binary_operand_conflicts() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("x".to_string(), Ty::Infer)],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::AnnAssign {
+                        target: "y".to_string(),
+                        annotation: Ty::Int,
+                        value: Some(HirExpr::BinOp {
+                            op: BinOpKind::Add,
+                            left: Box::new(HirExpr::Name("x".to_string())),
+                            right: Box::new(HirExpr::StringLiteral("bad".to_string())),
+                        }),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                ],
+            }],
+        };
+
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message
+                .contains("right operand of int binary expression")
+        );
+    }
+
+    #[test]
+    fn later_nested_call_evidence_wins_over_an_earlier_annotation_fallback() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_echo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::Int,
+                            value: Some(HirExpr::Name("x".to_string())),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+                HirItem::Function {
+                    name: "_caller".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::ExprStmt(HirExpr::Call {
+                            callee: "_echo".to_string(),
+                            args: vec![HirExpr::BoolLiteral(true)],
+                        }),
+                        HirStmt::Return(None),
+                    ],
+                },
+            ],
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(matches!(
+            &resolved.items[0],
+            HirItem::Function { params, return_ty, .. }
+                if params[0].1 == Ty::Bool && *return_ty == Ty::Bool
+        ));
+    }
+
+    #[test]
+    fn multiple_annotation_bounds_choose_bool_in_either_declaration_order() {
+        for bool_first in [false, true] {
+            let int_assignment = HirStmt::AnnAssign {
+                target: "a".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::Name("x".to_string())),
+            };
+            let bool_assignment = HirStmt::AnnAssign {
+                target: "b".to_string(),
+                annotation: Ty::Bool,
+                value: Some(HirExpr::Name("x".to_string())),
+            };
+            let assignments = if bool_first {
+                vec![bool_assignment, int_assignment]
+            } else {
+                vec![int_assignment, bool_assignment]
+            };
+            let mut body = assignments;
+            body.push(HirStmt::Return(Some(HirExpr::Name("b".to_string()))));
+            let hir = HirModule {
+                items: vec![HirItem::Function {
+                    name: "_helper".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body,
+                }],
+            };
+
+            let resolved = check_and_resolve(&hir).unwrap();
+            assert!(matches!(
+                &resolved.items[0],
+                HirItem::Function { params, .. } if params[0].1 == Ty::Bool
+            ));
+        }
+    }
+
+    #[test]
+    fn incompatible_annotation_bounds_fail_identically_in_either_declaration_order() {
+        let mut messages = Vec::new();
+        for string_first in [false, true] {
+            let int_assignment = HirStmt::AnnAssign {
+                target: "a".to_string(),
+                annotation: Ty::Int,
+                value: Some(HirExpr::Name("x".to_string())),
+            };
+            let string_assignment = HirStmt::AnnAssign {
+                target: "b".to_string(),
+                annotation: Ty::Str,
+                value: Some(HirExpr::Name("x".to_string())),
+            };
+            let body = if string_first {
+                vec![string_assignment, int_assignment]
+            } else {
+                vec![int_assignment, string_assignment]
+            };
+            let hir = HirModule {
+                items: vec![HirItem::Function {
+                    name: "_helper".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::None,
+                    body,
+                }],
+            };
+
+            let err = check_and_resolve(&hir).unwrap_err();
+            assert_eq!(err.code, "T0021");
+            messages.push(err.message);
+        }
+        assert_eq!(messages[0], messages[1]);
+    }
+
+    #[test]
+    fn annotated_private_local_rejects_known_int_to_bool_narrowing_with_t0025() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "_narrow".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::Bool,
+                            value: Some(HirExpr::Name("x".to_string())),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                    ],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "_narrow".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+            ],
+        };
+
+        assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0025");
+    }
+
+    #[test]
+    fn annotated_private_local_binds_when_a_container_subscript_has_no_solver_term() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                }),
+                HirItem::Function {
+                    name: "_first".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::Int,
+                            value: Some(HirExpr::Subscript {
+                                base: Box::new(HirExpr::Name("xs".to_string())),
+                                index: Box::new(HirExpr::IntLiteral(0)),
+                            }),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                    ],
+                },
+            ],
+        };
+
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(matches!(
+            &resolved.items[1],
+            HirItem::Function { return_ty, .. } if *return_ty == Ty::Int
+        ));
+    }
+
+    #[test]
+    fn no_term_initializer_still_reaches_directional_final_validation() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                }),
+                HirItem::Function {
+                    name: "_first".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "y".to_string(),
+                            annotation: Ty::Bool,
+                            value: Some(HirExpr::Subscript {
+                                base: Box::new(HirExpr::Name("xs".to_string())),
+                                index: Box::new(HirExpr::IntLiteral(0)),
+                            }),
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                    ],
+                },
+            ],
+        };
+
+        assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0025");
     }
 
     #[test]
@@ -6814,6 +7854,127 @@ mod tests {
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
     }
 
+    #[test]
+    fn float_of_an_int_infers_float() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn float_of_a_bool_infers_float() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Bool);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn float_of_a_float_infers_float() {
+        // Proves `float`'s own check isn't a narrowing-only conversion --
+        // an already-`float` argument is accepted too (identity), same
+        // discipline as `len_of_a_list_of_str_infers_int_proving_len_is_
+        // not_int_specific`'s own genericity claim above.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Float);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn float_with_no_arguments_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`float` expects exactly 1 argument, got 0");
+    }
+
+    #[test]
+    fn float_with_two_arguments_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`float` expects exactly 1 argument, got 2");
+    }
+
+    #[test]
+    fn float_of_a_str_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Str);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "`float` expects an `int`, `float`, or `bool` argument, got `str`"
+        );
+    }
+
+    #[test]
+    fn float_propagates_an_ill_typed_argument_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("undefined".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_user_defined_float_function_takes_priority_over_the_builtin() {
+        // Post-merge review finding: unlike `len`/`print`, which have been
+        // hand-recognized since before this compiler could compile
+        // user-declared functions at all, `float` was undefined until #181,
+        // so `def float(x: int) -> int: return x + 1` was a valid, working
+        // program on `main` immediately before this builtin landed --
+        // reproduced directly against a pristine `main` checkout, printing
+        // `6`. Without this priority check, the builtin would silently
+        // intercept the call and infer `Ty::Float` instead of the user's own
+        // declared `Ty::Int` return type.
+        let mut env = Environment::new();
+        env.bind_function("float".to_string(), vec![Ty::Int], Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::IntLiteral(5)],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn a_user_defined_float_function_accepting_a_non_numeric_argument_type_checks() {
+        // The other half of the same finding: the builtin's own argument-type
+        // gate (`int`/`float`/`bool` only) must not apply when the user's own
+        // `float` accepts something else entirely, e.g. `str`.
+        let mut env = Environment::new();
+        env.bind_function("float".to_string(), vec![Ty::Str], Ty::Str);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::StringLiteral("hello".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
+    }
+
     // -- PR-11 Task 3 (D-123): dict[str, int] type-checking --------------
 
     #[test]
@@ -7146,7 +8307,7 @@ mod tests {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             bindings: HashMap::new(),
             local_names: &[],
@@ -7162,7 +8323,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
@@ -7175,7 +8336,7 @@ mod tests {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             bindings: HashMap::new(),
             local_names: &["missing"],
@@ -7191,7 +8352,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,
@@ -7206,7 +8367,7 @@ mod tests {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
-        let mut binops = Vec::new();
+        let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             bindings: HashMap::new(),
             local_names: &["missing"],
@@ -7222,7 +8383,7 @@ mod tests {
             &signatures,
             &mut parents,
             &mut concrete,
-            &mut binops,
+            &mut constraints,
             &mut env,
             &body,
             None,

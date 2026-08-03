@@ -434,7 +434,9 @@ fn init_refuses_when_src_is_a_plain_file() {
     assert!(!dir.join("pycc.toml").exists());
 }
 
-/// #237 regression 4: a late write failure leaves `pycc.toml` uncreated.
+/// #237 regression 4, extended by #256: a late write failure leaves
+/// `pycc.toml` uncreated, AND rolls back whatever this same invocation
+/// already created (`main.py`, then the `src/` it made -- now empty).
 /// Unix-only injection (a dangling `pycc.toml` symlink passes the
 /// follow-symlink pre-check, both `src` steps succeed, and the final
 /// `create_new` write fails with `EEXIST` on the symlink entry itself,
@@ -443,7 +445,7 @@ fn init_refuses_when_src_is_a_plain_file() {
 /// leg runs on macOS, so this counts toward the 100% gate.
 #[cfg(unix)]
 #[test]
-fn init_leaves_pycc_toml_uncreated_when_a_late_write_fails() {
+fn init_rolls_back_main_py_when_a_late_write_fails() {
     let dir = std::env::temp_dir().join(format!("pycc_e2e_init_late_fail_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::os::unix::fs::symlink(
@@ -458,11 +460,51 @@ fn init_leaves_pycc_toml_uncreated_when_a_late_write_fails() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("error: pycc init failed"));
-    // Both src steps ran...
-    assert!(dir.join("src").join("main.py").is_file());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: pycc init failed"));
+    // Positive proof main.py genuinely existed and was cleanly removed
+    // (not that it never existed) -- see the unit-level twin in
+    // src/project_config.rs for why an absent "could not remove" substring
+    // proves this, not just non-emptiness of the error.
+    assert!(!stderr.contains("could not remove"));
+    assert!(!stderr.contains("remove it manually"));
+    // The invocation-owned main.py and the src/ it created are rolled back...
+    assert!(!dir.join("src").exists());
     // ...and the real pycc.toml path still resolves to nothing.
     assert!(!dir.join("pycc.toml").try_exists().unwrap());
+}
+
+/// #256 item 2 at the public-CLI level: after the underlying cause is
+/// removed, an immediate retry succeeds -- the whole point of rolling back
+/// invocation-owned residue is that a fixed retry is never blocked by it.
+#[cfg(unix)]
+#[test]
+fn init_succeeds_on_retry_after_a_late_write_failure_is_fixed() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_retry_ok_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(
+        dir.join("missing_dir").join("pycc.toml"),
+        dir.join("pycc.toml"),
+    )
+    .unwrap();
+
+    let first = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(2));
+
+    std::fs::remove_file(dir.join("pycc.toml")).unwrap();
+
+    let second = Command::new(pycc_bin())
+        .args(["init"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0));
+    assert!(dir.join("pycc.toml").is_file());
+    assert!(dir.join("src").join("main.py").is_file());
 }
 
 /// #250: a missing host linker driver is an environment failure reported
@@ -797,6 +839,95 @@ fn check_subcommand_infers_a_private_helper_signature() {
         .unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn check_subcommand_honors_an_annotated_private_local_without_widening_its_source() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_annotated_private_local_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "annotated_private_local.py",
+        "def _identity(x):\n    y: int = x\n    return y\n\nprint(_identity(True))\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn build_accepts_an_annotated_private_local_with_a_bool_initializer() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_build_annotated_private_local_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "annotated_private_local.py",
+        "def _identity(x):\n    y: int = x\n    return y\n\nprint(_identity(True))\n",
+    );
+    let out = dir.join("annotated_private_local");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // Do not execute this exact fixture here: #240 separately tracks the
+    // backend's existing loss of bool object identity in an int-typed slot.
+}
+
+#[test]
+fn annotated_private_local_does_not_widen_an_independently_returned_bool() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_run_annotated_private_echo_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "annotated_private_echo.py",
+        "def _echo(x):\n    y: int = x\n    return x\n\nprint(_echo(True))\n",
+    );
+    let out = dir.join("annotated_private_echo");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = Command::new(out).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"True\n");
+}
+
+#[test]
+fn check_subcommand_still_rejects_annotated_private_local_narrowing() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_annotated_private_narrowing_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "annotated_private_narrowing.py",
+        "def _narrow(x):\n    y: bool = x\n    return y\n\nprint(_narrow(1))\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0025"));
 }
 
 #[test]
