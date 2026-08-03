@@ -127,6 +127,7 @@ Format: one entry per irreversible-ish call. Statuses: `proposed` → `accepted`
 | D-125 | Session-driven temporary CI-check relaxation via `scripts/manage_ci_bypass.py`, narrowly superseding D-024/D-054 for exactly one publicly tracked, expiry-bound incident at a time | accepted |
 | D-126 | Gather exact-child CPU-time evidence (Phase A) alongside the existing wall-clock nbody gate before changing its assertion or per-target floors (Phase B) | accepted (Phase A) |
 | D-127 | Agents own the full delivery lifecycle for a task without pausing to ask the repository owner; a genuine judgment fork is resolved via an independent reviewer instead, not by soliciting the owner — carving out D-024's emergency path, credential/account actions, and any other owner-reserved action unchanged | accepted |
+| D-128 | Keep the nbody assertion on wall clock and retain the existing per-target floors after five observations per Tier-1 leg show CPU time leaves Ubuntu x86_64 variance unchanged and worsens Windows variance | accepted |
 
 ## Template
 
@@ -1251,3 +1252,60 @@ Entries D-001…D-013 get their long-form sections as they graduate to `accepted
 - Decision: agents own the full delivery lifecycle for a task — planning, implementation, testing, documentation, review, and merge — without waiting on the repository owner. An agent does not pause a task to ask the repository owner a clarifying question, request approval, or ask them to pick between alternatives. When a task reaches a genuine fork in judgment, the agent resolves it itself by consulting a stronger independent reviewer (a session's own advisor/second-opinion tool, or an independent review agent) rather than soliciting the repository owner, and records the reasoning and resolution in the relevant ADR, plan, or session log exactly as it would any other decision. The repository owner does not answer prompts as part of normal operation, but may still intervene at any time on their own initiative — reading history, editing files directly, redirecting a task, overriding a decision, or answering if they choose to — and any such intervention always takes precedence over this policy and over an agent's own judgment. This policy carves out its own scope explicitly rather than silently: it does not relax any other rule in AGENTS.md or in an agent's own safety boundaries. Actions that require a human administrator elsewhere in that document — the [D-024](#d-024-protected-main-and-audited-emergency-bypass) emergency path, credential and account actions, and any other action a session's own safety rules reserve for the user — still require the repository owner to act, and an agent still asks before taking them; this policy only removes the expectation of asking before ordinary engineering judgment calls. Separately, to conserve tokens across a long autonomous run, agents compact the session at natural checkpoints (after a pull request merges, after a milestone or task-list item completes, or before starting a substantial new task) rather than letting context grow unbounded, doing so proactively rather than waiting for the context window to force it.
 - Alternatives: keep the policy as unversioned `AGENTS.md` prose only (rejected — the finding this ADR resolves is precisely that an authority/escalation model change needs a versioned record with alternatives and consequences considered, not only an instruction agents happen to follow); require the repository owner's explicit sign-off on every judgment fork (rejected — this is the status quo the policy is replacing; it does not scale to an autonomous PR-by-PR delivery cadence and contradicts D-013's own premise that the project is built by autonomous agents against mechanically checkable specs); let each agent session decide its own escalation threshold ad hoc (rejected — inconsistent behavior across sessions is worse than a single documented default, and a written policy is exactly what lets a later session or a human reviewer check whether an agent followed it); route judgment forks through a second AI reviewer chosen ad hoc each time rather than a consistent advisor/independent-reviewer pattern (rejected as an unnecessary extra decision per fork — the D-068 pinned-reviewer precedent already establishes that a consistent, previously-vetted reviewer beats an arbitrary one picked in the moment).
 - Consequences: a session working on this repository no longer needs to stop and ask before an ordinary engineering judgment call, which is easier — but every such call now needs its reasoning recorded where a human or later session can audit it after the fact, which is a real obligation, not just a courtesy. The named exceptions (D-024's emergency path, credential/account actions, other user-reserved actions) remain hard stops regardless of how much autonomy this entry otherwise grants, so this decision must never be read as broadening those carve-outs. Because the repository owner's own intervention always takes precedence, this entry can never be used to justify overriding an explicit owner instruction on the theory that "the policy says agents decide" — the policy is a default for the owner's absence, not a ceiling on their authority. Superseding or narrowing this policy later (for example, once a second human maintainer is available and some judgment forks should route to them instead of an independent reviewer) requires a new ADR, not a silent edit to this one or to AGENTS.md's section alone.
+
+## D-128: Keep the nbody gate on wall clock after CPU time fails to reduce variance across Tier-1
+
+- Status: accepted (Phase B; closes issue
+  [#226](https://github.com/rotnov/pycc/issues/226))
+- Context: D-126 required at least five independent exact-child CPU-time
+  observations from every Tier-1 leg before changing the nbody assertion or its
+  floors, and explicitly allowed a negative Phase B result. Five ordinary CI
+  observations now exist from runs
+  [30814975808](https://github.com/rotnov/pycc/actions/runs/30814975808),
+  [30815296286](https://github.com/rotnov/pycc/actions/runs/30815296286),
+  [30816067817](https://github.com/rotnov/pycc/actions/runs/30816067817),
+  [30817223376](https://github.com/rotnov/pycc/actions/runs/30817223376), and
+  [30817715798](https://github.com/rotnov/pycc/actions/runs/30817715798).
+  The first run used the final benchmark implementation before a manifest-only
+  relocation of unchanged target-specific dev-dependency tables; the other four
+  ran the reviewed Phase A tree or descendants containing it. The full
+  observation table is recorded in
+  [#226](https://github.com/rotnov/pycc/issues/226#issuecomment-5166985278).
+  Across the five ratio observations, the sample coefficient of variation was:
+
+  | Tier-1 leg | Wall-clock CV | CPU-time CV | CPU-time change |
+  |---|---:|---:|---:|
+  | macOS aarch64 coverage | 2.069% | 1.548% | 25.1% lower |
+  | Ubuntu x86_64 | 13.979% | 13.985% | 0.05% higher (effectively identical) |
+  | Ubuntu aarch64 | 0.995% | 0.990% | 0.5% lower (effectively identical) |
+  | macOS x86_64 | 10.636% | 9.230% | 13.2% lower |
+  | Windows x86_64 | 6.055% | 8.729% | 44.2% higher |
+
+  CPU time therefore improves two macOS legs, is effectively unchanged on both
+  Linux legs, and is materially worse on Windows. Most importantly, it does not
+  improve the motivating Ubuntu x86_64 instability: the first observation was
+  19.7282x wall and 19.7377x CPU, so a 20x CPU gate would have failed the same
+  byte-identical tree.
+- Decision: retain the wall-clock ratio as the sole nbody assertion and retain
+  D-093/D-095/D-096/D-101's existing 20x/12x/15x/18x target-specific floors.
+  Continue recording exact-child CPU time, both ratios, all four medians, the
+  required wall floor, and `wall_pass` through D-126's frozen summary schema.
+  CPU time remains diagnostic telemetry, not a result selector or fallback
+  gate. No CPU-time floors are introduced because the evidence does not support
+  a cross-platform methodology switch.
+- Alternatives: switch every leg to CPU time and derive margins below each
+  observed minimum (rejected because the new clock leaves Ubuntu x86_64's
+  variance unchanged and makes Windows variance worse); use CPU time only on the
+  two macOS legs (rejected because a per-platform mixture of clock semantics
+  would complicate the acceptance contract while leaving the known Linux
+  failure mode untouched); gather more observations before deciding (rejected
+  as a blocker because D-126 deliberately set five per leg as the decision bar
+  and the negative result is already clear on the motivating and worst-regressed
+  legs; retained telemetry can still support a later superseding decision);
+  lower the wall floors or accept reruns (rejected for D-126's original reason:
+  either would hide instability without improving the measurement method).
+- Consequences: Phase B changes documentation, not benchmark code, workflow
+  trust boundaries, launch count/order, correctness checking, assertion metric,
+  or floors. The dual-clock telemetry remains useful for diagnosing future
+  failures, but issue #226 is complete with an evidence-backed negative result
+  rather than an unsupported CPU-time gate.
