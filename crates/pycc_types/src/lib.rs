@@ -511,6 +511,25 @@ fn collect_expr_constraints(
             }
             Ok(None)
         }
+        // PR-12 Task 10 (D-119): the base-type gate (`T0033`) and the
+        // value/key/default-type gate (`T0021`) are `infer_expr_in`'s job,
+        // not this solver's -- same reasoning as `ListAppend` above. `list`
+        // is a plain `String`, not a sub-expression, so there is nothing to
+        // recurse into for `ListPop`.
+        HirExpr::ListPop { list: _ } => Ok(None),
+        HirExpr::DictGetOrDefault {
+            dict: _,
+            key,
+            default,
+        } => {
+            collect_expr_constraints(signatures, parents, concrete, binops, env, key)?;
+            collect_expr_constraints(signatures, parents, concrete, binops, env, default)?;
+            Ok(None)
+        }
+        HirExpr::SetAdd { set: _, value } => {
+            collect_expr_constraints(signatures, parents, concrete, binops, env, value)?;
+            Ok(None)
+        }
     }
 }
 
@@ -1630,6 +1649,88 @@ fn infer_expr_in(
                     "T0021",
                     format!(
                         "cannot append `{}` to a list of `{}`",
+                        value_ty.name(),
+                        elem_ty.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            Ok(Ty::None)
+        }
+        // PR-12 Task 10 (D-119): `list.pop()`. Unlike `ListAppend`, this
+        // arm's result is the list's own element type, not `Ty::None` --
+        // `.pop()` is meant to be used for its value.
+        HirExpr::ListPop { list } => {
+            let list_ty = lookup_bound_name(env, local_names, list)?;
+            let Ty::List(elem_ty) = &list_ty else {
+                return Err(Diagnostic::error(
+                    "T0033",
+                    format!("`{}` does not support `.pop()`", list_ty.name()),
+                    Span::new(0, 0),
+                ));
+            };
+            Ok((**elem_ty).clone())
+        }
+        // PR-12 Task 10 (D-119): `dict.get(key, default)`. Two independent
+        // `T0021` checks -- the key must be assignable to the dict's key
+        // type, and the default must be assignable to the dict's value
+        // type -- mirroring `ListAppend`'s own `is_assignable` (not exact
+        // `Ty` equality) discipline for the same D-086 `bool`-subtypes-`int`
+        // reason. The overall result is the dict's *value* type, never
+        // `Ty::None`, since a missing key still yields the (same-typed)
+        // default rather than `None`.
+        HirExpr::DictGetOrDefault { dict, key, default } => {
+            let dict_ty = lookup_bound_name(env, local_names, dict)?;
+            let Ty::Dict(kv) = &dict_ty else {
+                return Err(Diagnostic::error(
+                    "T0033",
+                    format!("`{}` does not support `.get()`", dict_ty.name()),
+                    Span::new(0, 0),
+                ));
+            };
+            let key_ty = infer_expr_in(env, local_names, key)?;
+            if !is_assignable(key_ty.clone(), kv.0.clone()) {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!(
+                        "cannot look up a `{}` key in a dict of `{}` keys",
+                        key_ty.name(),
+                        kv.0.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            let default_ty = infer_expr_in(env, local_names, default)?;
+            if !is_assignable(default_ty.clone(), kv.1.clone()) {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!(
+                        "cannot use a `{}` default for a dict of `{}` values",
+                        default_ty.name(),
+                        kv.1.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            Ok(kv.1.clone())
+        }
+        // PR-12 Task 10 (D-119): `set.add(value)`. Mirrors `ListAppend`
+        // exactly -- always `Ty::None`, same D-072 value-position gap.
+        HirExpr::SetAdd { set, value } => {
+            let set_ty = lookup_bound_name(env, local_names, set)?;
+            let Ty::Set(elem_ty) = &set_ty else {
+                return Err(Diagnostic::error(
+                    "T0033",
+                    format!("`{}` does not support `.add()`", set_ty.name()),
+                    Span::new(0, 0),
+                ));
+            };
+            let value_ty = infer_expr_in(env, local_names, value)?;
+            if !is_assignable(value_ty.clone(), (**elem_ty).clone()) {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!(
+                        "cannot add `{}` to a set of `{}`",
                         value_ty.name(),
                         elem_ty.name()
                     ),
@@ -3329,6 +3430,189 @@ mod tests {
         };
         let expr = HirExpr::ListAppend {
             list: "lst".to_string(),
+            value: Box::new(HirExpr::Name("missing".to_string())),
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    // -- PR-12 Task 10 (D-119): remaining container methods depth --------
+    // `collect_expr_constraints` coverage, mirroring `ListAppend`'s own
+    // direct-call test shape exactly.
+
+    #[test]
+    fn constraint_collection_treats_a_list_pop_as_unconstrained() {
+        // `list` is a plain name, not a sub-expression -- unlike
+        // `ListAppend`, there is no `value` to recurse into here.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListPop {
+            list: "lst".to_string(),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_dict_get_or_default_as_unconstrained_but_recurses_into_key_and_default()
+     {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_key() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::Name("missing".to_string())),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_dict_get_or_default_default() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::Name("missing".to_string())),
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_treats_a_set_add_as_unconstrained_but_recurses_into_value() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_propagates_an_error_from_a_set_add_value() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["missing"],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
             value: Box::new(HirExpr::Name("missing".to_string())),
         };
 
@@ -5985,6 +6269,442 @@ mod tests {
             value: Box::new(HirExpr::Name("undefined".to_string())),
         };
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    // -- PR-12 Task 10 (D-119): remaining container methods depth --------
+    // `list.pop()`, `dict.get(key, default)`, `set.add(value)` -- each
+    // mirrors `ListAppend`'s own `infer_expr_in` test coverage exactly
+    // (base-type gate, value/key/default-type gate, `lookup_bound_name`'s
+    // own "not defined"/"unbound local" distinction, propagation, D-086
+    // bool-subtypes-int leniency, genericity).
+
+    #[test]
+    fn popping_the_last_element_of_a_list_of_int_infers_int() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Int)));
+        let expr = HirExpr::ListPop {
+            list: "x".to_string(),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn popping_from_a_list_of_str_infers_str_proving_pop_is_not_int_specific() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::List(Box::new(Ty::Str)));
+        let expr = HirExpr::ListPop {
+            list: "x".to_string(),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
+    }
+
+    #[test]
+    fn popping_from_an_undefined_name_is_rejected_as_not_defined() {
+        let env = Environment::new();
+        let expr = HirExpr::ListPop {
+            list: "undefined".to_string(),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not defined"));
+    }
+
+    #[test]
+    fn popping_from_a_local_name_read_before_assignment_is_unbound_local() {
+        let env = Environment::new();
+        let expr = HirExpr::ListPop {
+            list: "x".to_string(),
+        };
+        let err = infer_expr_in(&env, &["x"], &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
+    }
+
+    #[test]
+    fn popping_from_a_non_list_value_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::ListPop {
+            list: "x".to_string(),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("does not support `.pop()`"));
+    }
+
+    #[test]
+    fn getting_a_str_key_with_a_matching_int_default_infers_int() {
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn getting_a_bool_default_for_a_dict_of_int_values_is_accepted_since_bool_is_an_int_subtype() {
+        // D-086, matching `ListAppend`'s own leniency: `bool` is an `int`
+        // subtype, so a `bool` default for a `dict[str, int]` is ordinary,
+        // CPython-valid Python, not a type error.
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::BoolLiteral(true)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn getting_from_an_undefined_dict_is_rejected_as_not_defined() {
+        let env = Environment::new();
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "undefined".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not defined"));
+    }
+
+    #[test]
+    fn getting_from_a_local_dict_read_before_assignment_is_unbound_local() {
+        let env = Environment::new();
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        };
+        let err = infer_expr_in(&env, &["d"], &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
+    }
+
+    #[test]
+    fn getting_from_a_non_dict_value_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Int);
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("does not support `.get()`"));
+    }
+
+    #[test]
+    fn getting_with_a_mismatched_key_type_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::IntLiteral(1)),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot look up"));
+    }
+
+    #[test]
+    fn getting_with_a_mismatched_default_type_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::StringLiteral("nope".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot use"));
+    }
+
+    #[test]
+    fn getting_propagates_an_ill_typed_key_s_error() {
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::Name("undefined".to_string())),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn getting_propagates_an_ill_typed_default_s_error() {
+        let mut env = Environment::new();
+        env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+        let expr = HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+            default: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn adding_an_int_value_to_a_set_of_int_infers_none() {
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
+    }
+
+    #[test]
+    fn adding_a_bool_value_to_a_set_of_int_is_accepted_since_bool_is_an_int_subtype() {
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
+            value: Box::new(HirExpr::BoolLiteral(true)),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
+    }
+
+    #[test]
+    fn adding_a_value_to_a_set_of_str_infers_none_proving_add_is_not_int_specific() {
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Str)));
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
+            value: Box::new(HirExpr::StringLiteral("a".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::None));
+    }
+
+    #[test]
+    fn adding_to_an_undefined_set_is_rejected_as_not_defined() {
+        let env = Environment::new();
+        let expr = HirExpr::SetAdd {
+            set: "undefined".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not defined"));
+    }
+
+    #[test]
+    fn adding_to_a_local_set_read_before_assignment_is_unbound_local() {
+        let env = Environment::new();
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr_in(&env, &["s"], &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
+    }
+
+    #[test]
+    fn adding_to_a_non_set_value_is_rejected_as_t0033() {
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Int);
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert!(err.message.contains("does not support `.add()`"));
+    }
+
+    #[test]
+    fn adding_a_mismatched_value_type_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
+            value: Box::new(HirExpr::StringLiteral("nope".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot add"));
+    }
+
+    #[test]
+    fn adding_propagates_an_ill_typed_value_s_error() {
+        let mut env = Environment::new();
+        env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
+        let expr = HirExpr::SetAdd {
+            set: "s".to_string(),
+            value: Box::new(HirExpr::Name("undefined".to_string())),
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    // Whole-module `check()` tests, mirroring `HirExpr::Slice`'s own pair
+    // (PR-12 Task 7, D-118) exactly: Task 3's own ledger records a real
+    // regression of exactly this shape (a solver arm that looked correct in
+    // isolation but was never actually reached by the block walker) -- these
+    // confirm each new arm is genuinely wired into both the fast
+    // (`check_with_environment`) and solver (`collect_block_constraints`)
+    // paths, not just correct when `infer_expr`/`collect_expr_constraints`
+    // are called directly on a hand-built expression.
+
+    #[test]
+    fn list_pop_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::ListPop {
+                        list: "xs".to_string(),
+                    },
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn dict_get_or_default_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path()
+     {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::DictGetOrDefault {
+                        dict: "d".to_string(),
+                        key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                        default: Box::new(HirExpr::IntLiteral(0)),
+                    },
+                }),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn set_add_type_checks_correctly_when_an_unrelated_private_helper_forces_the_solver_path() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "s".to_string(),
+                    value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]),
+                }),
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::SetAdd {
+                    set: "s".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(2)),
+                })),
+                HirItem::Function {
+                    name: "_constant".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+                },
+            ],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn list_pop_assigned_inside_an_unannotated_private_helper_hits_the_pre_existing_solver_binding_gap_today()
+     {
+        // Pins a pre-existing, tracked gap (D-116's correction, "Three
+        // concrete reproductions") -- NOT introduced or fixed by this task.
+        // `collect_expr_constraints`'s `ListPop` arm returns `Ok(None)` (no
+        // unification term), mirroring `ListAppend`/every container-literal
+        // arm exactly (D-116's own stated reasoning: this solver only
+        // infers scalar `Ty::Infer` parameters/returns, and a container-
+        // producing expression has no unification-friendly term to give).
+        // Once any function in the module is unannotated, EVERY function
+        // (including this one) is checked via the solver path, whose
+        // `collect_block_constraints`' `Assign` arm never registers a
+        // binding for a target assigned from an `Ok(None)`-producing
+        // expression -- so a *later* read of that target inside the same
+        // solver-path function fails with the actively misleading
+        // "not bound before this use", even though the assignment is
+        // textually right above it. D-116's own three reproductions were
+        // all container-*typed* (`tuple`/`list` literals); `.pop()` is the
+        // first *scalar*-typed (`int`) expression to reach this same gap,
+        // which is more surprising precisely because scalar results are the
+        // ordinary, expected-to-work case. Fixing this is out of Task 10's
+        // scope (frontend+types only) -- tracked as `docs/ROADMAP.md`'s
+        // existing D-116 follow-up, unaffected by this task.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::Assign {
+                        target: "y".to_string(),
+                        value: HirExpr::ListPop {
+                            list: "xs".to_string(),
+                        },
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                ],
+            }],
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
+    }
+
+    #[test]
+    fn dict_get_or_default_assigned_inside_an_unannotated_private_helper_hits_the_pre_existing_solver_binding_gap_today()
+     {
+        // Same pre-existing D-116 gap as the `ListPop` test immediately
+        // above, exercised through `DictGetOrDefault`'s own
+        // `collect_expr_constraints` arm (also `Ok(None)`) instead.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_h".to_string(),
+                params: vec![("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))))],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::Assign {
+                        target: "y".to_string(),
+                        value: HirExpr::DictGetOrDefault {
+                            dict: "d".to_string(),
+                            key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                            default: Box::new(HirExpr::IntLiteral(0)),
+                        },
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
+                ],
+            }],
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("not bound before this use"));
     }
 
     #[test]

@@ -220,6 +220,46 @@ pub enum HirExpr {
     /// this form. Tuple-unpacking assignment (`a, b = t`) is a distinct,
     /// deferred capability (D-116) with no HIR shape of its own yet.
     TupleLiteral(Vec<HirExpr>),
+    /// `list.pop()` (PR-12, D-119): a hand-recognized special form, mirroring
+    /// `ListAppend`'s own shape exactly (no general method-call dispatch).
+    /// No-argument form only -- removes and returns the list's last element,
+    /// panicking at runtime if the list is empty (honest-panic convention,
+    /// D-119). Unlike `ListAppend`, whose value is always `None`, this
+    /// variant's own value is the list's element type -- `y = xs.pop()` is
+    /// its primary intended use, not merely a today's-actual-behavior
+    /// curiosity. A bare `xs.pop()` `ExprStmt` discarding the popped value is
+    /// also fine and matches CPython. `pycc_types` gates the base value's
+    /// type (`T0033`); MIR lowering and real runtime behavior are a later
+    /// task's job (D-119 point 2 of the delivery split).
+    ListPop {
+        list: String,
+    },
+    /// `dict.get(key, default)` (PR-12, D-119): exactly two arguments --
+    /// returns `default` if `key` is absent from the dict, else the stored
+    /// value. Mirrors `ListAppend`'s hand-recognized shape structurally, but
+    /// -- like `ListPop` above -- is value-producing (the dict's value
+    /// type), not `None`-producing. The zero/one-argument form CPython also
+    /// supports (returning `None` on a missing key) is deliberately not
+    /// shipped: this compiler has no `Optional[int]`/`None`-union
+    /// representation for a `dict[str, int]`'s value type, so requiring the
+    /// caller to always supply a same-typed default sidesteps that gap
+    /// entirely rather than half-solving it.
+    DictGetOrDefault {
+        dict: String,
+        key: Box<HirExpr>,
+        default: Box<HirExpr>,
+    },
+    /// `set.add(value)` (PR-12, D-119): mirrors `ListAppend`'s shape and its
+    /// `None`-producing/value-position quirk exactly (see `ListAppend`'s own
+    /// doc comment above -- `y = s.add(1)` reaches the same
+    /// `collect_stmt_bindings` `Ty::None`-binding gap `ListAppend` already
+    /// does, not a new one) -- dedups on insert, exactly like set-literal
+    /// construction already does (`pycc_rt_int_set_add`, already shipped by
+    /// PR-11a), from a second, user-facing call site added by a later task.
+    SetAdd {
+        set: String,
+        value: Box<HirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -848,9 +888,72 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                         value: Box::new(lower_expr(value)?),
                     });
                 }
+                if attr.attr.as_str() == "pop" {
+                    let Expr::Name(list_name) = attr.value.as_ref() else {
+                        return Err(unsupported(
+                            "`.pop()` is only supported on a bare-name list so far",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    };
+                    let [] = &*call.arguments.args else {
+                        return Err(unsupported(
+                            format!(
+                                "list.pop() takes no arguments, got {}",
+                                call.arguments.args.len()
+                            ),
+                            call.range,
+                        ));
+                    };
+                    return Ok(HirExpr::ListPop {
+                        list: list_name.id.as_str().to_string(),
+                    });
+                }
+                if attr.attr.as_str() == "get" {
+                    let Expr::Name(dict_name) = attr.value.as_ref() else {
+                        return Err(unsupported(
+                            "`.get()` is only supported on a bare-name dict so far",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    };
+                    let [key, default] = &*call.arguments.args else {
+                        return Err(unsupported(
+                            format!(
+                                "dict.get() takes exactly two arguments (key, default), got {}",
+                                call.arguments.args.len()
+                            ),
+                            call.range,
+                        ));
+                    };
+                    return Ok(HirExpr::DictGetOrDefault {
+                        dict: dict_name.id.as_str().to_string(),
+                        key: Box::new(lower_expr(key)?),
+                        default: Box::new(lower_expr(default)?),
+                    });
+                }
+                if attr.attr.as_str() == "add" {
+                    let Expr::Name(set_name) = attr.value.as_ref() else {
+                        return Err(unsupported(
+                            "`.add()` is only supported on a bare-name set so far",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    };
+                    let [value] = &*call.arguments.args else {
+                        return Err(unsupported(
+                            format!(
+                                "set.add() takes exactly one argument, got {}",
+                                call.arguments.args.len()
+                            ),
+                            call.range,
+                        ));
+                    };
+                    return Ok(HirExpr::SetAdd {
+                        set: set_name.id.as_str().to_string(),
+                        value: Box::new(lower_expr(value)?),
+                    });
+                }
                 return Err(unsupported(
                     format!(
-                        "only the `.append()` method is supported so far, got `.{}(...)`",
+                        "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.{}(...)`",
                         attr.attr
                     ),
                     call.range,
@@ -1045,6 +1148,24 @@ fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExpr {
         ),
         HirExpr::SetLiteral(es) => HirExpr::SetLiteral(es.into_iter().map(recurse).collect()),
         HirExpr::TupleLiteral(es) => HirExpr::TupleLiteral(es.into_iter().map(recurse).collect()),
+        // `list`/`dict`/`set` base-name fields are plain `String`s, mirroring
+        // `ListAppend`'s own arm exactly: renamed only when they equal
+        // `from`, otherwise left untouched. This matters for a
+        // comprehension's own `elt`/`cond` referencing e.g. `xs.pop()` where
+        // `xs` is the loop variable being synthesized-renamed -- the common
+        // case (some other, non-loop-variable base) must not be touched.
+        HirExpr::ListPop { list } => HirExpr::ListPop {
+            list: if list == from { to.to_string() } else { list },
+        },
+        HirExpr::DictGetOrDefault { dict, key, default } => HirExpr::DictGetOrDefault {
+            dict: if dict == from { to.to_string() } else { dict },
+            key: Box::new(recurse(*key)),
+            default: Box::new(recurse(*default)),
+        },
+        HirExpr::SetAdd { set, value } => HirExpr::SetAdd {
+            set: if set == from { to.to_string() } else { set },
+            value: Box::new(recurse(*value)),
+        },
     }
 }
 
@@ -2725,13 +2846,21 @@ mod tests {
     }
 
     #[test]
-    fn calling_a_non_append_method_is_unsupported() {
+    fn calling_an_unrecognized_method_is_unsupported() {
         // Any other `.method()` call is rejected before ever falling through
-        // to the bare-name-callee check below it -- this task only special-
-        // cases `.append()`, not general method dispatch (D-105).
+        // to the bare-name-callee check below it -- this project only
+        // special-cases `.append()`/`.pop()`/`.get()`/`.add()`, not general
+        // method dispatch (D-105, widened by D-119). `.remove()` is a
+        // deliberately chosen example: it is a real `list` method D-119
+        // explicitly did not ship (`list.pop()` is the one growable/lookup
+        // operation this PR ships for `list`), not a strawman.
         assert_capability_error_message(
             "foo.bar()\n",
-            "only the `.append()` method is supported so far, got `.bar(...)`",
+            "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.bar(...)`",
+        );
+        assert_capability_error_message(
+            "x.remove(1)\n",
+            "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.remove(...)`",
         );
     }
 
@@ -2772,6 +2901,183 @@ mod tests {
             "x.append(lambda: 1)\n",
             "expression kind not supported yet",
         );
+    }
+
+    // -- PR-12 Task 10 (D-119): remaining container methods depth --------
+    // `list.pop()`, `dict.get(key, default)`, `set.add(value)` -- each
+    // mirrors `.append()`'s own hand-recognized-special-form shape and test
+    // coverage exactly (bare-name-base gate, arity gate, value-position
+    // lowering, argument-propagation).
+
+    #[test]
+    fn lowers_pop_as_a_dedicated_hir_node_not_a_generic_call() {
+        let module = pycc_parser_test_helper::parse("x = [1]\nx.pop()\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListPop {
+                list: "x".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn list_pop_used_as_a_value_lowers_successfully() {
+        // Unlike `ListAppend`, `.pop()`'s value is the list's element type,
+        // not `None` -- `y = x.pop()` is the primary intended use, not a
+        // curiosity being merely tolerated.
+        let module = pycc_parser_test_helper::parse("x = [1]\ny = x.pop()\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::ListPop {
+                    list: "x".to_string(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn popping_from_a_non_bare_name_base_is_unsupported() {
+        assert_capability_error_message(
+            "a.b.pop()\n",
+            "`.pop()` is only supported on a bare-name list so far",
+        );
+    }
+
+    #[test]
+    fn pop_with_one_argument_is_unsupported() {
+        assert_capability_error_message("x.pop(0)\n", "list.pop() takes no arguments, got 1");
+    }
+
+    #[test]
+    fn lowers_get_as_a_dedicated_hir_node_not_a_generic_call() {
+        let module = pycc_parser_test_helper::parse("d = {\"a\": 1}\nd.get(\"a\", 0)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
+                dict: "d".to_string(),
+                key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                default: Box::new(HirExpr::IntLiteral(0)),
+            }))
+        );
+    }
+
+    #[test]
+    fn dict_get_used_as_a_value_lowers_successfully() {
+        let module = pycc_parser_test_helper::parse("d = {\"a\": 1}\ny = d.get(\"a\", 0)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::DictGetOrDefault {
+                    dict: "d".to_string(),
+                    key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                    default: Box::new(HirExpr::IntLiteral(0)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn getting_from_a_non_bare_name_base_is_unsupported() {
+        assert_capability_error_message(
+            "a.b.get(\"a\", 0)\n",
+            "`.get()` is only supported on a bare-name dict so far",
+        );
+    }
+
+    #[test]
+    fn get_with_one_argument_is_unsupported() {
+        assert_capability_error_message(
+            "d.get(\"a\")\n",
+            "dict.get() takes exactly two arguments (key, default), got 1",
+        );
+    }
+
+    #[test]
+    fn get_with_three_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "d.get(\"a\", 0, 1)\n",
+            "dict.get() takes exactly two arguments (key, default), got 3",
+        );
+    }
+
+    #[test]
+    fn a_get_call_with_an_unsupported_key_propagates_the_key_error() {
+        assert_capability_error_message(
+            "d.get(lambda: 1, 0)\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_get_call_with_an_unsupported_default_propagates_the_default_error() {
+        assert_capability_error_message(
+            "d.get(\"a\", lambda: 1)\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn lowers_add_as_a_dedicated_hir_node_not_a_generic_call() {
+        let module = pycc_parser_test_helper::parse("s = {1}\ns.add(2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::SetAdd {
+                set: "s".to_string(),
+                value: Box::new(HirExpr::IntLiteral(2)),
+            }))
+        );
+    }
+
+    #[test]
+    fn set_add_used_as_a_value_lowers_successfully_today() {
+        // Mirrors `ListAppend`'s own "today's actual behavior" test exactly
+        // -- `.add()`'s value is always `None`, same D-072 gap as `.append()`.
+        let module = pycc_parser_test_helper::parse("s = {1}\ny = s.add(2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::SetAdd {
+                    set: "s".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(2)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn adding_to_a_non_bare_name_base_is_unsupported() {
+        assert_capability_error_message(
+            "a.b.add(1)\n",
+            "`.add()` is only supported on a bare-name set so far",
+        );
+    }
+
+    #[test]
+    fn add_with_zero_arguments_is_unsupported() {
+        assert_capability_error_message("s.add()\n", "set.add() takes exactly one argument, got 0");
+    }
+
+    #[test]
+    fn add_with_two_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "s.add(1, 2)\n",
+            "set.add() takes exactly one argument, got 2",
+        );
+    }
+
+    #[test]
+    fn an_add_with_an_unsupported_argument_propagates_the_argument_error() {
+        assert_capability_error_message("s.add(lambda: 1)\n", "expression kind not supported yet");
     }
 
     #[test]
@@ -3662,6 +3968,99 @@ mod tests {
                 "new",
             ),
             HirExpr::TupleLiteral(vec![HirExpr::Name("new".to_string())])
+        );
+
+        // ListPop: covers both the `list` field matching `from` and not
+        // matching it (PR-12 Task 10, D-119; mirrors `ListAppend` above).
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListPop {
+                    list: "old".to_string(),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::ListPop {
+                list: "new".to_string(),
+            }
+        );
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListPop {
+                    list: "other".to_string(),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::ListPop {
+                list: "other".to_string(),
+            }
+        );
+
+        // DictGetOrDefault: covers both the `dict` field matching `from` and
+        // not matching it, plus renaming `key`/`default` in both cases.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::DictGetOrDefault {
+                    dict: "old".to_string(),
+                    key: Box::new(HirExpr::Name("old".to_string())),
+                    default: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::DictGetOrDefault {
+                dict: "new".to_string(),
+                key: Box::new(HirExpr::Name("new".to_string())),
+                default: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::DictGetOrDefault {
+                    dict: "other".to_string(),
+                    key: Box::new(HirExpr::Name("old".to_string())),
+                    default: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::DictGetOrDefault {
+                dict: "other".to_string(),
+                key: Box::new(HirExpr::Name("new".to_string())),
+                default: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // SetAdd: covers both the `set` field matching `from` and not
+        // matching it, plus renaming `value` in both cases.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::SetAdd {
+                    set: "old".to_string(),
+                    value: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::SetAdd {
+                set: "new".to_string(),
+                value: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::SetAdd {
+                    set: "other".to_string(),
+                    value: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::SetAdd {
+                set: "other".to_string(),
+                value: Box::new(HirExpr::Name("new".to_string())),
+            }
         );
     }
 }
