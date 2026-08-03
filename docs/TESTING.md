@@ -52,6 +52,46 @@ Tiers and gates in PYTHON_STANDARDS.md § Real-world corpus. Mechanics:
 - Per-project dashboard: % files compiled, % tests passed, RC-elision rate, binary size, speed vs CPython on the project's own benchmarks.
 - Regression vs previous release = release blocker.
 
+## Planned CPython interop matrix (v0.7)
+
+D-128's transparent interop contract is not implemented by the current
+compiler. The v0.7 implementation cannot mark its roadmap acceptance complete
+until all of the following run on every Tier-1 target:
+
+- unchanged source fixtures containing both `import numpy as np` and
+  `from numpy import array` build and run under the default `auto` policy
+  without a separately installed Python;
+- the produced `pycc.lock` and deployment bundle select the exact intended
+  CPython, package, and native-library artifacts and never consult ambient
+  `site-packages` at runtime;
+- `allowlist` accepts an allowed direct import root, covers its submodules and
+  pinned transitive closure, and emits `I0402` for an otherwise-resolvable
+  unlisted direct root;
+- CLI policy precedence covers every usable branch: explicit `auto` and
+  `deny` each override the other and a configured `allowlist`; explicit
+  `allowlist` with its configured roots accepts an allowed root and emits
+  `I0402` for an unlisted root. A CLI switch *to* `allowlist` from configured
+  `auto` or `deny` has no permitted stored roots because non-empty `allow` is
+  invalid under those policies, so it deterministically rejects every
+  CPython-backed direct root with `I0402` rather than borrowing a stale list;
+- `check`, `build`, `run`, and the eventual `test` compilation path apply the
+  same effective policy and select the same success or policy diagnostic for
+  an equivalent import graph;
+- invalid policy enum values, a non-empty `[interop].allow` outside
+  `allowlist`, and every `--pure` plus explicit `--interop-policy`
+  combination fail as bad invocations (exit 2) instead of depending on
+  argument order or silently ignoring stale configuration;
+- `deny` and its `--pure` shorthand both reject the same CPython-backed fixture,
+  while a native pycc import remains accepted and a successful pure artifact
+  has no CPython/libpython dependency; and
+- the boundary benchmark publishes copied scalar/container marshalling and
+  supported zero-copy buffer transfers separately, so compatibility does not
+  hide the cost model.
+
+Each negative case requires both human and versioned JSON diagnostic snapshots.
+The automatic and allowlist cases must also exercise target-specific native
+package artifacts rather than passing only with a pure-Python stand-in.
+
 ## The bot
 
 GitHub Action (`corpus-bot`):

@@ -7,15 +7,19 @@
 ## What pycc is
 
 pycc is an open-source compiler project whose design target is to check Python
-type annotations at compile time and emit a standalone native executable. It
-uses standard Python syntax rather than introducing a Python-like dialect.
+type annotations at compile time and emit an autonomous deployment artifact.
+Native and pure builds emit standalone executables; planned permitted CPython
+interop emits a self-contained bundle with its pinned runtime. pycc uses
+standard Python syntax rather than introducing a Python-like dialect.
 
 The intended compiler pipeline is:
 
 1. Parse Python 3.14 source while preserving source spans.
 2. Resolve names and enforce the typed contract in high-level IR.
 3. Lower checked programs to typed mid-level IR.
-4. Generate LLVM IR, emit object code, and link a native binary.
+4. Generate LLVM IR and emit object code for native pycc modules.
+5. Link a standalone native binary, or package the planned pinned CPython and
+   dependency closure when a permitted CPython-backed import requires it.
 
 ## Development model
 

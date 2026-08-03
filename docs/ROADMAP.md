@@ -174,11 +174,26 @@ Generators/`yield from` as state machines, iterator protocol, `itertools`/`funct
 
 **Accept:** thread-safety negative tests; 8-core scaling demo ≥ 6× on embarrassingly-parallel bench; race detector (TSan CI job) clean.
 
-## v0.7 — interop escape hatch
+## v0.7 — transparent CPython interop
 
-`pycc.interop.cpython`, typed boundary (`I04xx`), `[interop] allow` config; `unittest`/`logging`/`argparse`.
+This milestone is planned and **not implemented** in the current compiler.
+Ordinary standard-Python imports such as `import numpy as np` automatically
+classify CPython-backed packages and bundle a pinned CPython 3.14/package/native
+dependency closure without requiring pycc-specific source rewrites. The
+planned `auto` (default), `allowlist`, and `deny` policies plus `--pure` provide
+deployment control; the typed `I04xx` boundary, `unittest`/`logging`/`argparse`,
+and an optional low-level `pycc.interop.cpython` API remain part of the
+milestone (D-128).
 
-**Accept:** demo: compiled app calls numpy through the hatch; boundary-cost benchmark published; pure-mode (`allow = []`) guarantees no libpython dependency.
+**Accept:** an unchanged CPython-compatible app using `import numpy as np`
+builds and runs on all Tier-1 targets without a separately installed Python;
+the package/runtime closure is pinned and reproducible; `auto` succeeds without
+per-package approval; `allowlist` accepts an allowed import root and rejects an
+otherwise-resolvable unlisted root with `I0402`; both `deny` and `--pure`
+reject a CPython-backed fixture, while a separate native-only fixture builds
+successfully under both modes and its artifact has no CPython/libpython
+dependency; and a published boundary-cost benchmark reports copied versus
+zero-copy transfers.
 
 ## v0.8 — corpus at scale + bot
 

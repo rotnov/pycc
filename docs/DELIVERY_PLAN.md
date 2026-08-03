@@ -14,7 +14,7 @@ Every ROADMAP.md milestone is its own sub-project: its own brainstorm → plan �
 | v0.4 projects & incremental | multi-file/import resolution in `pycc_hir`, salsa-style incremental cache, `os`/`pathlib`/`json`/`datetime` | v0.3 | ~6-7 |
 | v0.5 generators & ownership v1 | new crate `pycc_own` (escape analysis, move semantics, RC elision), generators as state machines | v0.4 | ~6-7 |
 | v0.6 threads without GIL | Shareable/move checks in `pycc_own`, cycle collector, own parser replaces vendored `ruff_python_parser` (D-003 resolved) | v0.5 | ~6 |
-| v0.7 interop escape hatch | `pycc.interop.cpython` typed boundary | v0.6 | ~4-5 |
+| v0.7 transparent CPython interop | Standard `import` classification, pinned CPython/package/native-library bundling, `auto`/`allowlist`/`deny` policy enforcement, typed bridge and optional low-level `pycc.interop.cpython` API (D-128) | v0.6 | ~4-5 |
 | v0.8 corpus at scale + bot | `corpus-bot` GitHub Action, `socket`/`http.client`/compression stdlib | v0.7 | ~4 |
 | v0.9 async & packaging | `asyncio` subset on state machines, `--lib` C-ABI | v0.8 | ~4-5 |
 | v1.0 spec freeze | PYTHON_STANDARDS Python 3.0–3.14 matrix complete, semantics deviations doc, benchmarks published, diagnostics/JSON frozen semver | v0.9 | ~3-4 |

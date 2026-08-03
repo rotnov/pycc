@@ -23,10 +23,20 @@ THIR (fully typed)
 MIR (typed SSA, ownership-annotated)
    │  optimizations   — inlining, RC elision, devirtualization, monomorphization
    ▼
-LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pycc_rt + pycc_std)
+LLVM IR  ──►  object code  ──►  lld  ──►  native artifact (+ pycc_rt + pycc_std)
+                                                    └─ planned v0.7 only:
+                                                       pinned CPython/package
+                                                       closure when policy permits
 ```
 
 **Current state (through PR-5):** the diagram above is the v1.0 target. As of PR-5, `pycc_own` does not exist (deferred to v0.5, per DELIVERY_PLAN.md's crate scope), so there is no separate ownership-analysis stage and no THIR; `pycc_types` produces a checked HIR directly, and `pycc_mir`'s `MIR` is a typed *structural mirror* of HIR (D-057), not the ownership-annotated SSA form shown above -- LLVM codegen uses one `alloca` per local/parameter and relies on no optimization pass, matching this project's `--debug`-only v0.1 profile. The `optimizations` stage does not exist yet either. This is a deliberate, currently-accepted gap between the target architecture and today's implementation, not an unplanned deviation.
+
+D-128's conditional CPython/package closure is likewise a planned v0.7
+component, not part of the current pipeline. Native imports continue through
+the static pycc pipeline. A CPython-backed import keeps ordinary Python source
+syntax but adds a generated typed bridge and a pinned, target-specific runtime
+closure to the deployment artifact under `auto` or `allowlist`; `deny` and
+`--pure` retain the native-only artifact path.
 
 ## Workspace crates (Rust 1.97+, edition 2024)
 
@@ -197,7 +207,7 @@ Rules:
 
 - Runtime has **zero** platform-conditional behavior visible to user code (path/OS specifics live in `pycc_std` behind `os`/`pathlib` just like CPython).
 - Cross-compilation: `pycc build --target <triple>` is currently proven for same-OS/cross-arch only (e.g. macOS x86_64⟷arm64, CI-gated) — cross-OS targets are not yet supported (see D-026). Linking goes through each host's own toolchain driver (system `cc`, or a bundled `clang` on Windows/Linux when a target is given), not a universally bundled linker.
-- Static linking by default on Linux (musl optional), self-contained .exe on Windows, notarization-friendly binary on macOS.
+- Pure/native-only artifacts use static linking by default on Linux (musl optional), a self-contained `.exe` on Windows, and a notarization-friendly binary on macOS. Planned v0.7 interop artifacts instead form a self-contained application bundle containing their pinned CPython/package/native-library closure; they must not fall back to a target machine's Python installation (D-128).
 - CI matrix runs the full conformance suite on all Tier-1 targets; a PEP test only counts as passing when it passes everywhere.
 - Tier 2 (build, best-effort tests): `aarch64-pc-windows-msvc`, `x86_64-unknown-linux-musl`, `wasm32-wasi` (experiment).
 
