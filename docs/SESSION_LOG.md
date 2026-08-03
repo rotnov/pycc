@@ -11,6 +11,27 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — Two abandoned PRs finished and merged: #279 (D-103 manifest-awareness fold) and #258/#256 (pycc init rollback)
+
+**Authoritative checkpoint:** `main`'s tip is `deb358ffdfc3a90b7dc49c8ba659d27e6dedf647` ([PR #258](https://github.com/rotnov/pycc/pull/258), merge commit), confirmed via `git fetch origin main` immediately before writing this entry. Both PRs described below required multiple rebase rounds (main advanced 4-5 times across their finishing work, from concurrent unrelated PRs #305/#309-#312) — each rebase applied cleanly with no conflicts once the correct resolution strategy for `docs/DECISIONS.md`/`docs/SESSION_LOG.md`/`docs/AGENT_RETROSPECTIVE.md`'s own newest-first append-only structure was found.
+
+**What happened:** at the user's direction, resumed two PRs left open and stale from before this session's own context compaction, rather than starting the requested `issue-select`/`issue-to-plan`/`issue-implement` autopilot loop on top of unfinished work.
+
+**PR [#279](https://github.com/rotnov/pycc/pull/279)** ("Fold D-103 policy-successor-manifest awareness into issue-select/issue-implement") had gone stale since 2026-08-02 (`audit` failing on the old pre-D-114-activation tree, `CONFLICTING` against the since-much-advanced `main`, 3 unresolved bot review findings). Rebased cleanly (all 3 unresolved threads confirmed bot-authored, so resolvable by this session), then fixed all 3 codex findings for real:
+- an intermediate D-103 activation that only clears the way for a larger composed sequence no longer carries `Fixes #N` — only the sequence's own final PR does;
+- `docs/AGENT_TOOLING.md` (the normative contract `docs/SPEC.md` names for this area) now describes the D-103 manifest preflight check, the resulting systemic stop condition (14 total: 2 systemic + 12 per-issue, not the stale "seven"), and the updated eval counts;
+- new deterministic eval coverage (`manifest_transition_status`, a new pure oracle covering steady-state/landable/unlandable-transition outcomes) added to both `issue-select`'s and `issue-implement`'s `evals.json` (3→6, 5→8), closing a real gap where CI would have kept passing even if these three decision paths were later removed or inverted.
+
+**PR [#258](https://github.com/rotnov/pycc/pull/258)** ("Roll back `src/main.py` when `pycc init`'s final `pycc.toml` write fails", closing [#256](https://github.com/rotnov/pycc/issues/256)) had sat open since 2026-08-01 with one unresolved bot finding. Confirmed and fixed: `write_new_in`'s own best-effort cleanup of a partially-created file could itself fail silently (e.g. the containing directory becomes read-only mid-run) — a caller was told only "the write failed" with no way to learn a partial file (potentially a partial `pycc.toml`, since `roll_back_after_toml_failure` only ever sees `write_new`'s own returned error) was left on disk. Fixed for every `write_new` caller, with a new test forcing the write-then-cleanup-both-fail path via `chmod`.
+
+Both PRs: `cargo test --workspace`/`clippy --all-targets -D warnings`/`cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` all green, `ruby scripts/check_roadmap_evidence.rb`/`validate_agent_assets.py`/`validate_agent_policies.py` all pass, every bot-authored review thread replied to with the fixing evidence and resolved, merged with zero unresolved threads and a clean `mergeStateStatus`.
+
+**One incidental finding, not investigated further:** a `clang: error: linker command failed` line appeared in `cargo test --workspace`'s output partway through PR #258's local verification; isolating `tests/slice0.rs` alone (`--test-threads=1`) showed all 69 tests passing including a pre-existing test named `run_reports_a_missing_linker_driver_without_panicking` — almost certainly the source of that stderr line (expected diagnostic output from a test that deliberately exercises a missing-linker scenario), not a real regression. Recorded here rather than silently dismissed, since a fresh session hitting the same line in a full `--workspace` run should not need to re-derive this.
+
+**What's next:** returning to the user's original standing directive — cycle `issue-select` → `issue-to-plan` → `issue-implement` autonomously, marking (via GitHub's `in progress` label, confirmed available: `gh label list`) whichever issue gets selected so a concurrent session doesn't pick the same target.
+
+---
+
 ## 2026-08-03 — PR #281 merged to `main`: transparent CPython interop policy specified as D-128
 
 **Authoritative checkpoint:** `main`'s tip is `8c048da` ([PR #281](https://github.com/rotnov/pycc/pull/281), merge commit), confirmed via `git fetch origin main` immediately before writing this entry — one commit ahead of `8bbdb00` (PR #288's own merge, described in the entry directly below). This entry is written from the merged result, not from the in-flight drafting note PR #281 itself carried mid-review (that note's own "what's next" describes steps this merge has already completed).
