@@ -860,6 +860,30 @@ D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB = D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE
 D112_UBUNTU_FRONTEND_PERF_GATE_JOB = REPLICATED_PERF_GATE_JOB.merge(
   "runs-on" => "ubuntu-latest"
 ).freeze
+# D-114: a one-time, real (not runner-noise) regression from PR-10's `Ty`
+# migration (D-109) needs a wider frontend-perf-gate threshold than D-112's
+# implicit 2.0% default. This is the same D112_UBUNTU_FRONTEND_PERF_GATE_JOB
+# shape with only the comparison step's threshold argument added -- the
+# measure job is unchanged, so validate_source_aware_perf_gate_lifecycle's
+# D112 branch below is widened to accept either gate-job shape rather than
+# introducing a new measure-job branch.
+D114_RAISED_THRESHOLD_FRONTEND_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
+  ruby scripts/check_replicated_paired_perf_regression.rb \
+    target/criterion/pycc_check_frontend_fixture/current \
+    target/criterion/pycc_check_frontend_fixture/previous \
+    "$EXECUTABLE_INPUTS_EQUAL" \
+    "7.0"
+SHELL
+D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_STEPS =
+  Marshal.load(Marshal.dump(D112_UBUNTU_FRONTEND_PERF_GATE_JOB.fetch("steps"))).tap do |steps|
+    compare = steps.find { |step| step["name"] == "Compare exact predecessor and candidate" }
+    raise "expected an existing compare step to raise the threshold on" unless compare
+
+    compare["run"] = D114_RAISED_THRESHOLD_FRONTEND_PERF_COMPARE_SCRIPT
+  end.freeze
+D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB = D112_UBUNTU_FRONTEND_PERF_GATE_JOB.merge(
+  "steps" => D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_STEPS
+).freeze
 PAIRED_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
   "native-build-test",
@@ -1241,7 +1265,12 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
     elsif measure_job == D91_RELAX_FRONTEND_PERF_MANIFEST_MEASURE_JOB
       REPLICATED_PERF_GATE_JOB
     elsif measure_job == D112_UBUNTU_FRONTEND_PERF_MEASURE_JOB
-      D112_UBUNTU_FRONTEND_PERF_GATE_JOB
+      # D-114: this measure job now accepts either gate-job shape (D-112's
+      # own 2.0%-implicit-threshold shape, or D-114's 7.0%-explicit-threshold
+      # shape) -- an array here, unlike every other branch's single job
+      # constant, deliberately so a single measure-job shape can authorize
+      # more than one gate-job shape without a parallel measure-job branch.
+      [D112_UBUNTU_FRONTEND_PERF_GATE_JOB, D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB]
     end
   unless expected_perf_job
     raise RoadmapEvidenceError,
@@ -1254,7 +1283,9 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
           "#{source}: source-aware gate requires frontend-perf-gate"
   end
   perf_job = yaml_value(perf_job_node, "#{source} frontend-perf-gate job")
-  unless perf_job == expected_perf_job
+  accepted_perf_jobs =
+    expected_perf_job.is_a?(Array) ? expected_perf_job : [expected_perf_job]
+  unless accepted_perf_jobs.include?(perf_job)
     raise RoadmapEvidenceError,
           "#{source}: frontend-perf-gate must match the reviewed source-aware comparison job " \
           "for the selected measurement design"
