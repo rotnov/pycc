@@ -11,6 +11,24 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — D-114 revert (PR #291) merged via an owner-authorized emergency bypass; PR-10/#236 unblocked from `BLOCKED` to `BEHIND`
+
+**Authoritative checkpoint:** `main`'s tip is `fee5750274e8c000c5aee007fbd1aeb2d1964248` (was `cdb3f0abfe68b8c107711c595a5cbd6fd11e43f8`, unmoved since D-114's own propose round created a self-referential manifest deadlock — see incident [#292](https://github.com/rotnov/pycc/issues/292) for the first, aborted attempt to resolve it).
+
+**What happened:** PR [#291](https://github.com/rotnov/pycc/pull/291) ("Revert \"D-114 round 1: propose raising frontend-perf-gate threshold to 7.0%\"") restores `tests/fixtures/policy-successor-manifest.json`'s three mid-transition entries (`.github/workflows/ci.yml`, `scripts/check_roadmap_evidence.rb`, `scripts/test_check_roadmap_evidence.rb`) back to steady-state (`source_path == path`). Its own `audit` check could never pass on its own: `scripts/check_ci_permissions.rb`'s `validate_policy_successor_transition` compares the candidate's live content at each manifest target against what the *base* branch's manifest currently expects (the staged D-114 successor), and this PR's entire purpose is to diverge from that staged content — a self-referential deadlock, the same class this log's own "Issue #109 fully resolved" entry below already documented once (round 7a/7b) for a different D-number.
+
+Incident #292 (2026-08-02) first attempted this bypass and correctly aborted *without merging*: a bot-confirmed P1 review finding (`chatgpt-codex-connector` on `tests/fixtures/policy-successor-manifest.json:69`) showed PR #291's diff deleted the `tests/fixtures/d114-frontend-perf-threshold-ci.yml` protected manifest entry instead of retaining it as historical audit evidence, matching this project's own D-051/D-056/D-062 convention. The repository owner fixed that directly (commit `0376e1f`), and this session confirmed the review thread resolved before proceeding.
+
+Filed public incident [#294](https://github.com/rotnov/pycc/issues/294) first (per `docs/REPOSITORY_GOVERNANCE.md`'s Emergency path — disclose before acting, not retroactively), under the owner's explicit live authorization. Relaxed only `audit` from `main`'s required status checks (`ci-gate` and every other protection control — `enforce_admins`, `required_pull_request_reviews`, `required_conversation_resolution`, `allow_force_pushes`, `allow_deletions` — stayed enabled throughout), merged PR #291, and restored the original `required_status_checks.contexts` (`["ci-gate", "audit"]`) within under a minute, verified via a full settings readback matching the pre-relax snapshot exactly. Closed #294 with the outcome. The independent, automated "Main history audit" workflow (D-024's own push-audit, distinct from the `audit` PR check) passed on the resulting merge commit, confirming no unauthorized bypass survived in history.
+
+**Consequence:** the policy-successor manifest is back to steady state. PR [#236](https://github.com/rotnov/pycc/pull/236) (v0.2 PR-10) flipped from `mergeStateStatus: BLOCKED` to `BEHIND` — no longer deadlocked, but still needs its own rebase/merge of the new `main` tip, a fresh CI run, and pinned review before it can merge. The reverted D-114 propose-round content is fully gone from `main`; any future attempt to raise `frontend-perf-gate`'s threshold needs a fresh D-103 propose/activate round from scratch.
+
+**Not done / next steps for a fresh session:**
+1. PR-10/#236 needs an actual rebase or merge of `main` (`fee5750`), a fresh CI run (especially `frontend-perf-gate`, now running against the reverted, steady-state manifest), pinned review, and merge.
+2. Any v0.2 PR stacked on PR-10 (PR-11, PR-12, ...) that already merged a *stale* copy of this same manifest deadlock (see the `feat/v0-2-pr11-dict-set-tuple` branch's own SESSION_LOG entries) should re-check whether `main`'s own advance here changes anything for its next steps — as of this entry it does not yet, since that branch already resolved its own D-number collision independently before this fix landed.
+
+---
+
 ## 2026-08-02 — Issue #109 fully resolved: `frontend-perf-measure`/`frontend-perf-gate` moved to `ubuntu-latest`
 
 **Authoritative checkpoint:** `origin/main`'s tip is `c271d8d004b8fb4a4f8702330c70a76bae0c6314`.
