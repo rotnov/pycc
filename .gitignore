@@ -34,3 +34,6 @@ Thumbs.db
 .ievo/cache/
 .ievo/hooks/
 .ievo/evolution-candidates/
+
+# CI temporary-bypass ephemeral state (scripts/manage_ci_bypass.py)
+.ci-bypass-state/
