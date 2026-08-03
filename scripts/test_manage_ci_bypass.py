@@ -19,11 +19,9 @@ import manage_ci_bypass as mcb
 
 # Realistic branch-protection payload fields beyond `required_status_checks`,
 # matching this repository's actual `main` branch protection (see
-# protection_snapshot() in manage_ci_bypass.py). Tests that exercise relax()
-# or restore() -- i.e. that call protection_snapshot() on a fake protection
-# response -- need all of these keys present or protection_snapshot() raises
-# KeyError. Tests that only exercise status() (which never calls
-# protection_snapshot()) do not need them.
+# protection_snapshot() in manage_ci_bypass.py). Tests that call it through
+# status(), relax(), or restore() need all of these keys present or
+# protection_snapshot() fails closed with CiBypassError.
 REQUIRED_PULL_REQUEST_REVIEWS = {
     "dismiss_stale_reviews": False,
     "require_code_owner_reviews": False,
@@ -31,10 +29,18 @@ REQUIRED_PULL_REQUEST_REVIEWS = {
     "required_approving_review_count": 0,
 }
 
+REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE = {
+    "url": (
+        "https://api.github.com/repos/owner/repo/branches/main/protection/"
+        "required_pull_request_reviews"
+    ),
+    **REQUIRED_PULL_REQUEST_REVIEWS,
+}
+
 FULL_PROTECTION_RESPONSE = {
     "required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]},
     "enforce_admins": {"enabled": True},
-    "required_pull_request_reviews": REQUIRED_PULL_REQUEST_REVIEWS,
+    "required_pull_request_reviews": REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE,
     "required_conversation_resolution": {"enabled": True},
     "allow_force_pushes": {"enabled": False},
     "allow_deletions": {"enabled": False},
@@ -102,6 +108,60 @@ class GetProtectionTests(unittest.TestCase):
         )
 
 
+class ProtectionSnapshotTests(unittest.TestCase):
+    def test_strips_github_review_response_metadata(self):
+        snapshot = mcb.protection_snapshot(FULL_PROTECTION_RESPONSE)
+
+        self.assertEqual(
+            snapshot["required_pull_request_reviews"],
+            REQUIRED_PULL_REQUEST_REVIEWS,
+        )
+        self.assertNotIn("url", snapshot["required_pull_request_reviews"])
+
+    def test_preserves_none_when_pull_request_reviews_are_disabled(self):
+        protection = {
+            **FULL_PROTECTION_RESPONSE,
+            "required_pull_request_reviews": None,
+        }
+
+        snapshot = mcb.protection_snapshot(protection)
+
+        self.assertIsNone(snapshot["required_pull_request_reviews"])
+
+    def test_fails_closed_when_an_effective_review_field_is_missing(self):
+        protection = {
+            **FULL_PROTECTION_RESPONSE,
+            "required_pull_request_reviews": {
+                "url": REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE["url"],
+            },
+        }
+
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.protection_snapshot(protection)
+
+        self.assertIn("dismiss_stale_reviews", str(ctx.exception))
+
+    def test_preserves_an_additional_effective_review_control(self):
+        protection = {
+            **FULL_PROTECTION_RESPONSE,
+            "required_pull_request_reviews": {
+                **REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE,
+                "bypass_pull_request_allowances": {
+                    "users": [{"login": "release-bot"}],
+                },
+            },
+        }
+
+        snapshot = mcb.protection_snapshot(protection)
+
+        self.assertEqual(
+            snapshot["required_pull_request_reviews"][
+                "bypass_pull_request_allowances"
+            ],
+            {"users": [{"login": "release-bot"}]},
+        )
+
+
 class StatusTests(unittest.TestCase):
     def _dispatch(self, script):
         def fn(args, input_text=None):
@@ -125,6 +185,7 @@ class StatusTests(unittest.TestCase):
         ok, message = mcb.status("owner/repo")
         self.assertTrue(ok)
         self.assertIn("matches baseline", message)
+        self.assertNotIn("url", message)
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_status_reports_drift_in_required_checks(self, mock_run_gh):
@@ -158,6 +219,58 @@ class StatusTests(unittest.TestCase):
         ok, message = mcb.status("owner/repo")
         self.assertFalse(ok)
         self.assertIn("Branch protection DRIFT", message)
+
+    def test_status_reports_drift_in_each_effective_review_policy_field(self):
+        drift_values = {
+            "dismiss_stale_reviews": True,
+            "require_code_owner_reviews": True,
+            "require_last_push_approval": True,
+            "required_approving_review_count": 1,
+        }
+        for field, drift_value in drift_values.items():
+            with self.subTest(field=field):
+                drifted = {
+                    **FULL_PROTECTION_RESPONSE,
+                    "required_pull_request_reviews": {
+                        **REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE,
+                        field: drift_value,
+                    },
+                }
+                with mock.patch("manage_ci_bypass.run_gh") as mock_run_gh:
+                    mock_run_gh.side_effect = self._dispatch({
+                        ("api", "repos/owner/repo/branches/main/protection"): (
+                            json.dumps(drifted)
+                        ),
+                        ("issue", "list"): "[]",
+                    })
+                    ok, message = mcb.status("owner/repo")
+
+                self.assertFalse(ok)
+                self.assertIn("Branch protection DRIFT", message)
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_status_reports_drift_for_an_additional_effective_review_control(
+        self, mock_run_gh
+    ):
+        drifted = {
+            **FULL_PROTECTION_RESPONSE,
+            "required_pull_request_reviews": {
+                **REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE,
+                "dismissal_restrictions": {
+                    "teams": [{"slug": "release-managers"}],
+                },
+            },
+        }
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(drifted),
+            ("issue", "list"): "[]",
+        })
+
+        ok, message = mcb.status("owner/repo")
+
+        self.assertFalse(ok)
+        self.assertIn("Branch protection DRIFT", message)
+        self.assertIn("dismissal_restrictions", message)
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_status_ignores_incident_with_unparseable_expiry(self, mock_run_gh):
@@ -295,6 +408,46 @@ class StatusTests(unittest.TestCase):
         self.assertIn("live incident #410", message)
         self.assertIn("in progress", message)
         self.assertNotIn("Branch protection DRIFT", message)
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_status_accepts_live_incident_with_legacy_metadata_snapshot(
+        self, mock_run_gh
+    ):
+        drifted = {
+            **FULL_PROTECTION_RESPONSE,
+            "required_status_checks": {"strict": True, "contexts": ["ci-gate"]},
+        }
+        legacy_snapshot = {
+            **FULL_PROTECTION_SNAPSHOT,
+            "required_pull_request_reviews": REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE,
+        }
+        body = (
+            "**Check relaxed:** `audit`\n\n"
+            "**Expiry:** 2026-08-05T00:00:00Z (60 minutes from creation)\n\n"
+            f"{mcb.SNAPSHOT_MARKER_START}\n{json.dumps(legacy_snapshot)}\n"
+            f"{mcb.SNAPSHOT_MARKER_END}\n"
+        )
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(drifted),
+            ("api", "user"): json.dumps({"login": TRUSTED_LOGIN}),
+            ("issue", "list"): json.dumps([
+                {
+                    "number": 418,
+                    "title": "[ci-bypass] audit relaxed -- reason",
+                    "author": {"login": TRUSTED_LOGIN},
+                    "body": body,
+                },
+            ]),
+        })
+
+        ok, message = mcb.status(
+            "owner/repo",
+            now=datetime(2026, 8, 3, 0, 0, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertTrue(ok)
+        self.assertIn("live incident #418", message)
+        self.assertNotIn("url", message)
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_status_reports_drift_when_live_incident_not_opened_by_authenticated_actor(
@@ -782,9 +935,11 @@ class RelaxTests(unittest.TestCase):
         state = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.assertEqual(state["incident"], 300)
         self.assertEqual(state["snapshot"], FULL_PROTECTION_SNAPSHOT)
-        self.assertIn("CONFIRMED", self.body_path.read_text(encoding="utf-8"))
-        self.assertIn("2026-08-02T13:00:00Z", self.body_path.read_text(encoding="utf-8"))
-        self.assertIn("**Motivating PR:** #279", self.body_path.read_text(encoding="utf-8"))
+        body = self.body_path.read_text(encoding="utf-8")
+        self.assertIn("CONFIRMED", body)
+        self.assertIn("2026-08-02T13:00:00Z", body)
+        self.assertIn("**Motivating PR:** #279", body)
+        self.assertNotIn(REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE["url"], body)
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_relax_refuses_ci_gate_before_any_gh_call(self, mock_run_gh):
@@ -1153,6 +1308,29 @@ class RestoreTests(unittest.TestCase):
         readback = mcb.restore("owner/repo", 300, comment_path=self.comment_path)
         self.assertEqual(readback, FULL_PROTECTION_SNAPSHOT)
         self.assertIn("Readback matches", self.comment_path.read_text(encoding="utf-8"))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_restore_accepts_legacy_snapshot_with_review_response_metadata(
+        self, mock_run_gh
+    ):
+        body = self._snapshot_body(
+            required_pull_request_reviews=REQUIRED_PULL_REQUEST_REVIEWS_RESPONSE
+        )
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "view"): self._issue_view_response(body=body),
+            ("api", "user"): json.dumps({"login": TRUSTED_LOGIN}),
+            ("api", "-X"): "{}",
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "comment"): "",
+            ("issue", "close"): "",
+        })
+
+        readback = mcb.restore("owner/repo", 300, comment_path=self.comment_path)
+
+        self.assertEqual(readback, FULL_PROTECTION_SNAPSHOT)
+        self.assertNotIn("url", self.comment_path.read_text(encoding="utf-8"))
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_restore_raises_when_incident_not_open(self, mock_run_gh):

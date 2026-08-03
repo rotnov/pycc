@@ -28,6 +28,13 @@ DEFAULT_EXPIRY_MINUTES = 60
 # unattended or mistaken invocation free to relax ci-gate and silently drop
 # it from required checks.
 NEVER_RELAXABLE_CHECKS = frozenset({"ci-gate"})
+REQUIRED_PULL_REQUEST_REVIEW_POLICY_FIELDS = (
+    "dismiss_stale_reviews",
+    "require_code_owner_reviews",
+    "require_last_push_approval",
+    "required_approving_review_count",
+)
+REQUIRED_PULL_REQUEST_REVIEW_RESPONSE_METADATA_FIELDS = frozenset({"url"})
 BASELINE_PROTECTION = {
     "strict": True,
     "contexts": sorted(BASELINE_CONTEXTS),
@@ -69,12 +76,48 @@ def required_contexts(protection: dict) -> list[str]:
     return protection["required_status_checks"]["contexts"]
 
 
+def normalize_required_pull_request_reviews(reviews: dict | None) -> dict | None:
+    if reviews is not None:
+        # GitHub includes response metadata such as `url` alongside effective
+        # review-policy settings. Strip only explicitly classified metadata:
+        # preserving every other field makes a newly introduced effective
+        # control differ from the baseline and therefore fail closed as DRIFT.
+        # Indexing the known policy fields first also fails closed if GitHub
+        # omits a field that the baseline requires.
+        try:
+            for field in REQUIRED_PULL_REQUEST_REVIEW_POLICY_FIELDS:
+                reviews[field]
+        except KeyError as error:
+            raise CiBypassError(
+                "required_pull_request_reviews is missing required policy "
+                f"field {error.args[0]!r}"
+            ) from error
+        return {
+            field: value
+            for field, value in reviews.items()
+            if field not in REQUIRED_PULL_REQUEST_REVIEW_RESPONSE_METADATA_FIELDS
+        }
+    return None
+
+
+def normalize_incident_snapshot(snapshot: dict) -> dict:
+    normalized = dict(snapshot)
+    normalized["required_pull_request_reviews"] = (
+        normalize_required_pull_request_reviews(
+            snapshot.get("required_pull_request_reviews")
+        )
+    )
+    return normalized
+
+
 def protection_snapshot(protection: dict) -> dict:
     return {
         "strict": protection["required_status_checks"]["strict"],
         "contexts": sorted(protection["required_status_checks"]["contexts"]),
         "enforce_admins": protection["enforce_admins"]["enabled"],
-        "required_pull_request_reviews": protection.get("required_pull_request_reviews"),
+        "required_pull_request_reviews": normalize_required_pull_request_reviews(
+            protection.get("required_pull_request_reviews")
+        ),
         "required_conversation_resolution": protection["required_conversation_resolution"]["enabled"],
         "allow_force_pushes": protection["allow_force_pushes"]["enabled"],
         "allow_deletions": protection["allow_deletions"]["enabled"],
@@ -123,7 +166,9 @@ def status(repo: str = REPO, now: datetime | None = None) -> tuple[bool, str]:
         if (issue.get("author") or {}).get("login") != trusted_login:
             continue
         try:
-            snapshot = parse_snapshot_from_body(issue["body"])
+            snapshot = normalize_incident_snapshot(
+                parse_snapshot_from_body(issue["body"])
+            )
             check_name = parse_check_name_from_body(issue["body"])
         except CiBypassError:
             continue
@@ -413,7 +458,7 @@ def get_incident_body(repo: str, issue_number: int) -> str:
 
 def restore(repo: str, issue_number: int, comment_path: Path) -> dict:
     body = get_incident_body(repo, issue_number)
-    snapshot = parse_snapshot_from_body(body)
+    snapshot = normalize_incident_snapshot(parse_snapshot_from_body(body))
     # Defense in depth beyond get_incident_body()'s title/author check -- an
     # issue body can be edited after creation by anyone with write access,
     # and older incidents may predate that check. A genuine snapshot is
