@@ -76,6 +76,14 @@
 - While the repository has only one maintainer, require zero approving reviews so the PR path remains usable; enable an independent approving review when a second human maintainer is available.
 - Administrators and automation credentials do not bypass the rule for ordinary work. The emergency procedure, audit expectations, and recovery steps live in [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md).
 - A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
+- Every session's D-021 preflight also runs `python3 scripts/manage_ci_bypass.py status`.
+  If branch protection differs from the documented baseline
+  (`docs/REPOSITORY_GOVERNANCE.md`), search for an open `[ci-bypass]`-prefixed
+  issue tracking it. If none exists, or the one that does is open past its
+  own recorded expiry with no restore recorded, this is a release-blocking
+  governance incident: run `python3 scripts/manage_ci_bypass.py restore
+  --incident <issue-number>` immediately (or escalate if restore itself
+  fails) before any other work in this session.
 - The push audit executes the pre-push `main` revision of `scripts/check_main_history.py`, with an immutable reviewed bootstrap fallback when that parent predates the checker; it never executes the revision being audited. Its workflow definition is still supplied by the pushed revision, so treat the job as defense-in-depth: the external repository monitor must verify the workflow content and expected run independently.
 
 ## Monitor only live repository events ([D-078](docs/DECISIONS.md#d-078-external-repository-monitoring-is-checkpointed-and-event-driven))
