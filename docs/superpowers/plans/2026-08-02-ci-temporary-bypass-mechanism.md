@@ -28,10 +28,21 @@ matching `scripts/manage_ievo_hooks.py`'s existing shape and test conventions.
   branch in `scripts/manage_ci_bypass.py` needs a covering test.
 - All `gh` interaction goes through one `run_gh()` function — no other code
   path may call `subprocess` directly, so every test can mock exactly one seam.
-- Never embed untrusted or multi-line text directly into a shell/CLI argument;
-  write it to a file first and pass the file path (`-F`/`--input -`), matching
-  `correction-capture.local.sh`'s established CWE-78-avoidance pattern in this
-  repository.
+- Never embed **multi-line or arbitrarily large** text (an incident body, an
+  evidence dump, a JSON snapshot) directly into a CLI argument; write it to a
+  file first and pass the file path (`-F`/`--input -`), matching
+  `correction-capture.local.sh`'s established CWE-78-avoidance pattern. This
+  constraint targets *shell-command-string construction* specifically (the
+  real risk `correction-capture.local.sh` avoids, since a bash script
+  interpolates text into a command string a shell then re-parses) -- it does
+  not forbid passing a short, single-line, operator-supplied string (e.g.
+  `--reason`'s value) as one clean `argv` element to `subprocess.run([...])`
+  with no `shell=True`, which this script uses throughout and which carries
+  no shell-metacharacter risk regardless of the string's content. Confirmed
+  during Task 2's review: `reason` embedded in the incident issue's `--title`
+  argument is not a defect under this constraint, precisely because of this
+  distinction -- the constraint's target is shell reparsing, not argument
+  length or content in general.
 - Every new or changed skill needs both a `.claude/skills/...` canonical file
   and a thin `.agents/skills/...` Codex entrypoint pointing at it, in the same
   PR (`AGENTS.md`, "Support Codex and Claude Code").
