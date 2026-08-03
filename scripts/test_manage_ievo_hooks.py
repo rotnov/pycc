@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -126,12 +128,19 @@ class IevoHookLifecycleTests(unittest.TestCase):
     def run_manager(
         self, root: Path, *arguments: str
     ) -> subprocess.CompletedProcess[str]:
+        # #169 follow-up: resolve before handing to the CLI. main() now
+        # rejects any symlink/reparse component anywhere in the raw --root
+        # argument, and this machine's own tempdir prefix (e.g. macOS's
+        # /var -> /private/var) is exactly such a component -- resolving
+        # here matches what a real, non-test caller's --root looks like
+        # (this helper only ever asserts success below, so a legitimate,
+        # already-resolved root is always the correct input).
         result = subprocess.run(
             [
                 sys.executable,
                 str(Path(manager.__file__).resolve()),
                 "--root",
-                str(root),
+                str(root.resolve()),
                 *arguments,
             ],
             check=False,
@@ -1790,6 +1799,129 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.assertTrue(external_target.is_file())
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
+    def test_check_smoke_invokes_every_distinct_configured_target_exactly_once(
+        self,
+    ) -> None:
+        # #168: the smoke loop's own fixtures are all inert "exit 0" scripts
+        # with no observable side effect, so a mutation that deletes the
+        # entire subprocess-invocation loop leaves every other test green.
+        # Spy on subprocess.run (wraps=, so every call still executes for
+        # real -- this only records calls, it never fakes a result) rather
+        # than giving fixtures a real side effect: writing an observable
+        # marker from inside a "sh" script would need an absolute path
+        # embedded in the script's own text, which is untested territory on
+        # Windows CI (this suite's tempdir paths are backslash-separated
+        # there, and no existing test proves such a path survives Git
+        # Bash's sh parsing) -- a subprocess-call spy sidesteps that risk
+        # entirely while still proving each configured target actually ran.
+        #
+        # failure-capture is deliberately configured under two events
+        # (PostToolUseFailure and PermissionDenied, both real EVENT_TARGETS
+        # entries) so this exercises check()'s dict.fromkeys dedup-by-target
+        # for real: a per-command count, not a bare set of invoked commands,
+        # is required to prove a shared target still runs exactly once
+        # rather than once per event that references it (a codex review
+        # finding on this PR -- a set comparison alone cannot distinguish
+        # "invoked once" from "invoked twice", since both produce the same
+        # set of distinct commands).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.create_gitignore(root, upstream_shims=False)
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {
+                    "UserPromptSubmit": [
+                        self.group(
+                            self.command_entry(
+                                manager.SCRIPT_TARGETS["correction-capture"]
+                            )
+                        )
+                    ],
+                    "SessionStart": [
+                        self.group(
+                            self.command_entry(
+                                manager.SCRIPT_TARGETS["evo-analysis-nudge"]
+                            )
+                        )
+                    ],
+                    "PostToolUseFailure": [
+                        self.group(
+                            self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
+                        )
+                    ],
+                    "PermissionDenied": [
+                        self.group(
+                            self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
+                        )
+                    ],
+                }
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+
+            with mock.patch.object(
+                manager.subprocess, "run", wraps=manager.subprocess.run
+            ) as spy_run:
+                manager.check(root, smoke=True)
+
+            smoke_commands = [
+                tuple(call.args[0])
+                for call in spy_run.call_args_list
+                if call.args and call.args[0] and call.args[0][0] == "sh"
+            ]
+            self.assertEqual(
+                collections.Counter(smoke_commands),
+                collections.Counter(
+                    [
+                        ("sh", manager.SCRIPT_TARGETS["correction-capture"].as_posix()),
+                        ("sh", manager.SCRIPT_TARGETS["evo-analysis-nudge"].as_posix()),
+                        ("sh", manager.SCRIPT_TARGETS["failure-capture"].as_posix()),
+                    ]
+                ),
+            )
+
+    def test_check_smoke_rejects_a_failing_hook_through_the_cli(self) -> None:
+        # #168's second half: a non-zero-exit hook must still make
+        # `check --smoke` fail through the real public CLI. This fixture
+        # needs no embedded path at all ("exit 3" alone), so unlike the
+        # invocation-proof test above, a real script is safe and portable
+        # here -- and exercising it through the actual CLI (not
+        # manager.check() directly) proves the whole path: subprocess ->
+        # HookLifecycleError -> main()'s error handler -> non-zero exit.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.create_gitignore(root, upstream_shims=False)
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            (root / target).write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    # #169 follow-up: resolve so this test fails for the
+                    # reason it means to (the hook's own exit 3), not
+                    # because the tempdir's own OS-level symlink prefix
+                    # (e.g. macOS's /var -> /private/var) trips the new
+                    # raw-root ancestor check.
+                    str(root.resolve()),
+                    "check",
+                    "--smoke",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(result.stderr, r"hook smoke failed for .* exit 3")
+
     def test_mounted_config_ancestor_blocks_localize_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1992,6 +2124,333 @@ class IevoHookLifecycleTests(unittest.TestCase):
             ):
                 manager.disable(root)
 
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
+    def test_symlinked_root_rejects_direct_lifecycle_call(self) -> None:
+        # #169 follow-up: ensure_root_is_a_real_directory's own symlink/
+        # reparse-point check on the root argument itself is a separate
+        # contract from ensure_cli_root_is_not_redirected's ancestor walk --
+        # it is what protects a direct/library caller of
+        # localize()/check()/disable() that bypasses the CLI (and therefore
+        # never reaches main()'s new check) from being handed a symlinked
+        # root directly. A tracked git baseline is required here: without
+        # a ".git" marker, lifecycle_lock_path()'s own no-repo fallback
+        # calls ensure_lock_directory() on the root argument first and
+        # raises its own, different message before this test can reach the
+        # function under test; with ".git" present, lifecycle_lock_path()
+        # resolves the lock path through the symlink and only
+        # ensure_root_is_a_real_directory (via ensure_no_symlink_components)
+        # still sees the original, unresolved alias.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "repo"
+            root.mkdir()
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias = workspace / "repo-alias"
+            alias.symlink_to(root, target_is_directory=True)
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "managed path root must be a regular directory",
+            ):
+                manager.disable(alias)
+
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
+    @unittest.skipUnless(os.name != "nt", "POSIX symlink regression")
+    def test_symlinked_root_rejects_lifecycle_mutation_through_the_cli(self) -> None:
+        # #169: a symlinked --root must be rejected before any lifecycle
+        # mutation, not just a symlinked *component* underneath an already
+        # -real root (test_symlinked_config_ancestor_blocks_disable covers
+        # that separate case). Exercised through the real public CLI
+        # (subprocess, not manager.disable() directly), because the bug this
+        # regresses lives in main()'s own argument handling, before disable()
+        # is ever called. workspace is resolved up front (see run_manager's
+        # own comment): this machine's tempdir prefix (e.g. macOS's
+        # /var -> /private/var) is itself a symlink ancestor, and
+        # ensure_cli_root_is_not_redirected walks ancestors left to right --
+        # an unresolved workspace would make this test pass because it hit
+        # that prefix, not because of the "repo-alias" leaf this test
+        # actually means to exercise. The assertion below pins the flagged
+        # path to "alias" specifically so a regression that stops catching
+        # leaf symlinks (while some earlier, unrelated ancestor is still
+        # caught) cannot pass silently.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            root = workspace / "repo"
+            root.mkdir()
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias = workspace / "repo-alias"
+            alias.symlink_to(root, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(alias),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(
+                result.stderr,
+                "--root contains a symlink component.*" + re.escape(str(alias)),
+            )
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
+    @unittest.skipUnless(os.name != "nt", "POSIX symlink regression")
+    def test_symlinked_root_ancestor_rejects_lifecycle_mutation_through_the_cli(
+        self,
+    ) -> None:
+        # #169 follow-up (reopened by the repository owner's own post-merge
+        # review): a symlink anywhere in --root's ancestor chain must be
+        # rejected, not just a symlinked leaf. Here the final "repo"
+        # component is a real, non-symlink directory -- only its *parent*
+        # is an alias -- matching the owner's own reproduction exactly
+        # (alias-parent -> real-parent, --root alias-parent/repo). workspace
+        # is resolved up front for the same reason as the sibling leaf-alias
+        # test above: this machine's own tempdir prefix is itself a symlink
+        # ancestor on macOS, and without resolving first this test would
+        # pass because of that unrelated prefix rather than the
+        # "alias-parent" component it actually means to exercise.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            real_parent = workspace / "real-parent"
+            root = real_parent / "repo"
+            root.mkdir(parents=True)
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias_parent = workspace / "alias-parent"
+            alias_parent.symlink_to(real_parent, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(alias_parent / "repo"),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(
+                result.stderr,
+                "--root contains a symlink component.*" + re.escape(str(alias_parent)),
+            )
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
+    def test_mounted_root_rejects_lifecycle_mutation_before_resolution(self) -> None:
+        # #169 follow-up: the raw --root argument itself must be rejected
+        # if it is a mount point, even though it passes every symlink/
+        # reparse check -- ensure_cli_root_is_not_redirected must call
+        # os.path.ismount(root) directly, not rely on the descendant-only
+        # mount check ensure_no_symlink_components already does for paths
+        # *below* an already-accepted root. A real mount can't be created
+        # portably in a test, so this patches os.path.ismount to report the
+        # temporary directory itself as mounted, exercised directly against
+        # the new function (in-process, not through the CLI subprocess --
+        # the patch cannot cross a process boundary).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+
+            def fake_ismount(path: object) -> bool:
+                return Path(path) == root
+
+            with mock.patch.object(
+                manager.os.path, "ismount", side_effect=fake_ismount
+            ):
+                with self.assertRaisesRegex(
+                    manager.HookLifecycleError,
+                    "--root must be a regular, non-mounted directory",
+                ):
+                    manager.ensure_cli_root_is_not_redirected(root)
+
+    def test_non_directory_root_rejects_lifecycle_mutation_through_the_cli(
+        self,
+    ) -> None:
+        # #169 follow-up: --root must be rejected when it exists, has no
+        # symlink/reparse ancestor, and is not itself a mount point, but is
+        # not a directory at all (e.g. a plain file) -- the
+        # "not stat.S_ISDIR(...)" operand of
+        # ensure_cli_root_is_not_redirected's leaf check, independent of the
+        # "or os.path.ismount(...)" operand the mount test above exercises.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            not_a_directory = workspace / "not-a-directory"
+            not_a_directory.write_text("", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(not_a_directory),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(
+                result.stderr, "--root must be a regular, non-mounted directory"
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction regression")
+    def test_junctioned_root_rejects_lifecycle_mutation_through_the_cli(self) -> None:
+        # #169 follow-up: resolve workspace up front and pin the assertion to
+        # the junction itself, matching the POSIX symlink siblings above --
+        # an unresolved workspace plus a generic message-shape assertion
+        # would let this test pass because of an unrelated ancestor rather
+        # than the "repo-alias" junction it actually means to exercise, and
+        # this leg only runs in the required native Windows matrix, so that
+        # defect class would be invisible to the macOS discovery run.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            root = workspace / "repo"
+            root.mkdir()
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias = workspace / "repo-alias"
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(alias), str(root)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(alias),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(
+                result.stderr,
+                "--root contains a symlink component.*" + re.escape(str(alias)),
+            )
+            self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
+            self.assertTrue((root / target).is_file())
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction regression")
+    def test_junctioned_root_ancestor_rejects_lifecycle_mutation_through_the_cli(
+        self,
+    ) -> None:
+        # #169 follow-up: Windows sibling of
+        # test_symlinked_root_ancestor_rejects_lifecycle_mutation_through_
+        # the_cli above -- an *ancestor* junction, not the leaf itself
+        # (test_junctioned_root_rejects_lifecycle_mutation_through_the_cli
+        # covers that separate, leaf-only case). Without this, the
+        # ancestor-walk branch of ensure_cli_root_is_not_redirected -- the
+        # exact code this reopened #169 -- would have no coverage on the
+        # required native Windows matrix, only on the macOS discovery run.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            real_parent = workspace / "real-parent"
+            root = real_parent / "repo"
+            root.mkdir(parents=True)
+            self.create_gitignore(root, upstream_shims=False)
+            target = manager.SCRIPT_TARGETS["correction-capture"]
+            self.write_json(root, manager.CLAUDE_SHARED, {"hooks": {}})
+            local = {
+                "hooks": {"UserPromptSubmit": [self.group(self.command_entry(target))]}
+            }
+            self.write_json(root, manager.CLAUDE_LOCAL, local)
+            self.create_generated_files(root)
+            self.commit_tracked_baseline(root)
+            local_path = root / manager.CLAUDE_LOCAL
+            local_before = local_path.read_text(encoding="utf-8")
+
+            alias_parent = workspace / "alias-parent"
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(alias_parent), str(real_parent)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(manager.__file__).resolve()),
+                    "--root",
+                    str(alias_parent / "repo"),
+                    "disable",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(
+                result.stderr,
+                "--root contains a symlink component.*" + re.escape(str(alias_parent)),
+            )
             self.assertEqual(local_path.read_text(encoding="utf-8"), local_before)
             self.assertTrue((root / target).is_file())
 

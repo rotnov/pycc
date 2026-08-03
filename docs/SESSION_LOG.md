@@ -11,6 +11,26 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-02 — Issue #109 fully resolved: `frontend-perf-measure`/`frontend-perf-gate` moved to `ubuntu-latest`
+
+**Authoritative checkpoint:** `origin/main`'s tip is `c271d8d004b8fb4a4f8702330c70a76bae0c6314`.
+
+**What happened:** issue #109 (`frontend-perf-gate` false-positive regressions on `macos-14`, blocking PR-10 and all of v0.2 PR-11-14) is closed for real. D-112 (`docs/DECISIONS.md`) moves `frontend-perf-measure`/`frontend-perf-gate` from `macos-14` to `ubuntu-latest`, backed by 5 real `frontend-perf-shadow.yml` runs (deltas `+0.6819%`, `-0.8876%`, `-1.5595%`, `+0.5368%`, `+0.8018%`, all under the `>2%` threshold, max magnitude `1.5595%` vs. `macos-14`'s historical `+3.14%` to `+24.5%`) gathered *before* activating, matching this project's own evidentiary bar (D-095/D-096/D-101 precedent).
+
+Delivered as 7 D-103 propose/activate rounds (`docs/superpowers/plans/2026-08-01-issue-109-frontend-perf-gate-runner-move.md`, including 4 dated Corrections documenting real mid-execution discoveries — read it before touching `tests/fixtures/policy-successor-manifest.json` again): propose-checker (#269) → activate-checker (#270) → shadow-measurement evidence-gathering → propose-digest-coexist (#271) → activate-digest-coexist (#273) → propose-`ci.yml` (#277) → **round 7a** (#278, activates `ci.yml` to D-112) → **round 7b** (#283, activates the paired `scripts/test_check_roadmap_evidence.rb` fix).
+
+**Two administrator-authorized emergency exceptions, both disclosed, minimal-scope, and immediately reverted** (per `docs/REPOSITORY_GOVERNANCE.md`'s Emergency Path, mirroring D-054/incident #125):
+1. **Round 7a** hit a genuine one-commit deadlock: activating `ci.yml` is mandatory for every PR right now (D-103's base-staged check requires every candidate to already carry the staged successor, confirmed empirically against a synthetic unrelated candidate), but self-authorization independently forbids fixing `scripts/test_check_roadmap_evidence.rb`'s two now-stale assertions in the same commit (no prior staged successor existed for that file). No single self-authorized commit could satisfy both `audit` and `ci-gate`. Resolved via a public incident issue (#282, closed) and a ~1-minute `ci-gate`-only relaxation, merge, immediate restore.
+2. **Round 7b** hit a second, different deadlock discovered live: the `audit` job's "Test trusted checker" step always runs `scripts/test_check_roadmap_evidence.rb` against `main`'s own checked-out revision (D-080's trust boundary), never the candidate's. Between round 7a and 7b, `main` was self-inconsistent (live `ci.yml` = D-112, live test file still asserted D-100) — this broke `audit` for *every* open/fresh PR repo-wide, confirmed against #279/#280/#281, and could only be fixed by round 7b's own merge, which `audit` itself was blocking. Resolved the same way (user-authorized, `audit`-only relaxation, merge, immediate restore) — **filed only *after* execution, not before**, contrary to the Emergency Path's own required ordering; incident #285 was filed retroactively to close that specific process gap once a Codex review on this PR caught it. A future occurrence must file first.
+
+**Correction (caught by Codex review on this PR, not self-discovered):** the "reusable finding" originally recorded here was wrong about *why* the scoped endpoint failed. GitHub's documented "Update status check protection" operation for `.../protection/required_status_checks` is `PATCH`, not `PUT` — verified directly (`PATCH` succeeds immediately with a minimal `{strict, contexts}` body). This session used `PUT` on that scoped path, got a 404, and misdiagnosed it as a repo-level quirk (even testing and ruling out a Rulesets migration as the cause) rather than checking the HTTP verb first. Both emergency exceptions above were actually executed via the broader top-level `PUT .../protection` (full-object replacement, every field specified explicitly and verified unchanged) — functionally fine here since nothing was omitted, but unnecessarily broad for what was needed, and a real risk in general (an omitted field resets that control). **For any future occurrence, use the narrow, correct command:** `gh api -X PATCH repos/OWNER/REPO/branches/main/protection/required_status_checks -f strict=true -f 'contexts[]=...'` — not the top-level `PUT`.
+
+**Docs sweep landed alongside round 7a:** `docs/DECISIONS.md` (D-112 → `accepted` with the Update note above), `docs/ROADMAP.md`, `docs/TESTING.md`, `docs/REPOSITORY_GOVERNANCE.md`, `docs/DELIVERY_PLAN.md` — all previously described the live workflow/checker allowlist as D-100-only; a Codex review pass on PR #278 caught this and it's now fixed. `REVIEWED_PERF_CI_WORKFLOW_SHA256S` still coexists `[D100, D112]`; retiring D100 is an explicit, separate, not-yet-scheduled follow-up round (same propose/activate shape, lower urgency now that the repo-wide blocking pressure is gone).
+
+**What's next:** PR-10 (#236, `v0.2 PR-10: Ty representation migration + monomorphization foundation + list[int] thin slice`) is content-complete and was merge-blocked purely on issue #109, now closed (with a summary comment linking this resolution). Confirmed `mergeable: CONFLICTING` against the new `main` tip — needs a real rebase onto `c271d8d` next, then CI/pinned-review/merge. PR-11 (dict/set/tuple, content-complete per earlier session entries) and PR-12 through PR-14 remain sequenced after it, per `docs/DELIVERY_PLAN.md`.
+
+---
+
 ## 2026-08-01 — v0.2 PR-11b complete: tuple[int|bool|float, ...] works end-to-end; PR-11's combined scope (dict/set/tuple) is now content-complete but still un-mergeable
 
 **Snapshot evidence:** branch `feat/v0-2-pr11-dict-set-tuple`, still stacked on the unmerged `feat/v0-2-pr10-ty-representation-migration` (PR [#236](https://github.com/rotnov/pycc/pull/236)). Head `77e122c`, 8 commits ahead of PR-11a's own last commit (`431c7f3`, the entry below). Re-checked live state immediately before writing this entry (D-078 discipline): PR #236 is still `OPEN`, head unchanged at `f4b9517`, but `mergeable` has flipped from `MERGEABLE` to **`CONFLICTING`** since the last check (`origin/main` has advanced to `de16f7e` via several more merged PRs). Issue [#109](https://github.com/rotnov/pycc/issues/109) is still `OPEN`; its most recent comments (all posted earlier in this same session, before this task) are further investigation of the CI-gate methodology question, not a user scope decision — nothing new to act on. No GitHub PR is open for `feat/v0-2-pr11-dict-set-tuple` — see "Not done" below.
@@ -23,7 +43,7 @@ history alone, not a full narrative.
 - **A real correctness question (D-061 tagged-int representation) verified, not assumed:** the plan's own sketch never addressed whether a tuple's `int` field should be stored tagged or untagged (unlike `list[int]`'s `PyIntListObj`, which deliberately stores *raw* untagged elements and converts at the pycc_rt boundary). Task 5's implementer determined empirically that a tuple field crosses no such boundary and must stay in `Scalar::Int`'s ordinary tagged form throughout — confirmed by compiling and running a real program with a 12-digit value and a runtime-computed negative value, both byte-identical to CPython. Mirroring the list path's untag/retag conversion here would have silently double-tagged every integer field.
 - **A real, pre-existing (not tuple-specific) capability gap discovered during the docs/conformance task:** the plan's own D-116 claimed a tuple value could be an unannotated function's inferred return/argument value "exactly like `list[int]`/`dict[str,int]`/`set[int]` already can be." Task 7 found this is **false for all four container types**: `pycc_types`' private-helper signature-inference solver is scalar-only by construction (`collect_expr_constraints` returns no unification term for any of the four container literal kinds), so an entirely unannotated function can never have a container-typed parameter or return type inferred from real source today — confirmed via three direct reproductions against the real compiler, one of which returns an actively misleading diagnostic ("local name not bound" for a name that clearly is bound). The final whole-branch review found this correction was itself still incomplete: even a fixed solver would not be sufficient, since `emit_expr`'s own `MirExpr::Call` result-dispatch has no arm for any container return type either — a second, independent blocker, now documented alongside the first. Handled per this project's established ADR convention: D-116's original body was never edited, only appended to (a dated Correction note, then a further dated note from the final-review fix wave), mirroring D-109's own precedent for a similar prior correction.
 - **New diagnostics:** `T0039` (element-type gate), `T0040` (index gate) — each with a `tests/diagnostics/d00NN_*` fixture pair, verified against the real CLI once `pycc_mir`'s own piece landed (the fixtures were first captured via a standalone probe while the workspace didn't build end-to-end yet, then re-verified for real once it did — both passed with no wording drift).
-- **New ADRs:** D-115 (representation), D-116 (scope, plus its own two correction notes above). Also backfilled D-111–D-114's summary-table rows in `docs/DECISIONS.md`, an oversight from PR-11a's own Task 1 that had gone unnoticed until this session's Task 1 happened to touch the same table.
+- **New ADRs:** D-115 (representation), D-116 (scope, plus its own two correction notes above). Also backfilled D-121–D-124's summary-table rows in `docs/DECISIONS.md`, an oversight from PR-11a's own Task 1 that had gone unnoticed until this session's Task 1 happened to touch the same table.
 - **Conformance evidence:** `tests/fixtures/tuple_heterogeneous.py` — rebased mid-task onto Task 5's own already-CPython-verified smoke program (not the plan's original sketch, which relied on the now-known-broken unannotated-function-return inference) — verified byte-for-byte against real CPython 3.14.6 in both `--debug`/`--release`. No checkbox flipped in `docs/PYTHON_STANDARDS.md` (no CI-observed evidence exists yet for this branch; would repeat this project's own documented D-088 overclaiming mistake).
 - **Final whole-branch review** (pinned `ievo:deep-reviewer`, opus, full `431c7f3..92c3e85` diff — both PR-11a and PR-11b together, not just this session's own tasks): no blockers. Confirmed every exhaustive `Scalar`/`Ty`/`MirExpr`/`HirExpr` match across the *combined* diff stayed exhaustive, and that tuple's new arms don't silently shadow dict/set's already-shipped behavior anywhere a single task's own narrower review couldn't see. Found 4 doc-accuracy findings (3 warning, 1 note) — the two-blocker correction above, a stale line-number ADR citation, a real contradiction between `docs/ROADMAP.md`'s PR-11a and PR-11b paragraphs (a genuine oversight: 5 other docs got the same "tuple is no longer unimplemented" correction during Task 7's sweep, this one file was missed), and the disclosure that `print(t)`/`if t:` on a tuple now panics honestly where a clean diagnostic existed one commit ago (correct behavior, just previously undocumented) — all fixed in one wave and re-reviewed clean.
 
@@ -37,16 +57,115 @@ history alone, not a full narrative.
 3. Once PR-10 unblocks: this branch will need a real rebase onto the then-current `main` (already `CONFLICTING` as of this entry, and `main` keeps advancing) before PR-11's own combined PR can be opened.
 4. `docs/ROADMAP.md` now carries 7 total follow-ups across PR-11a+PR-11b: `set[int]`'s missing `in`-based membership test; future combined (non-leak-only) refcounting for `list`/`dict`/`set`; `tuple[...]` iteration; tuple-unpacking assignment; a `tuple[...]` annotation syntax; the cross-container (list/dict/set/tuple alike) unannotated-function-boundary signature-inference gap; and its own second blocker (`emit_expr`'s missing container-typed `Call`-result arms). None of these are this session's task — recorded so a fresh session doesn't need to rediscover them.
 
+---
+
+## 2026-08-01 — Hardened the three autopilot skills after a 5-dimension adversarial audit
+
+**Authoritative checkpoint:** `origin/main`'s tip is `26e415e` (same commit
+the three skills merged at, below). This session's work lives on branch
+`claude/issue-skill-hardening`, not yet merged — see its own pull request
+once opened for the exact commit range and CI/review outcome.
+
+**What happened:** while shipping issue #256 (`pycc init` rollback fix,
+separate work, not part of this entry), a real gap surfaced live:
+`issue-implement`'s "one CI re-run" instruction didn't distinguish a job
+that gathers fresh data from one that only recomputes an already-uploaded
+upstream artifact — the latter reproduces an identical failure on rerun by
+construction, which is not evidence the failure "persisted." That prompted
+a broader question: what else in the three skills has this shape? A
+5-dimension parallel audit (33 agents: 5 finders, then an adversarial
+verifier per candidate finding) read all three skills' full text against
+`AGENTS.md`, `docs/DECISIONS.md`, `docs/AGENT_TOOLING.md`, and the eval/
+oracle scripts. 28 candidate findings, 12 confirmed after independent
+re-verification against the live text (16 refuted).
+
+**Design correction worth recording:** the first design draft routed most
+of the newly-found gaps to a full autopilot halt ("stop and report"). The
+user pushed back directly ("не похоже это на автопилот цикл", "слишком
+много стопов") — the standing directive is full autopilot, stop only on a
+genuinely unsolvable problem. The design was reworked around a strict test:
+would a *different* issue hit this same wall? Only "the pinned reviewer
+cannot be bound" does (an environment failure, not an issue-specific one);
+every other stop condition became **per-issue** — `issue-select`'s loop now
+carries forward an in-run denylist of issues that hit a per-issue stop
+condition, sets that one issue aside, and keeps working the rest of the
+pool instead of halting or reselecting and re-failing it every iteration.
+
+**14 fixes shipped** (design: `docs/superpowers/specs/2026-08-01-issue-autopilot-skill-hardening-design.md`;
+plan: `docs/superpowers/plans/2026-08-01-issue-autopilot-skill-hardening.md`):
+review-thread resolution now distinguishes bot-authored (self-resolvable)
+from human-authored (reply only) threads; `issue-to-plan`'s delegation
+exception is a closed, named list instead of an open self-declared class;
+`issue-implement` reciprocally acknowledges `issue-select`'s
+standing-directive closure authority (previously asserted only on
+`issue-select`'s side); a two-tier issue-trust policy (owner-authored or
+`approved`-labeled is trusted, otherwise an explicit security check is
+required) across all three skills; the systemic/per-issue stop-condition
+split above; a live re-check of the target issue's own state before
+opening the PR and before merging; a bounded retry on a rejected merge;
+`issue-to-plan` gained a 5-round review-loop cap it previously lacked
+entirely; a concrete "at or near tip" definition replacing an undefined
+proximity feel; a new capability letting `issue-implement` execute this
+repository's established two-PR CI-digest stage-then-activate pattern
+(D-080), chosen as full automation after the trust-anchor blast-radius risk
+was raised and the user confirmed that choice explicitly; the informal
+`P1:`/`P2:`/`P3:` priority-title-prefix convention promoted into D-111 (no
+GitHub priority labels exist in this repository — live-verified, 85/104
+open issues); `scripts/validate_agent_assets.py`'s structural eval-contract
+check extended from 2 to all 5 alpha skills; and the previously-untestable
+"Inconclusive" triage outcome now has real eval coverage and a
+`triage_action` oracle that can actually distinguish it from "Still
+current."
+
+**Verified before this entry:** full local gate set green —
+`scripts/test_run_alpha_skill_evals.py` (30 tests) and
+`scripts/test_validate_agent_assets.py` (138 tests, 363 subtests) via
+`python3 -m pytest`, both `validate_agent_assets.py`/
+`validate_agent_policies.py`, `ruby scripts/check_roadmap_evidence.rb`, both
+marketplace checkers, and `run_alpha_skill_evals.py --client claude`/
+`--client codex` end to end against a locally built `pycc` binary — all
+exit 0, checked directly (no pipe hiding a real exit code, per this
+session's own earlier-learned lesson).
+
+**Second audit pass, run before this entry:** 10 independent checkers
+re-verified all 12 originally-confirmed findings against the actual
+committed text, not the design's stated intent. 8 were genuinely resolved
+outright; 2 were not, and 3 more were resolved but flagged thin regression
+coverage — all 5 fixed and re-verified locally before this entry:
+
+- **#1 not resolved on the first pass:** item 4's bot/human thread-resolution
+  split never made it into step 7's own procedural text, which still said
+  "resolve the thread afterwards" unconditionally — an agent following the
+  workflow section (as opposed to the authorization summary) would have
+  reproduced the exact original defect. Fixed, and bot detection tightened
+  to a concrete signal (GitHub API author `type: Bot` / a known reviewer-bot
+  login) instead of one named example.
+- **#3 not resolved on the first pass:** the "at or near tip" evidence-bar
+  fix landed only in `issue-select`; `issue-implement`'s own near-identical
+  step 2 text — which the original finding's evidence explicitly cited —
+  was untouched, so a direct `/issue-implement` invocation bypassing
+  `issue-select`'s screen still hit the pre-fix behavior. Fixed.
+- **#8, #11, #12:** resolved, but each had a real regression-coverage gap
+  the checkers demonstrated empirically (deleting the fix's own text left
+  every test green). All three closed with a pin or a targeted mutation
+  test.
+
+**Next session:** push the branch, open the pull request, D-078 monitoring,
+merge, then resume the `issue-select` autopilot loop per the user's standing
+directive.
+
+---
+
 ## 2026-08-01 — v0.2 PR-11a complete: dict[str, int] + set[int] both work end-to-end via subagent-driven-development
 
 **Snapshot evidence:** branch `feat/v0-2-pr11-dict-set-tuple`, stacked on the still-unmerged `feat/v0-2-pr10-ty-representation-migration` (PR #236, content-complete, blocked only on shared issue #109 — see the entry below). Head `8184eb7`, 21 commits ahead of the PR-10 branch tip (`f4b9517`). No GitHub PR opened yet — see "Not done" below.
 
 **What shipped:** `dict[str, int]` and `set[int]` are now fully working containers through the real `pycc build`/`pycc run` CLI, executed via 11 tasks under `docs/superpowers/plans/2026-08-01-v0-2-pr11-dict-set.md` (subagent-driven-development: fresh implementer per task, task-scoped reviewer, fix loop, then one final whole-branch review). `tuple[...]` is explicitly **not** part of this work — it needs a fundamentally different (non-hashed, LLVM-struct-based, no heap object) representation and has its own not-yet-written follow-up plan; `docs/DELIVERY_PLAN.md` row 11 bundles all three into one eventual PR-11, but this session split the *work* into separate plans per an early `advisor()` call that flagged the combined scope as too large for one plan document.
 
-- **dict[str, int]:** literal construction, `d[k]` read, `d[k] = v` insert-or-update (a deliberate asymmetry with `list[int]`'s own read-only indexing — added specifically so the insertion-order guarantee is genuinely exercised by mutation, not just literal order), `len(d)`, `for k in d:` (iterates keys in insertion order). Representation: `PyDictObj` (`crates/pycc_rt/src/lib.rs`), a dense insertion-ordered array of `(key, value)` pairs with **linear-scan** lookup (D-111) — no hash table, no hash function, no probing — reusing the compiler's already-existing `pycc_rt_str_cmp` for key equality. Leak-only refcounting (D-114), extending `list[int]`'s own D-107 precedent.
+- **dict[str, int]:** literal construction, `d[k]` read, `d[k] = v` insert-or-update (a deliberate asymmetry with `list[int]`'s own read-only indexing — added specifically so the insertion-order guarantee is genuinely exercised by mutation, not just literal order), `len(d)`, `for k in d:` (iterates keys in insertion order). Representation: `PyDictObj` (`crates/pycc_rt/src/lib.rs`), a dense insertion-ordered array of `(key, value)` pairs with **linear-scan** lookup (D-121) — no hash table, no hash function, no probing — reusing the compiler's already-existing `pycc_rt_str_cmp` for key equality. Leak-only refcounting (D-124), extending `list[int]`'s own D-107 precedent.
 - **set[int]:** literal construction with dedup-at-insert (linear scan via `pycc_rt_int_set_add`), `len(s)`, `for x in s:` (pycc's own first-insertion order — **not** compared against CPython, since CPython's own set iteration order is unspecified/hash-dependent). No membership test (`in`) — the `in` operator has no HIR/type-checker/codegen support anywhere in this compiler yet (it parses fine via `ruff_python_ast`'s `CmpOp::In`, but `pycc_hir`'s lowering rejects it with a generic `C0001` capability diagnostic, same as `is`/`is not`/chained comparisons) — tracked as a `docs/ROADMAP.md` follow-up. No indexing either (real Python sets aren't subscriptable, so this is correct behavior, not a scope cut).
 - **New diagnostics:** `T0035`/`T0036` (dict literal homogeneity / "only dict[str,int] is compiled" gate), `T0037`/`T0038` (same pair for set) — each with a `tests/diagnostics/d00NN_*` fixture pair, mirroring `list[int]`'s own `T0032`-`T0034` precedent from PR-10.
-- **New ADRs:** D-111 (dense-array-plus-linear-scan representation, not the "swiss table" `docs/RUNTIME.md`/`docs/TYPE_SYSTEM.md` aspirationally name — that stays the v1.0 target), D-112 (only `dict[str,int]`/`set[int]` get real codegen — every other key/value/element type type-checks structurally via the already-fully-general `Ty::Dict`/`Ty::Set` but is rejected pre-codegen), D-113 (the dict/set operation-scope decisions above, including a documented, deliberate CPython divergence added during the final review's fix wave: mutating a dict during `for k in d:` iterates the grown dict in pycc, where CPython raises `RuntimeError: dictionary changed size during iteration`), D-114 (leak-only refcounting for both new heap object types).
+- **New ADRs:** D-121 (dense-array-plus-linear-scan representation, not the "swiss table" `docs/RUNTIME.md`/`docs/TYPE_SYSTEM.md` aspirationally name — that stays the v1.0 target), D-122 (only `dict[str,int]`/`set[int]` get real codegen — every other key/value/element type type-checks structurally via the already-fully-general `Ty::Dict`/`Ty::Set` but is rejected pre-codegen), D-123 (the dict/set operation-scope decisions above, including a documented, deliberate CPython divergence added during the final review's fix wave: mutating a dict during `for k in d:` iterates the grown dict in pycc, where CPython raises `RuntimeError: dictionary changed size during iteration`), D-124 (leak-only refcounting for both new heap object types).
 - **A real, self-found-and-fixed use-after-free:** Task 5 (dict codegen)'s own mandatory pinned-reviewer pass (D-068) caught a bug where a bare-variable `str` key handed to `pycc_rt_dict_set` wasn't increfed, so a later reassignment of the source variable could free memory the dict still pointed to. Fixed via the existing `incref_if_str_duplicate` helper (already used elsewhere in the file for the identical class of problem) and independently re-verified this session via direct object-file symbol inspection with a real negative control (a literal-key build has no `str_incref` call; a variable-key build does), not just by re-running the fix's own tests.
 - **Conformance evidence:** `tests/fixtures/dict_order.py` (construction + new-key insert + existing-key update + iteration, verified byte-for-byte against real CPython 3.14.6 in both `--debug`/`--release`) and `tests/fixtures/pep_0585_set_int.py` (order-independent `len()` only). `docs/PYTHON_STANDARDS.md`'s dict-insertion-order row is deliberately left `☐` and the PEP 585 row's `✅` deliberately left describing only `list[int]`'s already-CI-observed evidence — both fixtures pass locally but haven't been observed passing in real CI yet (this branch hasn't been pushed through a CI run as of this entry), and flipping either checkbox before that would repeat this project's own documented D-088 "PEP 526 too-narrow/overclaimed wording" mistake in the overclaiming direction.
 - **Final whole-branch review** (pinned `ievo:deep-reviewer`, opus, full `f4b9517..4060522` diff): no blockers. Specifically re-verified that `list[int]`'s read-only-item-assignment invariant — which moved this session from "structurally impossible" (no HIR representation existed) to "one `else`-branch in `check_dict_set`" — still correctly rejects both `list[int]` and `set[int]` bases, not just the one container type each individual task's own narrower review could see. Found 3 real completeness gaps (missing diagnostic fixtures for the 4 new codes; `set[int]` had zero non-`#[ignore]`d end-to-end CLI test while `dict` had 4; the CPython-divergence-during-iteration point above went undocumented) plus 2 minor doc/robustness nits — all 5 fixed in one follow-up commit wave, then re-reviewed clean.
@@ -58,6 +177,79 @@ history alone, not a full narrative.
 2. This branch has never been pushed through real CI — `docs/PYTHON_STANDARDS.md`'s two pending checkbox flips (dict-insertion-order, PEP 585 widening) need that evidence first.
 3. No GitHub PR is open for this branch yet, and none should be opened until (a) the tuple work lands on this same branch and (b) PR-10's own merge-blocking issue #109 resolves (this branch is stacked on PR-10 and inherits its blocked state).
 4. Two `docs/ROADMAP.md` follow-ups now on record: `set[int]`'s missing `in`-based membership test (blocked on a project-wide `in` operator feature that doesn't exist yet), and wiring real (non-leak-only) refcounting for `list[int]`/`dict[str,int]`/`set[int]` together in one future pass, since the incref/decref call-site shape would be identical across all three.
+
+---
+
+## 2026-08-01 — Three new autopilot skills; four issues closed via them
+
+**Authoritative checkpoint:** `main`'s tip is `e026fc6` (merge of
+[PR #254](https://github.com/rotnov/pycc/pull/254)). This session added three
+new project-local alpha skills — `issue-to-plan`, `issue-implement`,
+`issue-select` — recorded in `docs/AGENT_TOOLING.md`'s "Project-local alpha
+skills" section, plus a language rule in `AGENTS.md` (English for every
+durable artifact, the user's own language for conversation). This entry's
+own branch (`claude/new-skill-development-86a548`) is what carries that
+work into `main`; see its pull request for the exact commit range.
+
+**What each skill does:** `issue-to-plan` turns one GitHub issue into a
+verified implementation plan, re-establishing the default branch and open
+pull requests, treating the issue's own text as dated evidence to
+re-verify rather than trust, and running an adversarial review loop before
+publishing the plan as an issue comment. `issue-implement` takes one issue
+end to end — staleness triage, plan acquisition, implementation under
+D-021's preflight, the pinned D-068 deep-review loop, PR creation,
+D-078-checkpointed CI/thread monitoring, and merge — with an enumerated,
+issue-scoped public-write authorization so the run needs no per-step
+confirmation. `issue-select` chooses the next issue for that pipeline:
+full open-list inventory, a staleness screen that closes every provably
+stale issue it finds, a blocker screen (dependency, roadmap/delivery-plan
+mismatch, open-PR collision, maintainer-only authority), P1>P2>P3-then-
+smaller-wins scoring, and an adversarial advisor round that answers "does
+this need the maintainer?" so that question is never escalated to the
+user.
+
+**Four issues closed via this pipeline this session**, each merged
+individually with its own PR, plan comment, and pinned-review history —
+not summarized further here since each PR's own description is the
+authoritative record:
+[#238](https://github.com/rotnov/pycc/pull/238) (`pycc version --verbose`
+contract, closing #38),
+[#252](https://github.com/rotnov/pycc/pull/252) (module-value-binding
+call-shadowing, D-110, closing #133 — 7 review rounds, 2 real blockers
+found and fixed),
+[#253](https://github.com/rotnov/pycc/pull/253) (`pycc init` overwrite
+refusal, closing #237 — `issue-select`'s first live pick),
+[#254](https://github.com/rotnov/pycc/pull/254) (missing-linker-driver
+diagnostic, closing #250 — `issue-select`'s second pick).
+
+**Lessons folded back into the skills as they were learned** (each skill's
+own git history carries the full reasoning): `issue-to-plan` learned to
+judge documentation-currency by a document's own granularity convention,
+not by grepping for literal mentions, and to publish decision-log-entry
+numbers derived from an open pull request as indicative rather than fixed.
+`issue-implement` learned to verify review findings by reproducing the
+predicted failure rather than re-deriving it, to treat a fix to a review
+finding as *more* suspect than the original diff (the #133 run's two real
+blockers were both introduced by fixes to earlier findings), and that a
+shell pipeline can silently destroy a gate's real exit code
+(`cmd | tail; echo $?` reports the pager's exit, not the gate's — this
+nearly shipped a failing coverage run as green once). `issue-select`
+learned to enumerate the complete same-priority peer set for its
+adversarial advisor round rather than a curated shortlist, and to state
+collision claims per layer (code vs. docs) rather than as an unqualified
+"zero collision."
+
+**Known gap, honestly recorded:** none of the three skills has bound
+executable eval runners yet (`scripts/run_alpha_skill_evals.py` declares
+no case for any of them), matching `pycc`/`pycc-feedback`'s own promotion
+gate — binding those evals is a prerequisite before any of the three can
+leave the project-local alpha set.
+
+**Next session:** the `issue-select` loop is designed to keep running
+(pick → plan → implement → merge → re-baseline) until the user stops it or
+the pool has no survivors; resuming it needs no special setup beyond
+invoking `/issue-select` again from a refreshed `main`.
+
 
 ## 2026-08-01 — v0.2 PR-10 content-complete, still blocked on #109; both candidate fixes found to be governance-gated; pivoting to PR-11
 

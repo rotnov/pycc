@@ -3,8 +3,8 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": ".github/workflows/ci.yml",
-      "sha256": "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
+      "source_path": "tests/fixtures/policy-successors/ci.yml",
+      "sha256": "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
@@ -18,8 +18,8 @@
     },
     {
       "path": "scripts/check_roadmap_evidence.rb",
-      "source_path": "scripts/check_roadmap_evidence.rb",
-      "sha256": "f7e5b618b5801d0ea07fcd354cdfbbcdf341bdfeb3c6c0b06c62c4b209682f97"
+      "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
+      "sha256": "fc0cc7a44ced3930a18bc7031bfdf20bfd75cfd89f5a2b8e12f27d19de090ba9"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -43,8 +43,8 @@
     },
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
-      "source_path": "scripts/test_check_roadmap_evidence.rb",
-      "sha256": "03db12e8529ff32c2c200f66da10b171102201f0234fdaa6efa6cabea85d44b6"
+      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
+      "sha256": "24048313a1124414e2f02c33a39cc984c359be10ed8b18830a575cfbeb0de56c"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
@@ -60,6 +60,16 @@
       "path": "tests/fixtures/d100-compose-d91-d99-ci.yml",
       "source_path": "tests/fixtures/d100-compose-d91-d99-ci.yml",
       "sha256": "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
+    },
+    {
+      "path": "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml",
+      "source_path": "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml",
+      "sha256": "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
+    },
+    {
+      "path": "tests/fixtures/d114-frontend-perf-threshold-ci.yml",
+      "source_path": "tests/fixtures/d114-frontend-perf-threshold-ci.yml",
+      "sha256": "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
     },
     {
       "path": "tests/fixtures/d51-paired-ci.yml",

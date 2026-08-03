@@ -104,14 +104,22 @@ identical. D-062 retains that classifier and the existing `>2%` block for
 changed source, but fixes the sample plan at five complete runs per revision.
 
 The active `.github/workflows/ci.yml` is byte-identical to the reviewed
-[`d100-compose-d91-d99-ci.yml`](../tests/fixtures/d100-compose-d91-d99-ci.yml),
-and the allowlist contains only its digest. Its performance-job content remains
-byte-identical to the reviewed D-062 fixture. D-051, D-056, D-062, D-080,
-D-084, pre-D-100 D-091, and pre-D-100 D-099 remain historical audit evidence,
-but the active policy rejects their whole-workflow digests; D-048 remains absent. Every pull
-request and `main` push still measures both exact revisions inside its own run,
-so no successful external baseline artifact or administrative bootstrap state
-is required.
+[`d112-ubuntu-frontend-perf-ci.yml`](../tests/fixtures/d112-ubuntu-frontend-perf-ci.yml)
+(D-112: `frontend-perf-measure`/`frontend-perf-gate` moved from `macos-14` to
+`ubuntu-latest`, confirmed by five real shadow-measurement runs before
+activation). The allowlist currently accepts both D-100's and D-112's
+whole-workflow digests (a deliberate coexist window per D-103's
+propose/activate discipline — a single PR cannot both change a protected
+target's bytes and authorize that change), pending a later, separate round
+that retires D-100. `frontend-perf-gate`'s comparator logic and D-062's
+five-replicate/`>2%` contract are unchanged; only the job's runner and LLVM
+install step differ from the D-062 fixture, so its content is no longer
+byte-identical to that fixture, though the reviewed behavior it exercises is
+the same. D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091, pre-D-100
+D-099, and now D-100 itself remain historical audit evidence; D-048 remains
+absent. Every pull request and `main` push still measures both exact
+revisions inside its own run, so no successful external baseline artifact or
+administrative bootstrap state is required.
 
 PR #131 and its post-merge main run later gave contradictory `+0.10%` and
 `+3.66%` outcomes for byte-identical Git trees, proving that one paired median

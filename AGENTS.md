@@ -18,6 +18,7 @@
 
 ## Keep documentation current
 
+- Write every durable artifact in English: documentation and specifications under `docs/`, decision entries, `AGENTS.md` and its imports, code comments and identifiers, tests, skills, commit messages, pull-request titles and bodies, and anything published to the issue tracker. Converse with the user in the user's own language, matching whatever language they write in; that choice never changes the language of anything written into the repository or published upstream. Translate the user's intent into English artifacts rather than mirroring their language into the tree.
 - Documentation work is part of every implementation task. Update all affected documentation in the same change and commit as the code; a change is incomplete while its docs describe the old behavior.
 - Keep descriptions honest about what exists now versus what is planned. Update examples, commands, status markers, acceptance criteria, and cross-references when their underlying behavior changes.
 - Keep `docs/ROADMAP.md` current in the same pull request whenever behavior, platform support, milestone acceptance evidence, or delivery sequencing changes. Its current-status section describes the repository tree in the commit that contains it: count behavior and evidence added by that same commit, but never count work that exists only in another open pull request or unmerged branch.
@@ -57,7 +58,7 @@
 - Do not report expected behavior, ordinary project failures, or unverified suspicions. Gather enough evidence to make the report actionable and avoid automated issue spam.
 - Link the upstream issue in the task summary and in the local PR when the reported bug affects the change being delivered.
 
-## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution), [D-025](docs/DECISIONS.md#d-025-registered-contracts-for-shared-hook-targets), [D-077](docs/DECISIONS.md#d-077-project-local-ievo-hook-lifecycle-is-symmetric), [D-081](docs/DECISIONS.md#d-081-harden-the-project-local-ievo-lifecycle-boundary))
+## Keep machine-local hooks local ([D-023](docs/DECISIONS.md#d-023-shared-auto-evolution-intent-with-local-hook-execution), [D-025](docs/DECISIONS.md#d-025-registered-contracts-for-shared-hook-targets), [D-077](docs/DECISIONS.md#d-077-project-local-ievo-hook-lifecycle-is-symmetric), [D-081](docs/DECISIONS.md#d-081-harden-the-project-local-ievo-lifecycle-boundary), [D-113](docs/DECISIONS.md#d-113-reject-ancestor-symlinks-and-mount-points-in-the-raw---root-cli-argument))
 
 - Shared `.claude/settings.json` entries must not invoke scripts or other targets that are absent from a clean checkout. A hook whose target is gitignored is a clean-clone defect even when the hook failure is non-blocking.
 - iEvo's generated hook scripts and vendored fallbacks under `.ievo/hooks/` are machine-local. Claude hook wiring belongs only in gitignored `.claude/settings.local.json`; Codex hook wiring belongs only in gitignored `.codex/hooks.json`. Never commit those entries or generated scripts.

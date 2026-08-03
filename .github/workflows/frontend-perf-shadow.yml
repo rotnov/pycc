@@ -1,0 +1,75 @@
+# Temporary (D-112 shadow-measurement; delete this file entirely in the
+# activation PR once evidence gathering, Task 4, is done). Measures the
+# SAME paired-delta protocol frontend-perf-measure/gate run in production,
+# against identical source checked out twice, on ubuntu-latest -- this
+# answers "does the paired delta this gate actually thresholds on stay
+# under 2% here," not merely "is single-phase replicate spread low."
+# Manually triggered only, never required by ci-gate, never touches
+# ci.yml (a separate workflow file so this file's own existence never
+# changes ci.yml's whole-file digest that scripts/check_roadmap_evidence.rb
+# pins). contents: read only, no elevated permissions, no
+# pull_request_target.
+name: frontend-perf-shadow
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  frontend-perf-shadow-ubuntu:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out candidate twice (both phases measure identical source)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          path: predecessor
+      - name: Check out candidate (second copy, same ref)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          path: current
+      - name: Install LLVM 22 (Linux, via apt.llvm.org)
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22
+          sudo apt-get install -y libpolly-22-dev
+          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+      - name: Benchmark "predecessor" phase, 5 replicates
+        run: |
+          set -euo pipefail
+          predecessor_target="$RUNNER_TEMP/pycc-shadow-predecessor"
+          for round in 1 2 3 4 5; do
+            ( cd predecessor && CARGO_TARGET_DIR="$predecessor_target" \
+              cargo bench --locked --bench check_bench -- --save-baseline "predecessor-$round" )
+            cp "$predecessor_target/criterion/pycc_check_frontend_fixture/predecessor-$round/estimates.json" \
+              "predecessor-$round.json"
+          done
+      - name: Benchmark "candidate" phase, 5 replicates
+        run: |
+          set -euo pipefail
+          current_target="$RUNNER_TEMP/pycc-shadow-current"
+          for round in 1 2 3 4 5; do
+            ( cd current && CARGO_TARGET_DIR="$current_target" \
+              cargo bench --locked --bench check_bench -- --save-baseline "current-$round" )
+            cp "$current_target/criterion/pycc_check_frontend_fixture/current-$round/estimates.json" \
+              "current-$round.json"
+          done
+      - name: Compare medians using the real reviewed comparator
+        run: |
+          set -euo pipefail
+          mkdir -p target/criterion/pycc_check_frontend_fixture/previous
+          mkdir -p target/criterion/pycc_check_frontend_fixture/current
+          for round in 1 2 3 4 5; do
+            cp "predecessor-$round.json" target/criterion/pycc_check_frontend_fixture/previous/round-$round.json
+            cp "current-$round.json" target/criterion/pycc_check_frontend_fixture/current/round-$round.json
+          done
+          {
+            echo "### frontend-perf-shadow-ubuntu: identical source, both phases"
+            ruby current/scripts/check_replicated_paired_perf_regression.rb \
+              target/criterion/pycc_check_frontend_fixture/current \
+              target/criterion/pycc_check_frontend_fixture/previous \
+              false || true
+          } | tee -a "$GITHUB_STEP_SUMMARY"
