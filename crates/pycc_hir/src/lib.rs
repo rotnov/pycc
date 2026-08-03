@@ -240,9 +240,12 @@ pub enum HirExpr {
     /// xs.pop()` inside that solver-checked function's body never registers
     /// a binding for `y` -- a later read of `y` in the same function then
     /// fails with a misleading "not bound before this use" instead of the
-    /// expected type. `xs.pop()` is the first *scalar*-typed expression to
-    /// reach this gap (D-116's own reproductions were all container-typed),
-    /// which makes it more surprising here than there.
+    /// expected type. This is not a novel gap: `HirExpr::Subscript`'s own
+    /// `collect_expr_constraints` arm (predates D-116/D-119, see commit
+    /// `0930903`) already returns `Ok(None)` the same way, so a scalar-typed
+    /// expression (`xs[0]`) already reached this exact gap long before this
+    /// task. `.pop()` is simply another instance of the same pre-existing
+    /// class, not a new or different failure mode.
     ListPop {
         list: String,
     },

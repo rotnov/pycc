@@ -6654,12 +6654,17 @@ mod tests {
         // solver-path function fails with the actively misleading
         // "not bound before this use", even though the assignment is
         // textually right above it. D-116's own three reproductions were
-        // all container-*typed* (`tuple`/`list` literals); `.pop()` is the
-        // first *scalar*-typed (`int`) expression to reach this same gap,
-        // which is more surprising precisely because scalar results are the
-        // ordinary, expected-to-work case. Fixing this is out of Task 10's
-        // scope (frontend+types only) -- tracked as `docs/ROADMAP.md`'s
-        // existing D-116 follow-up, unaffected by this task.
+        // all container-*typed* (`tuple`/`list` literals); `.pop()` is
+        // NOT the first *scalar*-typed expression to reach this same gap,
+        // though -- `HirExpr::Subscript`'s own `collect_expr_constraints`
+        // arm (predates D-116/D-119 entirely, commit `0930903`) already
+        // returns `Ok(None)` the same way, so plain `xs[0]` indexing already
+        // hit this exact failure mode first. This test just pins that
+        // `.pop()` is another, independently confirmed instance of the same
+        // pre-existing class, not a new or different one. Fixing this is
+        // out of Task 10's scope (frontend+types only) -- tracked as
+        // `docs/ROADMAP.md`'s existing D-116 follow-up, unaffected by this
+        // task.
         let hir = HirModule {
             items: vec![HirItem::Function {
                 name: "_h".to_string(),
