@@ -15,7 +15,7 @@ was independently, concurrently worked by two agent lineages pushing
 directly to `feat/v0-1-pr5-codegen-depth` (this session's own, and a
 `codex/fix-pr132-review-0764`-derived one whose merges landed as
 `0f19f22`…`5a9741e` and later `fcd8656`/`50e36e8`) — see
-[AGENT_RETROSPECTIVE.md](./AGENT_RETROSPECTIVE.md)'s newest entry for the
+[AGENT_RETROSPECTIVE.md](../AGENT_RETROSPECTIVE.md)'s newest entry for the
 process lesson. Rather than fight over authorship, this session's later
 pushes adopted the more-complete remote lineage as base each time and
 carried forward only genuinely unique value: stale `ARCHITECTURE.md`/

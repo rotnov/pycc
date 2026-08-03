@@ -24,7 +24,7 @@ caught by reading the raw job log rather than trusting a grep hit).
 Both real measurements exceed the 2.00% threshold in the same direction,
 which reads as a real, reproducible regression rather than noise.
 
-**Root cause identified, recorded as [D-109](DECISIONS.md#d-109-pr-10s-frontend-perf-gate-regression-is-real-and-self-inflicted-fix-deferred-to-its-own-follow-up-pr-merge-stays-blocked):**
+**Root cause identified, recorded as [D-109](../DECISIONS.md#d-109-pr-10s-frontend-perf-gate-regression-is-real-and-self-inflicted-fix-deferred-to-its-own-follow-up-pr-merge-stays-blocked):**
 `benches/check_bench.rs`'s `pycc_check_frontend_fixture` is scalar-only
 (no `list[T]` value ever constructed), ruling out the new list codegen.
 D-089/D-104's own `Ty` migration (Tasks 2-5) grew `crates/pycc_hir::Ty`
