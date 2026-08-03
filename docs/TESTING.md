@@ -66,7 +66,7 @@ GitHub Action (`corpus-bot`):
 - Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
 
-D-128 completes D-126's evidence phase with five observations from every Tier-1
+D-129 completes D-126's evidence phase with five observations from every Tier-1
 leg. Each of the five `--release` pycc launches and five pinned-CPython launches
 still records both elapsed wall-clock time and CPU time consumed by that exact
 child process. Unix obtains per-child usage from `wait4`; Windows reads the

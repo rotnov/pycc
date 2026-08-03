@@ -421,7 +421,7 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// for the exact spawned child rather than process-global `RUSAGE_CHILDREN`;
 /// Windows reads the waited child's retained process handle with
 /// `GetProcessTimes`. The frozen step-summary record exposes both ratios and all
-/// four medians on passes and failures. D-128 completed Phase B after five real
+/// four medians on passes and failures. D-129 completed Phase B after five real
 /// observations on every Tier-1 leg: CPU time did not reduce variance across
 /// the matrix, so wall clock remains the gate and CPU time remains non-gating
 /// diagnostic telemetry rather than gaining its own floors.
