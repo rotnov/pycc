@@ -286,6 +286,27 @@ fn true_division_by_zero_fails_explicitly() {
 }
 
 #[test]
+fn a_marker_bearing_false_range_step_fails_as_zero_after_codegen_normalization() {
+    let source = "\
+def false_int() -> int:
+    return False
+
+for value in range(0, 2, false_int()):
+    print(value)
+";
+    let output = build_and_run("range_false_marker_step", source);
+    assert!(
+        !output.status.success(),
+        "a marker-bearing False range step must fail as numeric zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("range() arg 3 must not be zero"),
+        "expected pycc_rt's honest zero-step message, got: {stderr}"
+    );
+}
+
+#[test]
 fn none_typed_parameters_cross_the_user_function_abi() {
     let source = "\
 def source() -> None:
@@ -515,7 +536,7 @@ fn a_float_call_on_a_bigint_argument_aborts_honestly() {
     // Post-merge review finding: `float(x)` for a bigint-valued `x` (an
     // `int` promoted past the tagged smallint range by arithmetic
     // overflow) reaches `to_float`'s `Scalar::Int` arm, which calls
-    // `pycc_rt_int_to_float` -> `require_smallint`, aborting -- the exact
+    // `pycc_rt_int_to_float` -> `require_inline_int`, aborting -- the exact
     // same pre-existing "no bigint-to-float" limitation ordinary arithmetic
     // promotion already has (confirmed directly: `fib_iter(100) + 1.5` hits
     // the identical abort on `main` before this PR), not a new gap
@@ -603,20 +624,14 @@ print(f\"{returns_none()}\")
 ";
     let output = build_and_run("backend_representation_boundaries", source);
     assert!(output.status.success());
-    // Three of these lines are a documented v0.1 deviation from CPython, not
-    // the correct value: `accepts_int(True)` (4th line), `both_branches_
-    // return(False)` (5th line), and `counter` after being reassigned `True`
-    // (12th line) print "1"/"0"/"1" here, where real CPython (verified via
-    // `python3` on this exact source) prints "True"/"False"/"True" -- once a
-    // `bool` crosses an `int`-typed boundary its runtime representation
-    // becomes an ordinary tagged int with no bit left to recover that it was
-    // ever a `bool` (see docs/ROADMAP.md's "Language surface" known-gaps
-    // list, D-061/D-074). This assertion pins pycc's actual current output,
-    // not CPython's -- it is not itself evidence the divergent lines are
-    // correct.
+    // D-132 closes the former silent identity loss on the argument, return,
+    // and reassignment lines: those original bool objects remain observable
+    // as `True`/`False`. The three `range` targets remain ordinary integers
+    // `0`/`1`/`2`, because range consumes its bool operands numerically rather
+    // than forwarding their identity.
     assert_eq!(
         output.stdout,
-        b"5\nglobal\n2\n1\n0\n4\n9\n11\n0\n1\n2\n1\nNone\n"
+        b"5\nglobal\n2\nTrue\nFalse\n4\n9\n11\n0\n1\n2\nTrue\nNone\n"
     );
 }
 
@@ -1102,15 +1117,12 @@ _run()
 
 #[test]
 fn appending_a_bigint_valued_element_fails_explicitly_instead_of_corrupting_the_slot() {
-    // D-106's own named regression: `PyIntListObj` stores raw, untagged
-    // `i64` slots with no room for a bigint, and `pycc_rt_int_add`/`_mul`
-    // promote past D-061's 63-bit smallint range on overflow -- reachable
-    // from ordinary type-checked source, as here. The decision requires
-    // this to be an honest runtime failure ("pycc_rt: list[int] does not
-    // support bigint-valued elements or indices yet") rather than a
-    // silently truncated element, and requires a real executing test of it
-    // rather than only a documented gap. Real CPython prints the exact
-    // product here; this is a documented v0.2 scope cut, not a match.
+    // D-132 supersedes D-106's raw payload but deliberately retains the
+    // bigint-container scope cut. `pycc_rt_int_add`/`_mul` promote past
+    // D-061's smallint range on overflow, and the shared encoded-boundary
+    // validator must reject that value honestly rather than store it as if
+    // the current containers supported bigint ownership. Real CPython prints
+    // the exact product here; this remains a documented v0.2 scope cut.
     //
     // The overflowing value is built by multiplication rather than written
     // as a literal: `tag_smallint_const` rejects an out-of-tagged-range
@@ -1130,16 +1142,16 @@ _run()
     let output = build_and_run("list_append_bigint_aborts", source);
     assert!(
         !output.status.success(),
-        "a bigint-valued element must fail loudly, not be truncated into a raw i64 slot"
+        "a bigint-valued element must fail loudly, not be stored as a supported container value"
     );
-    // D-106 requires specifically an *honest panic*, not merely a failure --
+    // D-132 retains specifically an *honest panic*, not merely a failure --
     // asserting the message is what distinguishes it from a segfault or any
     // other abort that a missing guard could also produce. `pycc_rt`'s panic
     // handler writes this to stderr before the `extern "C"` boundary turns
     // the unwind into a process abort.
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("does not support bigint-valued elements or indices"),
+        stderr.contains("int boundary does not support bigint-valued values"),
         "expected pycc_rt's honest bigint message, got: {stderr}"
     );
 }

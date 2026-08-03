@@ -50,9 +50,11 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   remains the separate definite-assignment work tracked in #118.
 - The first assignment fixes a local variable's inferred type. Later
   assignments must be compatible or produce `T0023`; assigning `bool` to an
-  `int` binding preserves the `int` representation. D-074 carries that
+  `int` binding preserves the static `int` representation and, per D-132, the
+  source object's runtime `False`/`True` identity. D-074/D-132 carry that
   decision through MIR and code generation at assignment, argument, return,
-  and `range` representation boundaries.
+  container-value, and `range` boundaries; range consumes the numeric value
+  and produces ordinary int objects rather than forwarding bool identity.
 - Python numeric semantics apply during inference: `bool` is an `int`
   subtype, mixed `int`/`float` arithmetic promotes to `float`, and true
   division `/` always returns `float` even for two integer operands.
@@ -61,9 +63,9 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 
 | Python type | Static semantics | Native representation |
 |---|---|---|
-| `int` | arbitrary precision (CPython-true) | `i64` + overflow promotion to heap bigint — see D-001 |
+| `int` | arbitrary precision (CPython-true); accepts `bool` as a subtype at checked boundaries | one int-compatible `i64`: odd smallint, exact `2`/`6` bool-identity marker, or aligned heap-bigint pointer — see D-061/D-132 |
 | `float` | IEEE 754 double | `f64`, unboxed |
-| `bool` | subtype of `int` | `i8`, unboxed; `i1` is transient control-flow state only — see D-061/D-074 |
+| `bool` | subtype of `int` | standalone `i8`, unboxed; exact `2`/`6` marker only after crossing an `int` boundary; `i1` is transient control-flow state only — see D-061/D-074/D-132 |
 | `str` | immutable Unicode | UTF-8 heap, small-string opt — see D-007 |
 | `bytes` / `bytearray` | per CPython | raw buffer |
 | `None` | unit | LLVM `void` for returns; canonical `i8 0` carrier for the v0.1 user-function parameter ABI plus parameter, local-assignment, and module-assignment storage; the MIR/static `Ty::None` tag keeps that carrier distinct from `False`; `T \| None` = nullable/tagged repr |

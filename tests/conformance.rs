@@ -408,3 +408,22 @@ fn container_methods_slicing_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("container_methods_slicing_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/container_methods_slicing.py");
 }
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn bool_int_runtime_identity_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/bool_int_runtime_identity.py");
+    let (debug_pycc, debug_cpython) = run_conformance_fixture_with_profile(
+        "bool_int_runtime_identity_debug",
+        &fixture,
+        false,
+    );
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/bool_int_runtime_identity.py");
+    let (release_pycc, release_cpython) = run_conformance_fixture_with_profile(
+        "bool_int_runtime_identity_release",
+        &fixture,
+        true,
+    );
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/bool_int_runtime_identity.py");
+}

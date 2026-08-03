@@ -1794,7 +1794,7 @@ fn infer_expr_in(
                     // and indexing is exactly that kind of boundary --
                     // `xs[True]` is ordinary, CPython-valid Python (`bool` is
                     // an `int` subtype, PEP 285), not a type error.
-                    // `pycc_codegen`'s `to_tagged_int` already has a
+                    // `pycc_codegen`'s `to_numeric_encoded_int` already has a
                     // `Scalar::Bool` arm reached unconditionally by every
                     // subscript index, so this was a pure over-rejection in
                     // the type checker, not a missing codegen capability.
@@ -1957,10 +1957,10 @@ fn infer_expr_in(
             // `Subscript` index check above (D-086): `x = [1]; x.append(True)`
             // is ordinary, CPython-valid Python (`bool` is an `int` subtype),
             // and `pycc_codegen`'s `MirExpr::ListAppend` arm already routes
-            // the appended value through `to_tagged_int` (the same
-            // `Scalar::Bool`-handling conversion the index path uses)
-            // unconditionally, so there is no missing codegen capability
-            // here either. This is NOT the same question as `ListLiteral`'s
+            // the appended value through `to_encoded_int`, preserving a
+            // `Scalar::Bool` marker while validating the int-compatible
+            // payload unconditionally, so there is no missing codegen
+            // capability here either. This is NOT the same question as `ListLiteral`'s
             // own homogeneity check above (`[1, True]`'s element type is
             // genuinely ambiguous to infer -- there is no already-known
             // `elem_ty` to check against); `.append()` on an *already-typed*
