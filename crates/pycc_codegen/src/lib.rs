@@ -255,6 +255,12 @@ struct RtFns<'ctx> {
     int_set_add: FunctionValue<'ctx>,
     int_set_len: FunctionValue<'ctx>,
     int_set_get: FunctionValue<'ctx>,
+    /// `ForSet`'s own loop-test check (Task 11 review fix, P1): panics if
+    /// the set's freshly re-read length no longer matches the length
+    /// captured once in the loop's preheader -- see
+    /// `pycc_rt_int_set_check_not_resized`'s own doc comment for why
+    /// `set.add()` made this reachable.
+    int_set_check_not_resized: FunctionValue<'ctx>,
     trap: FunctionValue<'ctx>,
 }
 
@@ -464,6 +470,10 @@ fn declare_rt_functions<'ctx>(
         int_set_get: declare(
             "pycc_rt_int_set_get",
             i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        int_set_check_not_resized: declare(
+            "pycc_rt_int_set_check_not_resized",
+            void_type.fn_type(&[i64_type.into(), i64_type.into()], false),
         ),
         trap: module.add_function("llvm.trap", void_type.fn_type(&[], false), None),
     }
@@ -976,6 +986,26 @@ fn build_int_set_len<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_rt_int_set_len returns a non-void i64")
         .into_int_value()
+}
+
+/// Panics (via `pycc_rt_int_set_check_not_resized`) if `current_len` no
+/// longer matches `expected_len` -- called once per `ForSet` loop-test
+/// evaluation, comparing a freshly re-read length against the length
+/// captured once in the preheader. See that runtime function's own doc
+/// comment for why `set.add()` (PR-12, D-119) made this reachable.
+fn build_int_set_check_not_resized<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    current_len: IntValue<'ctx>,
+    expected_len: IntValue<'ctx>,
+) {
+    builder
+        .build_call(
+            rt.int_set_check_not_resized,
+            &[current_len.into(), expected_len.into()],
+            "set_check_not_resized",
+        )
+        .expect("build_call should not fail for a well-formed set resize check");
 }
 
 /// Reads one element out of a `PyIntSetObj` by insertion-order index, used
@@ -4636,12 +4666,15 @@ fn emit_stmt<'ctx>(
         // 1. The bound is `pycc_rt_int_set_len`, still re-read on every
         //    iteration inside the test block rather than hoisted into the
         //    preheader, for the identical CPython-mutation-during-iteration
-        //    reason `ForList`'s own comment gives: this compiler has no
-        //    `.add()`/removal for a set yet, but nothing else can grow one
-        //    mid-loop either, so this is behaviorally moot today -- kept
-        //    identical to `ForList`/`ForDict`'s own shape anyway, so a
-        //    future `.add()` addition does not also have to remember to fix
-        //    a hoisted bound here.
+        //    reason `ForList`'s own comment gives -- kept identical to
+        //    `ForList`/`ForDict`'s own shape. Unlike `ForDict` (D-123
+        //    accepts silently visiting newly-inserted keys as a bounded
+        //    divergence), a mid-loop `set.add()` (D-119, this same PR) is
+        //    checked against the length captured once in the preheader and
+        //    panics honestly on any change -- see
+        //    `pycc_rt_int_set_check_not_resized`'s own doc comment for why
+        //    silently extending the iteration is not safe to accept here:
+        //    `for x in s: s.add(x + 1)` would never terminate.
         // 2. Each iteration reads the current element via
         //    `pycc_rt_int_set_get`, not `pycc_rt_int_list_get`.
         //
@@ -4661,6 +4694,15 @@ fn emit_stmt<'ctx>(
             // incref cannot go stale.
             let set_ptr =
                 emit_set_name_read(context, builder, module, rt, user_functions, locals, set);
+            // Captured once, in the preheader -- P1 review fix (PR-12,
+            // `pycc_rt_int_set_check_not_resized`'s own doc comment):
+            // `set.add()` existing in this same commit made it possible for
+            // the loop body to grow `set_ptr` out from under this loop's own
+            // `len` re-read below. Comparing every iteration's fresh read
+            // against this snapshot, rather than silently visiting whatever
+            // `len` grows to, matches CPython's own `RuntimeError` on
+            // set-changed-size-during-iteration with an honest panic.
+            let initial_len = build_int_set_len(builder, rt, set_ptr);
             let preheader = builder.get_insert_block().unwrap();
 
             let test_bb = context.append_basic_block(function, "for_set_test");
@@ -4678,6 +4720,7 @@ fn emit_stmt<'ctx>(
             induction.add_incoming(&[(&zero, preheader)]);
             let current = induction.as_basic_value().into_int_value();
             let len = build_int_set_len(builder, rt, set_ptr);
+            build_int_set_check_not_resized(builder, rt, len, initial_len);
             let cont = builder
                 .build_int_compare(IntPredicate::SLT, current, len, "for_set_cont")
                 .expect("build_int_compare should not fail comparing two i64 operands");

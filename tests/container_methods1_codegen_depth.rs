@@ -159,3 +159,35 @@ print(len(s))
     assert!(output.status.success());
     assert_eq!(output.stdout, b"3\n3\n");
 }
+
+#[test]
+fn growing_a_set_with_add_during_its_own_iteration_traps_instead_of_looping_forever() {
+    // Review finding (P1) on this same task: `ForSet`'s loop bound
+    // re-reads `pycc_rt_int_set_len` every iteration (mirroring `ForDict`,
+    // D-123's own accepted divergence), but `set.add(value)` existing in
+    // this same commit makes that reachable for the first time. `x + 1`
+    // is always a value not yet in `s`, so without a check this loop would
+    // never terminate -- real CPython raises a catchable
+    // `RuntimeError: Set changed size during iteration` on the very first
+    // mutation instead. This compiler has no exception model, so an
+    // honest panic (verified via a bounded process, not an infinite hang)
+    // is the correct match, per `pycc_rt_int_set_check_not_resized`'s own
+    // doc comment.
+    let source = "\
+s = {1}
+for x in s:
+    s.add(x + 1)
+print(len(s))
+";
+    let output = build_and_run("set_add_during_iteration_traps", source);
+    assert!(
+        !output.status.success(),
+        "growing a set from inside its own `for` loop must trap, not loop forever or silently \
+         extend the iteration"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("set changed size during iteration"),
+        "expected pycc_rt's honest resize-check message, got: {stderr}"
+    );
+}

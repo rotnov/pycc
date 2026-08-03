@@ -1633,6 +1633,32 @@ pub unsafe extern "C" fn pycc_rt_int_set_len(set: *mut PyIntSetObj) -> i64 {
     len
 }
 
+/// Panics if `current_len` differs from `expected_len`. `ForSet`'s own
+/// iteration codegen (Task 9) calls this once per loop-test evaluation,
+/// comparing a freshly re-read `pycc_rt_int_set_len` against the length
+/// captured once in the loop's preheader. `set.add(value)` (PR-12, D-119)
+/// made this reachable for the first time: `for x in s: s.add(x + 1)`
+/// would otherwise silently visit every newly-inserted element too,
+/// never terminating for a value like `x + 1` that is always distinct
+/// from every prior element -- unlike `ForDict`'s own identical
+/// re-read-every-iteration shape, which D-123 already accepts as a
+/// bounded divergence (a dict grown by re-inserting existing keys stays
+/// finite; a set grown by always-novel derived values does not). Real
+/// CPython raises a catchable `RuntimeError: Set changed size during
+/// iteration` here; this compiler has no exception model, so an honest
+/// panic is the correct match for this file's own established
+/// convention, not a new failure mode invented for this case.
+fn check_set_len_unchanged(current_len: i64, expected_len: i64) {
+    if current_len != expected_len {
+        panic!("pycc_rt: set changed size during iteration");
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_int_set_check_not_resized(current_len: i64, expected_len: i64) {
+    check_set_len_unchanged(current_len, expected_len);
+}
+
 /// Element at a given insertion-order position, used only by `ForSet`'s
 /// own iteration codegen (Task 9) -- `set` has no user-facing indexing in
 /// Python (real CPython also rejects `s[0]`), so this is an internal
@@ -2953,6 +2979,27 @@ mod tests {
             pycc_rt_dict_incref(std::ptr::null_mut());
             pycc_rt_dict_decref(std::ptr::null_mut());
         }
+    }
+
+    #[test]
+    fn pycc_rt_int_set_check_not_resized_is_a_no_op_when_lengths_match() {
+        // Calls the public wrapper directly (safe for the non-panicking
+        // path, unlike the panic-path test below), so the wrapper's own
+        // call-through line is exercised too, not just the private helper.
+        pycc_rt_int_set_check_not_resized(3, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: set changed size during iteration")]
+    fn check_set_len_unchanged_panics_when_lengths_differ() {
+        // Calls the private `check_set_len_unchanged` directly, not the
+        // public `pycc_rt_int_set_check_not_resized` wrapper -- the wrapper
+        // is a plain `extern "C" fn`, so a panic crossing its boundary
+        // aborts the whole test binary instead of unwinding into
+        // `#[should_panic]`'s own catch, exactly like
+        // `pycc_rt_int_list_pop_on_an_empty_list_panics_honestly`'s own
+        // established convention above.
+        check_set_len_unchanged(4, 3);
     }
 
     #[test]
