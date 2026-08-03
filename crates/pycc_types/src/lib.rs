@@ -5827,6 +5827,30 @@ mod tests {
     }
 
     #[test]
+    fn subscripting_a_non_list_value_with_a_non_int_index_reports_t0033_not_t0021() {
+        // Both operands are ill-typed at once: the base doesn't support
+        // indexing at all, AND the index isn't int-compatible. T0033
+        // ("does this value support the operation at all") must fire
+        // before T0021 ("is this operand's type wrong"). The `match
+        // base_ty { Ty::List(..) => ..., Ty::Dict(..) => ..., Ty::Tuple(..)
+        // => ..., other => T0033 }` dispatch above already gives this
+        // precedence structurally -- a non-container base falls straight
+        // to the `other` arm without ever reaching a container's own
+        // index-type check -- but PR-10's own final whole-branch review
+        // found and pinned this exact compound case as a regression test
+        // before container types existed, so it is kept here too.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::StringLiteral("zero".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
+        assert_eq!(err.message, "`int` does not support indexing");
+    }
+
+    #[test]
     fn subscripting_propagates_an_ill_typed_base_s_error() {
         let env = Environment::new();
         let expr = HirExpr::Subscript {

@@ -11,20 +11,45 @@ history alone, not a full narrative.
 
 ---
 
-## 2026-08-03 — `main`'s D-114/#291 manifest deadlock resolved (owner-authorized emergency bypass); PR-10/#236 now `BEHIND` instead of `BLOCKED`
+## 2026-08-03 — D-114 redone correctly with no emergency bypass: `frontend-perf-gate` now live at 7.0%, PR-10 unblocked
 
-**Authoritative checkpoint:** `origin/main` at `fee5750274e8c000c5aee007fbd1aeb2d1964248` (was `cdb3f0a`, unmoved for the entire span this log's newest-minus-one entry describes).
+**Authoritative checkpoint:** `main`'s tip is still `1ac027b` (round 5's merge) as of this entry — PR [#304](https://github.com/rotnov/pycc/pull/304) (round 6 of 6) has **not merged yet**; this entry documents that PR's own branch content, inspected at its own head, not an already-landed `main` state. Everything below is written from PR #304's own commits (through this entry's own fix round), verified there via a fresh `pull_request_target` audit-harness run against a pristine clone of `main` at `1ac027b`, plus a full local `ruby scripts/test_check_roadmap_evidence.rb` run (145 runs, 0 failures). "PR-10 unblocked" below describes the outcome this PR is expected to produce once it merges, not a fact already true on `main` — a fresh session should check whether #304 has merged before relying on it.
 
-**What happened:** the repository owner explicitly authorized ("да, выполни") executing the D-054-precedent emergency path (`docs/REPOSITORY_GOVERNANCE.md`'s "Emergency path" section) to unblock PR [#291](https://github.com/rotnov/pycc/pull/291) (the D-114 revert), the same self-referential `audit`/manifest deadlock this log's own entries below and incident #292 already documented. Re-verified fresh immediately before acting: incident #292's own blocker (a bot-confirmed P1 finding — PR #291's diff deleted the `tests/fixtures/d114-frontend-perf-threshold-ci.yml` protected manifest entry instead of retaining it as historical evidence) had since been fixed by the owner directly (commit `0376e1f`) and the review thread was confirmed resolved; `ci-gate` passed; only `audit` still failed, for the same self-referential reason as before.
+**Root cause of the original deadlock, per the repository owner's own diagnosis closing PR #290:** the first D-114 attempt (PR #286, reverted via #291 under an owner-authorized emergency bypass — see this log's own previous entry) staged all three D-103-protected targets (`.github/workflows/ci.yml`, `scripts/check_roadmap_evidence.rb`, `scripts/test_check_roadmap_evidence.rb`) in one propose round. `workflow-policy.yml`'s `audit` job runs two independent checks against the same files — `check_ci_permissions.rb`'s `validate_policy_successor_transition` (candidate's live bytes must match what `main`'s manifest already stages) and `check_roadmap_evidence.rb`'s own base-executed `validate_evidence` (candidate's `ci.yml` digest must already be trusted by `main`'s *currently live* checker) — and staging three targets together made no candidate able to satisfy both, in either direction. This is structurally the same deadlock class as the #109/D-112 round 7a/7b history this log already documents below, just with an extra target involved.
 
-Filed public incident [#294](https://github.com/rotnov/pycc/issues/294) first (per the corrected process from this log's own #109 entry — file before executing, not retroactively), disclosing the exact control, justification, owner, expiry, and rollback command, mirroring #292's/#125's own format. Relaxed `audit` alone (`ci-gate` and every other protection control stayed enabled throughout — `enforce_admins`, `required_pull_request_reviews`, `required_conversation_resolution`, `allow_force_pushes`, `allow_deletions` all unchanged), merged PR #291, and restored the original `required_status_checks.contexts` (`["ci-gate", "audit"]`) within under a minute, verified via a full settings readback matching the pre-relax snapshot exactly. Closed #294 with the outcome. `main`'s own post-merge "Main history audit" workflow (the independent D-024 push-audit, not the `audit` PR check) passed on the resulting merge commit, confirming no unauthorized bypass survived in history.
+**The fix, executed as six separate propose/activate rounds, one live-target change per round:**
+1. [#298](https://github.com/rotnov/pycc/pull/298) — propose a new `D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB` checker constant + widen the D112 measure-job branch to accept either gate-job shape. Inert.
+2. [#299](https://github.com/rotnov/pycc/pull/299) — activate round 1's successor.
+3. [#300](https://github.com/rotnov/pycc/pull/300) — propose adding `D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256` to the checker's accepted-digest array, reusing the already-registered retained historical fixture `tests/fixtures/d114-frontend-perf-threshold-ci.yml` verbatim (its bytes turned out byte-identical to what this round needed — `main` never touched that region of `ci.yml` since that fixture was first reviewed for the original #286 attempt). Inert w.r.t. live `ci.yml`.
+4. [#301](https://github.com/rotnov/pycc/pull/301) — activate round 3's successor.
+5. [#302](https://github.com/rotnov/pycc/pull/302) — propose `ci.yml`'s own successor (the `"7.0"` threshold argument) **and** the matching `scripts/test_check_roadmap_evidence.rb` assertion updates together, in the same round. This is the exact co-staging D-112's own round 6 (PR #277) omitted, which forced round 7a (PR #278) into an emergency-bypass-gated `ci-gate` failure — staging both together here (neither touches live bytes) avoided repeating that.
+6. This round — activate both of round 5's successors together. `.github/workflows/ci.yml` now genuinely has the 7.0% threshold; `scripts/test_check_roadmap_evidence.rb`'s "active digest" assertions now correctly name D114.
 
-**Consequence for this branch and PR-10:** `tests/fixtures/policy-successor-manifest.json` on `main` is back to steady state (all three previously mid-transition targets show `source_path == path`). PR [#236](https://github.com/rotnov/pycc/pull/236) (PR-10) flipped from `mergeStateStatus: BLOCKED` to `BEHIND` — it is no longer blocked by the manifest deadlock, but does need a real rebase/re-merge of the new `main` before its own checks (including `frontend-perf-gate`) can be re-evaluated, matching this task list's own pending item (re-merge main, verify frontend-perf-gate, pinned review, merge).
+**No emergency bypass was needed at any of the six rounds** — every propose/activate pair was verified locally (full test suite + the real `pull_request_target` audit harness against a pristine clone of `main` at that round's own base) before pushing, and GitHub's own automated review (`chatgpt-codex-connector`) caught two real findings along the way (round 3's ADR plan-text not matching the actual fixture-reuse decision; round 5 leaving four stale "not yet active" doc-comments after its own activation-state comments were added) — both fixed and threads resolved before merging.
+
+**Round 6's own fix-loop near-miss:** the pinned `ievo:deep-reviewer` flagged three cosmetic issues on round 6 (stale `docs/ROADMAP.md` review-date banner, a naming inconsistency in `scripts/test_check_roadmap_evidence.rb`, and this entry's own checkpoint not naming a concrete SHA). Fixing the naming inconsistency directly on the activation branch broke `audit`: `validate_policy_successor_transition` requires every protected target's candidate bytes to equal exactly what `main`'s manifest already stages as that target's successor, and an activation round is only supposed to copy that staged content into place, never edit it further. The rename was reverted back to byte-identical with the round-5-staged successor; it is deferred to the already-planned future round that retires D-100/D-112 from the accepted-digest array, which touches this same file anyway. The other two fixes (`ROADMAP.md`, this entry's checkpoint wording) do not touch a D-103-protected target and were kept.
+
+D-114 is now `accepted`; `docs/DECISIONS.md` records the full six-round Decision text. [Issue #296](https://github.com/rotnov/pycc/issues/296) tracks the eventual threshold reversion toward 2.0% (no promised date — the trigger is a one-time merge cost, not standing noise). [Issue #297](https://github.com/rotnov/pycc/issues/297) tracks adding a documented profiling workflow, filed during this investigation at the user's request.
+
+**What's next:** PR-10 (#236) can now rebase onto this new `main` tip and should pass `frontend-perf-gate` at its measured `~4.5%` regression (well under the new 7.0% threshold). Once PR-10 merges, PR-11/PR-12 (`feat/v0-2-pr11-dict-set-tuple`, content-complete, final review already clean) can finally be rebased and opened as a real PR.
+
+---
+
+## 2026-08-03 — D-114 revert (PR #291) merged via an owner-authorized emergency bypass; PR-10/#236 unblocked from `BLOCKED` to `BEHIND`
+
+**Authoritative checkpoint:** `main`'s tip is `fee5750274e8c000c5aee007fbd1aeb2d1964248` (was `cdb3f0abfe68b8c107711c595a5cbd6fd11e43f8`, unmoved since D-114's own propose round created a self-referential manifest deadlock — see incident [#292](https://github.com/rotnov/pycc/issues/292) for the first, aborted attempt to resolve it).
+
+**What happened:** PR [#291](https://github.com/rotnov/pycc/pull/291) ("Revert \"D-114 round 1: propose raising frontend-perf-gate threshold to 7.0%\"") restores `tests/fixtures/policy-successor-manifest.json`'s three mid-transition entries (`.github/workflows/ci.yml`, `scripts/check_roadmap_evidence.rb`, `scripts/test_check_roadmap_evidence.rb`) back to steady-state (`source_path == path`). Its own `audit` check could never pass on its own: `scripts/check_ci_permissions.rb`'s `validate_policy_successor_transition` compares the candidate's live content at each manifest target against what the *base* branch's manifest currently expects (the staged D-114 successor), and this PR's entire purpose is to diverge from that staged content — a self-referential deadlock, the same class this log's own "Issue #109 fully resolved" entry below already documented once (round 7a/7b) for a different D-number.
+
+Incident #292 (2026-08-02) first attempted this bypass and correctly aborted *without merging*: a bot-confirmed P1 review finding (`chatgpt-codex-connector` on `tests/fixtures/policy-successor-manifest.json:69`) showed PR #291's diff deleted the `tests/fixtures/d114-frontend-perf-threshold-ci.yml` protected manifest entry instead of retaining it as historical audit evidence, matching this project's own D-051/D-056/D-062 convention. The repository owner fixed that directly (commit `0376e1f`), and this session confirmed the review thread resolved before proceeding.
+
+Filed public incident [#294](https://github.com/rotnov/pycc/issues/294) first (per `docs/REPOSITORY_GOVERNANCE.md`'s Emergency path — disclose before acting, not retroactively), under the owner's explicit live authorization. Relaxed only `audit` from `main`'s required status checks (`ci-gate` and every other protection control — `enforce_admins`, `required_pull_request_reviews`, `required_conversation_resolution`, `allow_force_pushes`, `allow_deletions` — stayed enabled throughout), merged PR #291, and restored the original `required_status_checks.contexts` (`["ci-gate", "audit"]`) within under a minute, verified via a full settings readback matching the pre-relax snapshot exactly. Closed #294 with the outcome. The independent, automated "Main history audit" workflow (D-024's own push-audit) also passed on the resulting merge commit — but, per a Codex review finding on this PR, that check only confirms the introduced commits correlate with a normal merged PR and that the push was not forced; it cannot by itself confirm the required-check relaxation was authorized or properly restored. That conclusion rests on the independently verified settings-diff/readback above, not on this workflow's pass.
+
+**Consequence:** the policy-successor manifest is back to steady state — `.github/workflows/ci.yml`, `scripts/check_roadmap_evidence.rb`, and `scripts/test_check_roadmap_evidence.rb` (the three *live* targets) all show `source_path == path` again. PR [#236](https://github.com/rotnov/pycc/pull/236) (v0.2 PR-10) flipped from `mergeStateStatus: BLOCKED` to `BEHIND` — no longer deadlocked, but still needs its own rebase/merge of the new `main` tip, a fresh CI run, and pinned review before it can merge. **Correction (caught by a Codex review finding on this PR, not self-discovered):** the D-114 propose-round content is *not* "fully gone" from `main` — only its *live* wiring reverted. `tests/fixtures/policy-successors/ci.yml` still invokes the gate with `"7.0"`, both retained successor checker files still encode D-114, and the 40KB `tests/fixtures/d114-frontend-perf-threshold-ci.yml` fixture remains registered in the manifest as historical audit evidence — deliberately retained per this project's own D-051/D-056/D-062 convention (the exact thing PR #291's own fix, commit `0376e1f`, restored after the web Revert button had wrongly deleted it). A future attempt to raise `frontend-perf-gate`'s threshold needs a fresh D-103 propose/activate round, but should account for these already-present, dormant D-114 artifacts rather than assume a clean slate.
 
 **Not done / next steps for a fresh session:**
-1. PR-10/#236 needs an actual rebase or merge of `main` (`fee5750`), then CI re-run, pinned review, and merge — not yet attempted in this entry.
-2. This branch (`feat/v0-2-pr11-dict-set-tuple`, carrying PR-11+PR-12) is itself already ahead of the new `main` tip in every way that matters (it already merged the *prior* `main` state via `origin/feat/v0-2-pr10-ty-representation-migration` at `776632f`/`e33c517`, described in this log's own entry below) — but should re-check whether `origin/feat/v0-2-pr10-ty-representation-migration` itself gets updated/re-merged from `main` again before this branch's own PR is finally opened, since PR-10's own merge to `main` is still the next step in the stack, not yet done.
-3. The D-114 propose-round content (originally staged, then reverted by PR #291) is now fully reverted from `main` — any future attempt to raise `frontend-perf-gate`'s threshold needs a fresh D-103 propose/activate round from scratch, not a resumption of the reverted one.
+1. PR-10/#236 needs an actual rebase or merge of `main` (`fee5750`), a fresh CI run (especially `frontend-perf-gate`, now running against the reverted, steady-state manifest), pinned review, and merge.
+2. Any v0.2 PR stacked on PR-10 (PR-11, PR-12, ...) that already merged a *stale* copy of this same manifest deadlock (see the `feat/v0-2-pr11-dict-set-tuple` branch's own SESSION_LOG entries) should re-check whether `main`'s own advance here changes anything for its next steps — as of this entry it does not yet, since that branch already resolved its own D-number collision independently before this fix landed.
 
 ---
 
@@ -34,14 +59,14 @@ Filed public incident [#294](https://github.com/rotnov/pycc/issues/294) first (p
 
 **What happened:** PR-12's 14 tasks (comprehensions, `list[int]` slicing, `list.pop()`/`dict.get()`/`set.add()`, the PEP-709 fixture) all completed via subagent-driven-development, including a final whole-branch review and its own fix wave — see the SDD ledger at `.superpowers/sdd/2026-08-02-v0-2-pr12-comprehensions-slicing/progress.md` (gitignored, not in this repo) for the full per-task record. Before Task 14's own "open the PR" step, this branch was found stale relative to its parent `origin/feat/v0-2-pr10-ty-representation-migration`, which had separately merged `main` (picking up 37 files / 11364 insertions, including the D-114/#291 manifest-deadlock saga's own commits and an unrelated issue-autopilot skill-hardening pass).
 
-**A real D-number collision, the same class as D-056 on PR-5:** this branch's own Task 1 (PR-11a, before PR-12 started) had already claimed D-111 (dict/set representation), D-112 (key/element scope), D-113 (operations), D-114 (refcounting). The incoming branch independently claimed the *same four numbers* for unrelated work: D-111 (issue-title `P1:`/`P2:`/`P3:` priority convention), D-112 (`frontend-perf-measure`/`frontend-perf-gate` moved to `ubuntu-latest`, closing issue #109), D-113 (`--root` symlink/mount-point rejection, closing #169), D-114 (raising `frontend-perf-gate`'s threshold to 7.0% for the `Ty` migration — the same D-114 this log's own entries below already track via #291's deadlock). D-115 through D-120 (tuple; PR-12's own comprehensions/slicing/methods/PEP-709) had no collision.
+**A real D-number collision, the same class as D-056 on PR-5:** this branch's own Task 1 (PR-11a, before PR-12 started) had already claimed D-111 (dict/set representation), D-112 (key/element scope), D-113 (operations), D-114 (refcounting). The incoming branch independently claimed the *same four numbers* for unrelated work: D-111 (issue-title `P1:`/`P2:`/`P3:` priority convention), D-112 (`frontend-perf-measure`/`frontend-perf-gate` moved to `ubuntu-latest`, closing issue #109), D-113 (`--root` symlink/mount-point rejection, closing #169), D-114 (raising `frontend-perf-gate`'s threshold to 7.0% for the `Ty` migration — the same D-114 this log's own entries above already track via #291's deadlock). D-115 through D-120 (tuple; PR-12's own comprehensions/slicing/methods/PEP-709) had no collision.
 
-**Resolution (this branch's own numbers renumbered, not the incoming ones):** D-111→D-121, D-112→D-122, D-113→D-123, D-114→D-124, applied via `git merge origin/feat/v0-2-pr10-ty-representation-migration` (commit `776632f`) for `docs/DECISIONS.md`/`docs/SESSION_LOG.md`'s own conflict hunks, then a dedicated rename commit (`e33c517`) across the other 19 files that reference these ADRs (5 crate source files, 7 docs, 3 plan documents, 4 test files). Chose this direction — not renumbering the incoming range — because the incoming D-112/D-114 are load-bearing constants baked into `scripts/check_roadmap_evidence.rb` (SHA256 digests under the D-103 propose/activate protocol, itself already deadlocked per this log's own D-114/#291 entries below), while this branch's own D-111–D-114 are referenced only in docs and Rust doc comments — no baked hashes, no CI-script constants. Excluded from the rename by design (their D-111–D-114 references are the *incoming* branch's own, correctly left untouched): `AGENTS.md`, `docs/AGENT_TOOLING.md`, `docs/REPOSITORY_GOVERNANCE.md`, `docs/TESTING.md`, `.github/workflows/frontend-perf-shadow.yml`, `scripts/check_roadmap_evidence.rb`/`test_check_roadmap_evidence.rb`/`manage_ievo_hooks.py`, `tests/fixtures/policy-successors/*.rb`, plus one line each in `docs/DELIVERY_PLAN.md`/`docs/ROADMAP.md` where both branches' D-11x prose shares a paragraph. Also backfilled 3 `docs/DECISIONS.md` summary-table rows (D-112/D-113/D-114) that the *incoming* branch itself had never added — a pre-existing gap on that side, confirmed directly against `origin/feat/v0-2-pr10-ty-representation-migration`'s own tree, unrelated to this rename.
+**Resolution (this branch's own numbers renumbered, not the incoming ones):** D-111→D-121, D-112→D-122, D-113→D-123, D-114→D-124, applied via `git merge origin/feat/v0-2-pr10-ty-representation-migration` (commit `776632f`) for `docs/DECISIONS.md`/`docs/SESSION_LOG.md`'s own conflict hunks, then a dedicated rename commit (`e33c517`) across the other 19 files that reference these ADRs (5 crate source files, 7 docs, 3 plan documents, 4 test files). Chose this direction — not renumbering the incoming range — because the incoming D-112/D-114 are load-bearing constants baked into `scripts/check_roadmap_evidence.rb` (SHA256 digests under the D-103 propose/activate protocol, itself already deadlocked per this log's own D-114/#291 entries above), while this branch's own D-111–D-114 are referenced only in docs and Rust doc comments — no baked hashes, no CI-script constants. Excluded from the rename by design (their D-111–D-114 references are the *incoming* branch's own, correctly left untouched): `AGENTS.md`, `docs/AGENT_TOOLING.md`, `docs/REPOSITORY_GOVERNANCE.md`, `docs/TESTING.md`, `.github/workflows/frontend-perf-shadow.yml`, `scripts/check_roadmap_evidence.rb`/`test_check_roadmap_evidence.rb`/`manage_ievo_hooks.py`, `tests/fixtures/policy-successors/*.rb`, plus one line each in `docs/DELIVERY_PLAN.md`/`docs/ROADMAP.md` where both branches' D-11x prose shares a paragraph. Also backfilled 3 `docs/DECISIONS.md` summary-table rows (D-112/D-113/D-114) that the *incoming* branch itself had never added — a pre-existing gap on that side, confirmed directly against `origin/feat/v0-2-pr10-ty-representation-migration`'s own tree, unrelated to this rename.
 
 **Verification, run fresh against the merged-and-renamed tree, not assumed:** `cargo build --workspace` clean; `cargo test --workspace` 1307+ tests, 0 failed (confirms the 2 renumbered `.expected.txt` diagnostic fixtures and their `crates/pycc_types` emitted-message string literals stayed in lockstep); `ruby scripts/test_check_roadmap_evidence.rb` 136 runs/0 failures; `ruby scripts/check_roadmap_evidence.rb` passed (confirms the excluded incoming-side CI-governance files were genuinely untouched); `cargo llvm-cov clean --workspace && cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` — 37101/37101 regions, 26264/26264 lines, 100.00% across every crate; a line-by-line diff of every renumbered ADR table row and section body against the pre-merge original (with the rename mechanically reapplied) confirmed byte-for-byte, catching nothing lost in the multi-file `sed`-and-reassemble; a full-tree anchor-link sweep (`#d-11[1-4]-...`) found exactly one remaining hit, `AGENTS.md`'s own D-113 link, correctly pointing at the *incoming* symlink ADR, not a dead link.
 
 **Not done / next steps for a fresh session:**
-1. This branch is **not** opened as a GitHub PR yet, and should not be until `main`'s own D-114/#291 manifest deadlock resolves (owner-only branch-protection `PATCH`, tracked in this log's own entries below and in the now-concluded `pr291-d114-handoff.md` cross-session log) — PR #236 and #291 are both still `BLOCKED` as of this entry's own re-confirmed checkpoint. Re-check both before assuming this is still true.
+1. This branch is **not** opened as a GitHub PR yet, and should not be until `main`'s own D-114/#291 manifest deadlock resolves (owner-only branch-protection `PATCH`, tracked in this log's own entries above and in the now-concluded `pr291-d114-handoff.md` cross-session log) — PR #236 and #291 are both still `BLOCKED` as of this entry's own re-confirmed checkpoint. Re-check both before assuming this is still true.
 2. Once unblocked, this branch's own identity needs a decision before opening a PR: it now carries PR-10 (via the merge) + PR-11a + PR-11b + PR-12 combined on one branch/history, not just "PR-12" — Task 14's own "then PR" step should reassess whether that's opened as one combined PR or whether some other split makes more sense at that point, rather than assuming a clean single-PR-per-plan-document mapping still holds.
 3. Branch-name deviation, noted for the record, not corrected: this branch is still named `feat/v0-2-pr11-dict-set-tuple` (PR-11's own name) — PR-12's 14 tasks ran directly on this already-existing branch/worktree rather than a fresh `feat/v0-2-pr12-comprehensions-slicing` one. Not retroactively split; 29+ interleaved commits would make a synthetic split riskier than the naming mismatch itself.
 4. PR-12's own SDD workspace (`.superpowers/sdd/2026-08-02-v0-2-pr12-comprehensions-slicing/`) is intentionally kept, not deleted — the final-review gate for deleting it is "then PR" actually happening, which hasn't yet.
@@ -287,6 +312,212 @@ leave the project-local alpha set.
 the pool has no survivors; resuming it needs no special setup beyond
 invoking `/issue-select` again from a refreshed `main`.
 
+
+## 2026-08-01 — v0.2 PR-10 content-complete, still blocked on #109; both candidate fixes found to be governance-gated; pivoting to PR-11
+
+**Snapshot evidence:** branch `feat/v0-2-pr10-ty-representation-migration`, PR [#236](https://github.com/rotnov/pycc/pull/236), head `6029fae`. Since the entry below: merged a second round of fresh `origin/main` (PR #253 `pycc init` no-overwrite fix, PR #254 linker-diagnostic fix, range `da1ad48..e026fc6`) — auto-merged cleanly (only `docs/ROADMAP.md` needed auto-merge), full `cargo build --workspace`/`cargo test --workspace` green (0 failed) before pushing. `origin/main` has not advanced past `e026fc6` since.
+
+**PR #236's own status is unchanged and unambiguous:** every check is green — `build-test-coverage`, all 4 `native-build-test` targets, `cross-compile-build`/`-verify`, `agent-assets`, `agent-policy`, `audit`, `frontend-perf-measure` — except `frontend-perf-gate` and the `ci-gate` it feeds, both `FAILURE`. `mergeable: MERGEABLE`, `mergeStateStatus: BLOCKED`. This is issue #109 (frontend-perf-gate hosted-runner noise), not a defect in PR-10's own content, and not a new finding — restated here only because a fresh session must not mistake "checks failing" for "implementation incomplete."
+
+**Investigated both candidate fixes for #109 this session; both turned out to be bigger and more governance-gated than initially framed — a mistake corrected in the same session it was made:**
+
+- A prototype `getrusage(RUSAGE_SELF)`-based Criterion `Measurement` backend was built and posted to #109 as a plausible mechanism (works, but its actual noise-reduction benefit can't be validated without hosted-runner contention).
+- A job-duration CV analysis across 8 recent CI runs found `macos-14` (the runner `frontend-perf-measure`/`frontend-perf-gate` use) at 11.2% CV vs. `ubuntu-latest`'s 3.1% — posted to #109 as a cheaper candidate: move the gate to `ubuntu-latest`.
+- Started implementing the runner-move in a scratch worktree (`claude/issue-109-cpu-time-perf-gate`, since deleted, no commits made) and discovered `scripts/check_roadmap_evidence.rb` pins this workflow at three layers: a whole-file SHA256 allowlist, a structural Ruby-hash comparison of the `frontend-perf-measure`/`frontend-perf-gate` job bodies (`D56_SOURCE_AWARE_PERF_MEASURE_JOB` etc.), and those reference hashes hardcode `"runs-on" => "macos-14"`. **The runner-move requires the same checker-edit/mutation-test/D-100-style-staging ritual the getrusage backend would need — it is not a cheaper one-line change.** Posted a correction to [issue #109](https://github.com/rotnov/pycc/issues/109#issuecomment-5150324757) withdrawing the "cheaper" framing and noting the CV table's own caveat (job duration conflates environment-setup/compile time with scheduler noise; the `ubuntu-24.04-arm` 15.4%-CV-at-~140s-mean datum is the strongest evidence it's real variance regardless).
+- Neither remedy was implemented. Both require: an AGENTS.md-mandated failing-test-first checker edit, a new `docs/DECISIONS.md` ADR (check the live highest D-number first), and per D-100's own precedent, possibly a separate staging PR before `main`'s audit recognizes a new digest. This is a scope decision for the user, tracked as task #109 in the session task list, not something to do opportunistically alongside other work.
+- Triggered CI reruns on PR #236's latest run to look for a fresh data point: a `--failed`-only rerun (wrong — re-consumes `frontend-perf-measure`'s stale cached artifact, the exact cached-duplicate trap D-109's "Correction" note exists to warn about) followed by a full rerun so `frontend-perf-measure` actually re-executes. Result not yet confirmed as of this entry — a fresh session should check run `30688613410` and verify via `gh run view --job <id> --log` that the reported percentage differs from the prior run's before treating it as evidence (task #110).
+
+**Decision this entry records: PR-10 being blocked on #109 does not block v0.2 delivery generally.** An `advisor()` consultation confirmed the standing autopilot directive should not stall on this one shared, already-escalated CI question — PR-11 (`dict[K, V]`/`set[T]`/`tuple[...]`, `docs/DELIVERY_PLAN.md` row 11) is next. Since PR-11 explicitly reuses PR-10's own monomorphization machinery (`Ty::List`, `Scalar::List`, `PyIntListObj`) which exists only on this unmerged branch, PR-11 is being started stacked on `feat/v0-2-pr10-ty-representation-migration` rather than on `origin/main` — it inherits PR-10's blocked state by necessity and cannot merge before PR-10 does. This is a deliberate, recorded choice, not an oversight.
+
+## 2026-07-31 — v0.2 PR-10: merged `origin/main` (D-110 call-shadowing), resolved a real conflict; still blocked on issue #109
+
+**Snapshot evidence:** branch `feat/v0-2-pr10-ty-representation-migration`, PR #236. `origin/main` had advanced with PR #252 (D-110: module value bindings shadow builtin/function call lookup, callee-first — issue #133), landing as `bbd759a`. This produced a real merge conflict (`gh pr view 236` showed `mergeable: CONFLICTING`, `mergeStateStatus: DIRTY`), not just the review-thread `BLOCKED` state from before.
+
+**Resolution:** `git merge origin/main` auto-merged `crates/pycc_types/src/lib.rs` and `docs/ROADMAP.md` cleanly; `docs/DECISIONS.md` and `docs/SPEC.md` conflicted only on ordering — this branch's D-104–D-109 range and main's D-110 entry needed combining into one contiguous D-070…D-110 range (D-110's own Context paragraph had already anticipated exactly this: "numbered D-110 because open PR #236 has already published claims on D-104–D-109"). Resolved by keeping all of D-104–D-109 (including this session's own D-109 "Correction" note, already present on this branch) followed by D-110, in both files. `cargo test --workspace` then surfaced 20 test-only `ConstraintEnvironment` struct literals in `pycc_types/src/lib.rs` missing D-110's new `defs_rebound: HashSet<String>` field (compiler-enforced, not a silent gap) — fixed with a neutral `HashSet::new()` at each site, all in `#[cfg(test)]` code unrelated to what those tests actually exercise (list/subscript/append/for-list inference, not shadowing). Full workspace build and test suite green (0 failed) before committing. Merge commit `d3d9ea8`, pushed.
+
+**Not re-run through the full pinned reviewer:** the substantive logic here (D-110's shadowing rule) already went through its own review on PR #252 before landing on `main`; this session's own contribution is a content-preserving documentation reorder plus a compiler-mandated, test-verified mechanical field addition — judged not to rise to the "significant change" bar D-068 targets, unlike Task 14 and the final whole-branch review earlier in this session.
+
+**Still blocked, unrelated to this merge:** `mergeStateStatus` is `BLOCKED` again post-merge (conflict is gone — `mergeable: MERGEABLE` — this is the same D-109/issue #109 frontend-perf-gate methodology question from the entry below, now re-evaluated against a fresh commit). Also discussed with the user this session: issue #226 ("Measure nbody benchmark with process CPU time (getrusage), not wall-clock") is open, unimplemented, and scoped specifically to `tests/nbody_bench.rs` — its `RUSAGE_CHILDREN`-around-`Command::status()` mechanism doesn't directly transfer to `frontend-perf-gate` (an in-process Criterion benchmark with no child process to measure), though the same underlying hypothesis (hosted-runner scheduling noise) applies to both; adapting it to `frontend-perf-gate` would need `RUSAGE_SELF` and a custom Criterion `Measurement` backend, not implemented this session.
+
+## 2026-07-31 — v0.2 PR-10: `frontend-perf-gate`'s "D-109 confirmed closed" claim withdrawn; merge blocked pending a user methodology decision
+
+**Snapshot evidence:** branch `feat/v0-2-pr10-ty-representation-migration`, PR #236, head `022b49a1f7e6fc5ff50830c1b78fa4454bb7eeff`. The immediately-prior entry below ("Task 14 landed and confirmed") claimed D-109 was confirmed resolved from two independent passing CI measurements of commit `c276262` (run 30613065177). Re-checking that claim against the actual, currently retrievable job logs (`gh run view --job <id> --log`, not memory or a prior summary) shows it does not hold, and a full reconstruction of every `frontend-perf-gate` measurement across this investigation contradicts it:
+
+- Run 30613065177's two attempts are **not independent**: both show byte-identical replicate medians and an identical -0.4454% delta. Attempt 2 reused attempt 1's cached artifacts instead of remeasuring — exactly the failure mode this project's own D-095/D-096/D-101 methodology exists to catch, missed here. The 1.8430% figure recorded for "the first" measurement matches no retrievable log; its origin is unreconciled.
+- Three further CI runs since that update — `1420d91` (docs-only), `f4b01c6` (merge of `origin/main`), `022b49a` (touches only `pycc_types`'s `ListAppend` check and doc comments) — none touching `Ty`'s representation — have **all failed** `frontend-perf-gate`: 3.0685%, 16.5551%, and 4.2506% then 5.4321% on two attempts of the same commit.
+- The pre-fix side is equally mixed: alongside the two originally-cited failures (4.7008%, 5.1960%), the commit that first recorded D-109 (`25c95b97`) failed at 6.5239%, but the very next commit (`69b51b29`, a pure text edit, zero code change) **passed** at 0.8089%.
+- Full verified table (all from `gh run view --job <id> --log`): pre-fix 3 FAIL (4.7008%, 5.1960%, 6.5239%) / 1 PASS (0.8089%); post-fix 1 PASS (-0.4454%, genuine) / 4 FAIL (3.0685%, 16.5551%, 4.2506%, 5.4321%). Full detail in `docs/DECISIONS.md`'s D-109 "Correction" note.
+
+**Why this stopped mid-rerun instead of chasing another green result:** an `advisor()` consultation flagged that the prior "confirmed closed" conclusion rested on only two data points, that a third post-fix measurement (4.2506%) already contradicted it, and that D-093/D-096's own Alternatives sections explicitly reject "rerun until it happens to pass" as a way to resolve exactly this kind of ambiguity. Pulling the actual job logs (rather than trusting the already-written doc claims) surfaced the cached-duplicate and the three further failures above, which is materially worse than the single ambiguous reading the advisor was responding to.
+
+**This is the same class of gap this project has already named elsewhere, not a new phenomenon:** D-095/D-096/D-101 already accept macOS/Windows/`ubuntu-24.04-arm` hosted-runner noise as a genuine, hardware-linked constraint on the unrelated `nbody` gate. For this exact gate, `frontend-perf-gate`, an almost identical incident is already on record: the 2026-07-26 "PR #132 blocked on `frontend-perf-gate`; likely order/thermal drift, not a real regression; escalated to the user" entry further down this file, resolved by asking the user to choose among a probe rerun, an audited one-time exception, or a gate/threshold change — not by retrying until green.
+
+**Not reverted:** Task 14's `Ty::Dict`/`Ty::Tuple` boxing (`size_of::<Ty>()` 24→16 bytes) stays — it is a real, independently-measured representation improvement regardless of what this noisy benchmark shows. What's withdrawn is the claim that this benchmark's measurements demonstrate the boxing fixed a regression, and the earlier claim that the original regression was definitely real (rather than possibly always within this gate's own noise band, given the pre-fix side also shows a pass).
+
+**Update: this is issue #109, not a fresh PR-10-specific question.** Checking [issue #109](https://github.com/rotnov/pycc/issues/109) ("Stabilize frontend performance gate against hosted-runner variance") found it open, reopened four times since 2026-07-25 as each stabilization attempt (paired-runner activation, D-051/D-053, D-056's source-aware policy, D-062's identity path) turned out incomplete, with its newest comment (2026-07-31T07:41:09Z, posted independently of this branch, author `rotnov` — the same account this session is authenticated as and also the repository maintainer; the API gives no way to tell whether that post was a manual action or another automated session, and this entry does not guess) documenting the **identical** phenomenon on merged PR #188: the same merge commit passed `frontend-perf-gate` pre-merge and failed it on the exact post-merge `main` run, zero source difference. This branch's own `25c95b97`→`69b51b29` zero-diff pair has been added to that issue as corroborating evidence ([comment](https://github.com/rotnov/pycc/issues/109#issuecomment-5140997132)).
+
+**Status: merge-blocked, tracked at #109, not awaiting a bespoke PR-10 decision.** Docs corrected in `docs/DECISIONS.md` (D-109), `docs/ROADMAP.md`, `docs/DELIVERY_PLAN.md` (this same commit) to point at #109 as the actual root tracking issue rather than framing this as an isolated methodology question for the user to decide fresh. PR-10 does not attempt its own bespoke fix or threshold change inside this branch — that risks duplicating or conflicting with whatever the concurrent work on #109 is already doing. No further CI reruns triggered chasing a pass. PR-10's `list[int]` implementation itself remains fully task-reviewed and unaffected by this finding — only this one shared, already-tracked required check's own reliability is in question. A fresh session should read this entry, D-109's "Correction" note, and issue #109 itself before taking further action on PR #236: check whether #109 has since been resolved (a merged fix on `main`) before assuming PR-10 is still blocked, and if so, merge current `main` into this branch and let a fresh CI run confirm before proceeding to merge PR-10.
+
+## 2026-07-31 — v0.2 PR-10: Task 14 landed and confirmed; `frontend-perf-gate` regression (D-109) resolved
+
+**Authoritative checkpoint:** same branch/PR as the entry directly below
+(`feat/v0-2-pr10-ty-representation-migration` → [PR #236](https://github.com/rotnov/pycc/pull/236)).
+Commit `a6d35c8` lands Task 14 on top of the plan commit (`2a8879a`) the
+entry below left as the checkpoint. Since then: `2123ec6` (Task 14's own
+pinned-review follow-up), `c276262` (an independent task review's Dict
+doc-comment fix), `1420d91` (the D-109 CI-confirmation record), and
+`f4b01c6` (a merge of `origin/main`, which had advanced with an unrelated
+merged PR #238 in the meantime — auto-merged cleanly, no conflicts).
+
+**Two attempts, one dead end recorded, not silently discarded:** the
+plan's own first-drafted shape, `Ty::Tuple(Box<[Ty]>)` (a boxed slice),
+was executed exactly as planned and measured `size_of::<Ty>() == 24` —
+no reduction at all from the pre-fix size, confirmed independently
+in-crate and via a standalone `rustc` reproduction. Per the task's own
+explicit contingency for this outcome, that attempt was reverted in full
+(nothing committed) and reported BLOCKED. A corrected shape,
+`Ty::Tuple(Box<Vec<Ty>>)` (a second pointer indirection instead of a fat
+pointer), measured `size_of::<Ty>() == 16` (`align_of::<Ty>()` unchanged
+at 8) — a real reduction — and is what actually landed. `Ty::Dict` is
+`Dict(Box<(Ty, Ty)>)` as originally planned; it needed only the one
+attempt. `docs/DECISIONS.md`'s D-109 entry, this plan's own Task 14
+section, and `docs/ROADMAP.md`'s Task 14 follow-up paragraph all carry
+this correction, including an explicit caution that the niche-filling
+"why" is a plausible hypothesis, not an independently re-derived proof
+(the pre-fix shape's own 24-byte measurement doesn't fit a naive
+"tag plus largest payload" rule either, so a future session shouldn't
+cite that mechanism as settled fact without checking rustc's actual
+layout algorithm).
+
+An independent task review (a fresh subagent, not the implementer's own
+self-dispatched pass) then found one further Important finding — the
+`Ty::Dict` doc comment overclaimed that boxing `Dict` itself "closed" the
+regression and mis-attributed the original 24-byte size to `Dict`'s
+shape, when the brief's own analysis already established `Tuple(Vec<Ty>)`
+(24 bytes) was the actual size-dominating variant, not `Dict`'s two boxes
+(16 bytes) — fixed directly in commit `c276262` (a one-line reword).
+
+**Status: confirmed resolved.** Two independent, genuinely fresh full CI
+reruns of commit `c276262` ([run 30613065177](https://github.com/rotnov/pycc/actions/runs/30613065177))
+both passed `frontend-perf-gate` — 1.8430% and then **-0.4454%** (current
+measurement slightly *faster* than previous), both comfortably under the
+2.00% threshold, each with its own fresh `frontend-perf-measure`
+timestamps and distinct replicate medians (ruling out the cached-artifact
+false-positive this same investigation hit earlier with a `--failed`-only
+rerun). `docs/DECISIONS.md`'s D-109 entry and `docs/ROADMAP.md`'s Task 14
+follow-up both carry the confirmation numbers. PR #236 is no longer
+merge-blocked by D-109.
+
+`origin/main` advanced (PR #238, `version --verbose`) while this was in
+flight; merged cleanly (`f4b01c6`, `docs/ROADMAP.md` auto-merged, no
+conflicts) to satisfy branch protection's strict up-to-date requirement.
+
+The pinned `ievo:deep-reviewer` (D-068) then ran against the full
+`merge-base(origin/main)..HEAD` diff (44 commits, ~8000 insertions) —
+this plan's own single highest-risk area (non-exhaustive `Ty`/`Scalar`
+dispatch in `pycc_codegen`) came back clean. 8 findings total, all
+doc-currency/cross-file-consistency defects at task boundaries plus one
+real code asymmetry: `.append(True)` was rejected while `xs[True]` (this
+same branch's own earlier fix) was accepted, for the identical D-086
+bool-is-int-subtype reason — confirmed via a real build, fixed to use
+`is_assignable` for symmetry. All fixed directly: `TESTING.md`/
+`DELIVERY_PLAN.md`'s stale "not yet pushed for CI"/"pending CI" wording
+(the PEP-585 row has in fact been flipped since Task 13), `SPEC.md`'s
+DECISIONS.md range (stopped at D-108, missing this PR's own D-109), the
+HIR `ListAppend` doc comment (claimed `pycc_types` rejects value-position
+`.append()` — nothing does; it surfaces as a D-072-shaped codegen panic
+instead), two stale `pycc_rt` doc comments (referenced the private
+`untag_smallint` instead of the actual public boundary helper
+`pycc_rt_int_untag_checked`, and described a bigint-corruption gap that
+helper already closes), and `DIAGNOSTICS.md`'s `T0033` row (didn't
+mention the `len()`-arity failure shape). One `note` deliberately left
+open: `PYTHON_STANDARDS.md`'s other nine `✅` rows still carry stale
+`pyXX/` fixture-path prefixes this PR's own new row doesn't — pre-existing
+drift, not introduced here; the reviewer itself called deferring it
+defensible.
+
+**Status: ready to merge.** All required checks green, all review threads
+resolved, pinned review clean. What a fresh session should pick up next
+if this session ends before merging: confirm CI is green on the latest
+pushed commit, then squash-merge PR #236 per this project's established
+convention (matching PR-6 through PR-9's own precedent).
+
+---
+
+## 2026-07-31 — v0.2 PR-10: confirmed self-inflicted `frontend-perf-gate` regression (D-109), fixing as Task 14 on this same branch
+
+**Authoritative checkpoint:** [PR #236](https://github.com/rotnov/pycc/pull/236)
+(`feat/v0-2-pr10-ty-representation-migration` → `main`) is open, head
+`38c34ed` (the origin/main merge resolving the D-103 ID collision), with
+one further docs-only commit about to be pushed on top recording this
+entry's own findings. Tasks 1-12 (the `Ty` representation migration,
+D-103/D-104's ADRs, the `list[int]` end-to-end thin slice, and the
+PEP-585 fixture) are complete, individually task-reviewed, and merged
+into this branch's own history — none of that work is in question.
+
+**CI run [30608030517](https://github.com/rotnov/pycc/actions/runs/30608030517)
+is green on every required check except `frontend-perf-gate` (and
+consequently `ci-gate`).** All 4 `native-build-test` legs,
+`build-test-coverage`, `cross-compile-build`, and `cross-compile-verify`
+passed, including the new `pep_0585_builtin_generics` conformance test on
+all 5 Tier-1 targets in both profiles — `docs/PYTHON_STANDARDS.md`'s
+PEP-585 row is flipped to `✅` on this real evidence, per D-102's manual-
+flip policy. `frontend-perf-gate` failed twice on independent, genuinely
+fresh measurements: 4.7008% on the original run, 5.1960% on a full rerun
+(not the `--failed`-only rerun, whose "second data point" turned out to
+be misread self-test-fixture output interleaved in the same log stream —
+caught by reading the raw job log rather than trusting a grep hit).
+Both real measurements exceed the 2.00% threshold in the same direction,
+which reads as a real, reproducible regression rather than noise.
+
+**Root cause identified, recorded as [D-109](DECISIONS.md#d-109-pr-10s-frontend-perf-gate-regression-is-real-and-self-inflicted-fix-deferred-to-its-own-follow-up-pr-merge-stays-blocked):**
+`benches/check_bench.rs`'s `pycc_check_frontend_fixture` is scalar-only
+(no `list[T]` value ever constructed), ruling out the new list codegen.
+D-089/D-104's own `Ty` migration (Tasks 2-5) grew `crates/pycc_hir::Ty`
+from a flat, 1-byte, `Copy` enum to a recursive, 24-byte, non-`Copy`
+enum (`size_of::<Ty>() == 24`, `align_of::<Ty>() == 8`, confirmed with a
+throwaway example deleted after use) — a highly plausible, mechanical
+cause on a type-checking-heavy hot path that clones many `Ty` values.
+
+**Decision (called `advisor()` before acting): do not fix this inside
+Task 13.** The identified remedy — box `Ty::Dict`'s two fields and
+`Ty::Tuple`'s `Vec` down to single-pointer payloads — would change a
+representation Tasks 2-5 already migrated ~857 call sites against, after
+every task review already closed; it needs its own task brief,
+implementer, and independent review, not a late unreviewed amendment.
+Per D-024, `ci-gate` red blocks merge with no exception for this being
+self-inflicted or well-understood. Per this project's own D-095/D-096/
+D-101 precedent, a self-inflicted, root-caused regression is not
+grounds for relaxing the gate — that precedent only ever relaxed floors
+after confirming an *external*, unfixable hardware constraint.
+
+**Correction to this entry's own first draft:** an earlier version of this
+paragraph reported the fix as needing "its own follow-up PR" and stopped
+to escalate that choice to the user before proceeding. That framing was
+mechanically wrong: the regressed `Ty` shape exists only on this branch,
+never having reached `main`, so no PR opened against `main` could carry a
+fix for it — there was nothing to defer to. The actual review-discipline
+concern (no unreviewed representation change slipped in without its own
+brief, implementer, and independent review) is satisfied instead by
+adding **Task 14** to this same plan and branch, executed through the
+identical task-review loop every other PR-10 task already passed
+through — not by pausing for a user decision this repository's own
+standing autonomous-delivery directive does not call for on a
+well-scoped, already-diagnosed technical fix. `docs/DECISIONS.md`'s
+D-109 carries the same correction as its own cross-reference note.
+
+**Status: Task 14 in progress** (box `Ty::Dict`/`Ty::Tuple` down to
+single-pointer payloads, re-measure `size_of::<Ty>()`, verify the blast
+radius — confirmed small by direct grep: only `crates/pycc_hir/src/lib.rs`
+and `crates/pycc_codegen/src/lib.rs` reference `Dict`/`Tuple` at all, zero
+occurrences in `pycc_types`/`pycc_mir`/`pycc_rt` — then a fresh full CI
+rerun to confirm `frontend-perf-gate` closes). PR #236 stays open and
+unmerged until Task 14 lands green; Task 13 (pinned `ievo:deep-reviewer`
+pass, final merge) resumes once it does. `docs/ROADMAP.md` carries this
+same follow-up inline, alongside the pre-existing D-107 leak-only-
+refcounting one.
+
+---
 
 ## 2026-08-01 — v0.2 PR-10 content-complete, still blocked on #109; both candidate fixes found to be governance-gated; pivoting to PR-11
 

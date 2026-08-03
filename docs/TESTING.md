@@ -311,10 +311,22 @@ blocking aggregate without result selection, closing #109 (2026-07-26): a
 changed-input `>2%` failure is a real, validated gate result, not
 presumptively known-noise.
 
+**Update (2026-08-03, D-114):** the `>2%` threshold described throughout
+this section's own history is no longer the live value — `frontend-perf-gate`
+now requires `>7.0%` before failing, raised via a corrected six-round D-103
+propose/activate sequence to accommodate v0.2 PR-10's real, one-time
+`Ty`-migration cost (D-109), not runner noise. Every historical `2%`
+reference above still accurately describes what that specific decision
+changed at the time; only the currently-active threshold has moved.
+`REVIEWED_PERF_CI_WORKFLOW_SHA256S` now coexists `[D100, D112, D114]`;
+`.github/workflows/ci.yml` matches D-114's shape. Issue #296 tracks
+lowering the threshold back toward 2.0% once this one-time cost is
+absorbed into every future baseline.
+
 The byte-exact activation retired the D-048 workflow digest and fixture. No
 administrative bootstrap is required because each run of the active workflow
-(D-112, formerly D-100) uses D-062's embedded contract to measure both sides
-of its own comparison. D-054's one-shot
+(D-114, formerly D-112, formerly D-100) uses D-062's embedded contract to
+measure both sides of its own comparison. D-054's one-shot
 staging recovery is historical audit
 evidence only; normal `audit` plus `ci-gate` protection was restored before this
 activation branch was created and is not encoded in repository configuration.
