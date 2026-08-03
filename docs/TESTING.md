@@ -14,6 +14,14 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 6. Corpus (OSS projects) | nightly CI | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
 
+The focused D-094 release regression in `pycc_codegen` observes the same
+production codegen helper immediately before object emission. Debug codegen
+reports no applied pass pipeline and retains both a used and an unused runtime
+declaration; release codegen reports the exact `default<O3>` pipeline, retains
+the used declaration, and removes the unused one. This distinguishes a real
+pass-pipeline run from the aggressive target-machine setting alone; differing
+object bytes are not sufficient evidence that `Module::run_passes` executed.
+
 ## Conformance harness (`pycc_testkit`)
 
 - Each test = single `.py` file, header comment: PEP, category, min pycc milestone.

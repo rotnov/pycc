@@ -824,10 +824,12 @@ mod try_build_release_isolation_tests {
     /// for `release: false` is identical regardless of a neighboring
     /// `pycc.toml` naming `opt = "release"`, by comparing it against the
     /// same source's MIR compiled directly through `pycc_codegen` with
-    /// `release: false` -- the same object-file-bytes technique
+    /// `release: false`. Object-byte equality is appropriate for this
+    /// isolation claim because both paths are intentionally debug codegen;
     /// `pycc_codegen`'s own `release_mode_actually_runs_llvm_optimization_
-    /// passes` test uses to prove the *opposite* claim (that release *does*
-    /// change the emitted object). Deliberately not a final-linked-binary-
+    /// passes` test proves the separate release claim by observing the exact
+    /// pipeline and used/unused declaration state before object emission.
+    /// Deliberately not a final-linked-binary-
     /// size comparison: `docs/AGENT_RETROSPECTIVE.md`'s 2026-07-28 entry
     /// found that proxy has no signal at that level (a large statically-
     /// linked runtime plus OS segment-alignment padding absorbs the
