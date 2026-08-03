@@ -228,10 +228,14 @@ fn roll_back_after_toml_failure(
 /// `fs::write` with `create_new`: fails if the path already names any
 /// entry, including a dangling symlink, instead of following it (#237).
 /// When the write itself fails after `create_new` succeeded, the freshly
-/// created file is removed (best-effort), so a quota or I/O failure cannot
-/// leave behind an empty/partial `main.py` that makes the next `pycc init`
-/// refuse our own residue, or a corrupt partial `pycc.toml` -- `create_new`
-/// guarantees the entry is ours to delete (PR #253's review).
+/// created file is removed, so a quota or I/O failure cannot leave behind
+/// an empty/partial `main.py` that makes the next `pycc init` refuse our
+/// own residue, or a corrupt partial `pycc.toml` -- `create_new` guarantees
+/// the entry is ours to delete (PR #253's review). That removal is no
+/// longer silently best-effort (#256's review): if it too fails, the
+/// cleanup error is folded into the returned error rather than discarded,
+/// since a caller told only "the write failed" would otherwise have no way
+/// to learn a partially written file is still sitting at `path`.
 fn write_new(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
     write_new_in(path, contents, |file, contents| {
         use std::io::Write;
@@ -257,14 +261,35 @@ fn write_new_in(
         .write(true)
         .create_new(true)
         .open(path)?;
-    let result = write(&mut file, contents);
-    if result.is_err() {
-        // Close the handle before removing -- Windows cannot delete an
-        // open file. Best-effort: the write error stays the reported one.
-        drop(file);
-        let _ = std::fs::remove_file(path);
+    let write_error = match write(&mut file, contents) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    // Close the handle before removing -- Windows cannot delete an open
+    // file.
+    drop(file);
+    if let Err(cleanup_error) = std::fs::remove_file(path) {
+        // #256's review: unlike a bare best-effort cleanup, silently
+        // discarding this would leave the partially written entry at
+        // `path` on disk with no caller ever told it exists. For the
+        // `pycc.toml` write specifically, `roll_back_after_toml_failure`
+        // above only ever sees the error this function returns, so a
+        // swallowed cleanup failure here would leave a partial `pycc.toml`
+        // behind while every reported message still claimed only `main.py`
+        // needed manual removal -- the same residue this whole issue is
+        // about, one layer earlier and unreported. Report it for every
+        // caller of `write_new`, not just the `pycc.toml` one, since the
+        // failure mode is identical either way.
+        return Err(std::io::Error::new(
+            write_error.kind(),
+            format!(
+                "{write_error}; additionally, could not remove the \
+                 partially written file at {path:?} ({cleanup_error}) \
+                 -- remove it manually before retrying"
+            ),
+        ));
     }
-    result
+    Err(write_error)
 }
 
 #[cfg(test)]
@@ -549,6 +574,57 @@ paths = ["tests/"]
         assert_eq!(err.to_string(), "injected write failure");
         assert!(!path.exists(), "the partial file must be cleaned up");
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    fn chmod_containing_dir_readonly_then_fail_write(
+        _file: &mut std::fs::File,
+        _contents: &[u8],
+    ) -> std::io::Result<()> {
+        // A plain top-level `fn`, not a closure: `write_new_in` requires a
+        // capture-free `fn` pointer (see its own doc comment), so the
+        // directory this recomputes must be deterministically derivable
+        // from process state alone, matching the caller's own formula
+        // exactly rather than being passed in.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "pycc_write_new_cleanup_fail_{}",
+            std::process::id()
+        ));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        Err(std::io::Error::other("injected write failure"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_new_in_reports_a_cleanup_failure_honestly() {
+        // #256's review: if the write fails *and* the best-effort cleanup
+        // of the partially-created file also fails, the cleanup failure
+        // must not be silently discarded -- a caller told only "the write
+        // failed" would have no way to learn a partial file is still on
+        // disk. The injected writer chmods the containing directory
+        // read-only after `create_new` already succeeded, so the later
+        // `remove_file` in `write_new_in` fails deterministically.
+        // (Root ignores 0o555, so this would spuriously succeed under a
+        // root test runner; hosted CI and the coverage sandbox's `nobody`
+        // user are both non-root.)
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "pycc_write_new_cleanup_fail_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("partial.txt");
+
+        let err = write_new_in(&path, b"contents", chmod_containing_dir_readonly_then_fail_write)
+            .expect_err("the injected write failure must propagate");
+        let message = err.to_string();
+        assert!(message.contains("injected write failure"));
+        assert!(message.contains("could not remove"));
+        assert!(message.contains("remove it manually"));
+
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }
 
