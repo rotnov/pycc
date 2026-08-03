@@ -46,6 +46,18 @@ def required_contexts(protection: dict) -> list[str]:
     return protection["required_status_checks"]["contexts"]
 
 
+def protection_snapshot(protection: dict) -> dict:
+    return {
+        "strict": protection["required_status_checks"]["strict"],
+        "contexts": sorted(protection["required_status_checks"]["contexts"]),
+        "enforce_admins": protection["enforce_admins"]["enabled"],
+        "required_pull_request_reviews": protection.get("required_pull_request_reviews"),
+        "required_conversation_resolution": protection["required_conversation_resolution"]["enabled"],
+        "allow_force_pushes": protection["allow_force_pushes"]["enabled"],
+        "allow_deletions": protection["allow_deletions"]["enabled"],
+    }
+
+
 def status(repo: str = REPO) -> tuple[bool, str]:
     protection = get_protection(repo)
     current = sorted(required_contexts(protection))
@@ -149,8 +161,7 @@ def relax(
     contexts = required_contexts(protection)
     if check_name not in contexts:
         raise CiBypassError(f"check {check_name!r} is not currently a required check")
-    strict = protection["required_status_checks"]["strict"]
-    snapshot = {"strict": strict, "contexts": list(contexts)}
+    snapshot = protection_snapshot(protection)
     evidence_text = evidence_path.read_text(encoding="utf-8")
     if now is None:
         now = datetime.now(timezone.utc)
@@ -162,7 +173,7 @@ def relax(
         expiry_minutes, expiry_timestamp, body_path,
     )
     remaining = [c for c in contexts if c != check_name]
-    patch_required_status_checks(repo, strict, remaining)
+    patch_required_status_checks(repo, snapshot["strict"], remaining)
     state_path.write_text(
         json.dumps({"incident": issue_number, "snapshot": snapshot}), encoding="utf-8"
     )
@@ -203,11 +214,9 @@ def restore(repo: str, issue_number: int, comment_path: Path) -> dict:
     snapshot = parse_snapshot_from_body(body)
     patch_required_status_checks(repo, snapshot["strict"], snapshot["contexts"])
     protection = get_protection(repo)
-    readback = {
-        "strict": protection["required_status_checks"]["strict"],
-        "contexts": sorted(required_contexts(protection)),
-    }
-    expected = {"strict": snapshot["strict"], "contexts": sorted(snapshot["contexts"])}
+    readback = protection_snapshot(protection)
+    expected = dict(snapshot)
+    expected["contexts"] = sorted(snapshot["contexts"])
     if readback != expected:
         raise CiBypassError(
             f"DRIFT after restore: expected {expected}, readback {readback} "

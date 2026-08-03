@@ -16,6 +16,39 @@ from unittest import mock
 
 import manage_ci_bypass as mcb
 
+# Realistic branch-protection payload fields beyond `required_status_checks`,
+# matching this repository's actual `main` branch protection (see
+# protection_snapshot() in manage_ci_bypass.py). Tests that exercise relax()
+# or restore() -- i.e. that call protection_snapshot() on a fake protection
+# response -- need all of these keys present or protection_snapshot() raises
+# KeyError. Tests that only exercise status() (which never calls
+# protection_snapshot()) do not need them.
+REQUIRED_PULL_REQUEST_REVIEWS = {
+    "dismiss_stale_reviews": False,
+    "require_code_owner_reviews": False,
+    "require_last_push_approval": False,
+    "required_approving_review_count": 0,
+}
+
+FULL_PROTECTION_RESPONSE = {
+    "required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]},
+    "enforce_admins": {"enabled": True},
+    "required_pull_request_reviews": REQUIRED_PULL_REQUEST_REVIEWS,
+    "required_conversation_resolution": {"enabled": True},
+    "allow_force_pushes": {"enabled": False},
+    "allow_deletions": {"enabled": False},
+}
+
+FULL_PROTECTION_SNAPSHOT = {
+    "strict": True,
+    "contexts": ["audit", "ci-gate"],
+    "enforce_admins": True,
+    "required_pull_request_reviews": REQUIRED_PULL_REQUEST_REVIEWS,
+    "required_conversation_resolution": True,
+    "allow_force_pushes": False,
+    "allow_deletions": False,
+}
+
 
 class RunGhTests(unittest.TestCase):
     @mock.patch("subprocess.run")
@@ -198,7 +231,7 @@ class RelaxTests(unittest.TestCase):
                 {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
             ),
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
-                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
+                FULL_PROTECTION_RESPONSE
             ),
             ("issue", "create"): "https://github.com/owner/repo/issues/300\n",
             ("api", "-X"): "{}",
@@ -211,7 +244,7 @@ class RelaxTests(unittest.TestCase):
         self.assertEqual(issue_number, 300)
         state = json.loads(self.state_path.read_text(encoding="utf-8"))
         self.assertEqual(state["incident"], 300)
-        self.assertEqual(state["snapshot"], {"strict": True, "contexts": ["audit", "ci-gate"]})
+        self.assertEqual(state["snapshot"], FULL_PROTECTION_SNAPSHOT)
         self.assertIn("CONFIRMED", self.body_path.read_text(encoding="utf-8"))
         self.assertIn("2026-08-02T13:00:00Z", self.body_path.read_text(encoding="utf-8"))
 
@@ -271,7 +304,7 @@ class RelaxTests(unittest.TestCase):
                 {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
             ),
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
-                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
+                FULL_PROTECTION_RESPONSE
             ),
             ("issue", "create"): "https://github.com/owner/repo/issues/300\n",
             ("api", "-X"): mcb.CiBypassError("gh api ... failed (exit 1): rate limited"),
@@ -300,7 +333,7 @@ class RelaxTests(unittest.TestCase):
                 {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
             ),
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
-                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
+                FULL_PROTECTION_RESPONSE
             ),
             ("issue", "create"): "https://github.com/owner/repo/issues/301\n",
             ("api", "-X"): "{}",
@@ -354,8 +387,27 @@ class RestoreTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.comment_path = Path(self.tmp.name) / "comment.md"
 
-    def _snapshot_body(self, strict=True, contexts=("audit", "ci-gate")):
-        snapshot = json.dumps({"strict": strict, "contexts": list(contexts)})
+    def _snapshot_body(
+        self,
+        strict=True,
+        contexts=("audit", "ci-gate"),
+        enforce_admins=True,
+        required_pull_request_reviews=None,
+        required_conversation_resolution=True,
+        allow_force_pushes=False,
+        allow_deletions=False,
+    ):
+        if required_pull_request_reviews is None:
+            required_pull_request_reviews = REQUIRED_PULL_REQUEST_REVIEWS
+        snapshot = json.dumps({
+            "strict": strict,
+            "contexts": list(contexts),
+            "enforce_admins": enforce_admins,
+            "required_pull_request_reviews": required_pull_request_reviews,
+            "required_conversation_resolution": required_conversation_resolution,
+            "allow_force_pushes": allow_force_pushes,
+            "allow_deletions": allow_deletions,
+        })
         return f"body text\n{mcb.SNAPSHOT_MARKER_START}\n{snapshot}\n{mcb.SNAPSHOT_MARKER_END}\n"
 
     def _dispatch(self, script):
@@ -375,13 +427,13 @@ class RestoreTests(unittest.TestCase):
             ("issue", "view"): json.dumps({"state": "OPEN", "body": self._snapshot_body()}),
             ("api", "-X"): "{}",
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
-                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
+                FULL_PROTECTION_RESPONSE
             ),
             ("issue", "comment"): "",
             ("issue", "close"): "",
         })
         readback = mcb.restore("owner/repo", 300, comment_path=self.comment_path)
-        self.assertEqual(readback, {"strict": True, "contexts": ["audit", "ci-gate"]})
+        self.assertEqual(readback, FULL_PROTECTION_SNAPSHOT)
         self.assertIn("Readback matches", self.comment_path.read_text(encoding="utf-8"))
 
     @mock.patch("manage_ci_bypass.run_gh")
@@ -399,9 +451,30 @@ class RestoreTests(unittest.TestCase):
             ("issue", "view"): json.dumps({"state": "OPEN", "body": self._snapshot_body()}),
             ("api", "-X"): "{}",
             # Readback shows a DIFFERENT context list than the snapshot -- DRIFT.
-            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
-                {"required_status_checks": {"strict": True, "contexts": ["ci-gate"]}}
-            ),
+            # Every other field matches the (non-drifted) snapshot so the DRIFT
+            # signal stays isolated to `contexts` alone.
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps({
+                **FULL_PROTECTION_RESPONSE,
+                "required_status_checks": {"strict": True, "contexts": ["ci-gate"]},
+            }),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.restore("owner/repo", 300, comment_path=self.comment_path)
+        self.assertIn("DRIFT after restore", str(ctx.exception))
+        self.assertIn("release-blocking governance incident", str(ctx.exception))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_restore_raises_on_drift_in_non_status_check_field(self, mock_run_gh):
+        # DRIFT is not limited to required_status_checks -- a readback that
+        # flips enforce_admins (e.g. an admin disabled it while the bypass was
+        # open) while contexts/strict match must also be caught.
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "view"): json.dumps({"state": "OPEN", "body": self._snapshot_body()}),
+            ("api", "-X"): "{}",
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps({
+                **FULL_PROTECTION_RESPONSE,
+                "enforce_admins": {"enabled": False},
+            }),
         })
         with self.assertRaises(mcb.CiBypassError) as ctx:
             mcb.restore("owner/repo", 300, comment_path=self.comment_path)
@@ -445,7 +518,7 @@ class MainDispatchTests(unittest.TestCase):
                 {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
             ),
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
-                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
+                FULL_PROTECTION_RESPONSE
             ),
             ("issue", "create"): "https://github.com/owner/repo/issues/301\n",
             ("api", "-X"): "{}",
@@ -457,19 +530,17 @@ class MainDispatchTests(unittest.TestCase):
         ])
         state = json.loads((self.state_dir / "state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["incident"], 301)
-        self.assertEqual(
-            state["snapshot"], {"strict": True, "contexts": ["audit", "ci-gate"]}
-        )
+        self.assertEqual(state["snapshot"], FULL_PROTECTION_SNAPSHOT)
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_main_restore_dispatches_and_writes_verified_comment(self, mock_run_gh):
-        snapshot = json.dumps({"strict": True, "contexts": ["audit", "ci-gate"]})
+        snapshot = json.dumps(FULL_PROTECTION_SNAPSHOT)
         body = f"body\n{mcb.SNAPSHOT_MARKER_START}\n{snapshot}\n{mcb.SNAPSHOT_MARKER_END}\n"
         mock_run_gh.side_effect = self._dispatch({
             ("issue", "view"): json.dumps({"state": "OPEN", "body": body}),
             ("api", "-X"): "{}",
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
-                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
+                FULL_PROTECTION_RESPONSE
             ),
             ("issue", "comment"): "",
             ("issue", "close"): "",
