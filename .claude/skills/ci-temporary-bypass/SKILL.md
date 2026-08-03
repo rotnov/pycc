@@ -37,7 +37,7 @@ never assumed:
    and document it in a separate session first, then this skill can be used
    for a later recurrence.
 2. The same failure **reproduces fresh** (not a stale cached CI result --
-   see `docs/SESSION_LOG.md`'s 2026-08-02 entries for why a `pull_request_target`
+   see `docs/sessions/`'s 2026-08-02 entries for why a `pull_request_target`
    check's last recorded result can be stale after the base branch moves)
    on another open pull request that has nothing to do with the one
    motivating this relaxation, **and** the reproduction genuinely isolates
