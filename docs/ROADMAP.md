@@ -11,6 +11,11 @@ remains work in flight.
 
 **Current milestone: v0.1 — acceptance criteria met.** All five v0.1 acceptance-checklist bullets below are green: the checked v0.1 surface reaches a native executable through MIR, LLVM, and the runtime; `fib` and `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets; `pycc check` clears its <50ms/1000 LOC throughput floor; its diagnostic output matches CLI_SPEC.md's example; the five-target CI matrix and cross-host compilation are live; and the 100% line/region coverage gate is required and green. The Language surface row's documented gaps below are accepted boundaries this milestone's acceptance criteria never required closing, not blockers still outstanding.
 
+The D-094 `--release` contract now has a focused semantic regression that
+observes the exact `default<O3>` pipeline and its removal of a dead runtime
+declaration; object-byte inequality alone is not treated as proof that
+`Module::run_passes` executed.
+
 | Area | Status in this commit | Evidence and remaining gap |
 |---|---|---|
 | Compiler pipeline | Frontend and backend both cover the implemented v0.1 subset, with documented gaps | The workspace contains the driver plus `pycc_ast`, `pycc_parser`, `pycc_hir`, `pycc_types`, `pycc_mir`, `pycc_codegen`, `pycc_rt`, and `pycc_diag`. `pycc check` accepts one or more native paths and runs each through parser → HIR → strict type checking without aborting the batch on an unsupported valid-Python input. `build`/`run` compile the implemented v0.1 language subset (arithmetic, comparisons, `if`/`while`/`for`+`range`, functions with real parameters/return values and recursion, including the D-075 `None` parameter ABI, `int`/`float`/`bool`/`str`, string concatenation, basic f-strings, and type-aware multi-argument `print`) through MIR → LLVM object → host linker → native executable, proven by [`tests/slice0.rs`](../tests/slice0.rs) and [`tests/slice1_codegen_depth.rs`](../tests/slice1_codegen_depth.rs). See the "Language surface" row for the specific known gaps. |

@@ -13,6 +13,10 @@ use pycc_mir::{CompSource, MirExpr, MirItem, MirModule, MirStmt};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+const RELEASE_PASS_PIPELINE: &str = "default<O3>";
+type CodegenObserver<'observer> =
+    dyn for<'ctx> FnMut(&inkwell::module::Module<'ctx>, Option<&'static str>) + 'observer;
+
 /// One MIR-level value during codegen. Extended (never replaced) by later
 /// tasks: `Str` (Task 7) is a pointer to an opaque `pycc_rt::PyStrObj` --
 /// `pycc_codegen` never inspects its layout (D-059's inline/heap
@@ -3543,6 +3547,16 @@ pub fn compile_to_object(
     target_triple: Option<&str>,
     release: bool,
 ) -> Result<(), String> {
+    compile_to_object_with_observer(mir, output_path, target_triple, release, None)
+}
+
+fn compile_to_object_with_observer(
+    mir: &MirModule,
+    output_path: &Path,
+    target_triple: Option<&str>,
+    release: bool,
+    mut observer: Option<&mut CodegenObserver<'_>>,
+) -> Result<(), String> {
     let context = Context::create();
     let module = context.create_module("pycc_module");
     let builder = context.create_builder();
@@ -3865,13 +3879,23 @@ pub fn compile_to_object(
     // vanishingly narrow chance this ever legitimately panics on Windows,
     // the `LLVMString`'s `Drop` would run during unwinding (D-029's crash)
     // -- an accepted, currently unreachable risk, not a silently ignored one.
-    if release {
+    let applied_pipeline = if release {
         module
-            .run_passes("default<O3>", &target_machine, PassBuilderOptions::create())
+            .run_passes(
+                RELEASE_PASS_PIPELINE,
+                &target_machine,
+                PassBuilderOptions::create(),
+            )
             .expect(
                 "LLVM's \"default<O3>\" pipeline should never fail against a module this \
                  function has already verified, using a fixed, always-valid pipeline string",
             );
+        Some(RELEASE_PASS_PIPELINE)
+    } else {
+        None
+    };
+    if let Some(observer) = observer.as_mut() {
+        observer(&module, applied_pipeline);
     }
     target_machine
         .write_to_file(&module, FileType::Object, output_path)
@@ -6250,19 +6274,10 @@ mod tests {
         assert!(!err.is_empty());
     }
 
-    /// `x = 1.0`; `i = 0`; `while i < 1000: x = x * 1.0000001; i = i + 1`;
-    /// `print(x)` -- as top-level statements directly in the synthetic
-    /// entry `main`, rather than a separately defined-and-called user
-    /// function: this crate's own test module has no helper for building a
-    /// `MirModule` from a Python source string (`pycc_codegen`'s
-    /// `Cargo.toml` depends only on `pycc_mir`, not the frontend crates
-    /// `pycc_parser`/`pycc_hir`/`pycc_types` that would be needed to parse
-    /// one), so every other test in this file hand-builds its `MirModule`
-    /// the same way -- this one does too, matching the shape of the
-    /// compute-heavy loop the plan's own brief describes: repeated float
-    /// multiplication in a loop is exactly the kind of code `"default<O3>"`
-    /// constant-folds/vectorizes/unrolls very differently from an
-    /// unoptimized build.
+    /// A hand-built compute-heavy loop whose final `print(float)` references
+    /// `pycc_rt_float_to_str`, while nothing references `pycc_rt_int_sub`.
+    /// Debug codegen preserves both declarations; the release pipeline must
+    /// retain the used declaration and remove the unused one.
     fn release_flag_fixture() -> MirModule {
         MirModule {
             items: vec![
@@ -6329,17 +6344,46 @@ mod tests {
 
         let debug_dir = tempfile_dir("release_flag_debug");
         let debug_obj_path = debug_dir.join("release_flag_debug.o");
-        compile_to_object(&mir, &debug_obj_path, None, false).expect("codegen should succeed");
-        let debug_obj = std::fs::read(&debug_obj_path).expect("object file should be readable");
+        let mut debug_observations = Vec::new();
+        let mut debug_observer = |module: &inkwell::module::Module<'_>, applied_pipeline| {
+            debug_observations.push((
+                applied_pipeline,
+                module.get_function("pycc_rt_float_to_str").is_some(),
+                module.get_function("pycc_rt_int_sub").is_some(),
+            ));
+        };
+        compile_to_object_with_observer(
+            &mir,
+            &debug_obj_path,
+            None,
+            false,
+            Some(&mut debug_observer),
+        )
+        .expect("debug codegen should succeed");
 
         let release_dir = tempfile_dir("release_flag_release");
         let release_obj_path = release_dir.join("release_flag_release.o");
-        compile_to_object(&mir, &release_obj_path, None, true).expect("codegen should succeed");
-        let release_obj = std::fs::read(&release_obj_path).expect("object file should be readable");
+        let mut release_observations = Vec::new();
+        let mut release_observer = |module: &inkwell::module::Module<'_>, applied_pipeline| {
+            release_observations.push((
+                applied_pipeline,
+                module.get_function("pycc_rt_float_to_str").is_some(),
+                module.get_function("pycc_rt_int_sub").is_some(),
+            ));
+        };
+        compile_to_object_with_observer(
+            &mir,
+            &release_obj_path,
+            None,
+            true,
+            Some(&mut release_observer),
+        )
+        .expect("release codegen should succeed");
 
-        assert_ne!(
-            debug_obj, release_obj,
-            "release and debug object files must differ -- optimization passes did not run"
+        assert_eq!(debug_observations, vec![(None, true, true)]);
+        assert_eq!(
+            release_observations,
+            vec![(Some("default<O3>"), true, false)]
         );
     }
 
