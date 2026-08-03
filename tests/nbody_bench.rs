@@ -416,14 +416,15 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// averaged across both; taking the median (not the mean) of 5 same-block
 /// runs already blunts most of that exposure.
 ///
-/// D-126 Phase A records per-child CPU time alongside wall-clock time while
-/// deliberately preserving the existing wall-clock gate and every per-target
-/// floor. Unix uses `wait4` for the exact spawned child rather than the
-/// process-global `RUSAGE_CHILDREN`; Windows reads the waited child's retained
-/// process handle with `GetProcessTimes`. The frozen step-summary record exposes
-/// both ratios and all four medians on passes and failures. Phase B may switch
-/// the gate only after at least five real observations exist for every Tier-1
-/// leg and new CPU-time floors have been derived from that evidence.
+/// D-126 records per-child CPU time alongside wall-clock time while preserving
+/// the existing wall-clock gate and every per-target floor. Unix uses `wait4`
+/// for the exact spawned child rather than process-global `RUSAGE_CHILDREN`;
+/// Windows reads the waited child's retained process handle with
+/// `GetProcessTimes`. The frozen step-summary record exposes both ratios and all
+/// four medians on passes and failures. D-129 completed Phase B after five real
+/// observations on every Tier-1 leg: CPU time did not reduce variance across
+/// the matrix, so wall clock remains the gate and CPU time remains non-gating
+/// diagnostic telemetry rather than gaining its own floors.
 #[test]
 #[ignore = "slow: builds a --release binary, verifies output equality once, then runs both programs 5 times each"]
 fn nbody_release_binary_meets_required_speedup_over_cpython() {
