@@ -368,3 +368,43 @@ fn tuple_heterogeneous_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("tuple_heterogeneous_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/tuple_heterogeneous.py");
 }
+
+// PR-12 Task 13 (D-117/D-120): the PEP-709 conformance fixture. pycc has no
+// bytecode/frame model to "inline" the way CPython's own PEP 709 change
+// does, so this asserts the one CPython-observable, statically-testable
+// guarantee PEP 709 depends on instead -- a comprehension's own loop
+// variable does not leak into or clobber an enclosing same-named binding,
+// now genuinely exercised for the first time by D-117's synthesized-name
+// mechanism. See `docs/DECISIONS.md`'s D-120 entry for the full account of
+// why this fixture's exact shape was chosen and what CPython actually
+// prints for it.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0709_comp_inline_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0709_comp_inline.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0709_comp_inline_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0709_comp_inline.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0709_comp_inline_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0709_comp_inline.py");
+}
+
+// PR-12 Task 13 (D-117/D-118/D-119): a single breadth fixture covering
+// `list[int]` slicing, `.pop()`, `dict.get()`, `set.add()`, and both
+// comprehension source-container combinations (a `range()`-sourced dict
+// comprehension, a `range()`-sourced set comprehension with an `if` filter)
+// not already covered by `pep_0709_comp_inline.py` above. Every value is
+// printed element-wise or via `len()`, never a container value directly
+// (`print(xs)` panics today, D-107/D-114/D-116).
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn container_methods_slicing_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/container_methods_slicing.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("container_methods_slicing_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/container_methods_slicing.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("container_methods_slicing_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/container_methods_slicing.py");
+}
