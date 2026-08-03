@@ -225,8 +225,25 @@ open and blocked on a maintainer `emergency-bypass` authorization as of this wri
   none. Tag its body "Stage 1/2 for #N — see issue-implement's D-103 manifest-staging pattern."
 - **Activation PR:** opened only after the stage PR's commit is confirmed present on the default
   branch. Copies the staged content into the live target byte-for-byte and resets the manifest
-  entry to steady-state (`source_path` equal to `path` again); carries the real `Fixes #N`. The
+  entry to steady-state (`source_path` equal to `path` again). The
   activation commit must byte-identically match what the stage PR already landed.
+
+**`Fixes #N` goes only on the composed sequence's own final PR, never on an intermediate one.**
+When this D-103 cycle is itself a prerequisite for a larger composed change — the chained case
+just above, where an inner D-103 cycle for a manifest-protected checker script must complete
+before an outer D-080 `ci.yml` stage/activate pair can even open its own stage PR — this
+activation PR does not deliver the issue's actual requested fix yet; it only clears the way for
+the next PR in the sequence. Carrying `Fixes #N` here would close the issue on merge, before the
+outer pair (or any further intermediate cycle) has landed. Tag an intermediate activation's body
+instead: "Intermediate activation for #N (step `<k>` of `<total>`) — see issue-implement's D-103
+manifest-staging pattern; does not itself close #N." Only the sequence's own last PR — the one
+that actually satisfies the issue's premise — carries `Fixes #N`, and every PR the composed
+sequence requires (every stage and every intermediate activation) is explicitly named and
+authorized up front, exactly like the systemic stop condition below already requires for a
+transition this session cannot land at all. A D-103 activation that is *not* part of any larger
+composed change (the common case: the issue's own fix is simply "edit this one manifest-listed
+file") remains the final PR of its own two-PR cycle and does carry `Fixes #N`, unchanged from
+before.
 
 The stage PR's own step 5 review explicitly verifies the staged-copy-to-manifest-entry binding
 is correct (the SHA-256 matches, and the staged content is what the activation PR intends to
