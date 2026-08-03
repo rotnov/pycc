@@ -993,14 +993,14 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes stderr, "must appear under the expected roadmap section"
   end
 
-  # ci.yml now matches D112 (this round's own activation) -- D100 remains
-  # in the accepted array below only because retiring it is a separate,
-  # later propose-then-activate round for check_roadmap_evidence.rb's own
-  # bytes (the same self-authorization boundary this whole array already
-  # exists to enforce).
-  def test_tier1_workflow_authorization_is_the_active_d112_digest
+  # ci.yml now matches D114 (this round's own activation) -- D100/D112
+  # remain in the accepted array below only because retiring them is a
+  # separate, later propose-then-activate round for
+  # check_roadmap_evidence.rb's own bytes (the same self-authorization
+  # boundary this whole array already exists to enforce).
+  def test_tier1_workflow_authorization_is_the_active_d114_digest
     assert_equal(
-      D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
+      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
       Digest::SHA256.hexdigest(
         (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
       )
@@ -1025,13 +1025,11 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # D-114 (round 3): stages a reviewed successor fixture -- identical to
-  # the live D112 shape except the gate job's own comparison step gains
-  # an explicit "7.0" threshold_percent argument -- without touching the
-  # live `.github/workflows/ci.yml` at all. The live file still matches
-  # D112 exactly (see test_tier1_workflow_authorization_is_the_active_d112_digest
-  # above); this fixture and its digest are the reviewed target a later,
-  # separate activation round copies into place.
+  # D-114 (round 5/6): this reviewed successor fixture -- identical to
+  # the D112 shape except the gate job's own comparison step gains an
+  # explicit "7.0" threshold_percent argument -- is now the live
+  # `.github/workflows/ci.yml` shape (see
+  # test_tier1_workflow_authorization_is_the_active_d114_digest above).
   def test_d114_frontend_perf_threshold_workflow_fixture_matches_its_own_digest
     assert_equal(
       D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
@@ -1039,14 +1037,31 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d114_frontend_perf_threshold_workflow_is_a_staged_successor
+  def test_d114_frontend_perf_threshold_workflow_is_now_active
     assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
                     D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
-    refute_equal(
+  end
+
+  def test_d114_frontend_perf_threshold_workflow_is_active_and_reviewed
+    assert_equal(
       D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
-      Digest::SHA256.hexdigest(
-        (Pathname(__dir__).parent / ".github/workflows/ci.yml").read
-      )
+      Digest::SHA256.file(D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE).hexdigest
+    )
+    assert_equal(
+      D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+      Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
+    )
+    assert_equal(
+      D114_FRONTEND_PERF_THRESHOLD_WORKFLOW_FIXTURE.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
+    )
+    assert validate_source_aware_perf_gate_lifecycle(
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
+    )
+    assert coverage_gate_present?(
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
+      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
     )
   end
 
@@ -1544,28 +1559,15 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  def test_d112_ubuntu_frontend_perf_workflow_is_active_and_reviewed
-    assert_equal(
-      D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE).hexdigest
-    )
-    assert_equal(
-      D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-      Digest::SHA256.file(ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW).hexdigest
-    )
-    assert_equal(
-      D112_UBUNTU_FRONTEND_PERF_WORKFLOW_FIXTURE.read,
-      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read
-    )
-    assert validate_source_aware_perf_gate_lifecycle(
-      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
-      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
-    )
-    assert coverage_gate_present?(
-      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.read,
-      ACTIVE_D100_COMPOSE_D91_D99_WORKFLOW.to_s
-    )
-  end
+  # D-112 is no longer the live shape once D114 activates (see
+  # test_d114_frontend_perf_threshold_workflow_is_active_and_reviewed
+  # above) -- its remaining, still-true facts (fixture digest,
+  # array membership, structural recognition) stay covered by
+  # test_d112_ubuntu_frontend_perf_workflow_digest_matches_the_fixture,
+  # test_d112_ubuntu_frontend_perf_workflow_is_now_active, and
+  # test_d112_ubuntu_frontend_perf_workflow_structure_is_recognized
+  # below, so this test (which asserted D112 == the live file) is
+  # removed rather than left asserting something now false.
 
   # Checker-active (D-112): the checker itself now recognizes and accepts
   # this shape -- identical to the live D91/REPLICATED frontend-perf-
