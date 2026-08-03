@@ -402,6 +402,37 @@ fn collect_expr_constraints(
                 }
                 return Ok(Some(Ok(Ty::Int)));
             }
+            if callee == "float" {
+                // Mirrors the `len` arm immediately above for the same reason (D-105
+                // point 3's rationale applies identically): `float`'s own return type
+                // (`Ty::Float`) never depends on the argument's resolved type, so it
+                // is always producible here regardless of whether the argument's own
+                // term has resolved yet. Only an already-concretely-resolved argument
+                // can be validated at this point (union-find resolution hasn't run);
+                // an unresolved argument is left to the real check pass
+                // (`infer_expr_in`) above, matching this solver's existing
+                // lenient-until-known pattern.
+                if arg_terms.len() != 1 {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!("`float` expects exactly 1 argument, got {}", arg_terms.len()),
+                        Span::new(0, 0),
+                    ));
+                }
+                if let Some(Ok(arg_ty)) = &arg_terms[0]
+                    && !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool)
+                {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "`float` expects an `int`, `float`, or `bool` argument, got `{}`",
+                            arg_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                return Ok(Some(Ok(Ty::Float)));
+            }
             let Some(signature) = signatures.get(callee) else {
                 return Ok(None);
             };
@@ -1235,6 +1266,31 @@ fn infer_expr_in(
                     ));
                 }
                 return Ok(Ty::Int);
+            }
+            if callee == "float" {
+                // D-086's own remedy for the int-to-float boundary: a hand-recognized
+                // builtin, same as `len` above, not a user-declarable signature.
+                // Always returns `Ty::Float` regardless of the argument's own type,
+                // once that argument is numeric-like -- unlike `len`, there is no
+                // homogeneity/element-type question to defer.
+                if arg_tys.len() != 1 {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!("`float` expects exactly 1 argument, got {}", arg_tys.len()),
+                        Span::new(0, 0),
+                    ));
+                }
+                if !matches!(arg_tys[0], Ty::Int | Ty::Float | Ty::Bool) {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "`float` expects an `int`, `float`, or `bool` argument, got `{}`",
+                            arg_tys[0].name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                return Ok(Ty::Float);
             }
             let Some((param_tys, return_ty)) = env.lookup_function(callee) else {
                 return Err(Diagnostic::error(
@@ -3762,6 +3818,135 @@ mod tests {
         assert_eq!(
             err.message,
             "`len` expects a `list[T]`, `dict[K, V]`, or `set[T]` argument, got `int`"
+        );
+    }
+
+    #[test]
+    fn constraint_collection_float_call_returns_float_regardless_of_argument_resolution() {
+        // Mirrors `constraint_collection_len_call_returns_int_for_a_
+        // concretely_bound_list`: a directly concrete `TypeTerm`
+        // (`Ok(Ty::Int)`) validates cleanly and produces `Ty::Float`.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Float)));
+    }
+
+    #[test]
+    fn constraint_collection_float_call_defers_an_unresolved_argument_to_the_real_check_pass() {
+        // Mirrors `constraint_collection_len_call_defers_an_unresolved_
+        // argument_to_the_real_check_pass`: a genuinely unresolved
+        // inference variable is left to `infer_expr_in`, but the call's
+        // own return type (`Ty::Float`) is still produced unconditionally.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let unresolved = fresh_term(&mut parents, &mut concrete);
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("x".to_string(), unresolved)]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Float)));
+    }
+
+    #[test]
+    fn constraint_collection_float_call_rejects_the_wrong_arity() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![],
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`float` expects exactly 1 argument, got 0");
+    }
+
+    #[test]
+    fn constraint_collection_float_call_rejects_a_concretely_known_non_numeric_argument() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::StringLiteral("hello".to_string())],
+        };
+
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "`float` expects an `int`, `float`, or `bool` argument, got `str`"
         );
     }
 
@@ -6810,6 +6995,93 @@ mod tests {
         let env = Environment::new();
         let expr = HirExpr::Call {
             callee: "len".to_string(),
+            args: vec![HirExpr::Name("undefined".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn float_of_an_int_infers_float() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn float_of_a_bool_infers_float() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Bool);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn float_of_a_float_infers_float() {
+        // Proves `float`'s own check isn't a narrowing-only conversion --
+        // an already-`float` argument is accepted too (identity), same
+        // discipline as `len_of_a_list_of_str_infers_int_proving_len_is_
+        // not_int_specific`'s own genericity claim above.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Float);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn float_with_no_arguments_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`float` expects exactly 1 argument, got 0");
+    }
+
+    #[test]
+    fn float_with_two_arguments_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`float` expects exactly 1 argument, got 2");
+    }
+
+    #[test]
+    fn float_of_a_str_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Str);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "`float` expects an `int`, `float`, or `bool` argument, got `str`"
+        );
+    }
+
+    #[test]
+    fn float_propagates_an_ill_typed_argument_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
             args: vec![HirExpr::Name("undefined".to_string())],
         };
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");

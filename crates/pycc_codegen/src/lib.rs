@@ -1834,6 +1834,26 @@ fn emit_expr<'ctx>(
                 // which keeps it raw as a private loop bound.
                 return Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_len));
             }
+            if callee == "float" {
+                // Hand-recognized builtin, same reason as `len` above: it has no
+                // `user_functions` entry. Reuses `to_float`, which already dispatches
+                // `Scalar::Int`/`Scalar::Bool`/`Scalar::Float` correctly (the same
+                // helper arithmetic-promotion already calls) and already panics
+                // correctly for `Scalar::Str`/`List`/`Dict`/`Set`/`Tuple` -- no new conversion
+                // logic, only a new caller. `pycc_types` already rejects a
+                // non-numeric or mis-arity call with T0021 before codegen ever runs;
+                // this arity check is a defensive backstop against malformed MIR,
+                // mirroring `len`'s own internal-error convention immediately above.
+                let [arg] = args.as_slice() else {
+                    panic!(
+                        "pycc_codegen: internal error: `float` takes exactly 1 argument, got {} \
+                         -- pycc_types::check (T0021) should have rejected this before codegen",
+                        args.len()
+                    )
+                };
+                let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+                return Scalar::Float(to_float(context, builder, rt, scalar));
+            }
             // Unlike `emit_stmt`'s void-call arm below, there is no
             // `Result` here to propagate a clean, user-facing error
             // through -- `emit_expr` returns a `Scalar` unconditionally, so
@@ -9427,6 +9447,24 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "`float` takes exactly 1 argument, got 0")]
+    fn a_float_call_with_the_wrong_argument_count_is_an_internal_error() {
+        // `pycc_types` already rejects a mis-arity `float` call with T0021
+        // (its own `float` arm checks `arg_tys.len() != 1` before anything
+        // else), so this is hand-built malformed MIR exercising codegen's
+        // own defensive backstop, mirroring
+        // `a_len_call_with_the_wrong_argument_count_is_an_internal_error`
+        // immediately above.
+        let mir = list_fixture_module(vec![MirStmt::ExprStmt(MirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![],
+            ty: Ty::Float,
+        })]);
+        let dir = tempfile_dir("float_wrong_arity_panics");
+        let _ = compile_to_object(&mir, &dir.join("float_wrong_arity_panics.o"), None, false);
+    }
+
+    #[test]
     #[should_panic(expected = "`len`'s argument did not evaluate to a list")]
     fn a_len_call_on_a_non_list_argument_is_an_internal_error() {
         // The other half of `pycc_types`' own T0033 `len` check (a
@@ -9551,6 +9589,38 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"2\n");
+    }
+
+    #[test]
+    fn float_call_codegens_and_runs() {
+        // `x = 3\nprint(float(x))\n` end to end through `compile_to_object`
+        // -- #181's `float()` hand-recognized builtin, mirroring
+        // `dict_literal_construction_codegens_and_runs`'s own shape
+        // immediately above. Expected output verified against `python3` on
+        // this exact source.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "x".to_string(),
+                    value: MirExpr::IntLiteral(3),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "float".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::Float,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("float_call");
+        let obj_path = dir.join("float_call.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("float_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3.0\n");
     }
 
     #[test]

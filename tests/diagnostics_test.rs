@@ -207,6 +207,16 @@ fn d0040_tuple_index_not_a_literal() {
 }
 
 #[test]
+fn d0021_float_wrong_arity() {
+    assert_diagnostic_matches_fixture("d0021_float_wrong_arity");
+}
+
+#[test]
+fn d0021_float_non_numeric_argument() {
+    assert_diagnostic_matches_fixture("d0021_float_non_numeric_argument");
+}
+
+#[test]
 fn cli_spec_example() {
     assert_diagnostic_matches_fixture("cli_spec_example");
 }

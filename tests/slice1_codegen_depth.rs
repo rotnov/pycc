@@ -440,6 +440,57 @@ print(\"x\", 1, 2.5, True)
 }
 
 #[test]
+fn float_of_an_int_bool_and_float_prints_the_correct_value() {
+    // #181: `float(x)` for `x: int | float | bool` in a public,
+    // fully-annotated function body. Expected output verified directly
+    // against CPython 3.14.6: `str(float(3))` == "3.0", `str(float(True))`
+    // == "1.0", `str(float(2.5))` == "2.5" -- identity for an
+    // already-`float` argument, not just narrowing.
+    let source = "\
+print(float(3))
+print(float(True))
+print(float(2.5))
+";
+    let output = build_and_run("float_int_bool_float", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3.0\n1.0\n2.5\n");
+}
+
+#[test]
+fn float_used_as_a_nested_call_argument_compiles_and_runs() {
+    // #181 explicitly requires codegen to emit a real conversion usable as
+    // a nested expression (e.g. a call argument), not just a statement --
+    // `print(...)`'s own codegen arm rejects a nested `print` result, so
+    // this proves `float(...)` doesn't hit that same restriction.
+    let source = "\
+def f(x: float) -> float:
+    return x
+
+print(f(float(3)))
+";
+    let output = build_and_run("float_nested_call_argument", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3.0\n");
+}
+
+#[test]
+fn float_satisfies_the_d086_int_to_float_boundary() {
+    // The actual motivating scenario from D-086: `is_assignable` requires
+    // an explicit conversion for an `int` value crossing a `float`-typed
+    // boundary (parameter/return/assignment); `float(x)` is now that
+    // conversion's real, working, in-language remedy.
+    let source = "\
+def to_float(x: int) -> float:
+    return float(x)
+
+print(to_float(3))
+";
+    let output = build_and_run("float_d086_boundary", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3.0\n");
+}
+
+#[test]
 fn backend_representation_boundaries_match_the_checked_v0_1_contract() {
     let source = "\
 def read_later_global() -> int:
