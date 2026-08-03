@@ -1276,6 +1276,90 @@ pub unsafe extern "C" fn pycc_rt_int_list_decref(list: *mut PyIntListObj) {
     }
 }
 
+/// # Safety (panic-across-FFI note, same rationale as `int_list_get`'s own
+/// doc comment above)
+/// `pycc_rt_int_list_slice` below is a plain `extern "C" fn`, not `extern
+/// "C-unwind"` -- a panic that would otherwise unwind past its boundary is
+/// instead turned into a process abort. This private function holds the
+/// real, freely-panicking logic; tests exercising a panic call it directly,
+/// exactly like `int_list_get`'s own split.
+fn int_list_slice(list: &PyIntListObj, start: i64, stop: i64, step: i64) -> *mut PyIntListObj {
+    if start < 0 {
+        panic!("pycc_rt: slice start must be non-negative");
+    }
+    if stop < 0 {
+        panic!("pycc_rt: slice stop must be non-negative");
+    }
+    if step <= 0 {
+        panic!("pycc_rt: slice step must be positive");
+    }
+    let items = list.items.take();
+    let len = items.len() as i64;
+    let clamped_start = start.min(len);
+    let clamped_stop = stop.min(len);
+    let result = pycc_rt_int_list_new();
+    // Unlike `int_list_get` (whose own doc comment restores `list`'s
+    // payload before panicking on an out-of-range index), this loop's
+    // take-window contains no fallible operation, so there is nothing to
+    // restore: `items[i as usize]` cannot panic, since `i` starts at
+    // `clamped_start` and the loop guard keeps it below `clamped_stop`,
+    // and both clamped bounds are `.min(len)`-derived, so
+    // `clamped_start <= i < clamped_stop <= len == items.len()` holds on
+    // every iteration. `i += step` cannot overflow `i64` either: `i` never
+    // exceeds `len`, and `step` itself already passed
+    // `pycc_rt_int_untag_checked`'s 63-bit smallint range check at every
+    // real `pycc_codegen` call site, so `i + step` stays far below
+    // `i64::MAX`.
+    let mut i = clamped_start;
+    while i < clamped_stop {
+        unsafe { pycc_rt_int_list_append(result, items[i as usize]) };
+        i += step;
+    }
+    list.items.set(items);
+    result
+}
+
+/// Returns a **new** list containing the clamped, strided sub-range
+/// `[start, stop)` of `list`'s elements, stepping by `step` (Python's
+/// `list[start:stop:step]`, D-118's v0.2 `list[int]` slice). Panics on a
+/// negative `start`/`stop` or a non-positive `step` -- v0.2 ships no
+/// CPython-style negative-index/negative-step semantics, extending D-108's
+/// own uniform "no negative addressing" scope cut (`pycc_rt_int_list_get`)
+/// to slicing. `start`/`stop` are clamped into `[0, len]` after the sign
+/// check, matching CPython's own out-of-range-slice-bound clamping --
+/// required for the accepted subset (omitted/over-long bounds) to match
+/// CPython byte-for-byte, not merely a nicety. The three sign/positivity
+/// panics run before `list.items.take()`, mirroring `int_list_get`'s own
+/// "leave `list` intact on a panic" care -- a panicking call here never
+/// touches `list`'s payload at all, so there is nothing to restore.
+///
+/// # Element representation
+/// `start`/`stop`/`step` are raw, untagged `i64` offsets/strides, not
+/// D-061-tagged `Ty::Int` values -- a caller with a tagged operand must
+/// `pycc_rt_int_untag_checked` each one first, exactly like
+/// `pycc_rt_int_list_get`'s own `index` parameter. The returned list's own
+/// elements are copied through unchanged (already raw, untagged `i64`s per
+/// `PyIntListObj`'s own representation, D-106) -- no per-element tag/untag
+/// conversion happens here at all, unlike a single-element read.
+///
+/// # Safety
+/// `list` must be a live `PyIntListObj` pointer. Takes `*mut` rather than
+/// the task plan's own sketched `*const`, matching every other
+/// `pycc_rt_int_list_*` function in this file (`_get`/`_len` both take
+/// `*mut PyIntListObj` even though they too only read `list`'s payload) --
+/// a deliberate consistency choice over the plan's literal text, not a
+/// functional difference (LLVM's opaque pointer type distinguishes neither
+/// side at the `pycc_codegen` call site either way).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pycc_rt_int_list_slice(
+    list: *mut PyIntListObj,
+    start: i64,
+    stop: i64,
+    step: i64,
+) -> *mut PyIntListObj {
+    int_list_slice(unsafe { &*list }, start, stop, step)
+}
+
 /// `dict[str, int]`'s runtime representation (D-111): a dense,
 /// insertion-ordered array of `(key, value)` pairs. `Cell<Vec<...>>`
 /// mirrors `PyIntListObj`'s own choice over `RefCell` -- `Cell::take`/
@@ -2445,6 +2529,168 @@ mod tests {
         unsafe {
             pycc_rt_int_list_incref(std::ptr::null_mut());
             pycc_rt_int_list_decref(std::ptr::null_mut());
+        }
+    }
+
+    /// Reads every element of `list` (possibly zero, for an empty slice
+    /// result) into a `Vec<i64>`, for asserting a whole slice result's
+    /// contents in one line rather than one `pycc_rt_int_list_get` call per
+    /// expected element.
+    unsafe fn collect_list(list: *mut PyIntListObj) -> Vec<i64> {
+        unsafe {
+            let len = pycc_rt_int_list_len(list);
+            (0..len).map(|i| pycc_rt_int_list_get(list, i)).collect()
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_list_slice_returns_the_in_range_sub_range() {
+        // D-118's ordinary path: `[10,20,30,40,50][1:4:1] == [20,30,40]`.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for v in [10, 20, 30, 40, 50] {
+                pycc_rt_int_list_append(list, v);
+            }
+            let sliced = pycc_rt_int_list_slice(list, 1, 4, 1);
+            assert_eq!(collect_list(sliced), vec![20, 30, 40]);
+            pycc_rt_int_list_decref(list);
+            pycc_rt_int_list_decref(sliced);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_list_slice_clamps_a_too_high_stop() {
+        // D-118's clamp-stop-high branch: `[1,2,3][0:100:1] == [1,2,3]`,
+        // matching CPython's own out-of-range-slice-bound clamping.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for v in [1, 2, 3] {
+                pycc_rt_int_list_append(list, v);
+            }
+            let sliced = pycc_rt_int_list_slice(list, 0, 100, 1);
+            assert_eq!(collect_list(sliced), vec![1, 2, 3]);
+            pycc_rt_int_list_decref(list);
+            pycc_rt_int_list_decref(sliced);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_list_slice_clamps_a_too_high_start() {
+        // D-118's clamp-start-high branch: `[1,2,3][100:200:1]` clamps
+        // *both* bounds to `len` (3), so `clamped_start == clamped_stop`
+        // and the result is empty -- the same outcome as the
+        // start-at-or-past-stop test below, but pinning the clamp
+        // arithmetic itself (both operands clamp to the same value) rather
+        // than an already-in-range `start >= stop` relationship.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for v in [1, 2, 3] {
+                pycc_rt_int_list_append(list, v);
+            }
+            let sliced = pycc_rt_int_list_slice(list, 100, 200, 1);
+            assert_eq!(collect_list(sliced), Vec::<i64>::new());
+            pycc_rt_int_list_decref(list);
+            pycc_rt_int_list_decref(sliced);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_list_slice_with_start_at_or_past_stop_is_empty() {
+        // D-118's empty-result branch: `[1,2,3][2:1:1] == []` -- `start`
+        // and `stop` are both already in range, unlike the clamp-driven
+        // empty result above, so the `while i < clamped_stop` loop body
+        // never runs for a distinct reason (no clamping involved at all).
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for v in [1, 2, 3] {
+                pycc_rt_int_list_append(list, v);
+            }
+            let sliced = pycc_rt_int_list_slice(list, 2, 1, 1);
+            assert_eq!(collect_list(sliced), Vec::<i64>::new());
+            pycc_rt_int_list_decref(list);
+            pycc_rt_int_list_decref(sliced);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: slice start must be non-negative")]
+    fn pycc_rt_int_list_slice_rejects_negative_start() {
+        // Calls the private `int_list_slice` directly, not the public
+        // `pycc_rt_int_list_slice` wrapper -- the wrapper is a plain
+        // `unsafe extern "C" fn`, so a panic crossing its boundary aborts
+        // the whole test binary instead of unwinding into
+        // `#[should_panic]`'s own catch, exactly like
+        // `int_list_get_out_of_range_panics_honestly`'s own established
+        // convention above.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, 1);
+            int_list_slice(&*list, -1, 1, 1);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: slice stop must be non-negative")]
+    fn pycc_rt_int_list_slice_rejects_negative_stop() {
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, 1);
+            int_list_slice(&*list, 0, -1, 1);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: slice step must be positive")]
+    fn pycc_rt_int_list_slice_rejects_zero_step() {
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, 1);
+            int_list_slice(&*list, 0, 1, 0);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: slice step must be positive")]
+    fn pycc_rt_int_list_slice_rejects_negative_step() {
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, 1);
+            int_list_slice(&*list, 0, 1, -1);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_list_slice_with_a_step_greater_than_one_skips_elements() {
+        // `[0,1,2,3,4,5][0:6:2] == [0,2,4]`.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for v in [0, 1, 2, 3, 4, 5] {
+                pycc_rt_int_list_append(list, v);
+            }
+            let sliced = pycc_rt_int_list_slice(list, 0, 6, 2);
+            assert_eq!(collect_list(sliced), vec![0, 2, 4]);
+            pycc_rt_int_list_decref(list);
+            pycc_rt_int_list_decref(sliced);
+        }
+    }
+
+    #[test]
+    fn pycc_rt_int_list_slice_returns_a_genuinely_independent_list() {
+        // D-107's leak-only policy still requires the slice result to be a
+        // *new* allocation, not an alias of `list`'s own backing storage --
+        // appending to the original after slicing must not retroactively
+        // change the already-returned slice, and vice versa.
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            for v in [1, 2, 3] {
+                pycc_rt_int_list_append(list, v);
+            }
+            let sliced = pycc_rt_int_list_slice(list, 0, 3, 1);
+            pycc_rt_int_list_append(list, 99);
+            assert_eq!(collect_list(list), vec![1, 2, 3, 99]);
+            assert_eq!(collect_list(sliced), vec![1, 2, 3]);
+            pycc_rt_int_list_decref(list);
+            pycc_rt_int_list_decref(sliced);
         }
     }
 
