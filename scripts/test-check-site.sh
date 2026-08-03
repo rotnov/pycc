@@ -1008,6 +1008,40 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
+lastmod = "<lastmod>2026-08-02</lastmod>"
+assert lastmod in content
+path.write_text(content.replace(lastmod, "<lastmod>not-a-date</lastmod>", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a malformed sitemap lastmod" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+lastmod = "<lastmod>2026-08-02</lastmod>"
+assert lastmod in content
+path.write_text(content.replace(lastmod, "<lastmod>9999-12-31</lastmod>", 1))
+PY
+
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a future sitemap lastmod" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
+python3 - "$fixture_root/site/sitemap.xml" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>
     <lastmod>2026-08-02</lastmod>"""
 assert entry in content
