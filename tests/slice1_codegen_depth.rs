@@ -1029,3 +1029,327 @@ print(f())
     assert!(output.status.success());
     assert_eq!(output.stdout, b"5\n");
 }
+
+#[test]
+fn a_module_level_dict_str_int_literal_supports_len_and_indexed_read() {
+    // The `dict[str, int]` thin slice (D-123) end to end through the real
+    // `pycc build` CLI: literal construction, `len()`, and indexed read
+    // `d[k]`, all in one program, at module scope -- the same scope
+    // `a_module_level_list_binding_lives_in_a_global_slot` above covers for
+    // `list[int]` (`declare_module_globals`'s own `Ty::Dict(_)` arm, PR-11
+    // Task 5). Expected output verified against `python3` on this exact
+    // source.
+    let source = "\
+x = {\"a\": 1, \"b\": 2}
+print(len(x))
+print(x[\"b\"])
+";
+    let output = build_and_run("dict_literal_len_and_get", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n2\n");
+}
+
+#[test]
+fn dict_set_item_updates_an_existing_key_and_appends_a_new_one() {
+    // `d[k] = v`'s own insert-or-update contract (D-123), both halves in
+    // one program: `x["a"] = 5` updates the existing `"a"` entry in place
+    // (`len(x)` stays `1`), then `x["b"] = 2` appends a genuinely new key
+    // (`len(x)` grows to `2`). Expected output verified against `python3`
+    // on this exact source.
+    let source = "\
+x = {\"a\": 1}
+x[\"a\"] = 5
+print(x[\"a\"])
+print(len(x))
+x[\"b\"] = 2
+print(len(x))
+";
+    let output = build_and_run("dict_set_item_update_and_append", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"5\n1\n2\n");
+}
+
+#[test]
+fn for_k_in_a_module_level_dict_iterates_its_keys_in_insertion_order() {
+    // `for k in d:` (D-123) iterates a dict's keys in insertion order, not
+    // sorted order -- `"b"` is inserted first even though `"a"` sorts
+    // first, so printing `"b"` before `"a"` is the actual property this
+    // test pins (`PyDictObj`'s own D-121 insertion-order guarantee
+    // surviving through the real CLI, not just `pycc_codegen`'s own
+    // hand-built-MIR unit test). Expected output verified against
+    // `python3` on this exact source.
+    let source = "\
+x = {\"b\": 2, \"a\": 1}
+for k in x:
+    print(k)
+";
+    let output = build_and_run("dict_module_global_iteration_order", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"b\na\n");
+}
+
+#[test]
+fn a_variable_used_as_a_dict_key_survives_a_later_reassignment_of_that_variable() {
+    // Regression test for a confirmed use-after-free a pinned-reviewer pass
+    // on PR-11 Task 5 caught: `PyDictObj` adopts whatever key pointer it is
+    // given as its own permanent reference without incref'ing it itself
+    // (D-124), so `d[k] = 1` where `k` is a plain `str` variable used to
+    // silently hand the dict a *duplicate*, non-owned reference to the
+    // exact same `PyStrObj` `k`'s own slot holds -- a later `k = "xyz"`
+    // then decref'd (and, at refcount 1, freed) that object while `d` still
+    // pointed to it. The run of single-use literal assignments between the
+    // reassignment and the read encourages the allocator to reuse the freed
+    // slot before `d` is read back, turning silent corruption into an
+    // observable failure if `pycc_codegen`'s `incref_if_str_duplicate` fix
+    // (in `MirExpr::DictLiteral`'s and `MirStmt::DictSet`'s own key
+    // handling) ever regresses -- confirmed empirically to crash with
+    // "pycc_rt: dict key not found" without it. Expected output verified
+    // against `python3` on this exact source.
+    let source = "\
+k = \"abc\"
+d = {\"z\": 0}
+d[k] = 1
+k = \"xyz\"
+j0 = \"111\"
+j1 = \"222\"
+j2 = \"333\"
+j3 = \"444\"
+j4 = \"555\"
+j5 = \"666\"
+j6 = \"777\"
+j7 = \"888\"
+j8 = \"999\"
+j9 = \"000\"
+print(d[\"abc\"])
+print(len(d))
+";
+    let output = build_and_run("dict_variable_key_survives_reassignment", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n");
+}
+
+#[test]
+fn growing_a_dict_from_inside_for_k_in_d_iterates_the_newly_added_key_too() {
+    // A final whole-branch review flagged a genuinely new, deliberate v0.2
+    // CPython divergence introduced by `ForDict`'s own codegen (D-123): the
+    // loop bound is `pycc_rt_dict_len`, re-read on every iteration rather
+    // than hoisted, so `d[k] = v` inside a `for k in d:` loop body that
+    // grows the dict causes the loop to keep going and also visit the
+    // newly-added key. Real CPython raises `RuntimeError: dictionary
+    // changed size during iteration` for this exact program instead. This
+    // test pins the actual, verified behavior (empirically confirmed by
+    // running this exact source through the real `pycc build`/execute
+    // pipeline before writing the assertion below) so `docs/DECISIONS.md`'s
+    // D-123 Consequences note and `docs/RUNTIME.md`'s dict line describe
+    // enforced behavior, not an inference from a codegen comment. NOT a
+    // conformance fixture against CPython (this is the one documented
+    // point where pycc and CPython deliberately disagree).
+    let source = "\
+d = {\"a\": 1}
+for k in d:
+    print(k)
+    d[\"z\"] = 9
+print(len(d))
+";
+    let output = build_and_run("dict_grows_during_for_k_in_d_iteration", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"a\nz\n2\n");
+}
+
+#[test]
+fn a_module_level_set_int_literal_dedupes_and_supports_len() {
+    // The `set[int]` thin slice (D-123) end to end through the real `pycc
+    // build` CLI: literal construction (with `PyIntSetObj`'s own dedup on
+    // repeated elements, D-121) and `len()`, mirroring the dict coverage
+    // above (`a_module_level_dict_str_int_literal_supports_len_and_indexed_
+    // read`) -- until this test, `set[int]` had zero non-`#[ignore]`d
+    // end-to-end CLI coverage; the only prior coverage exercising this
+    // exact behavior was `pycc_codegen`'s own hand-built-MIR unit test
+    // `set_literal_and_len` one layer down. `len(x) == 3`, not `4`, is the
+    // actual point: the repeated `2` must be deduped, not counted twice.
+    // This assertion is order-independent (`len` doesn't observe iteration
+    // order), so it needs no CPython oracle disclaimer. Expected output
+    // verified against `python3` on this exact source.
+    let source = "\
+x = {1, 2, 2, 3}
+print(len(x))
+";
+    let output = build_and_run("set_literal_len_dedup", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n");
+}
+
+#[test]
+fn for_v_in_a_module_level_set_iterates_in_first_insertion_order() {
+    // `for v in x:` over a module-level `set[int]` (D-123) end to end
+    // through the real `pycc build` CLI, with a duplicate element in the
+    // literal -- mirrors the dict iteration-order coverage above
+    // (`for_k_in_a_module_level_dict_iterates_its_keys_in_insertion_
+    // order`) and pins the same property one layer down that
+    // `pycc_codegen`'s own hand-built-MIR unit test
+    // (`for_x_in_set_iterates_in_first_insertion_order`) already covers:
+    // `PyIntSetObj`'s first-insertion iteration order (D-121) surviving
+    // through the full CLI pipeline, not just direct MIR-to-object
+    // codegen. `2` printing before `1` (with the second `2` deduped away
+    // rather than moving `2`'s position) is pycc's own documented,
+    // internally-consistent behavior -- NOT a claim about CPython: this
+    // is pinning pycc against itself, not against a CPython oracle.
+    // `python3` on this exact source prints `1`/`2` instead (CPython's own
+    // set iteration order for small ints is unspecified by the language
+    // and happens to come out numeric here, not insertion order), so this
+    // is deliberately not a `tests/conformance.rs` fixture.
+    let source = "\
+x = {2, 1, 2}
+for v in x:
+    print(v)
+";
+    let output = build_and_run("set_for_iteration_order", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n1\n");
+}
+
+// -- PR-12 Task 9 (D-118): `list[int]` slicing end to end through the real
+// `pycc build` CLI. `print(ys)` is deliberately never used below -- `to_str`
+// has no `list[int]` arm yet (see `converting_a_list_to_str_stops_the_build_
+// with_an_honest_unsupported_message` above) -- every result is walked with
+// `for v in ys: print(v)` instead, the same convention D-120's own PEP-709
+// fixture uses for the identical reason.
+
+#[test]
+fn a_basic_slice_with_explicit_bounds_returns_the_expected_sub_range() {
+    // `xs[1:3]` on `[10, 20, 30, 40, 50]` is `[20, 30]`. Expected output
+    // verified against `python3` on this exact source.
+    let source = "\
+xs = [10, 20, 30, 40, 50]
+ys = xs[1:3]
+print(len(ys))
+for v in ys:
+    print(v)
+";
+    let output = build_and_run("slice_basic_explicit_bounds", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n20\n30\n");
+}
+
+#[test]
+fn slicing_with_every_omitted_bound_form_defaults_correctly() {
+    // D-118's own defaulting rule, all three omitted-bound shapes in one
+    // program: `xs[:3]` (omitted start), `xs[2:]` (omitted stop), and
+    // `xs[:]` (both omitted). Expected output verified against `python3` on
+    // this exact source.
+    let source = "\
+xs = [10, 20, 30, 40, 50]
+a = xs[:3]
+b = xs[2:]
+c = xs[:]
+for v in a:
+    print(v)
+for v in b:
+    print(v)
+for v in c:
+    print(v)
+";
+    let output = build_and_run("slice_every_omitted_bound_form", source);
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"10\n20\n30\n30\n40\n50\n10\n20\n30\n40\n50\n"
+    );
+}
+
+#[test]
+fn slicing_with_a_step_greater_than_one_skips_elements() {
+    // `xs[0:6:2]` (explicit bounds) and `xs[::2]` (both bounds omitted,
+    // step only) on `[0, 1, 2, 3, 4, 5]` both give `[0, 2, 4]`. Expected
+    // output verified against `python3` on this exact source.
+    let source = "\
+xs = [0, 1, 2, 3, 4, 5]
+ys = xs[0:6:2]
+zs = xs[::2]
+for v in ys:
+    print(v)
+for v in zs:
+    print(v)
+";
+    let output = build_and_run("slice_step_greater_than_one", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"0\n2\n4\n0\n2\n4\n");
+}
+
+#[test]
+fn a_sliced_list_stays_independent_of_further_mutation_on_either_side() {
+    // D-107's leak-only policy still requires the slice result to be a
+    // *new* allocation: appending to the original list after slicing must
+    // not retroactively change the slice's own contents, and appending to
+    // the slice must not change the original either. Expected output
+    // verified against `python3` on this exact source.
+    let source = "\
+xs = [1, 2, 3]
+ys = xs[0:3]
+xs.append(99)
+ys.append(77)
+for v in xs:
+    print(v)
+for v in ys:
+    print(v)
+";
+    let output = build_and_run("slice_independent_of_mutation", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n3\n99\n1\n2\n3\n77\n");
+}
+
+#[test]
+fn an_omitted_stop_bound_reflects_a_side_effect_from_evaluating_start() {
+    // Evaluation-order regression test: this task's own originating plan
+    // sketch computed `base`'s length (the value an omitted `stop`
+    // defaults to) immediately after evaluating `base`, before evaluating
+    // `start`/`step`. That ordering is observably wrong here -- `start` is
+    // `_grow()`, a helper that appends `99` to `xs` (its own module global)
+    // before returning `0` -- and real CPython's own evaluation order
+    // (build the whole slice from every sub-expression, *then* apply it,
+    // with the length lookup happening only at that final step) means the
+    // omitted `stop` must reflect `xs`'s length *after* `_grow()` already
+    // ran, i.e. `3`, not the `2` it held when `base` was first evaluated.
+    // `pycc_codegen`'s own `MirExpr::Slice` arm defers its `stop`-defaulting
+    // length read until after every present bound has already been
+    // evaluated for exactly this reason (see that arm's own doc comment).
+    // Verified empirically against `python3` on this exact source before
+    // this test was written: both give `3\n1\n2\n99\n`.
+    let source = "\
+xs = [1, 2]
+def _grow() -> int:
+    xs.append(99)
+    return 0
+
+ys = xs[_grow():]
+print(len(ys))
+for v in ys:
+    print(v)
+";
+    let output = build_and_run("slice_omitted_stop_reflects_start_side_effect", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n1\n2\n99\n");
+}
+
+#[test]
+fn a_runtime_negative_slice_start_traps_instead_of_cpython_last_element_addressing() {
+    // D-118's own runtime-panic scope cut, extended from D-108's existing
+    // index precedent to slicing: a negative `start` traps rather than
+    // addressing from the end the way real CPython's `xs[-1:3]` would.
+    // `neg = 0 - 1` (`BinOp::Sub`) stands in for a negative literal here --
+    // unary negation (`-1`) is not itself implemented anywhere in this
+    // compiler yet (`error[C0001]: expression kind not supported yet`,
+    // confirmed independently of slicing), so this is the only way to
+    // *produce* a negative runtime `int` from real Python source today.
+    let source = "\
+xs = [1, 2, 3]
+neg = 0 - 1
+ys = xs[neg:3]
+print(len(ys))
+";
+    let output = build_and_run("slice_negative_start_traps", source);
+    assert!(
+        !output.status.success(),
+        "a negative slice start must trap rather than silently address from the end"
+    );
+}
