@@ -169,6 +169,61 @@ def relax(
     return issue_number
 
 
+def parse_snapshot_from_body(body: str) -> dict:
+    start = body.find(SNAPSHOT_MARKER_START)
+    if start == -1:
+        raise CiBypassError("incident issue body has no embedded snapshot marker")
+    json_start = start + len(SNAPSHOT_MARKER_START)
+    end = body.find(SNAPSHOT_MARKER_END, json_start)
+    if end == -1:
+        raise CiBypassError("incident issue body's snapshot marker is not closed")
+    raw = body[json_start:end].strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise CiBypassError(
+            f"incident issue's embedded snapshot is not valid JSON: {error}"
+        ) from error
+
+
+def get_incident_body(repo: str, issue_number: int) -> str:
+    output = run_gh(
+        ["issue", "view", str(issue_number), "--repo", repo, "--json", "body,state"]
+    )
+    data = json.loads(output)
+    if data["state"] != "OPEN":
+        raise CiBypassError(
+            f"incident #{issue_number} is not open (state={data['state']!r})"
+        )
+    return data["body"]
+
+
+def restore(repo: str, issue_number: int, comment_path: Path) -> dict:
+    body = get_incident_body(repo, issue_number)
+    snapshot = parse_snapshot_from_body(body)
+    patch_required_status_checks(repo, snapshot["strict"], snapshot["contexts"])
+    protection = get_protection(repo)
+    readback = {
+        "strict": protection["required_status_checks"]["strict"],
+        "contexts": sorted(required_contexts(protection)),
+    }
+    expected = {"strict": snapshot["strict"], "contexts": sorted(snapshot["contexts"])}
+    if readback != expected:
+        raise CiBypassError(
+            f"DRIFT after restore: expected {expected}, readback {readback} "
+            f"-- this is a release-blocking governance incident, do not close "
+            f"#{issue_number}"
+        )
+    comment = (
+        "Restore verified. Readback matches pre-relax snapshot exactly:\n\n"
+        f"```json\n{json.dumps(readback, indent=2, sort_keys=True)}\n```\n"
+    )
+    comment_path.write_text(comment, encoding="utf-8")
+    run_gh(["issue", "comment", str(issue_number), "--repo", repo, "-F", str(comment_path)])
+    run_gh(["issue", "close", str(issue_number), "--repo", repo, "-r", "completed"])
+    return readback
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=REPO)
@@ -188,6 +243,9 @@ def main(argv: list[str] | None = None) -> None:
         "--expiry-minutes", type=int, default=DEFAULT_EXPIRY_MINUTES
     )
 
+    restore_parser = subparsers.add_parser("restore")
+    restore_parser.add_argument("--incident", required=True, type=int)
+
     args = parser.parse_args(argv)
     args.state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -204,6 +262,12 @@ def main(argv: list[str] | None = None) -> None:
                 body_path=args.state_dir / "incident-body.md",
             )
             print(f"Relaxed {args.check!r}; incident #{issue_number}")
+        elif args.command == "restore":
+            readback = restore(
+                args.repo, args.incident,
+                comment_path=args.state_dir / "restore-comment.md",
+            )
+            print(f"Restored and verified: {readback}")
     except CiBypassError as error:
         print(f"error: {error}", file=sys.stderr)
         sys.exit(1)
