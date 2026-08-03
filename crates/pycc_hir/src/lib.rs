@@ -9,6 +9,23 @@ pub enum Ty {
     Str,
     None,
     Infer,
+    /// A generic function's own type parameter (PEP 695, D-133), e.g. the `T`
+    /// in `def f[T](x: T) -> T`. Distinct from `Ty::Infer`: this is resolved by
+    /// call-site substitution (D-134), not by unification, and must never
+    /// reach `pycc_mir` unsubstituted (same invariant `Ty::Infer` already
+    /// holds, see the assertion near this enum's other pre-MIR checks).
+    /// Boxed as `Box<String>`, not `Box<str>`: `str` is unsized, so
+    /// `Box<str>` is itself a fat (16-byte, data-ptr + length) pointer,
+    /// which measured `size_of::<Ty>() == 24` here -- it broke the
+    /// niche-filling layout uniformity the other thin-pointer variants
+    /// rely on (see `Tuple`'s doc comment above for the same phenomenon
+    /// with `Box<[Ty]>` vs `Box<Vec<Ty>>`). `Box<String>` is a single
+    /// (8-byte) thin pointer to a further heap-indirected `String` --
+    /// confirmed by measurement to restore `size_of::<Ty>() == 16`,
+    /// matching `Tuple`'s `Box<Vec<Ty>>` shape. (D-133's ADR text says
+    /// `Box<str>`; this is a deliberate, measurement-driven deviation --
+    /// `Box<str>` does not in fact keep `Ty` at the D-109 ceiling.)
+    Param(Box<String>),
     /// `list[T]`. Type-checking is planned to accept any scalar `T`; only
     /// `T = Ty::Int` gets real codegen in v0.2 (D-105). Codegen rejecting
     /// every other element type before it becomes an unhandled codegen
@@ -63,6 +80,7 @@ impl Ty {
             Ty::Str => "str".to_string(),
             Ty::None => "None".to_string(),
             Ty::Infer => "<inferred>".to_string(),
+            Ty::Param(name) => name.to_string(),
             Ty::List(elem) => format!("list[{}]", elem.name()),
             Ty::Dict(kv) => format!("dict[{}, {}]", kv.0.name(), kv.1.name()),
             Ty::Set(elem) => format!("set[{}]", elem.name()),
@@ -441,15 +459,31 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
             def.range,
         ));
     }
-    if def.type_params.is_some() {
-        return Err(unsupported(
-            "generic function type parameters are not supported yet",
-            def.range,
-        ));
-    }
+    let type_param: Option<Box<str>> = match def.type_params.as_deref() {
+        None => None,
+        Some(type_params) => match type_params.type_params.as_slice() {
+            [single] => Some(type_param_name(single).into()),
+            _ => {
+                return Err(unsupported(
+                    "generic functions with more than one type parameter are not supported yet",
+                    def.range,
+                ));
+            }
+        },
+    };
     let is_public = !def.name.as_str().starts_with('_'); // D-038
-    let params = lower_params(&def.parameters, is_public, def.name.as_str())?;
-    let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, def.name.as_str())?;
+    let params = lower_params(
+        &def.parameters,
+        is_public,
+        def.name.as_str(),
+        type_param.as_deref(),
+    )?;
+    let return_ty = lower_return_annotation(
+        def.returns.as_deref(),
+        is_public,
+        def.name.as_str(),
+        type_param.as_deref(),
+    )?;
     let body = lower_body(&def.body)?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
@@ -459,10 +493,23 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
     })
 }
 
+/// Extracts a PEP 695 type parameter's identifier regardless of which of the
+/// three type-parameter kinds (`TypeVar`, `TypeVarTuple`, `ParamSpec`) it is.
+/// `lower_function` only accepts exactly one type parameter (any kind); the
+/// name is what `Ty::Param` (D-133) carries forward.
+fn type_param_name(type_param: &pycc_ast::TypeParam) -> &str {
+    match type_param {
+        pycc_ast::TypeParam::TypeVar(tv) => tv.name.as_str(),
+        pycc_ast::TypeParam::TypeVarTuple(tv) => tv.name.as_str(),
+        pycc_ast::TypeParam::ParamSpec(ps) => ps.name.as_str(),
+    }
+}
+
 fn lower_params(
     parameters: &pycc_ast::Parameters,
     is_public: bool,
     fn_name: &str,
+    type_param: Option<&str>,
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     // Every parameter kind and default value below is silently absent from
     // `parameters.args`/`ParameterWithDefault::default` -- an earlier version
@@ -507,7 +554,7 @@ fn lower_params(
             }
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
-                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann)?)),
+                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann, type_param)?)),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
                     format!(
@@ -525,9 +572,10 @@ fn lower_return_annotation(
     returns: Option<&Expr>,
     is_public: bool,
     fn_name: &str,
+    type_param: Option<&str>,
 ) -> Result<Ty, Diagnostic> {
     match returns {
-        Some(ann) => annotation_to_ty(ann),
+        Some(ann) => annotation_to_ty(ann, type_param),
         None if is_public => Err(Diagnostic::error(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
@@ -537,9 +585,12 @@ fn lower_return_annotation(
     }
 }
 
-fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
+fn annotation_to_ty(annotation: &Expr, type_param: Option<&str>) -> Result<Ty, Diagnostic> {
     match annotation {
         Expr::NoneLiteral(_) => Ok(Ty::None),
+        Expr::Name(name) if Some(name.id.as_str()) == type_param => {
+            Ok(Ty::Param(Box::new(name.id.to_string())))
+        }
         Expr::Name(name) => match name.id.as_str() {
             "int" => Ok(Ty::Int),
             "float" => Ok(Ty::Float),
@@ -654,7 +705,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     pycc_ast::expr_range(&ann.target),
                 ));
             }
-            let annotation = annotation_to_ty(&ann.annotation)?;
+            let annotation = annotation_to_ty(&ann.annotation, None)?;
             let value = ann.value.as_deref().map(lower_expr).transpose()?;
             HirStmt::AnnAssign {
                 target: name.id.as_str().to_string(),
@@ -1491,6 +1542,22 @@ mod tests {
             "size_of::<Ty>() must stay 16 bytes (PR-10 Task 14, D-109) -- PR-11 adds \
              no new Ty variants, so this must not move; if it does, something in this \
              PR accidentally widened Ty's boxing, not the containers themselves",
+        );
+    }
+
+    #[test]
+    fn ty_size_stays_within_d109_ceiling() {
+        // D-133: `Ty::Param(Box<String>)` is a new dataful variant added
+        // after the D-109 boxing fix. `Box<String>` is a single (thin,
+        // 8-byte) pointer -- unlike `Box<str>`, which measured 24 bytes here
+        // because `str` is unsized (see the variant's own doc comment) --
+        // so it must not push `size_of::<Ty>()` back past the 16-byte
+        // ceiling that fix established.
+        assert!(
+            std::mem::size_of::<Ty>() <= 16,
+            "size_of::<Ty>() must stay within the D-109 16-byte ceiling; adding \
+             Ty::Param(Box<String>) (D-133) must not regress it, got {}",
+            std::mem::size_of::<Ty>(),
         );
     }
 
@@ -2440,10 +2507,34 @@ mod tests {
     }
 
     #[test]
-    fn a_generic_function_is_rejected_without_losing_its_type_parameters() {
+    fn a_generic_function_with_two_type_parameters_is_rejected() {
+        // D-133: exactly one type parameter is accepted (see
+        // `a_single_type_parameter_is_lowered_to_ty_param` below); two or
+        // more still hit the frontend arity gate, since the underlying
+        // representation and call-site substitution (D-134) are scoped to
+        // the single-type-parameter case only.
         assert_capability_error_message(
-            "def f[T]() -> None:\n    return\n",
-            "generic function type parameters are not supported yet",
+            "def f[T, U](x: T) -> U:\n    return x\n",
+            "generic functions with more than one type parameter are not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_single_type_parameter_is_lowered_to_ty_param() {
+        // D-133: `Ty::Param` is resolved by call-site substitution (D-134),
+        // not by unification -- this test only asserts the frontend lowers
+        // `T` consistently to `Ty::Param("T")` everywhere it appears in the
+        // signature, not that substitution happens yet.
+        let module = pycc_parser_test_helper::parse("def f[T](x: T) -> T:\n    return x\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+                return_ty: Ty::Param(Box::new("T".to_string())),
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
         );
     }
 
