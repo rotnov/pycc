@@ -18,7 +18,7 @@
     },
     {
       "path": "scripts/check_roadmap_evidence.rb",
-      "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
+      "source_path": "scripts/check_roadmap_evidence.rb",
       "sha256": "3cefc98fb77550948970484357ffdf83c6506d4d70776ff2811efdba2255a107"
     },
     {
@@ -43,7 +43,7 @@
     },
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
-      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
+      "source_path": "scripts/test_check_roadmap_evidence.rb",
       "sha256": "d35227b136dbfa5b98a1379891d153e9086bc6a085b1d43a2b9039f2cb277355"
     },
     {
