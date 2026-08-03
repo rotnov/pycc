@@ -191,7 +191,7 @@ For each newly observed upstream release:
 | [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (needs v0.3's class model) | typing | `py312/pep_0695_generic_classes.py` | ☐ |
 | [698](https://peps.python.org/pep-0698/) | `@override` | typing | `py312/pep_0698_override.py` | ☐ |
 | [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
-| [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics | sem | `py312/pep_0709_comp_inline.py` | ☐ |
+| [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics -- pycc has no bytecode/frame model to "inline" the way CPython's own PEP 709 change does; this row instead verifies the one CPython-observable, statically-testable guarantee PEP 709 depends on: a comprehension's own loop variable does not leak into an enclosing same-named binding (D-117/D-120) | sem | `pep_0709_comp_inline.py` | ☐ |
 
 *n/a: PEP 684 (per-interpreter GIL — pycc binaries have no GIL at all).*
 
