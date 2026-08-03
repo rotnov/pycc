@@ -11,6 +11,18 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — PR #288 merged to `main`: recorded the autonomous agent operation model as D-127
+
+**Authoritative checkpoint:** `main`'s tip is `8bbdb00fb93fd9b87529cfe0be9d04470303548a` ([PR #288](https://github.com/rotnov/pycc/pull/288), merge commit), confirmed via `git fetch origin` immediately before writing this entry. All 13 required checks passed on the merged head (`gh pr checks 288`, re-confirmed post-merge).
+
+**What happened:** PR #288 (opened by an earlier session, predating this log's own visibility into it) adds AGENTS.md's "Autonomous agent operation" section — the standing policy, already in effect for this project's sessions, that agents own a task's full delivery lifecycle without pausing to ask the repository owner, resolving genuine judgment forks via an independent reviewer instead, with the repository owner's own intervention always taking precedence and D-024's emergency path/credential/account-action carve-outs left unchanged. `chatgpt-codex-connector`'s review flagged one real P2 finding on the original commit: a repository-wide authority/escalation model change had no `docs/DECISIONS.md` entry, only unversioned `AGENTS.md` prose. Fixed by adding **D-127** (choice, scope, exceptions, alternatives, rollback), cross-referenced from the AGENTS.md section heading the same way D-024 already anchors the emergency-bypass rules cited from that same section, and bumping `docs/SPEC.md`'s ADR-range citation from D-124 to D-127. While placing D-127's summary-table row, also backfilled **D-126**'s own missing row (a separate, pre-existing gap noticed in passing, not part of the reviewer's finding).
+
+**Two "is this PR mine?" misidentifications, corrected during this session:** PR #276 and PR #279 were confirmed NOT this session's own work (a concurrent actor under the same GitHub account — see this file's own recurring note on that pattern); PR #288 was initially misjudged the same way, then corrected on the user's explicit challenge once its diff was checked against this session's own established behavioral-policy content, not just PR timing/authorship heuristics.
+
+**What's next:** unchanged from the prior entry below — v0.2's remaining scope is PR-13 (PEP 695 generics, deferred per D-104) and PR-14 (`pycc_std`/stdlib imports), both entirely unimplemented as of this entry, neither with a plan or worktree yet.
+
+---
+
 ## 2026-08-03 — PR #303 merged to `main`: session-driven CI temporary-bypass mechanism, as D-125 (renumbered from D-116)
 
 **Authoritative checkpoint:** `main`'s tip is `bc27344ee870ff5006ddab07adbfb872971e9766` ([PR #303](https://github.com/rotnov/pycc/pull/303), merge commit), confirmed via `git fetch origin main` immediately before writing this entry. All 13 required checks passed on the merged head (`gh pr checks 303`, re-confirmed before merge).
