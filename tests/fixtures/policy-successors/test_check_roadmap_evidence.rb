@@ -1596,6 +1596,22 @@ class RoadmapEvidenceCliTest < Minitest::Test
     assert_includes error.message, "reviewed source-aware comparison job"
   end
 
+  # D-114's array-membership widening is scoped to the D112 measure-job
+  # branch only -- a different measure job (REPLICATED_PERF_MEASURE_JOB
+  # here) must still reject D114's gate-job shape, proving the new
+  # permissiveness didn't leak across branches.
+  def test_rejects_replicated_measurement_job_paired_with_the_d114_gate_job_shape
+    workflow = replicated_perf_workflow do |jobs|
+      jobs["frontend-perf-gate"] =
+        Marshal.load(Marshal.dump(D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB))
+    end
+
+    error = assert_raises(RoadmapEvidenceError) do
+      validate_source_aware_perf_gate_lifecycle(workflow, "ci.yml")
+    end
+    assert_includes error.message, "reviewed source-aware comparison job"
+  end
+
   def test_d84_throughput_floor_workflow_remains_a_retired_audit_fixture
     assert_equal(
       D84_THROUGHPUT_FLOOR_CI_WORKFLOW_SHA256,
