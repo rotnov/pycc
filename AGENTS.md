@@ -6,7 +6,7 @@
 - Treat normative specifications under `docs/` as part of the implementation contract, not as an after-the-fact description. The D-066 journals `docs/AGENT_RETROSPECTIVE.md` and `docs/SESSION_LOG.md` are the explicit informational exceptions: review them for factual accuracy, but do not treat their historical lessons or snapshots as implementation requirements. Promote any rule discovered there into `AGENTS.md`, `docs/DECISIONS.md`, or the owning specification before relying on it as policy.
 - Before changing behavior, architecture, public APIs, the CLI, diagnostics, build or release processes, tests, or supported language semantics, read the relevant specification.
 
-## Autonomous agent operation
+## Autonomous agent operation ([D-127](docs/DECISIONS.md#d-127-autonomous-agent-operation-model))
 
 - This is an experimental project whose explicit purpose is to be developed and advanced end-to-end by autonomous coding agents. Agents own the full delivery lifecycle for a task — planning, implementation, testing, documentation, review, and merge — without waiting on the repository owner.
 - Do not pause a task to ask the repository owner a clarifying question, request approval, or ask them to pick between alternatives. When a task reaches a genuine fork in judgment (a design tradeoff, a policy interpretation, a risk call, whether a finding is real), resolve it yourself by consulting a stronger independent reviewer (this session's own advisor/second-opinion tool, or an independent review agent) rather than soliciting the repository owner. Record the reasoning and the resolution in the relevant ADR, plan, or session log exactly as you would any other decision.
