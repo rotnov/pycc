@@ -1718,7 +1718,8 @@ fn infer_expr_in(
             Ok(kv.1.clone())
         }
         // PR-12 Task 10 (D-119): `set.add(value)`. Mirrors `ListAppend`
-        // exactly -- always `Ty::None`, same D-072 value-position gap.
+        // exactly -- always `Ty::None`, with D-131's ordinary assignment
+        // storage available when that result is bound to a name.
         HirExpr::SetAdd { set, value } => {
             let set_ty = lookup_bound_name(env, local_names, set)?;
             let Ty::Set(elem_ty) = &set_ty else {
