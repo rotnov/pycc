@@ -833,6 +833,17 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
                 // `$fn:len`, and panics even though `pycc_types` already
                 // accepts `len(lst)` as valid, `Ty::Int`-typed.
                 Ty::Int
+            } else if callee == "float"
+                && !scopes
+                    .iter()
+                    .any(|scope| scope.contains_key(&format!("$fn:{callee}")))
+            {
+                // Mirrors `pycc_types`' own `callee == "float"` arms (both the
+                // public-body and private-helper paths), including their own
+                // user-defined-function-takes-priority guard -- see
+                // `pycc_types::infer_expr_in`'s comment for why `float` (unlike
+                // `len`/`print`) needs this. Always `Ty::Float`.
+                Ty::Float
             } else {
                 lookup(scopes, &format!("$fn:{callee}"))
             };
@@ -2443,6 +2454,90 @@ mod tests {
                         name: "x".to_string(),
                         ty: Ty::List(Box::new(Ty::Int)),
                     }],
+                    ty: Ty::Int,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_float_call_to_mir_with_float_type_without_panicking() {
+        // Mirrors `lowers_len_call_to_mir_with_int_type_without_panicking`
+        // immediately above, for the same reason (#181): without a parallel
+        // `"float"` branch in the `HirExpr::Call` lowering arm, this would
+        // panic via `lookup`'s own "has no recorded type" message, since no
+        // `$fn:float` signature is ever registered -- even though
+        // `pycc_types` already accepts `float(x)` as valid, `Ty::Float`-typed.
+        let hir = HirModule {
+            items: vec![
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(3),
+                }),
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Call {
+                        callee: "float".to_string(),
+                        args: vec![HirExpr::Name("x".to_string())],
+                    },
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Call {
+                    callee: "float".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::Float,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_user_defined_float_function_is_lowered_as_a_real_call_not_the_builtin() {
+        // Post-merge review finding: unlike `len`/`print`, `float` was
+        // undefined until #181, so a program defining its own `float` was
+        // valid on `main` immediately before this builtin landed --
+        // reproduced directly, printing `6` on a pristine checkout. Without
+        // this priority check, the builtin's hardcoded `Ty::Float` would
+        // silently override the user function's own registered `Ty::Int`
+        // return type.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "float".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(HirExpr::Name("x".to_string())),
+                        right: Box::new(HirExpr::IntLiteral(1)),
+                    }))],
+                },
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Call {
+                        callee: "float".to_string(),
+                        args: vec![HirExpr::IntLiteral(5)],
+                    },
+                }),
+            ],
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[1],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "y".to_string(),
+                value: MirExpr::Call {
+                    callee: "float".to_string(),
+                    args: vec![MirExpr::IntLiteral(5)],
                     ty: Ty::Int,
                 },
             })
