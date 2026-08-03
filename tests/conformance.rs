@@ -293,3 +293,118 @@ fn pep_0515_underscores_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("pep_0515_underscores_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0515_underscores.py");
 }
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0585_builtin_generics_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0585_builtin_generics.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0585_builtin_generics_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_builtin_generics.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0585_builtin_generics_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_builtin_generics.py");
+}
+
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn dict_order_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dict_order.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("dict_order_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/dict_order.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("dict_order_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/dict_order.py");
+}
+
+// `set[int]`'s own iteration order is this implementation's insertion order,
+// which does not match CPython's hash-dependent set iteration order (D-123) --
+// so, unlike every other fixture in this file, this one intentionally prints
+// only an order-independent value (`len()` of a literal with a duplicate
+// element) rather than iterating the set. It exists to give the PEP 585
+// conformance-matrix row (`docs/PYTHON_STANDARDS.md`) real CI-verified
+// evidence for `set[int]`'s own half of that row, since `dict_order.py`
+// above only exercises `dict[str, int]`.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0585_set_int_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0585_set_int.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0585_set_int_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_set_int.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0585_set_int_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0585_set_int.py");
+}
+
+// `tuple[...]`'s own v0.2 slice (D-115/D-116, PR-11b): heterogeneous literal
+// construction, `t[k]` literal-index reads across all 3 accepted element
+// types (`int`/`bool`/`float`), both storage routes (a module-global tuple
+// and a function-local tuple reached through its own alloca slot), and an
+// inline (unnamed) tuple subscript. This deliberately does NOT exercise a
+// function returning or accepting a tuple *value* itself (as opposed to a
+// tuple living entirely inside one function's locals): `pycc_types`'
+// private-helper signature-inference solver is scalar-only by construction
+// (`collect_expr_constraints` returns no unification term for any container
+// literal), so an entirely unannotated helper cannot have its parameter or
+// return type inferred as `Ty::Tuple` from real source today -- confirmed
+// empirically, and true for `list`/`dict`/`set` the same way, not a
+// tuple-specific gap. See `docs/DECISIONS.md`'s D-116 point 4 correction
+// note and `docs/ROADMAP.md`'s matching follow-up. Unlike `pep_0585_set_int.py`
+// above, this fixture's output is fully order-independent already -- tuples
+// have no iteration order question the way sets do -- so it asserts
+// byte-for-byte agreement like every other fixture in this file, not just
+// `len()`.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn tuple_heterogeneous_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tuple_heterogeneous.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("tuple_heterogeneous_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/tuple_heterogeneous.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("tuple_heterogeneous_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/tuple_heterogeneous.py");
+}
+
+// PR-12 Task 13 (D-117/D-120): the PEP-709 conformance fixture. pycc has no
+// bytecode/frame model to "inline" the way CPython's own PEP 709 change
+// does, so this asserts the one CPython-observable, statically-testable
+// guarantee PEP 709 depends on instead -- a comprehension's own loop
+// variable does not leak into or clobber an enclosing same-named binding,
+// now genuinely exercised for the first time by D-117's synthesized-name
+// mechanism. See `docs/DECISIONS.md`'s D-120 entry for the full account of
+// why this fixture's exact shape was chosen and what CPython actually
+// prints for it.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0709_comp_inline_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0709_comp_inline.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0709_comp_inline_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0709_comp_inline.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0709_comp_inline_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0709_comp_inline.py");
+}
+
+// PR-12 Task 13 (D-117/D-118/D-119): a single breadth fixture covering
+// `list[int]` slicing, `.pop()`, `dict.get()`, `set.add()`, and both
+// comprehension source-container combinations (a `range()`-sourced dict
+// comprehension, a `range()`-sourced set comprehension with an `if` filter)
+// not already covered by `pep_0709_comp_inline.py` above. Every value is
+// printed element-wise or via `len()`, never a container value directly
+// (`print(xs)` panics today, D-107/D-124/D-116).
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn container_methods_slicing_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/container_methods_slicing.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("container_methods_slicing_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/container_methods_slicing.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("container_methods_slicing_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/container_methods_slicing.py");
+}

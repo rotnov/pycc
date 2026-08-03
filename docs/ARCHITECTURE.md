@@ -47,10 +47,89 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pyc
 The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
 the AST. `pycc_hir::lower_checked` preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,
-calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. Function items
-carry their parameter and return types, while call expressions retain only the
-bare callee name plus ordered argument expressions; HIR does not yet assign
-binding identities or build and memoize a
+calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. A first
+`list[int]` slice (D-105, PR-10) lowers list literals, read-only subscript
+indexing (`base[index]`), a dedicated `.append()` call form, and
+`for var in <bare-name-list>:` iteration through HIR (D-105's HIR-forms
+task), `pycc_types` type-checking including `len()`'s call-dispatch (D-105's
+type-checking task, `T0032`/`T0033`/`T0034`), `pycc_mir` lowering (D-105's
+MIR-lowering task), and `pycc_codegen` (D-105's codegen task) against
+`pycc_rt`'s `PyIntListObj` -- so `build`/`run` compiles and runs a
+`list[int]` program end to end, at module scope or inside a private helper
+(the two places D-105's first scope cut allows a `list[int]` value to live).
+Only `list[int]` reaches codegen: `T0034` rejects every other element type
+first. `pycc_codegen` owns the tagged/raw conversion at that runtime
+boundary in both directions (D-106), and `list[T]` values are deliberately
+never refcounted in v0.2, so their allocations leak for the process's
+lifetime (D-107). Two *operations* on a `list[T]` still type-check and then
+stop codegen with a "not supported yet" panic rather than compiling, because
+v0.2 gives `list[T]` no `str(list)` or `bool(list)` meaning (D-107):
+converting one to `str`, and using one as an `if`/`while` condition. The
+string conversion is reachable from every context that needs one, which
+today means both `print(xs)` and f-string interpolation (`f"{xs}"`) -- they
+share a single conversion helper in `pycc_codegen`, so both fail identically.
+
+A second slice (D-121/D-122, PR-11a) extends this same pattern to
+`dict[str, int]` and `set[int]`: dict/set literals, `d[k]`/`d[k] = v`
+(dict only, insert-or-update), `len(...)`, and `for k in d:`/`for x in s:`
+iteration lower through the same HIR/type-checking/MIR/codegen path,
+against `pycc_rt`'s `PyDictObj`/`PyIntSetObj` respectively -- so `build`/`run`
+now also compiles and runs `dict[str, int]` and `set[int]` programs end to
+end, not just `list[int]`. Exactly one key/element combination reaches
+codegen per container (`T0036` for dict, `T0038` for set), mirroring
+`list[int]`'s own `T0034` gate; every other combination type-checks but is
+rejected before codegen. Both new containers stay leak-only in v0.2 (D-124),
+matching `list[int]` (D-107), and neither ships a `str(...)`/`bool(...)`
+conversion or (for `set`) a membership test -- `in` parses fine (the
+parser produces a valid `CmpOp::In` node like any other comparison
+operator), but `pycc_hir`'s lowering step rejects it with the same generic
+`C0001` capability diagnostic used for `is`/`is not`/chained comparisons,
+so it has no HIR/type-checker/codegen support anywhere in this compiler
+yet (D-123).
+
+A third slice (D-115/D-116, PR-11b) adds `tuple[...]`, structurally
+different from the first two: every v0.2-accepted element type
+(`int`/`bool`/`float`, any mix, any arity ≥ 1) is a fixed-width scalar with
+a compile-time-known count, so `pycc_codegen` represents a tuple as an LLVM
+struct held by value (an SSA aggregate, built with `insertvalue` and read
+with `extractvalue`) rather than a `pycc_rt` heap object -- no allocation,
+no pointer, no refcounting question, unlike `list[int]`/`dict[str, int]`/
+`set[int]`. `t[k]` type-checks only for a literal, non-negative, in-range
+integer index (`T0040`), stricter than `list[int]`'s runtime-checked index,
+since a heterogeneous tuple's element type at position `k` is only knowable
+when `k` is known at compile time; any other element type is rejected
+before codegen with `T0039`, mirroring `T0034`/`T0036`/`T0038`. Both
+module-global and function-local tuple storage work end to end. Like
+`list`/`dict`/`set` above, string conversion of a tuple (`print(t)`,
+f-string interpolation) and truthiness of a tuple (`if t:`/`while t:`)
+both type-check but stop codegen with a "not supported yet" panic in
+`to_str`/`truthy` respectively -- but unlike those three, whose own
+identical gap predates this whole PR-11 effort (`list`, PR-10) or was
+already in place before this slice started (`dict`/`set`, PR-11a), this
+reachability for `tuple[...]` is new as of this slice's own tuple-literal
+HIR lowering: before that change, any program containing a tuple literal
+failed to lower at all and got a clean `C0001` diagnostic instead of ever
+reaching codegen (`docs/ROADMAP.md` has the matching follow-up). Passing or
+returning a tuple value across a function boundary is implemented at the
+codegen layer (`build_call_to`, `MirStmt::Return`, and `emit_assign` all
+accept `Scalar::Tuple` with a plain pass-through) but is not yet reachable
+from real, unannotated Python source, for two independent reasons:
+`pycc_types`' private-helper signature-inference solver has no
+unification-friendly representation for any container literal
+(`list`/`dict`/`set`/`tuple` alike), so an entirely unannotated helper's
+parameter or return type can never be inferred as a container type from
+real source today -- a pre-existing limitation this slice surfaced but did
+not introduce (see `docs/DECISIONS.md`'s D-116 point 4 correction note);
+and, even if that solver gap closed, `pycc_codegen`'s own `emit_expr` has
+no dedicated `MirExpr::Call` result-dispatch arm for a container-typed
+return either -- it panics for `Ty::List`/`Ty::Dict`/`Ty::Set`/`Ty::Tuple`
+alike (D-116's own further correction note). `for x in t:` iteration,
+tuple-unpacking assignment (`a, b = t`), and a `tuple[...]` annotation
+syntax remain unimplemented, tracked as `docs/ROADMAP.md` follow-ups.
+
+Function items carry their parameter and return types, while call
+expressions retain only the bare callee name plus ordered argument
+expressions; HIR does not yet assign binding identities or build and memoize a
 call graph. Syntactically valid constructs outside that implemented HIR subset
 return a spanned `C0001` capability diagnostic, so `pycc check` never turns an
 unsupported statement or expression into an uncaught lowering panic.
