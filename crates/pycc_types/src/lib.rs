@@ -402,7 +402,10 @@ fn collect_expr_constraints(
                 }
                 return Ok(Some(Ok(Ty::Int)));
             }
-            if callee == "float" {
+            if callee == "float" && !signatures.contains_key(callee) {
+                // A user-defined `float` takes priority over the builtin -- see
+                // `infer_expr_in`'s own identical guard and its comment for why
+                // this differs from `len`/`print`, which need no such guard.
                 // Mirrors the `len` arm immediately above for the same reason (D-105
                 // point 3's rationale applies identically): `float`'s own return type
                 // (`Ty::Float`) never depends on the argument's resolved type, so it
@@ -1267,9 +1270,20 @@ fn infer_expr_in(
                 }
                 return Ok(Ty::Int);
             }
-            if callee == "float" {
+            if callee == "float" && env.lookup_function(callee).is_none() {
                 // D-086's own remedy for the int-to-float boundary: a hand-recognized
-                // builtin, same as `len` above, not a user-declarable signature.
+                // builtin, same as `len` above, not a user-declarable signature --
+                // except, unlike `print`/`len`, a program can predate this builtin's
+                // introduction with its own `def float(...)`. Reviewer finding
+                // (post-merge review): unlike `print`/`len`, which have been
+                // hand-recognized since before this compiler could compile
+                // user-declared functions at all, `float` was undefined until
+                // this issue, so a user-defined `float` was a valid, working
+                // program on `main` immediately before this change landed --
+                // silently reinterpreting it as this builtin would be a real
+                // regression, not an inherited, already-accepted precedent.
+                // `env.lookup_function` takes priority; only fall through to the
+                // builtin when no such definition exists.
                 // Always returns `Ty::Float` regardless of the argument's own type,
                 // once that argument is numeric-like -- unlike `len`, there is no
                 // homogeneity/element-type question to defer.
@@ -3948,6 +3962,43 @@ mod tests {
             err.message,
             "`float` expects an `int`, `float`, or `bool` argument, got `str`"
         );
+    }
+
+    #[test]
+    fn constraint_collection_honors_a_user_defined_float_signature_over_the_builtin() {
+        // Same post-merge review finding as `infer_expr_in`'s own
+        // `a_user_defined_float_function_takes_priority_over_the_builtin`:
+        // a registered `float` signature (e.g. one accepting `str`, which
+        // the builtin itself would reject) must resolve through the normal
+        // signature lookup, not the hand-recognized builtin arm.
+        let signatures = HashMap::from([(
+            "float".to_string(),
+            (vec!["x".to_string()], vec![Ok(Ty::Str)], Ok(Ty::Str)),
+        )]);
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::StringLiteral("hello".to_string())],
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Str)));
     }
 
     #[test]
@@ -7085,6 +7136,40 @@ mod tests {
             args: vec![HirExpr::Name("undefined".to_string())],
         };
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_user_defined_float_function_takes_priority_over_the_builtin() {
+        // Post-merge review finding: unlike `len`/`print`, which have been
+        // hand-recognized since before this compiler could compile
+        // user-declared functions at all, `float` was undefined until #181,
+        // so `def float(x: int) -> int: return x + 1` was a valid, working
+        // program on `main` immediately before this builtin landed --
+        // reproduced directly against a pristine `main` checkout, printing
+        // `6`. Without this priority check, the builtin would silently
+        // intercept the call and infer `Ty::Float` instead of the user's own
+        // declared `Ty::Int` return type.
+        let mut env = Environment::new();
+        env.bind_function("float".to_string(), vec![Ty::Int], Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::IntLiteral(5)],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn a_user_defined_float_function_accepting_a_non_numeric_argument_type_checks() {
+        // The other half of the same finding: the builtin's own argument-type
+        // gate (`int`/`float`/`bool` only) must not apply when the user's own
+        // `float` accepts something else entirely, e.g. `str`.
+        let mut env = Environment::new();
+        env.bind_function("float".to_string(), vec![Ty::Str], Ty::Str);
+        let expr = HirExpr::Call {
+            callee: "float".to_string(),
+            args: vec![HirExpr::StringLiteral("hello".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
     }
 
     // -- PR-11 Task 3 (D-123): dict[str, int] type-checking --------------

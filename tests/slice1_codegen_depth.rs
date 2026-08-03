@@ -491,6 +491,63 @@ print(to_float(3))
 }
 
 #[test]
+fn a_user_defined_float_function_shadows_the_builtin_end_to_end() {
+    // Post-merge review finding: `def float(x: int) -> int: return x + 1`
+    // is a valid Python program that compiled and ran correctly (printing
+    // `6`) on `main` immediately before this builtin landed -- reproduced
+    // directly against a pristine checkout before this fix. The hand-
+    // recognized builtin must defer to a user's own definition of the same
+    // name through the full CLI pipeline (parser -> HIR -> pycc_types ->
+    // pycc_mir -> pycc_codegen), not just at the unit-test level.
+    let source = "\
+def float(x: int) -> int:
+    return x + 1
+
+print(float(5))
+";
+    let output = build_and_run("float_user_defined_shadow", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"6\n");
+}
+
+#[test]
+fn a_float_call_on_a_bigint_argument_aborts_honestly() {
+    // Post-merge review finding: `float(x)` for a bigint-valued `x` (an
+    // `int` promoted past the tagged smallint range by arithmetic
+    // overflow) reaches `to_float`'s `Scalar::Int` arm, which calls
+    // `pycc_rt_int_to_float` -> `require_smallint`, aborting -- the exact
+    // same pre-existing "no bigint-to-float" limitation ordinary arithmetic
+    // promotion already has (confirmed directly: `fib_iter(100) + 1.5` hits
+    // the identical abort on `main` before this PR), not a new gap
+    // `float()` introduces. Mirrors `list_append_bigint_aborts`'s own
+    // "executing test, not just a documented gap" convention (D-106).
+    let source = "\
+def fib_iter(n: int) -> int:
+    a = 0
+    b = 1
+    i = 0
+    while i < n:
+        temp = a + b
+        a = b
+        b = temp
+        i = i + 1
+    return a
+
+print(float(fib_iter(100)))
+";
+    let output = build_and_run("float_bigint_aborts", source);
+    assert!(
+        !output.status.success(),
+        "a bigint-valued argument to float() must fail loudly, not silently produce a wrong value"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("converting a bigint-valued `int` is not supported yet"),
+        "expected pycc_rt's honest bigint message, got: {stderr}"
+    );
+}
+
+#[test]
 fn backend_representation_boundaries_match_the_checked_v0_1_contract() {
     let source = "\
 def read_later_global() -> int:

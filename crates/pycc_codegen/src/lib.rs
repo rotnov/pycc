@@ -1834,9 +1834,12 @@ fn emit_expr<'ctx>(
                 // which keeps it raw as a private loop bound.
                 return Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_len));
             }
-            if callee == "float" {
-                // Hand-recognized builtin, same reason as `len` above: it has no
-                // `user_functions` entry. Reuses `to_float`, which already dispatches
+            if callee == "float" && !user_functions.contains_key(callee.as_str()) {
+                // Hand-recognized builtin -- but, unlike `len` above, only when
+                // no `user_functions` entry claims the name first (mirrors
+                // `pycc_types`/`pycc_mir`'s own identical guard; see
+                // `pycc_types::infer_expr_in`'s comment for why `float`, unlike
+                // `len`/`print`, needs one). Reuses `to_float`, which already dispatches
                 // `Scalar::Int`/`Scalar::Bool`/`Scalar::Float` correctly (the same
                 // helper arithmetic-promotion already calls) and already panics
                 // correctly for `Scalar::Str`/`List`/`Dict`/`Set`/`Tuple` -- no new conversion
@@ -9621,6 +9624,46 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"3.0\n");
+    }
+
+    #[test]
+    fn a_user_defined_float_function_codegens_and_runs_instead_of_the_builtin() {
+        // Post-merge review finding: `def float(x: int) -> int: return x +
+        // 1` was a valid, working program on `main` immediately before this
+        // builtin landed -- reproduced directly against a pristine
+        // checkout, printing `6`. Without the `user_functions.contains_key`
+        // guard, this would silently emit the builtin's own float
+        // conversion instead of a real call to the user's function.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "float".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(MirExpr::Name {
+                            name: "x".to_string(),
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(1)),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "float".to_string(),
+                    args: vec![MirExpr::IntLiteral(5)],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("user_defined_float_call");
+        let obj_path = dir.join("user_defined_float_call.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("user_defined_float_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"6\n");
     }
 
     #[test]
