@@ -66,6 +66,17 @@ GitHub Action (`corpus-bot`):
 - Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
 
+The nbody gate is in D-126's evidence-gathering phase. Each of its five
+`--release` pycc launches and five pinned-CPython launches records both elapsed
+wall-clock time and CPU time consumed by that exact child process. Unix obtains
+per-child usage from `wait4`; Windows reads the waited process handle through
+`GetProcessTimes`. The median wall-clock ratio continues to enforce the existing
+20x/12x/15x/18x target-specific floors, while the CPU-time ratio and all four
+medians are non-gating telemetry written on both passes and failures. Switching
+the gate requires a later decision backed by at least five CPU-time observations
+from every Tier-1 leg; Phase A neither reuses the wall-clock floors for CPU time
+nor weakens them to make noisy hosted-runner failures pass.
+
 ## Roadmap acceptance evidence
 
 A checked acceptance item in [ROADMAP.md](./ROADMAP.md) is a release claim, not
@@ -633,10 +644,19 @@ parseable issue number, drift after `restore` or `restore_to_baseline`, and
 `restore`'s CLI wiring rejecting `--incident`/`--to-baseline` given together
 or neither given with no prior `state.json` to fall back to.
 
-`status()` compares the full 7-field protection snapshot against
+`status()` compares the normalized full 7-field protection snapshot against
 `BASELINE_PROTECTION`, not just the required-checks list, so DRIFT tests
 cover both a `required_status_checks`-only mismatch and a mismatch confined
-to another field (e.g. `enforce_admins`). Separately, `status()` also
+to another field (e.g. `enforce_admins`). A realistic GitHub review-protection
+fixture includes the response-only `url` field and proves that metadata is
+absent from status, incident, and restore/readback snapshots, while one
+parameterized regression changes each of the four effective review-policy
+fields and proves every change still reports DRIFT. Additional regressions
+prove that an effective or unclassified extra field is preserved and reports
+DRIFT rather than being mistaken for metadata. A separate test preserves `None`
+when pull-request reviews are disabled, and legacy-incident regressions prove
+that snapshots already persisted with `url` still explain live drift and
+restore cleanly through the normalized readback. Separately, `status()` also
 detects a `[ci-bypass]` incident that is open past its own recorded expiry
 with no restore recorded -- DRIFT even when protection itself currently
 matches baseline -- and the combined case where both conditions hold at
