@@ -20,6 +20,14 @@ REPO = "rotnov/pycc"
 BASELINE_CONTEXTS = ["audit", "ci-gate"]
 INCIDENT_TITLE_PREFIX = "[ci-bypass]"
 DEFAULT_EXPIRY_MINUTES = 60
+# The ci-temporary-bypass skill documents ci-gate as never eligible (it
+# reflects the candidate's own build/test/coverage result, never external
+# state -- see the Scope boundary section of
+# .claude/skills/ci-temporary-bypass/SKILL.md). That exclusion must also be
+# enforced here in code: relying on the skill's prose alone leaves an
+# unattended or mistaken invocation free to relax ci-gate and silently drop
+# it from required checks.
+NEVER_RELAXABLE_CHECKS = frozenset({"ci-gate"})
 BASELINE_PROTECTION = {
     "strict": True,
     "contexts": sorted(BASELINE_CONTEXTS),
@@ -80,6 +88,7 @@ def status(repo: str = REPO, now: datetime | None = None) -> tuple[bool, str]:
     current = protection_snapshot(protection)
     drift = current != BASELINE_PROTECTION
     stale_issue = None
+    live_incident = None
     for issue in list_open_bypass_issues(repo):
         try:
             expiry = parse_expiry_from_body(issue["body"])
@@ -88,8 +97,33 @@ def status(repo: str = REPO, now: datetime | None = None) -> tuple[bool, str]:
         if expiry < now:
             stale_issue = issue["number"]
             break
+        if not drift:
+            continue
+        # A currently-open, unexpired incident legitimately makes `contexts`
+        # differ from BASELINE_PROTECTION for the one check it relaxed --
+        # that is the expected, in-progress state, not release-blocking
+        # drift. Only suppress the DRIFT verdict when the live protection
+        # state exactly matches what THIS incident's own pre-relax snapshot
+        # plus its one relaxed check predicts; any other difference still
+        # reports as real drift.
+        try:
+            snapshot = parse_snapshot_from_body(issue["body"])
+            check_name = parse_check_name_from_body(issue["body"])
+        except CiBypassError:
+            continue
+        expected_live = dict(snapshot)
+        expected_live["contexts"] = sorted(
+            c for c in snapshot["contexts"] if c != check_name
+        )
+        if current == expected_live:
+            live_incident = issue["number"]
     if not drift and stale_issue is None:
         return True, f"Branch protection matches baseline: {current}"
+    if drift and stale_issue is None and live_incident is not None:
+        return True, (
+            f"Branch protection reflects live incident #{live_incident} "
+            f"in progress (relaxed check pending restore): {current}"
+        )
     parts = []
     if drift:
         parts.append(
@@ -144,6 +178,15 @@ def list_open_bypass_issues(repo: str = REPO) -> list[dict]:
         issue for issue in json.loads(output)
         if issue["title"].startswith(INCIDENT_TITLE_PREFIX)
     ]
+
+
+def parse_check_name_from_body(body: str) -> str:
+    match = re.search(r"\*\*Check relaxed:\*\* `(\S+)`", body)
+    if not match:
+        raise CiBypassError(
+            "incident issue body has no parseable 'Check relaxed' line"
+        )
+    return match.group(1)
 
 
 def parse_expiry_from_body(body: str) -> datetime:
@@ -219,6 +262,13 @@ def relax(
     expiry_minutes: int, state_path: Path, body_path: Path,
     now: datetime | None = None,
 ) -> int:
+    if check_name in NEVER_RELAXABLE_CHECKS:
+        raise CiBypassError(
+            f"{check_name!r} is never eligible for this mechanism (it "
+            f"reflects the candidate's own build/test/coverage result, "
+            f"never external repository state) -- refusing before any "
+            f"incident is created or protection is touched"
+        )
     if find_open_bypass_issue(repo) is not None:
         raise CiBypassError(
             "a [ci-bypass] incident is already open; this mechanism cannot stack"
@@ -288,14 +338,42 @@ def parse_snapshot_from_body(body: str) -> dict:
         ) from error
 
 
+def get_authenticated_login() -> str:
+    output = run_gh(["api", "user"])
+    return json.loads(output)["login"]
+
+
 def get_incident_body(repo: str, issue_number: int) -> str:
     output = run_gh(
-        ["issue", "view", str(issue_number), "--repo", repo, "--json", "body,state"]
+        [
+            "issue", "view", str(issue_number), "--repo", repo,
+            "--json", "body,state,title,author",
+        ]
     )
     data = json.loads(output)
     if data["state"] != "OPEN":
         raise CiBypassError(
             f"incident #{issue_number} is not open (state={data['state']!r})"
+        )
+    if not data["title"].startswith(INCIDENT_TITLE_PREFIX):
+        raise CiBypassError(
+            f"incident #{issue_number}'s title does not start with "
+            f"{INCIDENT_TITLE_PREFIX!r}; refusing to trust its embedded "
+            f"snapshot as authoritative"
+        )
+    # A public GitHub issue can be opened by anyone, including one whose
+    # title and body forge this mechanism's own [ci-bypass]/snapshot-marker
+    # format. Only trust the embedded snapshot when the issue was actually
+    # authored by the identity this script itself is running as -- every
+    # genuine incident this mechanism creates is opened under that same
+    # authenticated `gh` actor (see create_incident_issue/_create_issue).
+    trusted_login = get_authenticated_login()
+    author_login = data["author"]["login"]
+    if author_login != trusted_login:
+        raise CiBypassError(
+            f"incident #{issue_number} was opened by {author_login!r}, not "
+            f"the currently authenticated actor {trusted_login!r}; refusing "
+            f"to apply its embedded snapshot to branch protection"
         )
     return data["body"]
 

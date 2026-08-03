@@ -639,7 +639,30 @@ detects a `[ci-bypass]` incident that is open past its own recorded expiry
 with no restore recorded -- DRIFT even when protection itself currently
 matches baseline -- and the combined case where both conditions hold at
 once; an incident whose body has no parseable Expiry line is skipped rather
-than crashing the check.
+than crashing the check. `status()` also recognizes when the observed drift
+is fully explained by a currently open, unexpired incident's own recorded
+pre-relax snapshot and relaxed check (an in-progress relaxation, reported
+`ok`, not release-blocking DRIFT) -- with dedicated tests for the case where
+an open incident does *not* explain the observed drift (must still report
+DRIFT, never blanket-suppressed just because an incident happens to be
+open) and where the incident's body has no parseable snapshot or "Check
+relaxed" line (skipped, not crashed).
+
+`relax()` refuses `ci-gate` before making any `gh` call at all -- it
+reflects the candidate's own build/test/coverage result, never external
+repository state, and the skill's documented exclusion is enforced here in
+code, not left to prose alone.
+
+`restore()`'s `get_incident_body()` only trusts an incident's embedded
+snapshot when the issue's title starts with `[ci-bypass]` *and* its author
+matches the currently authenticated `gh` actor (`get_authenticated_login()`)
+-- closing the gap where a public issue forging both the title and the
+`<!-- ci-bypass-snapshot -->` marker, opened by anyone else, could otherwise
+have its snapshot applied to branch protection by a later `restore
+--incident`. Both rejections (title, author) have dedicated tests, including
+one proving the author check is never reached when the title check already
+failed, and one proving no `PATCH`/comment/close call happens on an author
+mismatch.
 
 `relax()`'s TOCTOU re-check -- `find_open_bypass_issue` called once before
 any work starts and again immediately before the mutating `PATCH`, narrowing

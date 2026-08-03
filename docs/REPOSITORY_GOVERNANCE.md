@@ -258,8 +258,11 @@ linked skill's workflow is followed: two independent adversarial
 `[ci-bypass]`-prefixed incident issue created before any protection edit,
 relaxation of exactly the one named check via the scoped `PATCH
 .../protection/required_status_checks` endpoint, and a byte-exact
-restore verification. `scripts/manage_ci_bypass.py status` reports any
-drift between current protection and this document's own baseline;
+restore verification. `scripts/manage_ci_bypass.py status` reports
+drift between current protection and this document's own baseline,
+except when that exact drift is fully explained by a currently open,
+unexpired `[ci-bypass]` incident's own recorded pre-relax snapshot and
+relaxed check (an in-progress relaxation, not a governance incident);
 `AGENTS.md`'s "Protect main" section requires every session's preflight
 to run it and restore immediately if drift is found with no live
 tracking incident.
