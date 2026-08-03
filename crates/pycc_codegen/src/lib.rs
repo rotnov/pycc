@@ -62,12 +62,12 @@ enum Scalar<'ctx> {
     /// nothing frees a list value early either.
     List(PointerValue<'ctx>),
     /// A pointer to a heap-allocated `pycc_rt::PyDictObj` (PR-11 Task 2/5,
-    /// D-111/D-113) -- like `List`, opaque to this crate, which only ever
+    /// D-121/D-123) -- like `List`, opaque to this crate, which only ever
     /// stores it, passes it to a `pycc_rt_dict_*` call, or marshals it
     /// across a function boundary.
     ///
     /// Its own variant rather than a reuse of `List`'s or `Str`'s (D-107's
-    /// reasoning, extended to this new container by D-114): `PyDictObj` and
+    /// reasoning, extended to this new container by D-124): `PyDictObj` and
     /// `PyIntListObj` have entirely different layouts, and every exhaustive
     /// `Scalar` match (`truthy`/`to_str`/`to_tagged_int`/`to_float`/
     /// `emit_assign`/argument marshalling) would otherwise hand a
@@ -79,20 +79,20 @@ enum Scalar<'ctx> {
     /// answered deliberately, instead of silently misreading memory.
     ///
     /// Refcounting is deliberately *not* wired for this variant in v0.2
-    /// (D-114, extending D-107's exact reasoning): `pycc_rt_dict_incref`/
+    /// (D-124, extending D-107's exact reasoning): `pycc_rt_dict_incref`/
     /// `_decref` are never called on a dict value itself, so a dict's
     /// backing allocation leaks for the process's lifetime, identically to
     /// `List`. That is leak-only -- never a premature free or a double free
     /// -- because nothing frees a dict value early either.
     Dict(PointerValue<'ctx>),
     /// A pointer to a heap-allocated `pycc_rt::PyIntSetObj` (PR-11 Task 6,
-    /// D-111/D-114) -- like `List`/`Dict`, opaque to this crate, which only
+    /// D-121/D-124) -- like `List`/`Dict`, opaque to this crate, which only
     /// ever stores it, passes it to a `pycc_rt_int_set_*` call, or marshals
     /// it across a function boundary.
     ///
     /// Its own variant rather than a reuse of `List`'s, `Dict`'s, or
     /// `Str`'s (D-107's reasoning, extended to this new container by
-    /// D-114, exactly as `Dict`'s own doc comment already extends it):
+    /// D-124, exactly as `Dict`'s own doc comment already extends it):
     /// `PyIntSetObj` has its own layout, distinct from `PyIntListObj`,
     /// `PyDictObj`, and `PyStrObj`, and every exhaustive `Scalar` match
     /// (`truthy`/`to_str`/`to_tagged_int`/`to_float`/`emit_assign`/argument
@@ -105,7 +105,7 @@ enum Scalar<'ctx> {
     /// instead of silently misreading memory.
     ///
     /// Refcounting is deliberately *not* wired for this variant in v0.2
-    /// (D-114, extending D-107's exact reasoning, identically to `List`/
+    /// (D-124, extending D-107's exact reasoning, identically to `List`/
     /// `Dict`): `pycc_rt_int_set_incref`/`_decref` are never called on a set
     /// value itself, so a set's backing allocation leaks for the process's
     /// lifetime. That is leak-only -- never a premature free or a double
@@ -119,11 +119,11 @@ enum Scalar<'ctx> {
     /// pointer or a refcounted value), and the arity is fixed at compile
     /// time -- which is exactly why no heap object, no `pycc_rt` type, and
     /// no refcounting policy accompanies this variant at all. There is
-    /// nothing to leak (contrast `List`/`Dict`/`Set`, whose D-107/D-114
+    /// nothing to leak (contrast `List`/`Dict`/`Set`, whose D-107/D-124
     /// leak-only policy exists because they *do* allocate).
     ///
     /// Its own variant rather than a reuse of any pointer-holding
-    /// variant's shape (D-107/D-114's exact reasoning, extended): every
+    /// variant's shape (D-107/D-124's exact reasoning, extended): every
     /// exhaustive `Scalar` match (`truthy`/`to_str`/`to_tagged_int`/
     /// `to_float`) would otherwise have no way to reject a struct value
     /// passed where a pointer or a tagged int is expected. Unlike those
@@ -224,7 +224,7 @@ struct RtFns<'ctx> {
     /// PR-11 Task 5's own new `pycc_rt_dict_*` declarations, mirroring the
     /// `int_list_*` cluster immediately above one-for-one: `dict_new` (no
     /// pre-sizing entry point, same reasoning as `int_list_new`),
-    /// `dict_set` (insert-or-update, D-113 -- this crate's one dict
+    /// `dict_set` (insert-or-update, D-123 -- this crate's one dict
     /// "growable op", playing `int_list_append`'s role), `dict_get`
     /// (read, panics on a missing key), `dict_len`, and `dict_key_at`
     /// (`ForDict`'s own per-iteration key read, playing `int_list_get`'s
@@ -243,7 +243,7 @@ struct RtFns<'ctx> {
     /// PR-11 Task 9's own new `pycc_rt_int_set_*` declarations, mirroring
     /// the `int_list_*` cluster above one-for-one: `int_set_new` (no
     /// pre-sizing entry point, same reasoning as `int_list_new`),
-    /// `int_set_add` (insert-with-dedup, D-111 -- this crate's one set
+    /// `int_set_add` (insert-with-dedup, D-121 -- this crate's one set
     /// "growable op", playing `int_list_append`'s role; the dedup check
     /// itself lives entirely in `pycc_rt_int_set_add`, not here), `int_set_len`,
     /// and `int_set_get` (`ForSet`'s own per-iteration element read, playing
@@ -451,7 +451,7 @@ fn declare_rt_functions<'ctx>(
         // Returns nothing, exactly like `int_list_append` above: this
         // signature must match `pycc_rt_int_set_add`'s real Rust one
         // (`fn(*mut PyIntSetObj, i64) -> ()`) -- the dedup check itself
-        // lives entirely inside that function (D-111), so codegen's own
+        // lives entirely inside that function (D-121), so codegen's own
         // call site is exactly as simple as an unconditional append.
         int_set_add: declare(
             "pycc_rt_int_set_add",
@@ -614,14 +614,14 @@ fn to_tagged_int<'ctx>(
         }
         // Defensive for the identical `numeric_result_type` reason as the
         // `List` arm directly above, extended to `dict[K, V]` (D-107's
-        // reasoning, per D-114): no arithmetic operand is ever `Ty::Dict`,
+        // reasoning, per D-124): no arithmetic operand is ever `Ty::Dict`,
         // so this is never reached by real, type-checked source.
         Scalar::Dict(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got dict")
         }
         // Defensive for the identical `numeric_result_type` reason as the
         // `List`/`Dict` arms above, extended to `set[T]` (D-107's
-        // reasoning, per D-114): no arithmetic operand is ever `Ty::Set`,
+        // reasoning, per D-124): no arithmetic operand is ever `Ty::Set`,
         // so this is never reached by real, type-checked source.
         Scalar::Set(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got set")
@@ -856,7 +856,7 @@ fn expect_dict_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'
 
 /// Inserts or updates one already-untagged (D-106) `i64` value under `key`
 /// in a `PyDictObj`, shared by `MirExpr::DictLiteral`'s per-pair
-/// construction and `MirStmt::DictSet`'s own `d[k] = v` (D-113's
+/// construction and `MirStmt::DictSet`'s own `d[k] = v` (D-123's
 /// insert-or-update operation -- `pycc_rt_dict_set` itself decides which of
 /// the two this is, by whether `key` already compares equal to a stored
 /// key). Returns nothing, exactly like `build_int_list_append` above:
@@ -947,7 +947,7 @@ fn expect_set_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'c
 /// was the first and, until this task, only one). Returns nothing:
 /// `pycc_rt_int_set_add` is declared `void`, exactly like
 /// `build_int_list_append`/`build_dict_set` above. The dedup check that
-/// makes a repeated element collapse to one (D-111) lives entirely inside
+/// makes a repeated element collapse to one (D-121) lives entirely inside
 /// `pycc_rt_int_set_add` itself -- both callers just call it per value,
 /// unconditionally, with no dedup logic of their own.
 fn build_int_set_add<'ctx>(
@@ -1025,7 +1025,7 @@ fn range_operand_to_tagged_int<'ctx>(
         scalar @ (Scalar::Int(_) | Scalar::Bool(_)) => to_tagged_int(context, builder, scalar),
         // `List`/`Dict`/`Set`/`Tuple` join this arm's existing or-pattern
         // rather than getting their own (D-107, extended to dict/set by
-        // D-114 and to tuple by D-116): unlike `to_tagged_int`/`to_float`
+        // D-124 and to tuple by D-116): unlike `to_tagged_int`/`to_float`
         // above and below, this message never names the offending type, so
         // it stays exactly as honest for a list, dict, set, or tuple
         // operand as for a `float` or `str` one -- and folding adds no
@@ -1077,13 +1077,13 @@ fn to_float<'ctx>(
         }
         // Defensive for the identical `numeric_result_type` reason as the
         // `List` arm directly above, extended to `dict[K, V]` (D-107's
-        // reasoning, per D-114).
+        // reasoning, per D-124).
         Scalar::Dict(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got dict")
         }
         // Defensive for the identical `numeric_result_type` reason as the
         // `List`/`Dict` arms above, extended to `set[T]` (D-107's
-        // reasoning, per D-114).
+        // reasoning, per D-124).
         Scalar::Set(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got set")
         }
@@ -1176,7 +1176,7 @@ fn to_str<'ctx>(
         // `print`'s argument or an f-string interpolation, so `print(x)`/
         // `f"{x}"` for a `dict[str, int]` local type-checks today and
         // lands here. v0.2 has no `str(dict)`/dict-printing semantics
-        // (D-113), and there is no `pycc_rt_dict_to_str` to call -- so
+        // (D-123), and there is no `pycc_rt_dict_to_str` to call -- so
         // this panics honestly instead of handing a `PyDictObj` pointer to
         // a `pycc_rt_*_to_str` function that would read it as a
         // `PyStrObj`.
@@ -1188,7 +1188,7 @@ fn to_str<'ctx>(
         // restriction on `print`'s argument or an f-string interpolation,
         // so `print(s)`/`f"{s}"` for a `set[int]` local type-checks today
         // and lands here. v0.2 has no `str(set)`/set-printing semantics
-        // (D-114), and there is no `pycc_rt_int_set_to_str` to call -- so
+        // (D-124), and there is no `pycc_rt_int_set_to_str` to call -- so
         // this panics honestly instead of handing a `PyIntSetObj` pointer
         // to a `pycc_rt_*_to_str` function that would read it as a
         // `PyStrObj`.
@@ -1773,7 +1773,7 @@ fn emit_expr<'ctx>(
                     locals,
                     list_arg,
                 );
-                // D-113 relaxed `len()` to also accept a `dict[K, V]`
+                // D-123 relaxed `len()` to also accept a `dict[K, V]`
                 // argument alongside `list[T]` (PR-11 Task 5), and PR-11
                 // Task 9 relaxed it once more to also accept `set[T]`,
                 // dispatched on the argument's own static type -- mirrors
@@ -2112,7 +2112,7 @@ fn emit_expr<'ctx>(
             build_int_list_append(builder, rt, list_ptr, raw);
             Scalar::Bool(context.i8_type().const_int(0, false))
         }
-        // `{k1: v1, k2: v2, ...}` (PR-11 Task 5, D-113): an empty
+        // `{k1: v1, k2: v2, ...}` (PR-11 Task 5, D-123): an empty
         // `pycc_rt_dict_new()` object followed by one `pycc_rt_dict_set`
         // per pair, in source order -- mirrors `MirExpr::ListLiteral`'s own
         // shape exactly (no pre-sizing call: `PyDictObj`'s own payload
@@ -2136,7 +2136,7 @@ fn emit_expr<'ctx>(
                 let key_scalar =
                     emit_expr(context, builder, module, rt, user_functions, locals, key);
                 // `PyDictObj` adopts the key pointer it is given as its own
-                // permanent reference, without incref'ing it itself (D-114:
+                // permanent reference, without incref'ing it itself (D-124:
                 // "the stored key pointer is neither increfed on insert nor
                 // decrefed ... ever"). A bare-`Name` key (`{k: 1}`) is a
                 // *duplicate* reference to whatever `PyStrObj` `k`'s own
@@ -2148,7 +2148,7 @@ fn emit_expr<'ctx>(
                 // reassignment would decref (and potentially free) the same
                 // `PyStrObj` this dict still points to, a real premature
                 // free, not this project's accepted list/dict leak-only
-                // policy (D-107/D-114 only ever accept *never freeing*, not
+                // policy (D-107/D-124 only ever accept *never freeing*, not
                 // freeing too early). A string-literal key (`{"a": 1}`)
                 // freshly constructs its own owned reference every time, so
                 // `str_value_is_a_duplicate_reference` correctly leaves it
@@ -2178,7 +2178,7 @@ fn emit_expr<'ctx>(
             }
             Scalar::Dict(dict_ptr)
         }
-        // `dict[key]`, read-only (PR-11 Task 5, D-113 -- `d[k] = v` is a
+        // `dict[key]`, read-only (PR-11 Task 5, D-123 -- `d[k] = v` is a
         // separate, statement-level operation, `MirStmt::DictSet` below).
         // Mirrors `MirExpr::Subscript`'s own shape: the key is a `Ty::Str`
         // expression crossing in unchanged (no D-106 conversion -- a dict
@@ -2208,7 +2208,7 @@ fn emit_expr<'ctx>(
                 .into_int_value();
             Scalar::Int(raw_i64_to_tagged_int(context, builder, raw_value))
         }
-        // `{e1, e2, ...}` (PR-11 Task 9, D-113/D-111): an empty
+        // `{e1, e2, ...}` (PR-11 Task 9, D-123/D-121): an empty
         // `pycc_rt_int_set_new()` object followed by one
         // `pycc_rt_int_set_add` per element, in source order -- mirrors
         // `MirExpr::ListLiteral`'s own shape exactly (no pre-sizing call:
@@ -2217,7 +2217,7 @@ fn emit_expr<'ctx>(
         // `set[int]` has no string-keyed counterpart to `DictLiteral`'s own
         // per-pair key handling -- every element is a raw `i64`, so there is
         // no refcounting concern here at all (unlike `DictLiteral`'s key,
-        // D-113's own T0038 gate means every `set[int]` element is exactly
+        // D-123's own T0038 gate means every `set[int]` element is exactly
         // `Ty::Int`).
         //
         // D-106's input side applies to every element: each is an arbitrary
@@ -2225,7 +2225,7 @@ fn emit_expr<'ctx>(
         // `PyIntSetObj` stores raw untagged slots -- hence the
         // `build_untag_checked` per element, identical to `ListLiteral`'s
         // own elements. The dedup check that makes a repeated element
-        // collapse to one (D-111) lives entirely inside
+        // collapse to one (D-121) lives entirely inside
         // `pycc_rt_int_set_add` itself (see `build_int_set_add`'s own doc
         // comment) -- this arm calls it per element, unconditionally, with
         // no dedup logic of its own.
@@ -2260,7 +2260,7 @@ fn emit_expr<'ctx>(
         // `build_insert_value` (LLVM's `insertvalue`) per element in source
         // order, each returning a *new* aggregate value rather than
         // mutating one in place. No alloca, no pointer, no allocation, and
-        // so nothing for D-107/D-114's leak-only policy to apply to.
+        // so nothing for D-107/D-124's leak-only policy to apply to.
         //
         // Deliberately no `build_untag_checked` per element, unlike all
         // three of those literals: their runtime objects store raw untagged
@@ -2435,7 +2435,7 @@ fn emit_expr<'ctx>(
         // key -- following `MirExpr::DictGet`'s own no-incref precedent
         // above, not `DictSet`'s: a read-only lookup never stores the key
         // pointer anywhere persistent, so there is no new owning reference
-        // to protect (D-114's incref requirement exists only where a
+        // to protect (D-124's incref requirement exists only where a
         // pointer is *adopted*, e.g. `pycc_rt_dict_set`'s own key
         // parameter).
         //
@@ -2563,7 +2563,7 @@ fn emit_list_name_read<'ctx>(
 /// Reads a `dict[K, V]`-typed local by name. `MirStmt::DictSet`'s `dict` and
 /// `MirStmt::ForDict`'s `dict` both carry their dict as a plain variable
 /// name rather than a sub-expression (mirroring `HirStmt::DictSet`/
-/// `HirStmt::ForList`'s dict-typed case, D-113), so neither has a `MirExpr`
+/// `HirStmt::ForList`'s dict-typed case, D-123), so neither has a `MirExpr`
 /// to hand to `emit_expr` directly. Mirrors `emit_list_name_read` exactly,
 /// for the identical reason (see that function's own doc comment,
 /// including its `let ... else` shape over `unwrap_or_else(|| panic!(..))`).
@@ -2598,7 +2598,7 @@ fn emit_dict_name_read<'ctx>(
 
 /// Reads a `set[T]`-typed local by name. `MirStmt::ForSet`'s `set` carries
 /// its set as a plain variable name rather than a sub-expression (mirroring
-/// `HirStmt::ForList`'s set-typed case, D-113), so it has no `MirExpr` to
+/// `HirStmt::ForList`'s set-typed case, D-123), so it has no `MirExpr` to
 /// hand to `emit_expr` directly. Mirrors `emit_list_name_read`/
 /// `emit_dict_name_read` exactly, for the identical reason (see
 /// `emit_list_name_read`'s own doc comment, including its `let ... else`
@@ -2765,7 +2765,7 @@ fn truthy<'ctx>(
         // arm directly above: `pycc_types` places no type restriction on an
         // `if`/`while` condition, so `if x:` for a `dict[str, int]` local
         // type-checks today and lands here. v0.2 has no `bool(dict)`
-        // semantics (D-113 ships only `len(x)`/`x[k]`/`x[k] = v`/
+        // semantics (D-123 ships only `len(x)`/`x[k]`/`x[k] = v`/
         // iteration), and there is no `pycc_rt_dict_truthy` to call -- so
         // this panics honestly instead of calling `pycc_rt_str_truthy` on
         // a `PyDictObj` pointer, whose layout has nothing in common with
@@ -2777,7 +2777,7 @@ fn truthy<'ctx>(
         // `Dict` arms directly above: `pycc_types` places no type
         // restriction on an `if`/`while` condition, so `if s:` for a
         // `set[int]` local type-checks today and lands here. v0.2 has no
-        // `bool(set)` semantics (D-114 ships only `len(x)`/iteration), and
+        // `bool(set)` semantics (D-124 ships only `len(x)`/iteration), and
         // there is no `pycc_rt_int_set_truthy` to call -- so this panics
         // honestly instead of calling `pycc_rt_str_truthy` on a
         // `PyIntSetObj` pointer, whose layout has nothing in common with
@@ -2913,7 +2913,7 @@ fn emit_assign<'ctx>(
         // Pass-through, identical to `List`'s arm directly above: storing
         // a `dict[K, V]` value is storing one opaque pointer into a slot
         // `ty_to_basic_type` already allocated as a pointer. No refcount
-        // traffic accompanies it -- D-114 keeps `dict[K, V]` leak-only for
+        // traffic accompanies it -- D-124 keeps `dict[K, V]` leak-only for
         // v0.2 (extending D-107's exact reasoning), so unlike `Str` there
         // is deliberately no incref here and no
         // `decref_str_slot_before_store` counterpart.
@@ -2921,7 +2921,7 @@ fn emit_assign<'ctx>(
         // Pass-through, identical to `List`'s/`Dict`'s arms directly
         // above: storing a `set[T]` value is storing one opaque pointer
         // into a slot `ty_to_basic_type` already allocated as a pointer.
-        // No refcount traffic accompanies it -- D-114 keeps `set[T]`
+        // No refcount traffic accompanies it -- D-124 keeps `set[T]`
         // leak-only for v0.2 (extending D-107's exact reasoning),
         // identically to `List`/`Dict`.
         Scalar::Set(v) => v.into(),
@@ -3401,14 +3401,14 @@ fn declare_module_globals<'ctx>(
                 // directly above (PR-11 Task 5): an opaque pointer, null
                 // until the first assignment stores a real `PyDictObj`
                 // into it, with the separate `initialized` flag below
-                // trapping any read that reaches it first. D-113 names
+                // trapping any read that reaches it first. D-123 names
                 // module scope as one of the places a `dict[str, int]`
                 // value is expected to live, and every one of this task's
                 // own CLI repro programs assigns `x = {...}` at module
                 // scope -- leaving this arm out would turn that documented,
                 // supported form into an internal compiler panic. No
                 // exit-time decref accompanies it (contrast the `Ty::Str`
-                // loop in `compile_to_object`): D-114 keeps `dict[K, V]`
+                // loop in `compile_to_object`): D-124 keeps `dict[K, V]`
                 // leak-only for v0.2, extending D-107's exact reasoning.
                 pycc_mir::Ty::Dict(_) => (
                     context.ptr_type(inkwell::AddressSpace::default()).into(),
@@ -3422,13 +3422,13 @@ fn declare_module_globals<'ctx>(
                 // pointer, null until the first assignment stores a real
                 // `PyIntSetObj` into it, with the separate `initialized`
                 // flag below trapping any read that reaches it first.
-                // D-113 names module scope as one of the places a
+                // D-123 names module scope as one of the places a
                 // `set[int]` value is expected to live, and every one of
                 // this task's own CLI repro programs assigns `x = {...}` at
                 // module scope -- leaving this arm out would turn that
                 // documented, supported form into an internal compiler
                 // panic. No exit-time decref accompanies it (contrast the
-                // `Ty::Str` loop in `compile_to_object`): D-114 keeps
+                // `Ty::Str` loop in `compile_to_object`): D-124 keeps
                 // `set[T]` leak-only for v0.2, extending D-107's exact
                 // reasoning.
                 pycc_mir::Ty::Set(_) => (
@@ -4445,7 +4445,7 @@ fn emit_stmt<'ctx>(
             }
             Ok(())
         }
-        // `d[k] = v` (PR-11 Task 5, D-113): insert-or-update --
+        // `d[k] = v` (PR-11 Task 5, D-123): insert-or-update --
         // `pycc_rt_dict_set` itself decides which, by whether `key`
         // already compares equal to a stored key. `dict` is read by name
         // (mirrors `MirExpr::ListAppend`'s own `list` field), `key` crosses
@@ -4461,7 +4461,7 @@ fn emit_stmt<'ctx>(
             // DictLiteral`'s own per-pair key above, and for the identical
             // reason (see that arm's own comment): `pycc_rt_dict_set`
             // adopts whatever key pointer it is given as `d`'s own
-            // permanent reference without incref'ing it itself (D-114), so
+            // permanent reference without incref'ing it itself (D-124), so
             // a bare-`Name` key (`d[k] = v`) must be incref'd here first,
             // or a later reassignment of `k` would decref -- and
             // potentially free -- the same `PyStrObj` `d` still points to.
@@ -4479,7 +4479,7 @@ fn emit_stmt<'ctx>(
             build_dict_set(builder, rt, dict_ptr, key_ptr, raw);
             Ok(())
         }
-        // `for k in d:` (PR-11 Task 5, D-113): an intentional inline
+        // `for k in d:` (PR-11 Task 5, D-123): an intentional inline
         // duplicate of `MirStmt::ForList`'s own loop-building logic
         // directly above, for the identical "a third consumer, not a
         // second, justifies a shared helper" reason that arm's own comment
@@ -4501,7 +4501,7 @@ fn emit_stmt<'ctx>(
         //    and, unlike every `ForList`/`ForRange` induction target (never
         //    refcounted, D-061), a dict key genuinely is a refcounted
         //    `PyStrObj` that `d` itself still holds a live, non-incref'd
-        //    pointer to (D-114: "`PyDictObj`'s own keys ... are stored
+        //    pointer to (D-124: "`PyDictObj`'s own keys ... are stored
         //    without incref on insert"). Without the `pycc_rt_str_incref`
         //    below, an ordinary body-level reassignment of the loop
         //    variable (`for k in d:\n    k = "z"\n`) would go through
@@ -4518,7 +4518,7 @@ fn emit_stmt<'ctx>(
         //    it entirely -- see `emit_assign` below) only ever brings the
         //    *duplicate* back down, never below `d`'s own copy. The
         //    resulting extra, never-brought-back-down increment on the
-        //    loop's last key is exactly D-114's existing leak-only policy
+        //    loop's last key is exactly D-124's existing leak-only policy
         //    playing out one level lower: an unbalanced incref only makes
         //    an already-permanent leak larger, never a premature free.
         MirStmt::ForDict { var, dict, body } => {
@@ -4619,7 +4619,7 @@ fn emit_stmt<'ctx>(
             builder.position_at_end(after_bb);
             Ok(())
         }
-        // `for x in s:` (PR-11 Task 9, D-113): an intentional inline
+        // `for x in s:` (PR-11 Task 9, D-123): an intentional inline
         // duplicate of `MirStmt::ForList`'s own loop-building logic above,
         // for the identical "a third consumer, not a second, justifies a
         // shared helper" reason that arm's own comment already gives for
@@ -5475,7 +5475,7 @@ fn emit_stmt<'ctx>(
             //    to `ListCompAssign`'s own shared step (see that arm's own
             //    doc comment), substituting `build_int_set_add` for
             //    `build_int_list_append`. `pycc_rt_int_set_add`'s own
-            //    dedup check (D-111) makes a repeated element collapse to
+            //    dedup check (D-121) makes a repeated element collapse to
             //    one, unconditionally, with no extra logic needed here.
             match cond {
                 Some(cond_expr) => {
@@ -5563,7 +5563,7 @@ fn emit_stmt<'ctx>(
         // genuinely new correctness requirement: `incref_if_str_duplicate`
         // on the evaluated `key`, unconditionally, before `build_dict_set`
         // -- exactly mirroring `MirStmt::DictSet`'s own call (see that
-        // arm's own doc comment above, and D-114): `pycc_rt_dict_set` adopts
+        // arm's own doc comment above, and D-124): `pycc_rt_dict_set` adopts
         // whatever key pointer it is given as `new_dict`'s own permanent
         // reference without incref'ing it itself, so a bare-`Name` key
         // (`{k: 1 for k in d}`, `key.ty() == Ty::Str` -- the only shape
@@ -5989,7 +5989,7 @@ mod tests {
         // Superseded by PR-11 Task 5: this test used to assert that a
         // `dict[str, int]` module binding panicked here (mirroring the
         // `None`/`tuple` catch-all tests above) -- that was accurate for
-        // Task 4's own scope, but D-113 names module scope as one of the
+        // Task 4's own scope, but D-123 names module scope as one of the
         // places a `dict[str, int]` value is expected to live, and every
         // one of this task's own CLI repro programs assigns `x = {...}` at
         // module scope. `declare_module_globals` now gives `Ty::Dict(_)` a
@@ -8776,10 +8776,10 @@ mod tests {
     #[should_panic(expected = "pycc_codegen: truthiness of a dict[K, V] value is not supported yet")]
     fn truthiness_of_a_dict_value_panics_honestly() {
         // The `dict[K, V]` counterpart of `truthiness_of_a_list_value_
-        // panics_honestly` above (D-107's reasoning, per D-114): `pycc_types`
+        // panics_honestly` above (D-107's reasoning, per D-124): `pycc_types`
         // accepts any type in a boolean context, so `if x:` for a
         // `dict[str, int]` local type-checks today. v0.2 has no
-        // `bool(dict)` semantics (D-113), so an honest panic naming the gap
+        // `bool(dict)` semantics (D-123), so an honest panic naming the gap
         // is the correct behavior. Calls `truthy` directly with a hand-built
         // `Scalar::Dict`, for the identical reason that test gives.
         let context = Context::create();
@@ -9425,7 +9425,7 @@ mod tests {
     fn dict_set_item_updates_an_existing_key_in_place() {
         // `x = {"a": 1}\nx["a"] = 5\nprint(x["a"])\nprint(len(x))\n` end to
         // end -- real `MirStmt::DictSet` insert-or-update codegen (PR-11
-        // Task 5, D-113), exercising its update-in-place half: `len(x)`
+        // Task 5, D-123), exercising its update-in-place half: `len(x)`
         // staying `1` (not growing to `2`) is exactly what distinguishes
         // an update from an append. Expected output verified against
         // `python3` on this exact source.
@@ -9467,7 +9467,7 @@ mod tests {
     fn dict_set_item_appends_a_new_key() {
         // `x = {"a": 1}\nx["b"] = 2\nprint(len(x))\n` end to end --
         // `MirStmt::DictSet`'s append-a-new-key half (PR-11 Task 5,
-        // D-113): `len(x)` growing to `2` is exactly what distinguishes an
+        // D-123): `len(x)` growing to `2` is exactly what distinguishes an
         // append from an update. Expected output verified against
         // `python3` on this exact source.
         let mir = MirModule {
@@ -9503,10 +9503,10 @@ mod tests {
     #[test]
     fn for_k_in_dict_iterates_keys_in_insertion_order() {
         // `x = {"b": 2, "a": 1}\nfor k in x:\n    print(k)\n` end to end --
-        // real `MirStmt::ForDict` iteration codegen (PR-11 Task 5, D-113).
+        // real `MirStmt::ForDict` iteration codegen (PR-11 Task 5, D-123).
         // "b" printing before "a" (insertion order, not sorted order) is
         // the actual point of this test: `PyDictObj`'s own insertion-order
-        // guarantee (D-111) surviving through `pycc_rt_dict_key_at`.
+        // guarantee (D-121) surviving through `pycc_rt_dict_key_at`.
         // Expected output verified against `python3` on this exact source.
         let mir = MirModule {
             items: vec![
@@ -9633,11 +9633,11 @@ mod tests {
     #[test]
     fn for_x_in_set_iterates_in_first_insertion_order() {
         // `x = {2, 1, 2}\nfor v in x:\n    print(v)\n` end to end -- real
-        // `MirStmt::ForSet` iteration codegen (PR-11 Task 9, D-113). `2`
+        // `MirStmt::ForSet` iteration codegen (PR-11 Task 9, D-123). `2`
         // printing before `1` (first-insertion order, with the second `2`
         // deduped away rather than moving `2`'s position) is the actual
         // point of this test: `PyIntSetObj`'s own insertion-order guarantee
-        // (D-111) surviving through `pycc_rt_int_set_get`.
+        // (D-121) surviving through `pycc_rt_int_set_get`.
         //
         // This is pycc's own internal-consistency check, NOT a conformance
         // fixture against CPython: `python3` on this exact source prints
@@ -9824,10 +9824,10 @@ mod tests {
     #[should_panic(expected = "pycc_codegen: truthiness of a set[T] value is not supported yet")]
     fn truthiness_of_a_set_value_panics_honestly() {
         // The `set[T]` counterpart of `truthiness_of_a_dict_value_panics_
-        // honestly` above (D-107's reasoning, per D-114): `pycc_types`
+        // honestly` above (D-107's reasoning, per D-124): `pycc_types`
         // accepts any type in a boolean context, so `if s:` for a
         // `set[int]` local type-checks today. v0.2 has no `bool(set)`
-        // semantics (D-114), so an honest panic naming the gap is the
+        // semantics (D-124), so an honest panic naming the gap is the
         // correct behavior. Calls `truthy` directly with a hand-built
         // `Scalar::Set`, for the identical reason that test gives.
         let context = Context::create();
@@ -12663,7 +12663,7 @@ mod tests {
         // Regression test for a confirmed use-after-free a pinned-reviewer
         // pass on this task caught: `pycc_rt_dict_set` adopts whatever key
         // pointer it is given as `PyDictObj`'s own permanent reference,
-        // without incref'ing it itself (D-114: "neither increfed on insert
+        // without incref'ing it itself (D-124: "neither increfed on insert
         // nor decrefed ... ever"). `{k: 1}` where `k` is a bare `str`
         // variable is exactly the *duplicate*-reference shape `incref_if_
         // str_duplicate` exists to protect at every other ownership-taking
@@ -12756,7 +12756,7 @@ mod tests {
     /// Builds `MirStmt::ForList { var: "v", list: <list>, body: [print(v)] }`,
     /// the shape every list-comprehension test below uses to read its own
     /// result back out: container `to_str`/`truthy` are unimplemented
-    /// (D-107/D-114), so a comprehension's own produced list cannot be
+    /// (D-107/D-124), so a comprehension's own produced list cannot be
     /// printed directly and must be walked element-by-element instead.
     fn print_each_int(list: &str) -> MirStmt {
         MirStmt::ForList {
@@ -12776,7 +12776,7 @@ mod tests {
     /// `MirStmt::ForSet { var: "v", set: <set>, body: [print(v)] }` -- the
     /// `SetCompAssign` test suite's own analog of `print_each_int` above,
     /// for the identical reason (container `to_str`/`truthy` remain
-    /// unimplemented, D-107/D-114, so a produced `set[int]` cannot be
+    /// unimplemented, D-107/D-124, so a produced `set[int]` cannot be
     /// printed directly and must be walked element-by-element via
     /// `MirStmt::ForSet` instead, whose own insertion-order iteration this
     /// crate's pre-existing `a_return_inside_a_for_set_body_returns_
@@ -13310,7 +13310,7 @@ mod tests {
         // `xs = [1, 2, 2, 3]` then `s = {x for x in xs}` (PR-12 Task 5b,
         // D-117): exercises `MirStmt::SetCompAssign`'s own `List` branch and
         // the `cond: None` unconditional-insert path, and confirms
-        // `pycc_rt_int_set_add`'s own dedup check (D-111) collapses the
+        // `pycc_rt_int_set_add`'s own dedup check (D-121) collapses the
         // repeated `2` to a single entry -- `len(s) == 3`, not `4`.
         let mir = MirModule {
             items: vec![
@@ -13596,19 +13596,19 @@ mod tests {
         // correct and independently readable, and building `d2` leaves `d`'s
         // own contents unaffected -- exactly what this arm's own
         // `incref_if_str_duplicate` call on `key` (mirroring `MirStmt::
-        // DictSet`'s own identical call, D-114) exists to guarantee: `d2`'s
+        // DictSet`'s own identical call, D-124) exists to guarantee: `d2`'s
         // own stored key becomes a genuinely independent reference, not a
         // bare, uncounted alias of `d`'s own key pointer.
         //
         // This is a functional-correctness test, not a use-after-free
         // detector: this compiler's container model keeps `dict[K, V]`
-        // leak-only (D-114) and has no key-removal operation of any kind
+        // leak-only (D-124) and has no key-removal operation of any kind
         // (`del`, `.pop()`, ...) yet, so nothing currently implemented can
         // ever bring a dict's own claim on one of its keys down to zero --
         // the missing incref this test guards against cannot be forced into
         // an observable crash via any currently-reachable pycc-language
         // operation (see this task's own report for the full analysis). The
-        // fix is still required by D-114's ownership contract and is
+        // fix is still required by D-124's ownership contract and is
         // unconditionally applied here, independent of what this one test
         // can currently observe.
         let mir = MirModule {

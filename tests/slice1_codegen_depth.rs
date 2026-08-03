@@ -1032,7 +1032,7 @@ print(f())
 
 #[test]
 fn a_module_level_dict_str_int_literal_supports_len_and_indexed_read() {
-    // The `dict[str, int]` thin slice (D-113) end to end through the real
+    // The `dict[str, int]` thin slice (D-123) end to end through the real
     // `pycc build` CLI: literal construction, `len()`, and indexed read
     // `d[k]`, all in one program, at module scope -- the same scope
     // `a_module_level_list_binding_lives_in_a_global_slot` above covers for
@@ -1051,7 +1051,7 @@ print(x[\"b\"])
 
 #[test]
 fn dict_set_item_updates_an_existing_key_and_appends_a_new_one() {
-    // `d[k] = v`'s own insert-or-update contract (D-113), both halves in
+    // `d[k] = v`'s own insert-or-update contract (D-123), both halves in
     // one program: `x["a"] = 5` updates the existing `"a"` entry in place
     // (`len(x)` stays `1`), then `x["b"] = 2` appends a genuinely new key
     // (`len(x)` grows to `2`). Expected output verified against `python3`
@@ -1071,10 +1071,10 @@ print(len(x))
 
 #[test]
 fn for_k_in_a_module_level_dict_iterates_its_keys_in_insertion_order() {
-    // `for k in d:` (D-113) iterates a dict's keys in insertion order, not
+    // `for k in d:` (D-123) iterates a dict's keys in insertion order, not
     // sorted order -- `"b"` is inserted first even though `"a"` sorts
     // first, so printing `"b"` before `"a"` is the actual property this
-    // test pins (`PyDictObj`'s own D-111 insertion-order guarantee
+    // test pins (`PyDictObj`'s own D-121 insertion-order guarantee
     // surviving through the real CLI, not just `pycc_codegen`'s own
     // hand-built-MIR unit test). Expected output verified against
     // `python3` on this exact source.
@@ -1093,7 +1093,7 @@ fn a_variable_used_as_a_dict_key_survives_a_later_reassignment_of_that_variable(
     // Regression test for a confirmed use-after-free a pinned-reviewer pass
     // on PR-11 Task 5 caught: `PyDictObj` adopts whatever key pointer it is
     // given as its own permanent reference without incref'ing it itself
-    // (D-114), so `d[k] = 1` where `k` is a plain `str` variable used to
+    // (D-124), so `d[k] = 1` where `k` is a plain `str` variable used to
     // silently hand the dict a *duplicate*, non-owned reference to the
     // exact same `PyStrObj` `k`'s own slot holds -- a later `k = "xyz"`
     // then decref'd (and, at refcount 1, freed) that object while `d` still
@@ -1131,7 +1131,7 @@ print(len(d))
 #[test]
 fn growing_a_dict_from_inside_for_k_in_d_iterates_the_newly_added_key_too() {
     // A final whole-branch review flagged a genuinely new, deliberate v0.2
-    // CPython divergence introduced by `ForDict`'s own codegen (D-113): the
+    // CPython divergence introduced by `ForDict`'s own codegen (D-123): the
     // loop bound is `pycc_rt_dict_len`, re-read on every iteration rather
     // than hoisted, so `d[k] = v` inside a `for k in d:` loop body that
     // grows the dict causes the loop to keep going and also visit the
@@ -1140,7 +1140,7 @@ fn growing_a_dict_from_inside_for_k_in_d_iterates_the_newly_added_key_too() {
     // test pins the actual, verified behavior (empirically confirmed by
     // running this exact source through the real `pycc build`/execute
     // pipeline before writing the assertion below) so `docs/DECISIONS.md`'s
-    // D-113 Consequences note and `docs/RUNTIME.md`'s dict line describe
+    // D-123 Consequences note and `docs/RUNTIME.md`'s dict line describe
     // enforced behavior, not an inference from a codegen comment. NOT a
     // conformance fixture against CPython (this is the one documented
     // point where pycc and CPython deliberately disagree).
@@ -1158,9 +1158,9 @@ print(len(d))
 
 #[test]
 fn a_module_level_set_int_literal_dedupes_and_supports_len() {
-    // The `set[int]` thin slice (D-113) end to end through the real `pycc
+    // The `set[int]` thin slice (D-123) end to end through the real `pycc
     // build` CLI: literal construction (with `PyIntSetObj`'s own dedup on
-    // repeated elements, D-111) and `len()`, mirroring the dict coverage
+    // repeated elements, D-121) and `len()`, mirroring the dict coverage
     // above (`a_module_level_dict_str_int_literal_supports_len_and_indexed_
     // read`) -- until this test, `set[int]` had zero non-`#[ignore]`d
     // end-to-end CLI coverage; the only prior coverage exercising this
@@ -1181,14 +1181,14 @@ print(len(x))
 
 #[test]
 fn for_v_in_a_module_level_set_iterates_in_first_insertion_order() {
-    // `for v in x:` over a module-level `set[int]` (D-113) end to end
+    // `for v in x:` over a module-level `set[int]` (D-123) end to end
     // through the real `pycc build` CLI, with a duplicate element in the
     // literal -- mirrors the dict iteration-order coverage above
     // (`for_k_in_a_module_level_dict_iterates_its_keys_in_insertion_
     // order`) and pins the same property one layer down that
     // `pycc_codegen`'s own hand-built-MIR unit test
     // (`for_x_in_set_iterates_in_first_insertion_order`) already covers:
-    // `PyIntSetObj`'s first-insertion iteration order (D-111) surviving
+    // `PyIntSetObj`'s first-insertion iteration order (D-121) surviving
     // through the full CLI pipeline, not just direct MIR-to-object
     // codegen. `2` printing before `1` (with the second `2` deduped away
     // rather than moving `2`'s position) is pycc's own documented,

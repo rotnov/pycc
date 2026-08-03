@@ -319,7 +319,7 @@ fn dict_order_matches_cpython_3_14_6_byte_for_byte() {
 }
 
 // `set[int]`'s own iteration order is this implementation's insertion order,
-// which does not match CPython's hash-dependent set iteration order (D-113) --
+// which does not match CPython's hash-dependent set iteration order (D-123) --
 // so, unlike every other fixture in this file, this one intentionally prints
 // only an order-independent value (`len()` of a literal with a duplicate
 // element) rather than iterating the set. It exists to give the PEP 585
@@ -396,7 +396,7 @@ fn pep_0709_comp_inline_matches_cpython_3_14_6_byte_for_byte() {
 // comprehension, a `range()`-sourced set comprehension with an `if` filter)
 // not already covered by `pep_0709_comp_inline.py` above. Every value is
 // printed element-wise or via `len()`, never a container value directly
-// (`print(xs)` panics today, D-107/D-114/D-116).
+// (`print(xs)` panics today, D-107/D-124/D-116).
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
 fn container_methods_slicing_matches_cpython_3_14_6_byte_for_byte() {

@@ -326,7 +326,7 @@ pub enum MirStmt {
         list: String,
         body: Vec<MirStmt>,
     },
-    /// `d[k] = v` (mirrors `HirStmt::DictSet`, PR-11 Task 4/D-113). `dict` is
+    /// `d[k] = v` (mirrors `HirStmt::DictSet`, PR-11 Task 4/D-123). `dict` is
     /// carried as the plain variable name, exactly like `ForList`'s `list`
     /// field and `ListAppend`'s `list` field -- there is no sub-expression to
     /// recursively lower for it, only for `key`/`value`.
@@ -348,7 +348,7 @@ pub enum MirStmt {
     /// `for var in set:` (mirrors `HirStmt::ForList` on a set-typed base --
     /// see `lower_stmt`'s own `HirStmt::ForList` arm for why a set-typed
     /// base is lowered to this node instead of `MirStmt::ForList`, PR-11
-    /// Task 8, D-113). `set` is carried as the plain variable name, exactly
+    /// Task 8, D-123). `set` is carried as the plain variable name, exactly
     /// like `ForList`'s `list` field and `ForDict`'s `dict` field.
     ForSet {
         var: String,
@@ -713,7 +713,7 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
                         body,
                     }
                 }
-                // `for x in s:` (PR-11 Task 8, D-113): iterates a set's own
+                // `for x in s:` (PR-11 Task 8, D-123): iterates a set's own
                 // elements, binding the loop variable as the set's element
                 // type -- mirrors the `Ty::Dict` arm immediately above,
                 // which mirrors `pycc_types::check_stmt`'s own identical

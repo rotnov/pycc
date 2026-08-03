@@ -123,7 +123,7 @@ pub enum HirExpr {
     /// `base[index]`, a read (Load position). `Stmt::Assign`'s own target
     /// handling below special-cases an `Expr::Subscript` target on a bare
     /// name into a dedicated `HirStmt::DictSet` node instead of ever
-    /// constructing this variant for it (PR-11 Task 3, D-113 -- `list[int]`
+    /// constructing this variant for it (PR-11 Task 3, D-123 -- `list[int]`
     /// itself is still read-only-indexed, D-105, but that is now
     /// `pycc_types`' judgment on `HirStmt::DictSet`'s base type, not a
     /// structural HIR-shape restriction), and every other assignment/for
@@ -331,7 +331,7 @@ pub enum HirStmt {
     /// `for var in list:`, parallel to the existing `ForRange` -- desugars
     /// to an index-counted loop starting in a later PR-10 task (D-105),
     /// not here. Also reused, unconditionally, for `for k in <bare-name
-    /// dict>:` (PR-11 Task 3, D-113: iterates keys in insertion order) --
+    /// dict>:` (PR-11 Task 3, D-123: iterates keys in insertion order) --
     /// this lowering step has no type information to distinguish a
     /// `list`-typed iterable from a `dict`-typed one, so `pycc_types`'
     /// own `ForList` arms resolve `list`'s real type to `Ty::List`,
@@ -341,7 +341,7 @@ pub enum HirStmt {
         list: String,
         body: Vec<HirStmt>,
     },
-    /// `<bare name>[key] = value`, PR-11 Task 3 (D-113 supersedes D-105's
+    /// `<bare name>[key] = value`, PR-11 Task 3 (D-123 supersedes D-105's
     /// "no subscript assignment target anywhere in this file" consequence
     /// for `list[int]`; see `Stmt::Assign`'s own lowering arm below). `dict`
     /// is carried as a plain variable name, exactly like `ForList`'s `list`
@@ -599,7 +599,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                         value: lower_expr(&assign.value)?,
                     },
                 },
-                // `<bare name>[key] = value`, PR-11 Task 3 (D-113): unlike
+                // `<bare name>[key] = value`, PR-11 Task 3 (D-123): unlike
                 // `list[int]`'s own read-only-indexing consequence (D-105),
                 // `dict[str, int]` ships `d[k] = v`. This lowering step has
                 // no type information (mirroring `ForList`'s own bare-name
@@ -702,7 +702,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                 ));
             };
             // A bare-name iterable is `for v in some_list:` (D-105) or
-            // `for k in some_dict:` (PR-11 Task 3, D-113) -- resolved to
+            // `for k in some_dict:` (PR-11 Task 3, D-123) -- resolved to
             // `Ty::List`, `Ty::Dict`, or rejected by pycc_types, not here;
             // HIR only records the syntactic shape.
             if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
@@ -1796,7 +1796,7 @@ mod tests {
 
     #[test]
     fn subscript_assignment_to_a_bare_name_base_lowers_to_dict_set() {
-        // PR-11 Task 3 (D-113) supersedes D-105's "no subscript assignment
+        // PR-11 Task 3 (D-123) supersedes D-105's "no subscript assignment
         // target anywhere in this file" invariant this test used to lock in
         // (`list[int]` alone stayed read-only-indexed; `dict[str, int]`
         // ships `d[k] = v`). This lowering step has no type information (the
@@ -2713,7 +2713,7 @@ mod tests {
         );
     }
 
-    // -- PR-11 Task 3 (D-113): dict[str, int] frontend HIR forms ---------
+    // -- PR-11 Task 3 (D-123): dict[str, int] frontend HIR forms ---------
 
     #[test]
     fn lowers_a_dict_literal() {
@@ -2783,7 +2783,7 @@ mod tests {
         );
     }
 
-    // -- PR-11 Task 7 (D-113): set[int] frontend HIR forms ---------------
+    // -- PR-11 Task 7 (D-123): set[int] frontend HIR forms ---------------
 
     #[test]
     fn lowers_a_set_literal() {

@@ -1399,14 +1399,14 @@ pub unsafe extern "C" fn pycc_rt_int_list_pop(list: *mut PyIntListObj) -> i64 {
     int_list_pop(unsafe { &*list })
 }
 
-/// `dict[str, int]`'s runtime representation (D-111): a dense,
+/// `dict[str, int]`'s runtime representation (D-121): a dense,
 /// insertion-ordered array of `(key, value)` pairs. `Cell<Vec<...>>`
 /// mirrors `PyIntListObj`'s own choice over `RefCell` -- `Cell::take`/
 /// `_::set` never holds a borrow across a mutation, so there is no new
 /// runtime-panic mode from overlapping borrows. Not `#[repr(C)]` -- never
 /// crosses the LLVM/Rust boundary by value, only as an opaque pointer
 /// (mirrors `PyStrObj`/`PyIntListObj`). Lookup is linear-scan comparison
-/// via `pycc_rt_str_cmp` (D-111), not a hash table.
+/// via `pycc_rt_str_cmp` (D-121), not a hash table.
 pub struct PyDictObj {
     rc: Cell<u32>,
     entries: Cell<Vec<(*mut PyStrObj, i64)>>,
@@ -1421,10 +1421,10 @@ pub extern "C" fn pycc_rt_dict_new() -> *mut PyDictObj {
     }))
 }
 
-/// Insert-or-update (D-113): if `key` compares equal (`pycc_rt_str_cmp`)
+/// Insert-or-update (D-123): if `key` compares equal (`pycc_rt_str_cmp`)
 /// to an already-stored key, that entry's value is overwritten in place,
 /// preserving insertion order; otherwise `(key, value)` is appended.
-/// Leak-only (D-114): the stored key pointer is neither increfed on
+/// Leak-only (D-124): the stored key pointer is neither increfed on
 /// insert nor decrefed on update-in-place or ever.
 ///
 /// # Safety
@@ -1453,7 +1453,7 @@ fn dict_get(dict: &PyDictObj, key: *mut PyStrObj) -> i64 {
     found.unwrap_or_else(|| panic!("pycc_rt: dict key not found"))
 }
 
-/// Linear-scan lookup (D-111). Panics if no stored key compares equal to
+/// Linear-scan lookup (D-121). Panics if no stored key compares equal to
 /// `key` -- this compiler has no `KeyError` handling, so a missing key is
 /// an honest panic rather than a silently wrong value. The panic message
 /// is `"pycc_rt: dict key not found"`.
@@ -1550,7 +1550,7 @@ pub unsafe extern "C" fn pycc_rt_dict_key_at(dict: *mut PyDictObj, index: i64) -
     dict_key_at(unsafe { &*dict }, index)
 }
 
-/// Unconditional refcounting (D-114), mirroring `pycc_rt_int_list_incref`
+/// Unconditional refcounting (D-124), mirroring `pycc_rt_int_list_incref`
 /// exactly. No-op on null.
 ///
 /// # Safety
@@ -1566,7 +1566,7 @@ pub unsafe extern "C" fn pycc_rt_dict_incref(dict: *mut PyDictObj) {
 
 /// Mirrors `pycc_rt_int_list_decref` exactly: frees via `Box::from_raw`
 /// once `rc` hits 0. Not called from any `pycc_codegen` site in this PR
-/// (D-114, leak-only).
+/// (D-124, leak-only).
 ///
 /// # Safety
 /// `dict` must be null or a live `PyDictObj` pointer not used again after
@@ -1584,9 +1584,9 @@ pub unsafe extern "C" fn pycc_rt_dict_decref(dict: *mut PyDictObj) {
     }
 }
 
-/// `set[int]`'s runtime representation (D-111): structurally identical to
+/// `set[int]`'s runtime representation (D-121): structurally identical to
 /// `PyIntListObj` (a dense array of raw untagged `i64`), but insertion goes
-/// through `pycc_rt_int_set_add`'s own dedup check (linear scan, D-111)
+/// through `pycc_rt_int_set_add`'s own dedup check (linear scan, D-121)
 /// instead of `PyIntListObj`'s unconditional append -- this is the one
 /// behavioral difference and the reason this is its own distinct type
 /// rather than a reuse of `PyIntListObj` (mirrors the same reasoning
@@ -1607,7 +1607,7 @@ pub extern "C" fn pycc_rt_int_set_new() -> *mut PyIntSetObj {
     }))
 }
 
-/// Dedup-checked insert (D-111): linear-scan for an already-present equal
+/// Dedup-checked insert (D-121): linear-scan for an already-present equal
 /// value; appends only if absent, preserving first-insertion order.
 ///
 /// # Safety

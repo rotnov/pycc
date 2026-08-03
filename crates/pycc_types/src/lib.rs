@@ -377,9 +377,9 @@ fn collect_expr_constraints(
                 // collection (union-find resolution hasn't run yet); an
                 // unresolved argument is left to the real check pass
                 // (`infer_expr_in`) below, matching this solver's existing
-                // lenient-until-known pattern. PR-11 Task 3 (D-113) relaxed
+                // lenient-until-known pattern. PR-11 Task 3 (D-123) relaxed
                 // the argument-type check below to also accept `Ty::Dict`;
-                // PR-11 Task 7 (D-113) relaxes it once more to also accept
+                // PR-11 Task 7 (D-123) relaxes it once more to also accept
                 // `Ty::Set`.
                 if arg_terms.len() != 1 {
                     return Err(Diagnostic::error(
@@ -756,7 +756,7 @@ fn collect_block_constraints(
                     )?;
                 }
             }
-            // PR-11 Task 3 (D-113): `dict`'s own type isn't tracked by this
+            // PR-11 Task 3 (D-123): `dict`'s own type isn't tracked by this
             // solver either (same reasoning as `ForList`'s `list` field
             // above) -- recurse into `key`/`value` only to keep propagating
             // genuine errors; real item-assignment type-checking is
@@ -1213,9 +1213,9 @@ fn infer_expr_in(
                 // both failure shapes (wrong arity, non-list argument) --
                 // the same "value does not support list operations" shape
                 // already established for `ForList`/`Subscript`/`ListAppend`.
-                // PR-11 Task 3 (D-113): also accepts `Ty::Dict` (gated the
+                // PR-11 Task 3 (D-123): also accepts `Ty::Dict` (gated the
                 // same way by `T0036`), so `len(d)` type-checks too. PR-11
-                // Task 7 (D-113): also accepts `Ty::Set` (gated the same way
+                // Task 7 (D-123): also accepts `Ty::Set` (gated the same way
                 // by `T0038`), so `len(s)` type-checks too.
                 if arg_tys.len() != 1 {
                     return Err(Diagnostic::error(
@@ -1328,10 +1328,10 @@ fn infer_expr_in(
             }
             Ok(Ty::List(Box::new(elem_ty)))
         }
-        // PR-11 Task 3 (D-113): mirrors `ListLiteral`'s own homogeneity
+        // PR-11 Task 3 (D-123): mirrors `ListLiteral`'s own homogeneity
         // check above, extended to a key/value pair, plus a `dict[str,
         // int]`-only gate mirroring `ListLiteral`'s own `T0034` gate
-        // (D-112: "exactly one combination gets real codegen").
+        // (D-122: "exactly one combination gets real codegen").
         HirExpr::DictLiteral(pairs) => {
             let Some((first_key, first_value)) = pairs.first() else {
                 return Err(Diagnostic::error(
@@ -1367,7 +1367,7 @@ fn infer_expr_in(
                 return Err(Diagnostic::error(
                     "T0036",
                     format!(
-                        "{} is not compiled yet (D-112) -- only dict[str, int] is",
+                        "{} is not compiled yet (D-122) -- only dict[str, int] is",
                         dict_ty.name()
                     ),
                     Span::new(0, 0),
@@ -1375,10 +1375,10 @@ fn infer_expr_in(
             }
             Ok(dict_ty)
         }
-        // PR-11 Task 7 (D-113): mirrors `ListLiteral`'s own homogeneity
+        // PR-11 Task 7 (D-123): mirrors `ListLiteral`'s own homogeneity
         // check above, for a single-element-type container (no key/value
         // pair), plus a `set[int]`-only gate mirroring `ListLiteral`'s own
-        // `T0034` gate (D-112: "exactly one combination gets real codegen").
+        // `T0034` gate (D-122: "exactly one combination gets real codegen").
         // Unlike `DictLiteral` above, the empty-literal branch below is
         // unreachable from any real Python source: `{}` always parses as an
         // empty *dict* (Python has no empty-set literal spelling at all --
@@ -1416,7 +1416,7 @@ fn infer_expr_in(
                 return Err(Diagnostic::error(
                     "T0038",
                     format!(
-                        "{} is not compiled yet (D-112) -- only set[int] is",
+                        "{} is not compiled yet (D-122) -- only set[int] is",
                         set_ty.name()
                     ),
                     Span::new(0, 0),
@@ -1484,7 +1484,7 @@ fn infer_expr_in(
                     }
                     Ok(*elem_ty)
                 }
-                // PR-11 Task 3 (D-113): `d[k]` read. Uses exact `Ty`
+                // PR-11 Task 3 (D-123): `d[k]` read. Uses exact `Ty`
                 // equality on the key, not `is_assignable` -- every
                 // `Ty::Dict` value that survives `DictLiteral`'s own
                 // `T0036` gate above has key type exactly `Ty::Str` (no
@@ -1540,7 +1540,7 @@ fn infer_expr_in(
                     };
                     Ok(elem_ty.clone())
                 }
-                // PR-11 Task 7 (D-113): `Ty::Set` deliberately has no
+                // PR-11 Task 7 (D-123): `Ty::Set` deliberately has no
                 // explicit arm here and falls through to this rejection --
                 // real Python sets are not subscriptable either (`s[0]`
                 // raises `TypeError` in CPython too), so this is not a v0.2
@@ -1964,17 +1964,17 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             // empty `local_names` slice too, so an unresolved `list` is
             // simply "not defined," never `unbound_local`.
             let list_ty = lookup_bound_name(env, &[], list)?;
-            // PR-11 Task 3 (D-113): `for k in d:` iterates a dict's own keys
+            // PR-11 Task 3 (D-123): `for k in d:` iterates a dict's own keys
             // in insertion order, mirroring `len()`'s own relaxation to
             // accept `Ty::Dict` alongside `Ty::List` at this crate's other
             // hand-recognized dispatch points. `HirStmt::ForList` itself is
             // reused unconditionally for any bare-name iterable, dict or
             // list alike (`pycc_hir`'s own lowering has no type information
             // to pick a different node) -- this is the point where the real
-            // type is resolved. PR-11 Task 7 (D-113): `for x in s:` iterates
+            // type is resolved. PR-11 Task 7 (D-123): `for x in s:` iterates
             // a set's own elements (order is this implementation's own
             // insertion order, not a CPython-matching guarantee -- see
-            // D-113's own iteration-order caveat), so `Ty::Set` is accepted
+            // D-123's own iteration-order caveat), so `Ty::Set` is accepted
             // here too, binding the loop variable as the set's element type.
             let var_ty = match list_ty {
                 Ty::List(elem_ty) => *elem_ty,
@@ -2004,7 +2004,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
         // a reference to the loop variable inside either sub-expression
         // resolves correctly. The produced element type is gated to
         // `Ty::Int` -- identical rule to `ListLiteral`'s own `T0034` gate
-        // (D-105/D-112), just reached via a new code path (D-119); no new
+        // (D-105/D-122), just reached via a new code path (D-119); no new
         // diagnostic code is minted.
         HirStmt::ListCompAssign {
             target,
@@ -2101,7 +2101,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
     }
 }
 
-/// `d[k] = v` (PR-11 Task 3, D-113): insert-or-update. Shared between
+/// `d[k] = v` (PR-11 Task 3, D-123): insert-or-update. Shared between
 /// module (`check_stmt`, `local_names = &[]`) and function-body
 /// (`check_stmt_in_function`) scope, mirroring how `check_range_operand`/
 /// `check_range_operand_in` are already split for `ForRange`. Reuses
@@ -2315,8 +2315,8 @@ fn check_stmt_in_function(
         HirStmt::ForList { var, list, body } => {
             let list_ty = lookup_bound_name(env, local_names, list)?;
             // See the module-scope `check_stmt` arm's own comment (PR-11
-            // Task 3, D-113): `for k in d:` iterates a dict's keys. PR-11
-            // Task 7 (D-113): `for x in s:` iterates a set's elements.
+            // Task 3, D-123): `for k in d:` iterates a dict's keys. PR-11
+            // Task 7 (D-123): `for x in s:` iterates a set's elements.
             let var_ty = match list_ty {
                 Ty::List(elem_ty) => *elem_ty,
                 Ty::Dict(kv) => kv.0,
@@ -4815,7 +4815,7 @@ mod tests {
 
     #[test]
     fn a_for_dict_loop_binds_its_variable_as_the_key_type() {
-        // PR-11 Task 3 (D-113): `for k in d:` iterates a dict's own keys, so
+        // PR-11 Task 3 (D-123): `for k in d:` iterates a dict's own keys, so
         // `var` binds as the dict's key type (`Ty::Str`), not its value type.
         let mut env = Environment::new();
         env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
@@ -4830,7 +4830,7 @@ mod tests {
 
     #[test]
     fn a_for_set_loop_binds_its_variable_as_the_element_type() {
-        // PR-11 Task 7 (D-113): `for x in s:` iterates a set's own elements,
+        // PR-11 Task 7 (D-123): `for x in s:` iterates a set's own elements,
         // so `var` binds as the set's element type (`Ty::Int` for
         // `set[int]`).
         let mut env = Environment::new();
@@ -5143,7 +5143,7 @@ mod tests {
     fn a_dict_comprehension_over_a_bare_dict_name_type_checks_and_binds_target_as_dict_str_int() {
         // Exercises `resolve_comp_iter`'s `CompIter::Name` branch resolving
         // to `Ty::Dict`, binding `var` as the dict's *key* type (mirroring
-        // `ForList`'s own `for k in d:` behavior, D-113).
+        // `ForList`'s own `for k in d:` behavior, D-123).
         let mut env = Environment::new();
         env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
         let stmt = HirStmt::DictCompAssign {
@@ -6790,7 +6790,7 @@ mod tests {
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
     }
 
-    // -- PR-11 Task 3 (D-113): dict[str, int] type-checking --------------
+    // -- PR-11 Task 3 (D-123): dict[str, int] type-checking --------------
 
     #[test]
     fn an_empty_dict_literal_cannot_be_inferred() {
@@ -6872,7 +6872,7 @@ mod tests {
         assert_eq!(err.code, "T0036");
         assert_eq!(
             err.message,
-            "dict[str, str] is not compiled yet (D-112) -- only dict[str, int] is"
+            "dict[str, str] is not compiled yet (D-122) -- only dict[str, int] is"
         );
     }
 
@@ -8163,7 +8163,7 @@ mod tests {
 
     #[test]
     fn a_dict_set_item_on_a_list_value_is_still_t0033() {
-        // D-113 supersedes D-105's "no subscript assignment target anywhere
+        // D-123 supersedes D-105's "no subscript assignment target anywhere
         // in this file" HIR-level invariant (see `pycc_hir`'s own
         // `subscript_assignment_to_a_bare_name_base_lowers_to_dict_set`
         // test), but `list[int]` itself is still read-only-indexed -- this
@@ -8270,7 +8270,7 @@ mod tests {
         assert!(err.message.contains("is not bound before this use"));
     }
 
-    // -- PR-11 Task 7 (D-113): set[int] type-checking ---------------------
+    // -- PR-11 Task 7 (D-123): set[int] type-checking ---------------------
 
     #[test]
     fn an_empty_set_literal_cannot_be_inferred() {
@@ -8321,7 +8321,7 @@ mod tests {
         assert_eq!(err.code, "T0038");
         assert_eq!(
             err.message,
-            "set[str] is not compiled yet (D-112) -- only set[int] is"
+            "set[str] is not compiled yet (D-122) -- only set[int] is"
         );
         assert!(err.message.contains("set[str]"));
     }
@@ -8375,7 +8375,7 @@ mod tests {
 
     #[test]
     fn indexing_a_set_reports_t0033() {
-        // Mirrors real CPython: sets are not subscriptable either (D-113) --
+        // Mirrors real CPython: sets are not subscriptable either (D-123) --
         // no explicit `Ty::Set` arm exists in `Subscript`'s own match, and
         // the generic `other` fallthrough already covers it.
         let mut env = Environment::new();
@@ -10459,7 +10459,7 @@ mod tests {
 
     #[test]
     fn a_for_dict_loop_binds_its_variable_as_the_key_type_in_a_function_body() {
-        // Mirrors the list-shaped test above (PR-11 Task 3, D-113): `for k in
+        // Mirrors the list-shaped test above (PR-11 Task 3, D-123): `for k in
         // d:` binds `k` as the dict's key type, not its value type.
         let mut env = Environment::new();
         env.bind("d".to_string(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
@@ -10478,7 +10478,7 @@ mod tests {
 
     #[test]
     fn a_for_set_loop_binds_its_variable_as_the_element_type_in_a_function_body() {
-        // Mirrors the dict-shaped test above (PR-11 Task 7, D-113): `for x in
+        // Mirrors the dict-shaped test above (PR-11 Task 7, D-123): `for x in
         // s:` binds `x` as the set's element type.
         let mut env = Environment::new();
         env.bind("s".to_string(), Ty::Set(Box::new(Ty::Int)));
