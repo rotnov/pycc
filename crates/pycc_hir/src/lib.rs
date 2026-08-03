@@ -177,14 +177,11 @@ pub enum HirExpr {
     /// which locks in today's actual behavior). `pycc_types` doesn't reject
     /// it either -- it type-checks `y = x.append(2)` as binding `y: None`,
     /// same as any other `None`-typed value. `print(x.append(1))` runs and
-    /// prints `None`, matching CPython. Only `y = x.append(2)`'s
-    /// assignment path currently surfaces a problem, and even that is not
-    /// a rejection: `pycc_codegen`'s `collect_stmt_bindings` has no
-    /// `Ty::None` arm, so it hits the same internal-error panic
-    /// ("every assignment target must have a predeclared storage slot")
-    /// already accepted for `y = f()` on a `None`-returning `f` (D-072) --
-    /// a pre-existing gap this variant newly reaches, tracked as its own
-    /// issue rather than fixed here.
+    /// prints `None`, matching CPython. D-131 also gives
+    /// `y = x.append(2)` ordinary canonical `None` assignment storage, so
+    /// both the side effect and the stored unit value are preserved. D-072
+    /// remains narrower: it rejects using `print()` itself as a nested
+    /// expression, not materializable `None` results such as `.append()`.
     ListAppend {
         list: String,
         value: Box<HirExpr>,
@@ -266,11 +263,11 @@ pub enum HirExpr {
         key: Box<HirExpr>,
         default: Box<HirExpr>,
     },
-    /// `set.add(value)` (PR-12, D-119): mirrors `ListAppend`'s shape and its
-    /// `None`-producing/value-position quirk exactly (see `ListAppend`'s own
-    /// doc comment above -- `y = s.add(1)` reaches the same
-    /// `collect_stmt_bindings` `Ty::None`-binding gap `ListAppend` already
-    /// does, not a new one) -- dedups on insert, exactly like set-literal
+    /// `set.add(value)` (PR-12, D-119): mirrors `ListAppend`'s shape and
+    /// `None`-producing behavior exactly. D-131 gives `y = s.add(1)` the
+    /// same canonical `None` assignment storage as `.append()`; D-072's
+    /// remaining nested-expression rejection is specific to `print()`'s
+    /// own result. Insertion deduplicates exactly like set-literal
     /// construction already does (`pycc_rt_int_set_add`, already shipped by
     /// PR-11a), from a second, user-facing call site added by a later task.
     SetAdd {
@@ -3056,7 +3053,8 @@ mod tests {
     #[test]
     fn set_add_used_as_a_value_lowers_successfully_today() {
         // Mirrors `ListAppend`'s own "today's actual behavior" test exactly
-        // -- `.add()`'s value is always `None`, same D-072 gap as `.append()`.
+        // -- `.add()`'s value is always `None`, and D-131 lets an assignment
+        // preserve that materialized unit value in ordinary storage.
         let module = pycc_parser_test_helper::parse("s = {1}\ny = s.add(2)\n");
         let hir = lower_checked(&module).unwrap();
         assert_eq!(

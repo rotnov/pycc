@@ -784,6 +784,62 @@ print(_total())
 }
 
 #[test]
+fn none_typed_list_append_result_from_issue_242_matches_cpython() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/regress/issue_242.py");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", fixture.display()));
+    let output = build_and_run("issue_242_none_local", &source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"None\n");
+}
+
+#[test]
+fn none_typed_module_global_list_append_result_is_storable() {
+    let source = "\
+xs = [1]
+result = xs.append(2)
+print(result)
+print(len(xs))
+";
+    let output = build_and_run("none_typed_module_global", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"None\n2\n");
+}
+
+#[test]
+fn none_typed_set_add_result_is_storable() {
+    let source = "\
+def _run() -> None:
+    values = {1}
+    result = values.add(2)
+    print(result)
+    print(len(values))
+
+_run()
+";
+    let output = build_and_run("none_typed_set_add_result", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"None\n2\n");
+}
+
+#[test]
+fn none_global_read_before_assignment_traps() {
+    let source = "\
+def _show() -> None:
+    print(result)
+
+_show()
+values = [1]
+result = values.append(2)
+";
+    let output = build_and_run("none_global_read_before_assignment", source);
+    assert!(
+        !output.status.success(),
+        "a zero-initialized None carrier must not look assigned before its statement runs"
+    );
+}
+
+#[test]
 fn reading_a_list_global_before_it_is_assigned_traps_instead_of_dereferencing_null() {
     // A `list[int]` module global's storage starts as a null pointer, the
     // same as a `str` global's (see

@@ -507,8 +507,8 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         pycc_mir::Ty::Str => context.ptr_type(inkwell::AddressSpace::default()).into(),
         // LLVM `void` cannot be a parameter type. v0.1 therefore carries
         // Python's singleton unit value across user-function parameter and
-        // local-storage boundaries as the canonical `i8 0`; a `None` return
-        // is still emitted as LLVM `void` by `compile_to_object`.
+        // assignment-storage boundaries as the canonical `i8 0`; a `None`
+        // return is still emitted as LLVM `void` by `compile_to_object`.
         pycc_mir::Ty::None => context.i8_type().into(),
         // `list[T]`'s runtime object (Task 11) is heap-allocated and always
         // referenced by pointer -- exactly the same storage/parameter
@@ -3181,13 +3181,15 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
             // `storage_slot_at_entry`) depends on this slot already
             // existing, and `x = (1, 2)` is exactly the form D-116 ships.
             // Each is a real, deliberate inclusion, not just a louder panic
-            // elsewhere. Only `Ty::None`/`Ty::Infer` remain excluded.
+            // elsewhere. `Ty::None` is also storable via D-075's canonical
+            // unit carrier; only `Ty::Infer` remains excluded.
             if matches!(
                 ty,
                 pycc_mir::Ty::Int
                     | pycc_mir::Ty::Bool
                     | pycc_mir::Ty::Float
                     | pycc_mir::Ty::Str
+                    | pycc_mir::Ty::None
                     | pycc_mir::Ty::List(_)
                     | pycc_mir::Ty::Dict(_)
                     | pycc_mir::Ty::Set(_)
@@ -3392,6 +3394,15 @@ fn declare_module_globals<'ctx>(
                     tag_smallint_const(context, 0).into(),
                 ),
                 pycc_mir::Ty::Bool => (
+                    context.i8_type().into(),
+                    context.i8_type().const_zero().into(),
+                ),
+                // D-075's canonical unit carrier extends to ordinary
+                // assignment storage: `None` has no payload, so an `i8 0`
+                // is sufficient. The separate `initialized` flag created
+                // below, not this zero initializer, distinguishes a binding
+                // whose assignment has executed from an uninitialized one.
+                pycc_mir::Ty::None => (
                     context.i8_type().into(),
                     context.i8_type().const_zero().into(),
                 ),
@@ -4007,10 +4018,12 @@ fn emit_print_arg<'ctx>(
 
 /// Handles every `MirStmt` shape (this match is exhaustive over
 /// `MirStmt`, no catch-all arm): a `print()` call of any number of
-/// `int`/`float`/`bool`/`str` arguments plus `None` from either a direct
-/// user-function result or a D-075 parameter value (Task 10, space-separated,
-/// one trailing newline, matching CPython's `print(*args)`; D-072 still
-/// excludes using `print()` itself as a nested expression), any
+/// `int`/`float`/`bool`/`str` arguments plus any supported materializable
+/// non-`print()` `None` expression, including direct user-function,
+/// `ListAppend`, and `SetAdd` results, a D-075 parameter, or ordinary
+/// assignment storage (space-separated, one trailing newline, matching
+/// CPython's `print(*args)`; D-072 still excludes using `print()` itself as a
+/// nested expression), any
 /// other bare expression statement (a user-function call with any number of
 /// arguments included -- see `emit_expr`'s `Call` arm, which this now
 /// delegates to uniformly instead of special-casing zero-arg calls here), a
@@ -4440,8 +4453,9 @@ fn emit_stmt<'ctx>(
                     let scalar =
                         coerce_scalar_to_type(context, builder, scalar, expected_return_ty.clone());
                     if expected_return_ty == pycc_mir::Ty::None {
-                        // `None` parameters and call results use a canonical
-                        // `i8 0` carrier inside expressions, but a function
+                        // `None` parameters, call results, and stored names
+                        // use a canonical `i8 0` carrier inside expressions,
+                        // but a function
                         // declared to return `None` has an LLVM `void`
                         // signature. Evaluating above preserves any call or
                         // name-load side effects; the carrier itself is
@@ -6023,8 +6037,8 @@ mod tests {
     /// `print(<n>)` as a `MirStmt` -- a convenience single-int-argument
     /// shape reused by many of this file's older tests (`emit_stmt`'s
     /// `print` dispatch itself now handles any number of arguments of any
-    /// v0.1 scalar type, plus `None` from direct user-function results and
-    /// D-075 parameter values; see its own doc comment, Task 10).
+    /// v0.1 scalar type, plus `None` from direct user-function results,
+    /// D-075 parameter values, and assignment storage; see its own doc comment).
     fn call_print(n: i64) -> MirStmt {
         MirStmt::ExprStmt(MirExpr::Call {
             callee: "print".to_string(),
@@ -6043,11 +6057,34 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a `None`-typed module binding is not supported yet")]
-    fn a_none_typed_module_binding_has_no_storage_representation() {
+    fn a_none_typed_module_binding_gets_a_zero_unit_global_slot() {
         let context = Context::create();
-        let module = context.create_module("unsupported_global");
+        let module = context.create_module("none_global");
         let bindings = BTreeMap::from([("x".to_string(), Ty::None)]);
+        let globals = declare_module_globals(&context, &module, &bindings);
+        let slot = globals
+            .get("x")
+            .expect("declare_module_globals should bind `x`");
+        assert_eq!(slot.ty, Ty::None);
+        assert!(
+            slot.initialized.is_some(),
+            "zero is the None carrier, not proof that the binding was assigned"
+        );
+        let initializer = module
+            .get_global("pyglobal_x")
+            .expect("the global is named pyglobal_<name>")
+            .get_initializer()
+            .expect("declare_module_globals always sets an initializer")
+            .into_int_value();
+        assert_eq!(initializer.get_zero_extended_constant(), Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "a `<inferred>`-typed module binding is not supported yet")]
+    fn an_infer_typed_module_binding_remains_an_internal_error() {
+        let context = Context::create();
+        let module = context.create_module("infer_global");
+        let bindings = BTreeMap::from([("x".to_string(), Ty::Infer)]);
         let _ = declare_module_globals(&context, &module, &bindings);
     }
 
@@ -8426,13 +8463,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "every assignment target must have a predeclared storage slot")]
-    fn a_none_typed_call_result_cannot_be_stored_as_a_general_value() {
-        // D-072 leaves general `None` storage outside v0.1. `emit_expr`
-        // preserves the call side effect with an internal placeholder, but
-        // binding collection deliberately creates no slot for `Ty::None`;
-        // the assignment invariant must therefore fail loudly instead of
-        // silently materializing a bool local.
+    fn a_none_typed_call_result_can_be_stored_and_printed() {
         let mir = MirModule {
             items: vec![
                 MirItem::Function {
@@ -8441,19 +8472,44 @@ mod tests {
                     return_ty: Ty::None,
                     body: vec![MirStmt::Return(None)],
                 },
-                MirItem::TopLevelStmt(MirStmt::Assign {
-                    target: "x".to_string(),
-                    value: MirExpr::Call {
-                        callee: "f".to_string(),
-                        args: vec![],
-                        ty: Ty::None,
-                    },
-                }),
+                MirItem::Function {
+                    name: "store".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![
+                        MirStmt::Assign {
+                            target: "x".to_string(),
+                            value: MirExpr::Call {
+                                callee: "f".to_string(),
+                                args: vec![],
+                                ty: Ty::None,
+                            },
+                        },
+                        MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::Name {
+                                name: "x".to_string(),
+                                ty: Ty::None,
+                            }],
+                            ty: Ty::None,
+                        }),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "store".to_string(),
+                    args: vec![],
+                    ty: Ty::None,
+                })),
             ],
         };
-        let dir = tempfile_dir("none_typed_call_result_has_no_storage");
-        let obj_path = dir.join("none_typed_call_result_has_no_storage.o");
-        let _ = compile_to_object(&mir, &obj_path, None, false);
+        let dir = tempfile_dir("none_typed_call_result_storage");
+        let obj_path = dir.join("none_typed_call_result_storage.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("none_typed_call_result_storage");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"None\n");
     }
 
     #[test]
@@ -8942,6 +8998,24 @@ mod tests {
             bindings.get("xs"),
             Some(&Ty::List(Box::new(Ty::Int))),
             "a list[int]-typed assignment target's binding should be collected"
+        );
+    }
+
+    #[test]
+    fn collect_stmt_bindings_includes_a_none_typed_assignment_target() {
+        let stmt = MirStmt::Assign {
+            target: "result".to_string(),
+            value: MirExpr::Name {
+                name: "result".to_string(),
+                ty: Ty::None,
+            },
+        };
+        let mut bindings = BTreeMap::new();
+        collect_stmt_bindings(&stmt, &mut bindings);
+        assert_eq!(
+            bindings.get("result"),
+            Some(&Ty::None),
+            "a None-typed assignment target needs a real storage slot"
         );
     }
 
@@ -11047,13 +11121,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "using print()'s result as a nested expression is not supported yet")]
     fn nesting_a_print_call_inside_another_expression_is_not_yet_supported() {
-        // `x = print(1)` -- v0.1's `print()` always returns `None`, and
-        // nothing implements using a `None` value as an operand yet.
-        // `emit_stmt`'s own `print`-call arm builds a `pycc_rt_int_print`
-        // call directly and never routes the outer `print(...)` itself
-        // through `emit_expr` -- so the only way a `print` call can reach
-        // `emit_expr`'s `Call` arm at all is nested one level deeper than
-        // that, inside another expression, exercised here via `Assign`.
+        // `x = print(1)` remains D-072's explicit exception: ordinary
+        // materializable `None` results now support assignment storage,
+        // but `print()`'s own result is still rejected as a nested
+        // expression. `emit_stmt`'s own `print`-call arm builds a
+        // `pycc_rt_int_print` call directly and never routes the outer
+        // `print(...)` itself through `emit_expr` -- so the only way a
+        // `print` call can reach `emit_expr`'s `Call` arm at all is nested
+        // one level deeper than that, inside another expression, exercised
+        // here via `Assign`.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
