@@ -79,11 +79,15 @@
 - Every session's D-021 preflight also runs `python3 scripts/manage_ci_bypass.py status`.
   If branch protection differs from the documented baseline
   (`docs/REPOSITORY_GOVERNANCE.md`), search for an open `[ci-bypass]`-prefixed
-  issue tracking it. If none exists, or the one that does is open past its
-  own recorded expiry with no restore recorded, this is a release-blocking
-  governance incident: run `python3 scripts/manage_ci_bypass.py restore
-  --incident <issue-number>` immediately (or escalate if restore itself
-  fails) before any other work in this session.
+  issue tracking it. If one exists and is not past its recorded expiry,
+  no action is needed -- it is being actively worked. Otherwise (no
+  tracking issue at all, or one that is open past its own recorded expiry
+  with no restore recorded) this is a release-blocking governance
+  incident: run `python3 scripts/manage_ci_bypass.py restore --to-baseline`
+  (or `restore --incident <issue-number>` if a stale-but-identifiable
+  incident exists and should be closed through its own recorded snapshot
+  instead of the baseline) immediately -- or escalate if restore itself
+  fails -- before any other work in this session.
 - The push audit executes the pre-push `main` revision of `scripts/check_main_history.py`, with an immutable reviewed bootstrap fallback when that parent predates the checker; it never executes the revision being audited. Its workflow definition is still supplied by the pushed revision, so treat the job as defense-in-depth: the external repository monitor must verify the workflow content and expected run independently.
 
 ## Monitor only live repository events ([D-078](docs/DECISIONS.md#d-078-external-repository-monitoring-is-checkpointed-and-event-driven))

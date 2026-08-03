@@ -617,6 +617,39 @@ strict mode, accepting an `audit` context from another app, or dropping a
 job from `ci-gate`'s `needs:` list is a policy regression; all later policy
 changes are evaluated by the trusted checker from their base revision.
 
+## CI temporary-bypass lifecycle (D-116)
+
+`scripts/test_manage_ci_bypass.py` covers `scripts/manage_ci_bypass.py`'s
+`status`/`relax`/`restore`/`restore_to_baseline` lifecycle at 100% line
+coverage, run via `python3 -m coverage run -m pytest
+test_manage_ci_bypass.py` from `scripts/`. Every `CiBypassError`-raising
+branch has a dedicated test: a `gh` failure, an already-open `[ci-bypass]`
+incident (refuses to stack), a check that isn't currently failing or isn't
+a required check, a missing or unreadable `--evidence` file, an unparseable
+snapshot or Expiry timestamp, a `gh issue create` whose output has no
+parseable issue number, drift after `restore` or `restore_to_baseline`, and
+`restore`'s CLI wiring rejecting `--incident`/`--to-baseline` given together
+or neither given with no prior `state.json` to fall back to.
+
+`status()` compares the full 7-field protection snapshot against
+`BASELINE_PROTECTION`, not just the required-checks list, so DRIFT tests
+cover both a `required_status_checks`-only mismatch and a mismatch confined
+to another field (e.g. `enforce_admins`). Separately, `status()` also
+detects a `[ci-bypass]` incident that is open past its own recorded expiry
+with no restore recorded -- DRIFT even when protection itself currently
+matches baseline -- and the combined case where both conditions hold at
+once; an incident whose body has no parseable Expiry line is skipped rather
+than crashing the check.
+
+`relax()`'s TOCTOU re-check -- `find_open_bypass_issue` called once before
+any work starts and again immediately before the mutating `PATCH`, narrowing
+(not eliminating) the window where a concurrent session's relax could stack
+underneath this one -- has its own test: the first call reports no open
+incident, the second reports a different one that appeared in between, and
+`relax()` must abort before the `PATCH` with the other incident's number and
+a manual-cleanup pointer to the incident it already created, without ever
+calling `patch_required_status_checks` or writing `state.json`.
+
 ## Code coverage (D-014)
 
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.

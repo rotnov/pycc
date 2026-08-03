@@ -94,24 +94,160 @@ class GetProtectionTests(unittest.TestCase):
 
 
 class StatusTests(unittest.TestCase):
+    def _dispatch(self, script):
+        def fn(args, input_text=None):
+            key = tuple(args[:2])
+            if key not in script:
+                raise AssertionError(f"unexpected gh call: {args}")
+            response = script[key]
+            if isinstance(response, Exception):
+                raise response
+            return response
+        return fn
+
     @mock.patch("manage_ci_bypass.run_gh")
     def test_status_ok_when_matches_baseline(self, mock_run_gh):
-        mock_run_gh.return_value = json.dumps(
-            {"required_status_checks": {"strict": True, "contexts": ["ci-gate", "audit"]}}
-        )
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "list"): "[]",
+        })
         ok, message = mcb.status("owner/repo")
         self.assertTrue(ok)
         self.assertIn("matches baseline", message)
 
     @mock.patch("manage_ci_bypass.run_gh")
-    def test_status_reports_drift(self, mock_run_gh):
-        mock_run_gh.return_value = json.dumps(
-            {"required_status_checks": {"strict": True, "contexts": ["ci-gate"]}}
-        )
+    def test_status_reports_drift_in_required_checks(self, mock_run_gh):
+        # Only `contexts` differs from baseline -- every other field in the
+        # fixture still matches BASELINE_PROTECTION exactly, isolating the
+        # DRIFT signal to the required-checks list alone.
+        drifted = {
+            **FULL_PROTECTION_RESPONSE,
+            "required_status_checks": {"strict": True, "contexts": ["ci-gate"]},
+        }
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(drifted),
+            ("issue", "list"): "[]",
+        })
         ok, message = mcb.status("owner/repo")
         self.assertFalse(ok)
-        self.assertIn("DRIFT", message)
-        self.assertIn("['ci-gate']", message)
+        self.assertIn("Branch protection DRIFT", message)
+        self.assertIn("ci-gate", message)
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_status_reports_drift_in_non_status_check_field(self, mock_run_gh):
+        # status() now compares the FULL 7-field snapshot against
+        # BASELINE_PROTECTION, not just `contexts` -- a field outside
+        # required_status_checks flipping (e.g. an admin disabling
+        # enforce_admins) must be caught too, with contexts/strict matching.
+        drifted = {**FULL_PROTECTION_RESPONSE, "enforce_admins": {"enabled": False}}
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(drifted),
+            ("issue", "list"): "[]",
+        })
+        ok, message = mcb.status("owner/repo")
+        self.assertFalse(ok)
+        self.assertIn("Branch protection DRIFT", message)
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_status_ignores_incident_with_unparseable_expiry(self, mock_run_gh):
+        # An open [ci-bypass] issue whose body has no parseable Expiry line
+        # (hand-edited, or predating this field) must not crash status() or
+        # be mistaken for a stale incident -- parse_expiry_from_body's
+        # CiBypassError is caught and that issue is silently skipped.
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "list"): json.dumps([
+                {
+                    "number": 250,
+                    "title": "[ci-bypass] audit relaxed -- reason",
+                    "body": "no expiry line in this body",
+                },
+            ]),
+        })
+        ok, message = mcb.status("owner/repo")
+        self.assertTrue(ok)
+        self.assertIn("matches baseline", message)
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_status_reports_drift_for_stale_incident_even_when_protection_matches(
+        self, mock_run_gh
+    ):
+        # A [ci-bypass] incident open past its own recorded expiry, with no
+        # restore recorded, is DRIFT on its own -- even when branch
+        # protection itself currently matches the baseline exactly (e.g. a
+        # second, unrelated relax/restore cycle already happened while this
+        # stale incident sat open, or the restore is simply overdue).
+        stale_body = "**Expiry:** 2026-08-01T00:00:00Z (60 minutes from creation)\n"
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "list"): json.dumps([
+                {
+                    "number": 400,
+                    "title": "[ci-bypass] audit relaxed -- reason",
+                    "body": stale_body,
+                },
+            ]),
+        })
+        now = datetime(2026, 8, 3, 0, 0, 0, tzinfo=timezone.utc)
+        ok, message = mcb.status("owner/repo", now=now)
+        self.assertFalse(ok)
+        self.assertNotIn("Branch protection DRIFT", message)
+        self.assertIn("Incident #400", message)
+        self.assertIn("past its recorded expiry", message)
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_status_ok_when_open_incident_is_not_yet_past_its_expiry(self, mock_run_gh):
+        # The mirror image of the stale-incident test above: an open
+        # [ci-bypass] incident that has NOT yet reached its recorded expiry
+        # is actively-worked, not DRIFT. This is the exact branch AGENTS.md's
+        # preflight rule relies on ("If one exists and is not past its
+        # recorded expiry, no action is needed") -- if status() ever flagged
+        # a live in-flight incident as stale, the preflight would force a
+        # restore out from under an actively-working session.
+        live_body = "**Expiry:** 2026-08-05T00:00:00Z (60 minutes from creation)\n"
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "list"): json.dumps([
+                {
+                    "number": 402,
+                    "title": "[ci-bypass] audit relaxed -- reason",
+                    "body": live_body,
+                },
+            ]),
+        })
+        now = datetime(2026, 8, 3, 0, 0, 0, tzinfo=timezone.utc)
+        ok, message = mcb.status("owner/repo", now=now)
+        self.assertTrue(ok)
+        self.assertIn("matches baseline", message)
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_status_reports_combined_drift_and_stale_incident(self, mock_run_gh):
+        drifted = {**FULL_PROTECTION_RESPONSE, "enforce_admins": {"enabled": False}}
+        stale_body = "**Expiry:** 2026-08-01T00:00:00Z (60 minutes from creation)\n"
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(drifted),
+            ("issue", "list"): json.dumps([
+                {
+                    "number": 401,
+                    "title": "[ci-bypass] audit relaxed -- reason",
+                    "body": stale_body,
+                },
+            ]),
+        })
+        now = datetime(2026, 8, 3, 0, 0, 0, tzinfo=timezone.utc)
+        ok, message = mcb.status("owner/repo", now=now)
+        self.assertFalse(ok)
+        self.assertIn("Branch protection DRIFT", message)
+        self.assertIn("Incident #401", message)
+        self.assertIn("past its recorded expiry", message)
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_status_propagates_run_gh_failure(self, mock_run_gh):
@@ -121,20 +257,39 @@ class StatusTests(unittest.TestCase):
 
 
 class CliStatusTests(unittest.TestCase):
+    def _dispatch(self, script):
+        def fn(args, input_text=None):
+            key = tuple(args[:2])
+            if key not in script:
+                raise AssertionError(f"unexpected gh call: {args}")
+            response = script[key]
+            if isinstance(response, Exception):
+                raise response
+            return response
+        return fn
+
     @mock.patch("manage_ci_bypass.run_gh")
     def test_cli_status_exits_zero_when_ok(self, mock_run_gh):
-        mock_run_gh.return_value = json.dumps(
-            {"required_status_checks": {"strict": True, "contexts": ["ci-gate", "audit"]}}
-        )
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", f"repos/{mcb.REPO}/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "list"): "[]",
+        })
         with self.assertRaises(SystemExit) as ctx:
             mcb.main(["status"])
         self.assertEqual(ctx.exception.code, 0)
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_cli_status_exits_one_on_drift(self, mock_run_gh):
-        mock_run_gh.return_value = json.dumps(
-            {"required_status_checks": {"strict": True, "contexts": ["ci-gate"]}}
-        )
+        drifted = {
+            **FULL_PROTECTION_RESPONSE,
+            "required_status_checks": {"strict": True, "contexts": ["ci-gate"]},
+        }
+        mock_run_gh.side_effect = self._dispatch({
+            ("api", f"repos/{mcb.REPO}/branches/main/protection"): json.dumps(drifted),
+            ("issue", "list"): "[]",
+        })
         with self.assertRaises(SystemExit) as ctx:
             mcb.main(["status"])
         self.assertEqual(ctx.exception.code, 1)
@@ -200,6 +355,65 @@ class FindOpenBypassIssueTests(unittest.TestCase):
         self.assertIsNone(mcb.find_open_bypass_issue("owner/repo"))
 
 
+class ListOpenBypassIssuesTests(unittest.TestCase):
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_returns_empty_list_when_no_open_issues(self, mock_run_gh):
+        mock_run_gh.return_value = "[]"
+        self.assertEqual(mcb.list_open_bypass_issues("owner/repo"), [])
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_returns_matching_issue_with_body(self, mock_run_gh):
+        issue = {
+            "number": 292,
+            "title": "[ci-bypass] audit relaxed -- reason",
+            "body": "**Expiry:** 2026-08-02T13:00:00Z (60 minutes from creation)\n",
+        }
+        mock_run_gh.return_value = json.dumps([issue])
+        self.assertEqual(mcb.list_open_bypass_issues("owner/repo"), [issue])
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_filters_out_fuzzy_search_hit_that_does_not_start_with_prefix(self, mock_run_gh):
+        # Same fuzzy-search caveat as find_open_bypass_issue: `gh issue list
+        # --search '"[ci-bypass]" in:title'` can return issues that merely
+        # mention "ci-bypass" somewhere in the title -- the startswith
+        # filter must reject those here too.
+        matching = {
+            "number": 292,
+            "title": "[ci-bypass] audit relaxed -- reason",
+            "body": "**Expiry:** 2026-08-02T13:00:00Z (60 minutes from creation)\n",
+        }
+        mock_run_gh.return_value = json.dumps([
+            {
+                "number": 9,
+                "title": "unrelated issue mentioning ci-bypass in passing",
+                "body": "irrelevant",
+            },
+            matching,
+        ])
+        self.assertEqual(mcb.list_open_bypass_issues("owner/repo"), [matching])
+
+
+class ParseExpiryFromBodyTests(unittest.TestCase):
+    def test_parses_valid_expiry(self):
+        body = (
+            "**Check relaxed:** `audit`\n\n"
+            "**Expiry:** 2026-08-02T13:00:00Z (60 minutes from creation)\n\n"
+        )
+        expiry = mcb.parse_expiry_from_body(body)
+        self.assertEqual(expiry, datetime(2026, 8, 2, 13, 0, 0, tzinfo=timezone.utc))
+
+    def test_raises_when_expiry_line_missing(self):
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.parse_expiry_from_body("no expiry line anywhere in this body")
+        self.assertIn("no parseable Expiry line", str(ctx.exception))
+
+    def test_raises_when_expiry_timestamp_malformed(self):
+        body = "**Expiry:** not-a-timestamp (60 minutes from creation)\n"
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.parse_expiry_from_body(body)
+        self.assertIn("not parseable", str(ctx.exception))
+
+
 class RelaxTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -247,6 +461,7 @@ class RelaxTests(unittest.TestCase):
         self.assertEqual(state["snapshot"], FULL_PROTECTION_SNAPSHOT)
         self.assertIn("CONFIRMED", self.body_path.read_text(encoding="utf-8"))
         self.assertIn("2026-08-02T13:00:00Z", self.body_path.read_text(encoding="utf-8"))
+        self.assertIn("**Motivating PR:** #279", self.body_path.read_text(encoding="utf-8"))
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_relax_refuses_when_incident_already_open(self, mock_run_gh):
@@ -319,6 +534,7 @@ class RelaxTests(unittest.TestCase):
         # The incident issue was still created (visible/auditable) even though
         # the PATCH failed afterwards -- state file must not claim success.
         self.assertFalse(self.state_path.exists())
+        self.assertIn("**Motivating PR:** #279", self.body_path.read_text(encoding="utf-8"))
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_relax_defaults_now_to_current_utc_time_when_omitted(self, mock_run_gh):
@@ -350,6 +566,80 @@ class RelaxTests(unittest.TestCase):
         self.assertEqual(issue_number, 301)
         # 60 minutes after the fixed 09:00:00 stand-in for "now" -> 10:00:00.
         self.assertIn("2026-08-03T10:00:00Z", self.body_path.read_text(encoding="utf-8"))
+        self.assertIn("**Motivating PR:** #279", self.body_path.read_text(encoding="utf-8"))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_relax_wraps_missing_evidence_file_as_ci_bypass_error(self, mock_run_gh):
+        mock_run_gh.side_effect = self._run_gh_dispatch({
+            ("issue", "list"): "[]",
+            ("pr", "view"): json.dumps(
+                {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
+            ),
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+        })
+        missing_evidence = self.tmp_path / "does-not-exist.txt"
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.relax(
+                "owner/repo", "audit", "reason", missing_evidence,
+                pr_number=279, expiry_minutes=60,
+                state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
+            )
+        self.assertIn("could not read --evidence file", str(ctx.exception))
+        self.assertFalse(self.state_path.exists())
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_relax_aborts_when_a_different_incident_appears_before_the_patch(self, mock_run_gh):
+        # The TOCTOU re-check: find_open_bypass_issue is called twice inside
+        # relax() -- once at the very top, once again right before the
+        # mutating PATCH. Here the first call finds nothing (so the initial
+        # stacking guard passes and this incident gets created), but the
+        # second call -- simulating a concurrent session's relax() that won
+        # the race in between -- finds a DIFFERENT open incident. relax()
+        # must abort before the PATCH rather than mutate protection out from
+        # under the other session.
+        issue_list_responses = iter([
+            "[]",
+            json.dumps([{"number": 999, "title": "[ci-bypass] something else"}]),
+        ])
+        script = {
+            ("pr", "view"): json.dumps(
+                {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
+            ),
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "create"): "https://github.com/owner/repo/issues/300\n",
+        }
+
+        def dispatch(args, input_text=None):
+            key = tuple(args[:2])
+            if key == ("issue", "list"):
+                return next(issue_list_responses)
+            if key not in script:
+                raise AssertionError(f"unexpected gh call: {args}")
+            response = script[key]
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+        mock_run_gh.side_effect = dispatch
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.relax(
+                "owner/repo", "audit", "external state stuck", self.evidence_path,
+                pr_number=279, expiry_minutes=60,
+                state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
+            )
+        message = str(ctx.exception)
+        self.assertIn("#999", message)
+        self.assertIn("already created and needs manual cleanup", message)
+        self.assertIn("restore --incident 300", message)
+        # PATCH must never have been called -- protection was not mutated,
+        # and the state file (which would claim a successful relax) is absent.
+        for call in mock_run_gh.call_args_list:
+            self.assertNotEqual(tuple(call.args[0][:2]), ("api", "-X"))
+        self.assertFalse(self.state_path.exists())
 
 
 class ParseSnapshotFromBodyTests(unittest.TestCase):
@@ -482,6 +772,111 @@ class RestoreTests(unittest.TestCase):
         self.assertIn("release-blocking governance incident", str(ctx.exception))
 
 
+class RestoreToBaselineTests(unittest.TestCase):
+    """The no-tracking-issue escalation path AGENTS.md's D-021 preflight uses.
+
+    Distinct from restore(): there is no incident issue to read a snapshot
+    from, so this creates its own forced-restore issue, PATCHes directly to
+    BASELINE_PROTECTION, and verifies the readback matches exactly.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tmp_path = Path(self.tmp.name)
+        self.body_path = self.tmp_path / "escalation-body.md"
+        self.comment_path = self.tmp_path / "restore-comment.md"
+
+    def _dispatch(self, script):
+        def fn(args, input_text=None):
+            key = tuple(args[:2])
+            if key not in script:
+                raise AssertionError(f"unexpected gh call: {args}")
+            response = script[key]
+            if isinstance(response, Exception):
+                raise response
+            return response
+        return fn
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_restore_to_baseline_happy_path(self, mock_run_gh):
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "create"): "https://github.com/owner/repo/issues/500\n",
+            ("api", "-X"): "{}",
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "comment"): "",
+            ("issue", "close"): "",
+        })
+        readback = mcb.restore_to_baseline(
+            "owner/repo", body_path=self.body_path, comment_path=self.comment_path,
+        )
+        self.assertEqual(readback, mcb.BASELINE_PROTECTION)
+        self.assertIn(
+            "No open `[ci-bypass]` incident", self.body_path.read_text(encoding="utf-8")
+        )
+        self.assertIn("Forced restore verified", self.comment_path.read_text(encoding="utf-8"))
+        mock_run_gh.assert_any_call(
+            [
+                "api", "-X", "PATCH",
+                "repos/owner/repo/branches/main/protection/required_status_checks",
+                "--input", "-",
+            ],
+            input_text=json.dumps(
+                {"strict": True, "contexts": sorted(mcb.BASELINE_CONTEXTS)}
+            ),
+        )
+        mock_run_gh.assert_any_call(
+            ["issue", "close", "500", "--repo", "owner/repo", "-r", "completed"]
+        )
+        mock_run_gh.assert_any_call(
+            [
+                "issue", "create", "--repo", "owner/repo",
+                "--title",
+                "[ci-bypass] forced restore to baseline (no tracking incident found)",
+                "-F", str(self.body_path),
+            ]
+        )
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_restore_to_baseline_raises_on_drift_after_forced_restore(self, mock_run_gh):
+        drifted = {**FULL_PROTECTION_RESPONSE, "enforce_admins": {"enabled": False}}
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "create"): "https://github.com/owner/repo/issues/501\n",
+            ("api", "-X"): "{}",
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(drifted),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.restore_to_baseline(
+                "owner/repo", body_path=self.body_path, comment_path=self.comment_path,
+            )
+        message = str(ctx.exception)
+        self.assertIn("DRIFT after forced baseline restore", message)
+        self.assertIn("#501", message)
+        self.assertIn("release-blocking governance incident", message)
+        # No comment/close call should have happened -- the issue must stay
+        # open for a human to investigate the still-drifted state.
+        for call in mock_run_gh.call_args_list:
+            self.assertNotIn(tuple(call.args[0][:2]), (("issue", "comment"), ("issue", "close")))
+
+
+class CreateIssueTests(unittest.TestCase):
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_raises_when_gh_output_has_no_parseable_issue_number(self, mock_run_gh):
+        mock_run_gh.return_value = ""
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb._create_issue("owner/repo", "some title", Path("/dev/null"))
+        self.assertIn("could not parse an issue number", str(ctx.exception))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_raises_when_gh_output_last_line_is_not_a_url(self, mock_run_gh):
+        mock_run_gh.return_value = "creating issue...\nnot a url\n"
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb._create_issue("owner/repo", "some title", Path("/dev/null"))
+        self.assertIn("could not parse an issue number", str(ctx.exception))
+
+
 class MainDispatchTests(unittest.TestCase):
     """Covers main()'s CLI wiring: argument parsing and subcommand dispatch.
 
@@ -572,6 +967,80 @@ class MainDispatchTests(unittest.TestCase):
         self.assertIn("error:", stderr.getvalue())
         self.assertIn("not found", stderr.getvalue())
 
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_main_restore_to_baseline_dispatches(self, mock_run_gh):
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "create"): "https://github.com/owner/repo/issues/600\n",
+            ("api", "-X"): "{}",
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "comment"): "",
+            ("issue", "close"): "",
+        })
+        mcb.main([
+            "--repo", "owner/repo", "--state-dir", str(self.state_dir),
+            "restore", "--to-baseline",
+        ])
+        comment = (self.state_dir / "restore-comment.md").read_text(encoding="utf-8")
+        self.assertIn("Forced restore verified", comment)
+        mock_run_gh.assert_any_call(
+            ["issue", "close", "600", "--repo", "owner/repo", "-r", "completed"]
+        )
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_main_restore_defaults_incident_from_state_file_when_omitted(self, mock_run_gh):
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        (self.state_dir / "state.json").write_text(
+            json.dumps({"incident": 301, "snapshot": FULL_PROTECTION_SNAPSHOT}),
+            encoding="utf-8",
+        )
+        snapshot = json.dumps(FULL_PROTECTION_SNAPSHOT)
+        body = f"body\n{mcb.SNAPSHOT_MARKER_START}\n{snapshot}\n{mcb.SNAPSHOT_MARKER_END}\n"
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "view"): json.dumps({"state": "OPEN", "body": body}),
+            ("api", "-X"): "{}",
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+            ("issue", "comment"): "",
+            ("issue", "close"): "",
+        })
+        mcb.main([
+            "--repo", "owner/repo", "--state-dir", str(self.state_dir),
+            "restore",
+        ])
+        # No --incident on the CLI -- main() must have read incident #301
+        # back out of the prior relax's own state.json.
+        mock_run_gh.assert_any_call(
+            ["issue", "view", "301", "--repo", "owner/repo", "--json", "body,state"]
+        )
+        mock_run_gh.assert_any_call(
+            ["issue", "close", "301", "--repo", "owner/repo", "-r", "completed"]
+        )
+
+    def test_main_restore_raises_when_no_incident_no_to_baseline_and_no_state_file(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                mcb.main([
+                    "--repo", "owner/repo", "--state-dir", str(self.state_dir),
+                    "restore",
+                ])
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("requires --incident, --to-baseline", stderr.getvalue())
+
+    def test_main_restore_raises_when_to_baseline_and_incident_both_given(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as ctx:
+                mcb.main([
+                    "--repo", "owner/repo", "--state-dir", str(self.state_dir),
+                    "restore", "--incident", "301", "--to-baseline",
+                ])
+        self.assertEqual(ctx.exception.code, 1)
+        self.assertIn("mutually exclusive", stderr.getvalue())
+
 
 class ModuleEntryPointTests(unittest.TestCase):
     """Covers the `if __name__ == "__main__": main()` guard at module scope.
@@ -586,13 +1055,35 @@ class ModuleEntryPointTests(unittest.TestCase):
 
     @mock.patch("subprocess.run")
     def test_running_the_file_as_a_script_invokes_main(self, mock_subprocess_run):
-        mock_subprocess_run.return_value = mock.Mock(
-            returncode=0,
-            stdout=json.dumps(
-                {"required_status_checks": {"strict": True, "contexts": ["audit", "ci-gate"]}}
-            ),
-            stderr="",
-        )
+        # status() now issues two gh calls (protection, then the open
+        # [ci-bypass] issue list), so the fake subprocess must dispatch on
+        # the actual gh subcommand rather than return one static response.
+        def fake_run(cmd, input=None, capture_output=None, text=None):
+            if cmd[:2] == ["gh", "api"]:
+                stdout = json.dumps(
+                    {
+                        "required_status_checks": {
+                            "strict": True, "contexts": ["audit", "ci-gate"],
+                        },
+                        "enforce_admins": {"enabled": True},
+                        "required_pull_request_reviews": {
+                            "dismiss_stale_reviews": False,
+                            "require_code_owner_reviews": False,
+                            "require_last_push_approval": False,
+                            "required_approving_review_count": 0,
+                        },
+                        "required_conversation_resolution": {"enabled": True},
+                        "allow_force_pushes": {"enabled": False},
+                        "allow_deletions": {"enabled": False},
+                    }
+                )
+            elif cmd[:2] == ["gh", "issue"]:
+                stdout = "[]"
+            else:
+                raise AssertionError(f"unexpected subprocess.run call: {cmd}")
+            return mock.Mock(returncode=0, stdout=stdout, stderr="")
+
+        mock_subprocess_run.side_effect = fake_run
         module_path = Path(mcb.__file__)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -603,7 +1094,7 @@ class ModuleEntryPointTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 runpy.run_path(str(module_path), run_name="__main__")
         self.assertEqual(ctx.exception.code, 0)
-        mock_subprocess_run.assert_called_once_with(
+        mock_subprocess_run.assert_any_call(
             ["gh", "api", "repos/owner/repo/branches/main/protection"],
             input=None, capture_output=True, text=True,
         )

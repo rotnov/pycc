@@ -1,6 +1,6 @@
 ---
 name: ci-temporary-bypass
-description: Use this skill when a required CI check is failing on a pull request for reasons that appear entirely unrelated to that pull request's own diff -- e.g. every open PR shows the same failure simultaneously. Verifies the failure is provably caused by external repository state (not the PR's own defect) through two independent adversarial checks, then temporarily relaxes exactly that one required check via a public, time-bounded, auditable incident, and restores it immediately afterward with a second independent verification. Never use it to work around a check that is failing because of the current PR's own content.
+description: Use this skill when a required CI check is failing on a pull request for reasons that appear entirely unrelated to that pull request's own diff -- e.g. every open PR shows the same failure simultaneously. Verifies the failure is provably caused by external repository state (not the PR's own defect) through two independent adversarial checks, then temporarily relaxes exactly that one required check via a public, expiry-labeled, auditable incident, and restores it immediately afterward with a second independent verification. Never use it to work around a check that is failing because of the current PR's own content.
 ---
 
 # ci-temporary-bypass (Alpha)
@@ -10,8 +10,9 @@ to external repository state, then restore it -- publicly, narrowly, and
 verifiably. This supersedes D-024's "not delegated to routine tasks" and
 D-054's "grants no reusable permission" for this one mechanism only, per a
 decision recorded in `docs/DECISIONS.md`; every other principle in those
-decisions (public incident, minimal scope, time-bounded, immediately
-restored, fully auditable) still applies without exception.
+decisions (public incident, minimal scope, an expiry-labeled auditable
+incident rather than a hard time bound, immediately restored, fully
+auditable) still applies without exception.
 
 Full design and rationale:
 `docs/superpowers/specs/2026-08-02-ci-temporary-bypass-mechanism-design.md`.
@@ -137,6 +138,21 @@ This reads the snapshot back from the incident issue (authoritative),
 `PATCH`es protection back to it, reads back the result, and raises
 `CiBypassError` on any mismatch rather than silently closing the incident.
 
+If no tracking incident can be found for a drifted branch protection state
+(this skill's own Stop conditions below, or AGENTS.md's D-021 preflight
+escalation path, for exactly this case), use the baseline escalation path
+instead of guessing an incident number:
+
+```
+python3 scripts/manage_ci_bypass.py restore --to-baseline
+```
+
+This creates its own `[ci-bypass]`-prefixed forced-restore issue (so the
+action stays public and auditable even with nothing to restore from),
+`PATCH`es protection directly to the documented baseline, and raises
+`CiBypassError` on any readback mismatch exactly like `restore --incident`
+does. `--incident` and `--to-baseline` are mutually exclusive.
+
 ### 5. Gate 2 -- post-restore verification
 
 Dispatch a second fresh, isolated `Agent()`. Give it the pre-relax snapshot
@@ -162,6 +178,17 @@ skill resolves on its own.
   check) -- restore immediately, do not merge anyway.
 - `restore` raises `CiBypassError` (including DRIFT).
 - Gate 2 returns DRIFT, or cannot be dispatched.
+- `relax` fails after creating the incident issue but before the `PATCH`
+  succeeds (e.g. the network call in between drops, or the TOCTOU re-check
+  finds a different incident that appeared concurrently and aborts on
+  purpose). Protection was never actually mutated in this case -- the
+  mechanism correctly refused to stack or half-apply a relaxation -- but the
+  stray incident issue leaves the mechanism wedged (a `[ci-bypass]` issue is
+  now open, so a fresh `relax` will refuse to stack) until it is cleaned up.
+  The safe remedy is `python3 scripts/manage_ci_bypass.py restore --incident
+  <that-issue-number>`: it is safe to run even though no relaxation actually
+  took effect, because it `PATCH`es back to the snapshot embedded in that
+  same issue (the unchanged, pre-relax protection) and closes it.
 
 Every stop condition above ends with restoring protection (if it was ever
 relaxed) and reporting -- never with leaving protection relaxed and moving
