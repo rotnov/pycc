@@ -22,3 +22,13 @@
 **Trigger:** user-defined convention
 
 ScheduleWakeup, я бы вешал может фонового агента который следит что луп автопилота живой?
+
+## 2026-08-03 14:10 UTC — Verify live PR readiness before reporting
+**Trigger:** user-observed mistake during pull-request readiness assessment
+
+**Operational rule:** Before reporting a pull request as ready or waiting on
+CI, refresh and verify its live state, draft status, head commit, mergeability
+or conflicts, required checks, and unresolved review threads.
+
+**Verbatim user lesson (provenance only):**
+> PR с конфликатми и stale а ты не заметил

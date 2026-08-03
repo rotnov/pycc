@@ -6,7 +6,7 @@ The Rust-inspired core of pycc: ownership is **inferred, never written**. Source
 
 1. No tracing GC, no stop-the-world pauses.
 2. Deterministic, predictable memory behavior; C-like performance for non-shared data.
-3. Data-race freedom across threads, checked at compile time (the GIL is gone — safety must come from the type system).
+3. Data-race freedom across native pycc threads, checked at compile time (there is no pycc-wide GIL — safety must come from the type system).
 
 ## Ownership model (inferred on MIR)
 
@@ -30,9 +30,12 @@ RC alone leaks cycles. Decision (D-004): lightweight incremental **trial-deletio
 - `sys.getrefcount`, `id()` stability across moves: `id()` returns stable logical id; `getrefcount` unavailable (`E0107`).
 - `weakref`: supported on RC-managed objects.
 
-## Threading without the GIL
+## Native threading without a pycc-wide GIL
 
-Compiled binaries have no GIL; `threading.Thread` = OS thread. Safety model (the "fishечка"):
+Native pycc execution has no GIL; `threading.Thread` = OS thread. A planned
+CPython interop boundary owns CPython's GIL only while executing CPython-backed
+operations and does not weaken the rules below for native values (D-128).
+Safety model (the "fishечка"):
 
 - Compiler classifies every type: **`Shareable`** (deeply immutable: `int`, `str`, `frozen` dataclasses, `tuple` of Shareable…) or **`ThreadLocal`**.
 - A value crossing a thread boundary (thread target args, closures captured by threads, `queue.Queue[T]` payloads) must be `Shareable`, or ownership must **move** (sender provably loses access — checked by uniqueness analysis), else `O0301`.

@@ -50,7 +50,7 @@
             "name": "Python AOT compilers compared — where pycc fits",
             "description": "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from official docs: language contract, output artifact, runtime model, and current positioning.",
             "inLanguage": "en",
-            "dateModified": "2026-07-27",
+            "dateModified": "2026-08-02",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -174,7 +174,7 @@
                   <tr class="highlight-row">
                     <th scope="row">pycc</th>
                     <td>Typed, standard Python 3.14 is the v1 design target</td>
-                    <td>Standalone native executable without CPython is the design target</td>
+                    <td>Standalone native executable without CPython for native and pure builds; planned permitted interop bundles a pinned CPython runtime</td>
                     <td>Pre-alpha; v0.1 frontend and native backend implemented with documented gaps; not production-ready</td>
                   </tr>
                   <tr>
@@ -233,8 +233,8 @@
                 <span>Codon is available today, with deliberate language and semantic differences documented by its maintainers.</span>
               </li>
               <li>
-                <strong>Target strict standard Python and a standalone runtime</strong>
-                <span>That is pycc's intended niche, but it remains a design target rather than a usable alternative today.</span>
+                <strong>Target strict standard Python with autonomous deployment</strong>
+                <span>Native and pure pycc builds target a standalone runtime; planned permitted interop carries a pinned CPython runtime in the application bundle.</span>
               </li>
             </ul>
           </section>
@@ -245,7 +245,9 @@
             <p>
               pycc aims to combine hard compile-time type enforcement,
               standard Python syntax, a native executable without an embedded
-              CPython interpreter, and a five-target portability gate. The
+              CPython interpreter for native and pure builds, an autonomous
+              bundle for planned permitted CPython interop, and a five-target
+              portability gate. The
               repository now parses, type-checks, and compiles the implemented
               v0.1 surface through MIR, LLVM, and its native runtime, and
               v0.1's own acceptance criteria are met on all five Tier-1
