@@ -1566,7 +1566,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   # above) -- its remaining, still-true facts (fixture digest,
   # array membership, structural recognition) stay covered by
   # test_d112_ubuntu_frontend_perf_workflow_digest_matches_the_fixture,
-  # test_d112_ubuntu_frontend_perf_workflow_digest_remains_accepted, and
+  # test_d112_ubuntu_frontend_perf_workflow_is_now_active, and
   # test_d112_ubuntu_frontend_perf_workflow_structure_is_recognized
   # below, so this test (which asserted D112 == the live file) is
   # removed rather than left asserting something now false.
@@ -1586,10 +1586,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
   end
 
-  # Renamed from ..._is_now_active (D-114 activation): D112 is no longer
-  # the live shape, only still accepted alongside it as reviewed audit
-  # evidence -- "is_now_active" would be misleading post-activation.
-  def test_d112_ubuntu_frontend_perf_workflow_digest_remains_accepted
+  def test_d112_ubuntu_frontend_perf_workflow_is_now_active
     assert_includes REVIEWED_PERF_CI_WORKFLOW_SHA256S,
                     D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256
   end
