@@ -44,7 +44,7 @@
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
-      "sha256": "2c45c46b1765ff5174d02549cd6b86514472cae2edc8bbef34956d4e4f19811c"
+      "sha256": "df4745597a7bdfd74500a04b6973c8196684ecdd7ef0dd08618c8e8e74ad2f98"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
