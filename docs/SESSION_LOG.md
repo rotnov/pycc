@@ -11,6 +11,18 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — PR #281 refreshed onto `8bbdb00`; interop decision renumbered to D-128
+
+**Authoritative checkpoint:** `origin/main` is `8bbdb00fb93fd9b87529cfe0be9d04470303548a` (PR #288's merge commit), confirmed with `git fetch --prune origin` immediately before this entry. [PR #281](https://github.com/rotnov/pycc/pull/281) is still open as a draft at its stale remote head `ccbf3361216971ba255a4b4315901842a115fa91`; GitHub reports that old head as conflicting, with its previous `audit` check failed and no unresolved review threads. The local `codex/spec-cpython-interop-policy` branch is rebased onto the checkpoint above; publishing this containing commit will replace that stale remote range.
+
+**What changed:** the planned v0.7 contract now keeps ordinary source such as `import numpy as np`, classifies native versus CPython-backed imports, and bundles a pinned CPython/package/native-library closure for permitted interop. The policy is the closed `auto` (default), `allowlist`, or `deny` enum, with `--pure` as the strict `deny` shorthand. The current compiler still implements none of this and continues to reject imports before policy evaluation; the PR is specification, roadmap, website, and validator work only. Current `main` owns D-127 for the autonomous-agent operation model, so the interop decision is D-128; D-115 remains the unrelated shipped tuple-representation decision.
+
+**Resolved blocker and verification:** the first pinned review correctly caught that `main` advanced during review and claimed D-127, making the earlier interop numbering stale. The branch was refreshed again and every interop reference moved to D-128 while `main`'s D-127 remains unchanged. The previous `3636f52...786f04d` range passed the site, roadmap-evidence, CI-permission, Rust documentation, and workspace test suites, but those results are historical after the new rebase; the final `8bbdb00...HEAD` range must be validated and independently reviewed again before publication.
+
+**What's next:** validate the complete rebased range, run the repository-pinned iEvo deep reviewer on `origin/main...HEAD`, address any actionable findings, force-push the branch with lease, mark PR #281 ready, require fresh `audit`/`ci-gate` and all other checks to pass, then merge through the protected-branch PR path.
+
+---
+
 ## 2026-08-03 — PR #303 merged to `main`: session-driven CI temporary-bypass mechanism, as D-125 (renumbered from D-116)
 
 **Authoritative checkpoint:** `main`'s tip is `bc27344ee870ff5006ddab07adbfb872971e9766` ([PR #303](https://github.com/rotnov/pycc/pull/303), merge commit), confirmed via `git fetch origin main` immediately before writing this entry. All 13 required checks passed on the merged head (`gh pr checks 303`, re-confirmed before merge).

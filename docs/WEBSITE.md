@@ -12,7 +12,7 @@ indexable explanation of pycc:
 - pycc is an ahead-of-time compiler for typed, standard Python 3.14;
 - native and `--pure` output is a standalone native binary, while planned
   permitted CPython interop produces an autonomous bundle carrying the pinned
-  interpreter and dependency closure (D-115);
+  interpreter and dependency closure (D-128);
 - the implementation is written in Rust and uses LLVM;
 - the project is created entirely by AI agents, while a human manages goals,
   constraints, priorities, and product decisions without writing project code;

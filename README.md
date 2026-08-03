@@ -138,13 +138,13 @@ Design principles:
   are verified, then used for static dispatch and unboxed native
   representations. Native pycc execution has no interpreter loop; only the
   planned CPython-backed boundary executes package operations in its bundled
-  interpreter (D-115).
+  interpreter (D-128).
 - **Fast above all.** Compiler in Rust 1.97+, zero-copy parsing, per-module parallel compilation, incremental caching. Goal: frontend + type check of a mid-size project in well under a second — compiling should feel like `ruff`, not like `webpack`.
 - **Ownership under the hood.** Rust-style ownership and escape analysis *inferred* from standard Python — no new syntax. Locals that don't escape live on the stack, values with a single owner are moved instead of shared, reference counting only where sharing is proven. Goal: predictable memory, no tracing-GC pauses.
 - **No pycc-wide GIL.** Native pycc execution has no interpreter or GIL, and
   `threading` maps to real OS threads (roadmap). The planned embedded CPython
   boundary retains CPython's own GIL only while it executes CPython-backed
-  operations (D-115).
+  operations (D-128).
 
 ## What won't compile (by design)
 
