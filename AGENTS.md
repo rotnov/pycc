@@ -76,6 +76,18 @@
 - While the repository has only one maintainer, require zero approving reviews so the PR path remains usable; enable an independent approving review when a second human maintainer is available.
 - Administrators and automation credentials do not bypass the rule for ordinary work. The emergency procedure, audit expectations, and recovery steps live in [REPOSITORY_GOVERNANCE.md](docs/REPOSITORY_GOVERNANCE.md).
 - A failed `main-history-audit` run is a release-blocking governance incident. Open an issue, identify the bypass and actor, and restore protection before further merges.
+- Every session's D-021 preflight also runs `python3 scripts/manage_ci_bypass.py status`.
+  If branch protection differs from the documented baseline
+  (`docs/REPOSITORY_GOVERNANCE.md`), search for an open `[ci-bypass]`-prefixed
+  issue tracking it. If one exists and is not past its recorded expiry,
+  no action is needed -- it is being actively worked. Otherwise (no
+  tracking issue at all, or one that is open past its own recorded expiry
+  with no restore recorded) this is a release-blocking governance
+  incident: run `python3 scripts/manage_ci_bypass.py restore --to-baseline`
+  (or `restore --incident <issue-number>` if a stale-but-identifiable
+  incident exists and should be closed through its own recorded snapshot
+  instead of the baseline) immediately -- or escalate if restore itself
+  fails -- before any other work in this session.
 - The push audit executes the pre-push `main` revision of `scripts/check_main_history.py`, with an immutable reviewed bootstrap fallback when that parent predates the checker; it never executes the revision being audited. Its workflow definition is still supplied by the pushed revision, so treat the job as defense-in-depth: the external repository monitor must verify the workflow content and expected run independently.
 
 ## Monitor only live repository events ([D-078](docs/DECISIONS.md#d-078-external-repository-monitoring-is-checkpointed-and-event-driven))
@@ -100,7 +112,7 @@
 - A job that checks out or executes pull-request-controlled code, or consumes its artifacts, caches, or outputs, must use the minimum token permissions it needs: normally `contents: read`, or `permissions: {}` when repository access is unnecessary. Beyond that minimally scoped `GITHUB_TOKEN`, it must not receive write scopes, OIDC access, any secret or credential, or a protected environment.
 - Grant any elevated capability only to the smallest isolated job that needs it. Every privileged job, including jobs in reusable workflows and workflows without a pull-request trigger, must use the exact `push` plus `refs/heads/main` guard enforced by `scripts/check_ci_permissions.rb`. It must establish its trusted commit source, validate the actor when actor identity is part of the trust decision, and must not execute untrusted code or consume untrusted state unless provenance and integrity are verified against that commit.
 - Gate publish and deploy jobs to `refs/heads/main` and a protected environment. If the repository later adds a release-branch or tag deployment, extend the checker's explicit allowlist and record the corresponding ref-protection evidence in the same pull request before granting privilege. Never rely on a skipped step to contain credentials granted at workflow scope or to an earlier validation job.
-- Regular CI must run `ruby scripts/check_ci_permissions.rb` for fast feedback. The read-only `Workflow policy` check is the trust anchor: it runs on every pull request from the base commit under `pull_request_target`, never checks out or executes pull-request code, and audits the head revision's workflow YAML plus roadmap acceptance evidence as data. Keep that check required before merging.
+- Regular CI must run `ruby scripts/check_ci_permissions.rb` for fast feedback. The read-only `Workflow policy` check (`audit`) is the trust anchor: it runs on every pull request from the base commit under `pull_request_target`, never checks out or executes pull-request code, and audits the head revision's workflow YAML plus roadmap acceptance evidence as data. Keep that check required before merging -- never permanently remove or downgrade it. The one narrow exception is D-125's session-driven temporary bypass, which may relax `audit` for exactly one publicly tracked, expiry-bound incident at a time and restores it immediately afterward; see `docs/REPOSITORY_GOVERNANCE.md`'s "Session-driven temporary bypass" section.
 - Whenever a workflow adds a `pull_request`, `pull_request_target`, or chained trigger, begins executing a repository script, transfers state between jobs, or changes job-level `permissions`, review every job's effective permissions and all artifact, cache, output, and reusable-workflow boundaries. Add a focused negative-event check for privileged behavior where practical; otherwise record the unautomated trust assumptions and verification evidence in the owning specification or workflow.
 
 ## Code Review Rules

@@ -619,6 +619,115 @@ strict mode, accepting an `audit` context from another app, or dropping a
 job from `ci-gate`'s `needs:` list is a policy regression; all later policy
 changes are evaluated by the trusted checker from their base revision.
 
+## CI temporary-bypass lifecycle (D-125)
+
+`scripts/test_manage_ci_bypass.py` covers `scripts/manage_ci_bypass.py`'s
+`status`/`relax`/`restore`/`restore_to_baseline` lifecycle at 100% line
+coverage, run via `python3 -m coverage run -m pytest
+test_manage_ci_bypass.py` from `scripts/`. Every `CiBypassError`-raising
+branch has a dedicated test: a `gh` failure, an already-open `[ci-bypass]`
+incident (refuses to stack), a check that isn't currently failing or isn't
+a required check, a missing or unreadable `--evidence` file, an unparseable
+snapshot or Expiry timestamp, a `gh issue create` whose output has no
+parseable issue number, drift after `restore` or `restore_to_baseline`, and
+`restore`'s CLI wiring rejecting `--incident`/`--to-baseline` given together
+or neither given with no prior `state.json` to fall back to.
+
+`status()` compares the full 7-field protection snapshot against
+`BASELINE_PROTECTION`, not just the required-checks list, so DRIFT tests
+cover both a `required_status_checks`-only mismatch and a mismatch confined
+to another field (e.g. `enforce_admins`). Separately, `status()` also
+detects a `[ci-bypass]` incident that is open past its own recorded expiry
+with no restore recorded -- DRIFT even when protection itself currently
+matches baseline -- and the combined case where both conditions hold at
+once; an incident whose body has no parseable Expiry line is skipped rather
+than crashing the check. `status()` also recognizes when the observed drift
+is fully explained by a currently open, unexpired incident's own recorded
+pre-relax snapshot and relaxed check (an in-progress relaxation, reported
+`ok`, not release-blocking DRIFT) -- with dedicated tests for the case where
+an open incident does *not* explain the observed drift (must still report
+DRIFT, never blanket-suppressed just because an incident happens to be
+open) and where the incident's body has no parseable snapshot or "Check
+relaxed" line (skipped, not crashed). Two more tests isolate the exact
+mutants an independent review found surviving an earlier version of this
+suite: one where `contexts` matches the incident's prediction exactly but
+`enforce_admins` also drifted (must still report DRIFT, proving the
+comparison is the full dict, not just `contexts`), and one where the
+incident names the wrong check (`ci-gate` named as relaxed while `audit`
+is the one actually missing -- must still report DRIFT, proving
+`check_name` itself is what's compared, not merely presence/absence of
+any context).
+
+Authenticating an incident's author matters differently depending on what
+trusting the wrong one would cause, and the tests are organized around
+that split. `status()`'s live-incident branch is the one place a forged
+issue's content could *suppress* a safety signal (blind the only automated
+DRIFT detector, indefinitely, using only `BASELINE_PROTECTION` -- a public
+literal in this file -- and a far-future Expiry), so it requires the
+issue's author to match `get_authenticated_login()` before an incident may
+suppress DRIFT; a dedicated regression test reproduces that exact exploit
+(same check, same snapshot, unexpired, but authored by `"attacker"`) and
+asserts DRIFT is still reported, plus a test that the lookup is cached
+(one `gh api user` call even across multiple open issues in the loop).
+`find_open_bypass_issue`'s and `restore_to_baseline`'s stacking guards are
+deliberately left unauthenticated -- a forged issue there only makes the
+tool refuse and escalate to a human, the correct fail-closed outcome, not
+a suppression risk.
+
+`relax()` refuses `ci-gate` before making any `gh` call at all -- it
+reflects the candidate's own build/test/coverage result, never external
+repository state, and the skill's documented exclusion is enforced here in
+code, not left to prose alone.
+
+`create_incident_issue()` refuses to create an issue whenever its fully
+assembled body contains this mechanism's own snapshot-marker text more
+than once -- `parse_snapshot_from_body` reads the *first* occurrence of
+the marker, and the function's own genuine marker is always last, so
+marker-shaped text in `--evidence` (influenced by CI failure text, which
+can itself be influenced by a PR's own content) or in `--reason` (which
+also lands directly in the issue title) would otherwise be parsed as
+authoritative on a later `restore`, even inside an issue that is correctly
+titled and authored. Checking the assembled body once catches both fields
+-- and any field added later -- rather than enumerating them individually;
+dedicated tests inject the marker through each field separately and prove
+`relax()` refuses before ever calling `gh issue create`.
+
+`restore()`'s `get_incident_body()` only trusts an incident's embedded
+snapshot when the issue's title starts with `[ci-bypass]` *and* its author
+matches the currently authenticated `gh` actor (`get_authenticated_login()`)
+-- closing the gap where a public issue forging both the title and the
+`<!-- ci-bypass-snapshot -->` marker, opened by anyone else, could otherwise
+have its snapshot applied to branch protection by a later `restore
+--incident`. Both rejections (title, author) have dedicated tests, including
+one proving the author check is never reached when the title check already
+failed, one proving no `PATCH`/comment/close call happens on an author
+mismatch, and one proving a `null` GitHub `author` (e.g. a deleted account)
+fails closed as `CiBypassError` rather than an uncaught `TypeError`.
+
+`restore()` itself adds two more predicates as defense in depth beyond that
+check, for a body that was edited after creation or an incident that
+predates it: the snapshot's `contexts` must equal `BASELINE_CONTEXTS`
+*exactly*, and `strict` must be `true`. An earlier version of the first
+predicate only required `NEVER_RELAXABLE_CHECKS` to be a subset of
+`contexts` -- which a snapshot dropping `audit` while keeping `ci-gate`
+present would still have passed, permanently un-requiring `audit` (the
+`pull_request_target` trust anchor `AGENTS.md` calls "never permanently
+remove or downgrade") while `restore` reported success. Three dedicated
+tests cover this predicate: dropping `ci-gate`, dropping `audit` while
+keeping `ci-gate` (the exact regression case above), and adding an extra
+context beyond baseline (which would permanently wedge every future PR on
+a check that can never report). A fourth test covers `strict != true`
+alone. Each proves no `PATCH`/comment/close call happens on rejection.
+
+`relax()`'s TOCTOU re-check -- `find_open_bypass_issue` called once before
+any work starts and again immediately before the mutating `PATCH`, narrowing
+(not eliminating) the window where a concurrent session's relax could stack
+underneath this one -- has its own test: the first call reports no open
+incident, the second reports a different one that appeared in between, and
+`relax()` must abort before the `PATCH` with the other incident's number and
+a manual-cleanup pointer to the incident it already created, without ever
+calling `patch_required_status_checks` or writing `state.json`.
+
 ## Code coverage (D-014)
 
 Distinct from the grammar-coverage gate in Meta below (which measures PEP/language-surface coverage): this is ordinary line/region coverage of pycc's own Rust source, gated on every PR from v0.1 on.
