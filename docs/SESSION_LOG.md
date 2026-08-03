@@ -11,6 +11,23 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — `main`'s D-114/#291 manifest deadlock resolved (owner-authorized emergency bypass); PR-10/#236 now `BEHIND` instead of `BLOCKED`
+
+**Authoritative checkpoint:** `origin/main` at `fee5750274e8c000c5aee007fbd1aeb2d1964248` (was `cdb3f0a`, unmoved for the entire span this log's newest-minus-one entry describes).
+
+**What happened:** the repository owner explicitly authorized ("да, выполни") executing the D-054-precedent emergency path (`docs/REPOSITORY_GOVERNANCE.md`'s "Emergency path" section) to unblock PR [#291](https://github.com/rotnov/pycc/pull/291) (the D-114 revert), the same self-referential `audit`/manifest deadlock this log's own entries below and incident #292 already documented. Re-verified fresh immediately before acting: incident #292's own blocker (a bot-confirmed P1 finding — PR #291's diff deleted the `tests/fixtures/d114-frontend-perf-threshold-ci.yml` protected manifest entry instead of retaining it as historical evidence) had since been fixed by the owner directly (commit `0376e1f`) and the review thread was confirmed resolved; `ci-gate` passed; only `audit` still failed, for the same self-referential reason as before.
+
+Filed public incident [#294](https://github.com/rotnov/pycc/issues/294) first (per the corrected process from this log's own #109 entry — file before executing, not retroactively), disclosing the exact control, justification, owner, expiry, and rollback command, mirroring #292's/#125's own format. Relaxed `audit` alone (`ci-gate` and every other protection control stayed enabled throughout — `enforce_admins`, `required_pull_request_reviews`, `required_conversation_resolution`, `allow_force_pushes`, `allow_deletions` all unchanged), merged PR #291, and restored the original `required_status_checks.contexts` (`["ci-gate", "audit"]`) within under a minute, verified via a full settings readback matching the pre-relax snapshot exactly. Closed #294 with the outcome. `main`'s own post-merge "Main history audit" workflow (the independent D-024 push-audit, not the `audit` PR check) passed on the resulting merge commit, confirming no unauthorized bypass survived in history.
+
+**Consequence for this branch and PR-10:** `tests/fixtures/policy-successor-manifest.json` on `main` is back to steady state (all three previously mid-transition targets show `source_path == path`). PR [#236](https://github.com/rotnov/pycc/pull/236) (PR-10) flipped from `mergeStateStatus: BLOCKED` to `BEHIND` — it is no longer blocked by the manifest deadlock, but does need a real rebase/re-merge of the new `main` before its own checks (including `frontend-perf-gate`) can be re-evaluated, matching this task list's own pending item (re-merge main, verify frontend-perf-gate, pinned review, merge).
+
+**Not done / next steps for a fresh session:**
+1. PR-10/#236 needs an actual rebase or merge of `main` (`fee5750`), then CI re-run, pinned review, and merge — not yet attempted in this entry.
+2. This branch (`feat/v0-2-pr11-dict-set-tuple`, carrying PR-11+PR-12) is itself already ahead of the new `main` tip in every way that matters (it already merged the *prior* `main` state via `origin/feat/v0-2-pr10-ty-representation-migration` at `776632f`/`e33c517`, described in this log's own entry below) — but should re-check whether `origin/feat/v0-2-pr10-ty-representation-migration` itself gets updated/re-merged from `main` again before this branch's own PR is finally opened, since PR-10's own merge to `main` is still the next step in the stack, not yet done.
+3. The D-114 propose-round content (originally staged, then reverted by PR #291) is now fully reverted from `main` — any future attempt to raise `frontend-perf-gate`'s threshold needs a fresh D-103 propose/activate round from scratch, not a resumption of the reverted one.
+
+---
+
 ## 2026-08-02 — PR-12 (comprehensions/slicing/methods) content-complete; merged stale PR-10 into this branch, resolved a real D-111–D-114 ID collision; branch stays un-PR'd, blocked on main's own D-114/#291 manifest deadlock
 
 **Authoritative checkpoint (re-confirmed immediately before this entry):** `origin/main` at `cdb3f0abfe68b8c107711c595a5cbd6fd11e43f8`, unmoved. `origin/feat/v0-2-pr10-ty-representation-migration` at `5bcb09b8260896d77a2b8a579b5455341dd5c415`. PR [#236](https://github.com/rotnov/pycc/pull/236) and PR [#291](https://github.com/rotnov/pycc/pull/291) both `OPEN`/`BLOCKED`. Branch `feat/v0-2-pr11-dict-set-tuple` (still carrying PR-11a+PR-11b+PR-12's own work, not renamed), head now `e33c517` (2 new commits since the entry below).
