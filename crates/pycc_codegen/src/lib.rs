@@ -207,6 +207,14 @@ struct RtFns<'ctx> {
     int_list_append: FunctionValue<'ctx>,
     int_list_get: FunctionValue<'ctx>,
     int_list_len: FunctionValue<'ctx>,
+    /// PR-12 Task 9's own new `pycc_rt_int_list_slice` declaration
+    /// (`base[start:stop:step]`, D-118) -- takes the `list` pointer plus
+    /// three already-defaulted, already-untagged raw `i64` bounds and
+    /// returns a **new** `PyIntListObj` pointer, exactly the same opaque
+    /// pointer type every other `PyIntListObj`-returning function above
+    /// already declares (`int_list_new`'s own `ptr_type.fn_type(&[], ..)`
+    /// one line below shares that same return type).
+    int_list_slice: FunctionValue<'ctx>,
     /// PR-11 Task 5's own new `pycc_rt_dict_*` declarations, mirroring the
     /// `int_list_*` cluster immediately above one-for-one: `dict_new` (no
     /// pre-sizing entry point, same reasoning as `int_list_new`),
@@ -371,6 +379,27 @@ fn declare_rt_functions<'ctx>(
         int_list_len: declare(
             "pycc_rt_int_list_len",
             i64_type.fn_type(&[ptr_type.into()], false),
+        ),
+        // `list` pointer plus `start`/`stop`/`step`, all raw `i64`,
+        // returning a pointer (the new sliced list) -- matches
+        // `pycc_rt_int_list_slice`'s real Rust signature
+        // (`fn(*mut PyIntListObj, i64, i64, i64) -> *mut PyIntListObj`)
+        // exactly. The task plan's own sketch described this as "4 `i64`
+        // parameters" for the whole call, which undercounts by one: it is
+        // one `ptr_type` plus three `i64_type` parameters, not four
+        // `i64_type` ones -- corrected here to match what `declare` below
+        // actually builds.
+        int_list_slice: declare(
+            "pycc_rt_int_list_slice",
+            ptr_type.fn_type(
+                &[
+                    ptr_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                    i64_type.into(),
+                ],
+                false,
+            ),
         ),
         dict_new: declare("pycc_rt_dict_new", ptr_type.fn_type(&[], false)),
         // Returns nothing, exactly like `int_list_append` above: this
@@ -709,6 +738,34 @@ fn build_int_list_len<'ctx>(
         .try_as_basic_value()
         .expect_basic("pycc_rt_int_list_len returns a non-void i64")
         .into_int_value()
+}
+
+/// Returns a **new** `PyIntListObj` holding the clamped, strided sub-range
+/// `[start, stop)` of `list_ptr`'s elements, stepping by `step`
+/// (`base[start:stop:step]`, PR-12 Task 9, D-118). All three bound operands
+/// must already be raw, untagged `i64`s with every default/untag conversion
+/// already applied by the caller (`MirExpr::Slice`'s own `emit_expr` arm
+/// below) -- this helper is a thin one-`build_call` wrapper, exactly like
+/// `build_int_list_get` above, not a place that itself interprets D-106's
+/// tagging or D-118's defaulting rules.
+fn build_int_list_slice<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    list_ptr: PointerValue<'ctx>,
+    start: IntValue<'ctx>,
+    stop: IntValue<'ctx>,
+    step: IntValue<'ctx>,
+) -> PointerValue<'ctx> {
+    builder
+        .build_call(
+            rt.int_list_slice,
+            &[list_ptr.into(), start.into(), stop.into(), step.into()],
+            "list_slice",
+        )
+        .expect("build_call should not fail for a well-formed list slice")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_int_list_slice returns a non-void pointer")
+        .into_pointer_value()
 }
 
 /// Appends one already-untagged (D-106) value to a `PyIntListObj`, shared by
@@ -2170,6 +2227,92 @@ fn emit_expr<'ctx>(
                     .into_struct_value();
             }
             Scalar::Tuple(aggregate)
+        }
+        // `base[start:stop:step]` (PR-12 Task 9, D-118). Evaluates `base`,
+        // then each present bound left to right, exactly matching Python's
+        // own sub-expression evaluation order. `pycc_types` already
+        // validated `base` is `list[int]` and every present bound is
+        // `int`-assignable (Task 7); this arm applies D-118's own runtime
+        // behavior (default/clamp/panic) that `pycc_mir`'s purely
+        // structural lowering (Task 8) deliberately left to codegen.
+        //
+        // Deliberate deviation from this task's own originating plan
+        // sketch: `base`'s length (needed only when `stop` is omitted) is
+        // read *after* every present bound has already been evaluated, not
+        // immediately after `base`. `len()` itself has no side effect, but
+        // a present `start`/`step` expression might mutate `base` before
+        // yielding its own value (e.g. a helper that appends to the same
+        // list `base` names, then returns the bound) -- reading the length
+        // this late means an omitted `stop` always reflects `base`'s state
+        // as of just before the slice actually runs, matching CPython's own
+        // "build the slice object from every sub-expression, then apply it"
+        // order, where the length lookup happens once, after `start`/
+        // `stop`/`step` have all already been evaluated. This costs nothing
+        // in either code size or coverage: both the `Some`/`None` arms for
+        // `stop` already need their own tests regardless of where the
+        // length read sits.
+        //
+        // `xs = xs[1:3]` is safe from the identical self-referential-rebind
+        // hazard `MirStmt::ListCompAssign`'s own doc comment documents at
+        // length (Task 5a's confirmed regression): the only way this arm's
+        // result reaches a name is through `MirStmt::Assign`, which fully
+        // evaluates this whole expression to a `Scalar::List` -- a pointer
+        // to a **freshly allocated** result object `pycc_rt_int_list_slice`
+        // returns, never `base_ptr` itself -- before it ever calls
+        // `emit_assign` to rebind `target`'s own slot. This arm never
+        // writes to `locals` at all, so there is no premature-rebind window
+        // here the way an earlier `ListCompAssign` draft had for
+        // comprehensions. The original list is left untouched either way
+        // (D-107's leak-only policy: no incref/decref of `base_ptr`, and no
+        // special handling for the new result beyond what
+        // `pycc_rt_int_list_slice` itself already does).
+        MirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let base_ptr = expect_list_pointer(base_scalar, "the sliced value");
+
+            let start_i64 = match start {
+                Some(e) => {
+                    let scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, e);
+                    let tagged = to_tagged_int(context, builder, scalar);
+                    build_untag_checked(builder, rt, tagged, "slice_untag_start")
+                }
+                None => context.i64_type().const_int(0, false),
+            };
+            let stop_raw = match stop {
+                Some(e) => {
+                    let scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, e);
+                    let tagged = to_tagged_int(context, builder, scalar);
+                    Some(build_untag_checked(builder, rt, tagged, "slice_untag_stop"))
+                }
+                None => None,
+            };
+            let step_i64 = match step {
+                Some(e) => {
+                    let scalar =
+                        emit_expr(context, builder, module, rt, user_functions, locals, e);
+                    let tagged = to_tagged_int(context, builder, scalar);
+                    build_untag_checked(builder, rt, tagged, "slice_untag_step")
+                }
+                None => context.i64_type().const_int(1, false),
+            };
+            // Read only now: after `base` and every present bound have
+            // already been evaluated (see this arm's own doc comment
+            // above).
+            let stop_i64 = match stop_raw {
+                Some(v) => v,
+                None => build_int_list_len(builder, rt, base_ptr),
+            };
+
+            let result_ptr =
+                build_int_list_slice(builder, rt, base_ptr, start_i64, stop_i64, step_i64);
+            Scalar::List(result_ptr)
         }
     }
 }
@@ -13691,6 +13834,207 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"3\n0\n1\n2\n");
+    }
+
+    // -- PR-12 Task 9 (D-118): `MirExpr::Slice` codegen -----------------
+
+    /// `xs = [<values>]` as a `MirStmt`, this section's own analog of
+    /// `assign_list_literal` above for an arbitrary element list rather
+    /// than the fixed `[1, 2, 3]` that helper hardcodes.
+    fn assign_list_literal_values(target: &str, values: &[i64]) -> MirStmt {
+        MirStmt::Assign {
+            target: target.to_string(),
+            value: MirExpr::ListLiteral(values.iter().map(|v| MirExpr::IntLiteral(*v)).collect()),
+        }
+    }
+
+    fn slice_list_name(name: &str) -> MirExpr {
+        MirExpr::Name {
+            name: name.to_string(),
+            ty: Ty::List(Box::new(Ty::Int)),
+        }
+    }
+
+    #[test]
+    fn a_slice_with_all_three_bounds_present_returns_the_expected_sub_range() {
+        // D-118's ordinary path, at the codegen layer: `xs[1:4:1]` on
+        // `[10, 20, 30, 40, 50]` is `[20, 30, 40]`. Exercises every `Some`
+        // arm of the new `MirExpr::Slice` match (`start`/`stop`/`step` all
+        // present), matching `tests/slice1_codegen_depth.rs`'s own identical
+        // real-Python-source case (`a_basic_slice_with_explicit_bounds_
+        // returns_the_expected_sub_range`) -- this hand-built-MIR version is
+        // what actually counts toward `cargo llvm-cov -p pycc_codegen`,
+        // since a workspace-root `tests/*.rs` integration binary is
+        // attributed to the `pycc` package, not this crate.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_list_literal_values("xs", &[10, 20, 30, 40, 50])),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: MirExpr::Slice {
+                        base: Box::new(slice_list_name("xs")),
+                        start: Some(Box::new(MirExpr::IntLiteral(1))),
+                        stop: Some(Box::new(MirExpr::IntLiteral(4))),
+                        step: Some(Box::new(MirExpr::IntLiteral(1))),
+                    },
+                }),
+                MirItem::TopLevelStmt(print_each_int("ys")),
+            ],
+        };
+        let dir = tempfile_dir("slice_all_bounds_present");
+        let obj_path = dir.join("slice_all_bounds_present.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("slice_all_bounds_present");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"20\n30\n40\n");
+    }
+
+    #[test]
+    fn a_slice_with_every_bound_omitted_defaults_to_the_whole_list_stepped_by_one() {
+        // D-118's own defaulting rule (`start`/`stop`/`step` default to
+        // `0`/`len(list)`/`1`): `xs[:]` returns every element unchanged.
+        // Exercises every `None` arm of the new match, including the
+        // deferred `build_int_list_len` call this arm's own doc comment
+        // describes -- the one line no other test in this group reaches,
+        // since every other test here supplies an explicit `stop`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_list_literal_values("xs", &[10, 20, 30, 40, 50])),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: MirExpr::Slice {
+                        base: Box::new(slice_list_name("xs")),
+                        start: None,
+                        stop: None,
+                        step: None,
+                    },
+                }),
+                MirItem::TopLevelStmt(print_each_int("ys")),
+            ],
+        };
+        let dir = tempfile_dir("slice_all_bounds_omitted");
+        let obj_path = dir.join("slice_all_bounds_omitted.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("slice_all_bounds_omitted");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"10\n20\n30\n40\n50\n");
+    }
+
+    #[test]
+    fn a_slice_with_only_a_step_present_skips_every_other_element() {
+        // `xs[::2]` on `[0, 1, 2, 3, 4, 5]` is `[0, 2, 4]` -- `start`/`stop`
+        // stay omitted (re-exercising the `None` arms the test above
+        // already covers) while `step`'s own `Some` arm carries a value
+        // other than `1`, pinning D-118's Step 5(c) requirement
+        // specifically (a step greater than one, not just present at all).
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_list_literal_values("xs", &[0, 1, 2, 3, 4, 5])),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: MirExpr::Slice {
+                        base: Box::new(slice_list_name("xs")),
+                        start: None,
+                        stop: None,
+                        step: Some(Box::new(MirExpr::IntLiteral(2))),
+                    },
+                }),
+                MirItem::TopLevelStmt(print_each_int("ys")),
+            ],
+        };
+        let dir = tempfile_dir("slice_step_only");
+        let obj_path = dir.join("slice_step_only.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("slice_step_only");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"0\n2\n4\n");
+    }
+
+    #[test]
+    fn a_sliced_list_is_a_genuinely_independent_allocation_from_its_base() {
+        // D-107's leak-only policy still requires the slice result to be a
+        // *new* allocation, not an alias of `xs`'s own backing storage
+        // (`pycc_rt_int_list_slice` itself is unit-tested for this in
+        // `pycc_rt`; this pins the same guarantee through the real codegen
+        // call site). Appending to `xs` after slicing must not retroactively
+        // change `ys`, and vice versa.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_list_literal_values("xs", &[1, 2, 3])),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: MirExpr::Slice {
+                        base: Box::new(slice_list_name("xs")),
+                        start: Some(Box::new(MirExpr::IntLiteral(0))),
+                        stop: Some(Box::new(MirExpr::IntLiteral(3))),
+                        step: Some(Box::new(MirExpr::IntLiteral(1))),
+                    },
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ListAppend {
+                    list: "xs".to_string(),
+                    value: Box::new(MirExpr::IntLiteral(99)),
+                })),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::ListAppend {
+                    list: "ys".to_string(),
+                    value: Box::new(MirExpr::IntLiteral(77)),
+                })),
+                MirItem::TopLevelStmt(print_each_int("xs")),
+                MirItem::TopLevelStmt(print_each_int("ys")),
+            ],
+        };
+        let dir = tempfile_dir("slice_result_is_independent");
+        let obj_path = dir.join("slice_result_is_independent.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("slice_result_is_independent");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n2\n3\n99\n1\n2\n3\n77\n");
+    }
+
+    #[test]
+    fn a_list_sourced_slice_that_rebinds_its_own_source_name_reads_the_pre_existing_value() {
+        // Regression test in this arm's own established style (see
+        // `a_list_sourced_list_comprehension_that_rebinds_its_own_source_
+        // name_reads_the_pre_existing_value` above, Task 5a's confirmed
+        // review-round regression): `xs = [1,2,3,4,5]` then `xs =
+        // xs[1:3]`, reusing `xs` as both the slice's own `base` and the
+        // assignment's own `target`. Real CPython fully evaluates the RHS
+        // (reading the original 5-element `xs`, producing `[2, 3]`) before
+        // rebinding `xs` to that result -- an implementation that stored
+        // the slice's target pointer into `xs`'s slot before `base` had
+        // been evaluated and the slice call completed would corrupt this.
+        // `MirExpr::Slice`'s own arm never writes to `locals` at all (see
+        // its doc comment) -- `MirStmt::Assign` is the only thing that
+        // ever does, and only after this whole expression already produced
+        // a pointer to a brand new, independent result object -- so there
+        // is no premature-rebind window here to begin with, unlike
+        // `ListCompAssign`'s own multi-block loop construction, which
+        // needed a deliberate fix to get this right.
+        let mir = MirModule {
+            items: vec![
+                MirItem::TopLevelStmt(assign_list_literal_values("xs", &[1, 2, 3, 4, 5])),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: MirExpr::Slice {
+                        base: Box::new(slice_list_name("xs")),
+                        start: Some(Box::new(MirExpr::IntLiteral(1))),
+                        stop: Some(Box::new(MirExpr::IntLiteral(3))),
+                        step: None,
+                    },
+                }),
+                MirItem::TopLevelStmt(print_each_int("xs")),
+            ],
+        };
+        let dir = tempfile_dir("slice_self_referential_rebind");
+        let obj_path = dir.join("slice_self_referential_rebind.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("slice_self_referential_rebind");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"2\n3\n");
     }
 
     fn tempfile_dir(label: &str) -> std::path::PathBuf {

@@ -1207,3 +1207,149 @@ for v in x:
     assert!(output.status.success());
     assert_eq!(output.stdout, b"2\n1\n");
 }
+
+// -- PR-12 Task 9 (D-118): `list[int]` slicing end to end through the real
+// `pycc build` CLI. `print(ys)` is deliberately never used below -- `to_str`
+// has no `list[int]` arm yet (see `converting_a_list_to_str_stops_the_build_
+// with_an_honest_unsupported_message` above) -- every result is walked with
+// `for v in ys: print(v)` instead, the same convention D-120's own PEP-709
+// fixture uses for the identical reason.
+
+#[test]
+fn a_basic_slice_with_explicit_bounds_returns_the_expected_sub_range() {
+    // `xs[1:3]` on `[10, 20, 30, 40, 50]` is `[20, 30]`. Expected output
+    // verified against `python3` on this exact source.
+    let source = "\
+xs = [10, 20, 30, 40, 50]
+ys = xs[1:3]
+print(len(ys))
+for v in ys:
+    print(v)
+";
+    let output = build_and_run("slice_basic_explicit_bounds", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n20\n30\n");
+}
+
+#[test]
+fn slicing_with_every_omitted_bound_form_defaults_correctly() {
+    // D-118's own defaulting rule, all three omitted-bound shapes in one
+    // program: `xs[:3]` (omitted start), `xs[2:]` (omitted stop), and
+    // `xs[:]` (both omitted). Expected output verified against `python3` on
+    // this exact source.
+    let source = "\
+xs = [10, 20, 30, 40, 50]
+a = xs[:3]
+b = xs[2:]
+c = xs[:]
+for v in a:
+    print(v)
+for v in b:
+    print(v)
+for v in c:
+    print(v)
+";
+    let output = build_and_run("slice_every_omitted_bound_form", source);
+    assert!(output.status.success());
+    assert_eq!(
+        output.stdout,
+        b"10\n20\n30\n30\n40\n50\n10\n20\n30\n40\n50\n"
+    );
+}
+
+#[test]
+fn slicing_with_a_step_greater_than_one_skips_elements() {
+    // `xs[0:6:2]` (explicit bounds) and `xs[::2]` (both bounds omitted,
+    // step only) on `[0, 1, 2, 3, 4, 5]` both give `[0, 2, 4]`. Expected
+    // output verified against `python3` on this exact source.
+    let source = "\
+xs = [0, 1, 2, 3, 4, 5]
+ys = xs[0:6:2]
+zs = xs[::2]
+for v in ys:
+    print(v)
+for v in zs:
+    print(v)
+";
+    let output = build_and_run("slice_step_greater_than_one", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"0\n2\n4\n0\n2\n4\n");
+}
+
+#[test]
+fn a_sliced_list_stays_independent_of_further_mutation_on_either_side() {
+    // D-107's leak-only policy still requires the slice result to be a
+    // *new* allocation: appending to the original list after slicing must
+    // not retroactively change the slice's own contents, and appending to
+    // the slice must not change the original either. Expected output
+    // verified against `python3` on this exact source.
+    let source = "\
+xs = [1, 2, 3]
+ys = xs[0:3]
+xs.append(99)
+ys.append(77)
+for v in xs:
+    print(v)
+for v in ys:
+    print(v)
+";
+    let output = build_and_run("slice_independent_of_mutation", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n3\n99\n1\n2\n3\n77\n");
+}
+
+#[test]
+fn an_omitted_stop_bound_reflects_a_side_effect_from_evaluating_start() {
+    // Evaluation-order regression test: this task's own originating plan
+    // sketch computed `base`'s length (the value an omitted `stop`
+    // defaults to) immediately after evaluating `base`, before evaluating
+    // `start`/`step`. That ordering is observably wrong here -- `start` is
+    // `_grow()`, a helper that appends `99` to `xs` (its own module global)
+    // before returning `0` -- and real CPython's own evaluation order
+    // (build the whole slice from every sub-expression, *then* apply it,
+    // with the length lookup happening only at that final step) means the
+    // omitted `stop` must reflect `xs`'s length *after* `_grow()` already
+    // ran, i.e. `3`, not the `2` it held when `base` was first evaluated.
+    // `pycc_codegen`'s own `MirExpr::Slice` arm defers its `stop`-defaulting
+    // length read until after every present bound has already been
+    // evaluated for exactly this reason (see that arm's own doc comment).
+    // Verified empirically against `python3` on this exact source before
+    // this test was written: both give `3\n1\n2\n99\n`.
+    let source = "\
+xs = [1, 2]
+def _grow() -> int:
+    xs.append(99)
+    return 0
+
+ys = xs[_grow():]
+print(len(ys))
+for v in ys:
+    print(v)
+";
+    let output = build_and_run("slice_omitted_stop_reflects_start_side_effect", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"3\n1\n2\n99\n");
+}
+
+#[test]
+fn a_runtime_negative_slice_start_traps_instead_of_cpython_last_element_addressing() {
+    // D-118's own runtime-panic scope cut, extended from D-108's existing
+    // index precedent to slicing: a negative `start` traps rather than
+    // addressing from the end the way real CPython's `xs[-1:3]` would.
+    // `neg = 0 - 1` (`BinOp::Sub`) stands in for a negative literal here --
+    // unary negation (`-1`) is not itself implemented anywhere in this
+    // compiler yet (`error[C0001]: expression kind not supported yet`,
+    // confirmed independently of slicing), so this is the only way to
+    // *produce* a negative runtime `int` from real Python source today.
+    let source = "\
+xs = [1, 2, 3]
+neg = 0 - 1
+ys = xs[neg:3]
+print(len(ys))
+";
+    let output = build_and_run("slice_negative_start_traps", source);
+    assert!(
+        !output.status.success(),
+        "a negative slice start must trap rather than silently address from the end"
+    );
+}
