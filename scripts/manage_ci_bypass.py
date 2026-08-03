@@ -89,6 +89,7 @@ def status(repo: str = REPO, now: datetime | None = None) -> tuple[bool, str]:
     drift = current != BASELINE_PROTECTION
     stale_issue = None
     live_incident = None
+    trusted_login = None
     for issue in list_open_bypass_issues(repo):
         try:
             expiry = parse_expiry_from_body(issue["body"])
@@ -106,6 +107,21 @@ def status(repo: str = REPO, now: datetime | None = None) -> tuple[bool, str]:
         # state exactly matches what THIS incident's own pre-relax snapshot
         # plus its one relaxed check predicts; any other difference still
         # reports as real drift.
+        #
+        # This is the one place in this file where trusting an issue's
+        # content SUPPRESSES a safety signal instead of merely causing a
+        # refusal or a false alarm -- so, unlike the stale-issue check just
+        # above (a forged issue there only produces an extra, fail-closed
+        # DRIFT report) and unlike relax()/restore_to_baseline()'s stacking
+        # guards (a forged issue there only makes the tool refuse to
+        # proceed), this branch alone must verify the issue was actually
+        # opened by the currently authenticated actor before an unrelated,
+        # attacker-opened public issue can blind this preflight's only
+        # automated detector.
+        if trusted_login is None:
+            trusted_login = get_authenticated_login()
+        if (issue.get("author") or {}).get("login") != trusted_login:
+            continue
         try:
             snapshot = parse_snapshot_from_body(issue["body"])
             check_name = parse_check_name_from_body(issue["body"])
@@ -171,7 +187,7 @@ def list_open_bypass_issues(repo: str = REPO) -> list[dict]:
         [
             "issue", "list", "--repo", repo,
             "--search", f'"{INCIDENT_TITLE_PREFIX}" in:title',
-            "--state", "open", "--json", "number,title,body",
+            "--state", "open", "--json", "number,title,body,author",
         ]
     )
     return [
@@ -290,6 +306,14 @@ def relax(
         raise CiBypassError(
             f"could not read --evidence file {evidence_path}: {error}"
         ) from error
+    if SNAPSHOT_MARKER_START in evidence_text:
+        raise CiBypassError(
+            f"--evidence file {evidence_path} contains {SNAPSHOT_MARKER_START!r} "
+            f"-- refusing to embed it in the incident body, where it could be "
+            f"mistaken for this mechanism's own authoritative snapshot marker "
+            f"(build_incident_body places the evidence text before the real "
+            f"marker, and parse_snapshot_from_body reads the first occurrence)"
+        )
     if now is None:
         now = datetime.now(timezone.utc)
     expiry_timestamp = (now + timedelta(minutes=expiry_minutes)).strftime(
@@ -368,7 +392,7 @@ def get_incident_body(repo: str, issue_number: int) -> str:
     # genuine incident this mechanism creates is opened under that same
     # authenticated `gh` actor (see create_incident_issue/_create_issue).
     trusted_login = get_authenticated_login()
-    author_login = data["author"]["login"]
+    author_login = (data.get("author") or {}).get("login")
     if author_login != trusted_login:
         raise CiBypassError(
             f"incident #{issue_number} was opened by {author_login!r}, not "
@@ -381,6 +405,26 @@ def get_incident_body(repo: str, issue_number: int) -> str:
 def restore(repo: str, issue_number: int, comment_path: Path) -> dict:
     body = get_incident_body(repo, issue_number)
     snapshot = parse_snapshot_from_body(body)
+    # Defense in depth beyond get_incident_body()'s title/author check --
+    # an issue body can be edited after creation, and older incidents may
+    # predate that check. A genuine snapshot is always what relax() itself
+    # captured immediately before its PATCH, which never removes a
+    # never-relaxable check or weakens `strict`; refuse anything that
+    # wouldn't have come from a genuine relax().
+    missing_never_relaxable = NEVER_RELAXABLE_CHECKS - set(snapshot.get("contexts", []))
+    if missing_never_relaxable:
+        raise CiBypassError(
+            f"incident #{issue_number}'s embedded snapshot would drop "
+            f"{sorted(missing_never_relaxable)} from required checks -- "
+            f"refusing to restore a snapshot that violates this "
+            f"mechanism's own never-relaxable set"
+        )
+    if snapshot.get("strict") is not True:
+        raise CiBypassError(
+            f"incident #{issue_number}'s embedded snapshot does not have "
+            f"strict=true -- refusing to restore a snapshot that weakens "
+            f"branch protection beyond what this mechanism is authorized to change"
+        )
     patch_required_status_checks(repo, snapshot["strict"], snapshot["contexts"])
     protection = get_protection(repo)
     readback = protection_snapshot(protection)
