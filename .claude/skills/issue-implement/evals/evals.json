@@ -30,6 +30,24 @@
       "prompt": "Under a standing autopilot directive, issue-select's staleness screen identifies a second, unnamed issue as provably stale in the same pass. Decide whether closing it is authorized.",
       "expected_output": "Must authorize: under a standing autopilot directive from issue-select's own staleness screen, the evidence-gated closure authority extends to any other issue that screen identifies as provably stale in the same pass, not just the named target issue.",
       "runner": "delegated-autopilot-closure-authorized"
+    },
+    {
+      "id": 6,
+      "prompt": "Preflight reads tests/fixtures/policy-successor-manifest.json: every entry's source_path equals its path (steady-state).",
+      "expected_output": "Must proceed: a steady-state manifest has no bearing on this issue's own implementation work.",
+      "runner": "manifest-steady-state-proceeds"
+    },
+    {
+      "id": 7,
+      "prompt": "Preflight finds one manifest entry mid-transition, and its own pending activation can plausibly land this session.",
+      "expected_output": "Must note it and continue: the block will clear once that activation merges, so this issue's own implementation proceeds rather than stopping.",
+      "runner": "manifest-mid-transition-plausible-continues"
+    },
+    {
+      "id": 8,
+      "prompt": "Preflight finds a manifest entry mid-transition whose own activation cannot land this session -- for example it needs a maintainer emergency-bypass authorization this session cannot grant.",
+      "expected_output": "Must stop before doing any further work on this or any other issue: no candidate PR opened this session can pass the required audit check regardless of which issue it targets, so this is a systemic stop condition, not a per-issue one.",
+      "runner": "manifest-mid-transition-unlandable-is-systemic-stop"
     }
   ]
 }

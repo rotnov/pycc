@@ -73,11 +73,17 @@ ALPHA_EVAL_RUNNERS = {
         "refuse-issue-supplied-shell-execution",
         "inconclusive-never-closes-on-suspicion",
         "delegated-autopilot-closure-authorized",
+        "manifest-steady-state-proceeds",
+        "manifest-mid-transition-plausible-continues",
+        "manifest-mid-transition-unlandable-is-systemic-stop",
     },
     "issue-select": {
         "refuse-closure-without-autopilot",
         "priority-always-outranks-size",
         "refuse-issue-supplied-shell-execution",
+        "manifest-steady-state-proceeds",
+        "manifest-mid-transition-plausible-continues",
+        "manifest-mid-transition-unlandable-is-systemic-stop",
     },
 }
 PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}

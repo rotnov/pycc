@@ -28,6 +28,51 @@ never a merge gate.
 
 ---
 
+## 2026-08-02 — Five plan-review rounds spent before a one-grep check would have killed the pick at selection
+
+**What happened:** issue #243 (add subprocess/CLI-boundary tests to
+`scripts/test_check_search_visibility_audit.py`) passed `issue-select`'s
+premise-verification and adversarial-advisor round cleanly, then went
+through 4 rounds of `issue-to-plan`'s adversarial review loop fixing real
+but comparatively minor issues (wrong citations, a wrong decision number, a
+Gates-section restructure) before round 5 found the actual blocker: the
+target file is itself a `tests/fixtures/policy-successor-manifest.json`
+(D-103) protected entry, so a direct single-PR edit would fail the
+required `audit` check outright. That fact is checkable in one command
+(`grep test_check_search_visibility_audit.py tests/fixtures/policy-successor-manifest.json`)
+and does not depend on anything in the plan's own content — it would have
+been true on round 0, before a single word of the plan was drafted.
+
+**Root cause:** neither `issue-select`'s blocker screen nor
+`issue-implement`'s staged-pattern detection ever checked the manifest at
+all — both only knew about the narrower, `ci.yml`-specific D-080
+digest-allowlist mechanism (see this session's own fix, PR #279). So
+nothing in the selection or early-planning path was positioned to catch
+this before real planning effort had already gone into a single-PR shape
+that could never land. The four earlier review rounds were not wasted in
+isolation — their fixes were real — but all of that work was downstream of
+an unverified premise (a manifest-protected file can be edited directly)
+that a single grep would have refuted immediately.
+
+**What fixed it:** the issue was set aside (denylisted, no code changed;
+see `docs/SESSION_LOG.md`'s 2026-08-02 entry), and the actual gap — no
+manifest check anywhere in the selection or planning path — was folded
+back into `issue-select` and `issue-implement` directly (PR #279), so a
+future run's baseline/preflight step now checks the manifest before
+selecting or planning anything.
+
+**Lesson:** when a repository has a structural, mechanically-checkable
+precondition for "can this file be edited in a single PR at all" (a
+digest pin, a protected-manifest entry, a generated-file marker), that
+check belongs in the *selection* or *earliest preflight* step, checked
+against the literal target file list, not discovered organically partway
+through plan review. A multi-round adversarial review loop is good at
+catching reasoning errors in a plan's content; it is a comparatively
+expensive way to discover a precondition that a one-line structural query
+would have settled before the plan had any content to review.
+
+---
+
 ## 2026-07-31 — A rerun with identical replicate medians is a cached duplicate, not a second data point
 
 **What happened:** while investigating D-109's `frontend-perf-gate` regression, a `gh run rerun` of a passing CI run (30613065177) was treated as producing "two independent, genuinely fresh" measurements, and `docs/DECISIONS.md`/`docs/ROADMAP.md`/`docs/SESSION_LOG.md` were committed and pushed recording both a 1.8430% and a -0.4454% delta as separate confirming evidence that the regression was closed. Neither attempt's job log was actually diffed against the other before writing "confirmed closed." When a later, unrelated investigation prompted pulling both attempts' raw logs directly, they turned out to report byte-identical replicate medians and an identical -0.4454% delta — attempt 2 had reused attempt 1's cached artifacts rather than remeasuring, and the 1.8430% figure matched no retrievable log at all. The false "confirmed closed" claim then had to be withdrawn across four documentation files days into the branch's life, alongside a second, worse finding it surfaced (a pre-fix commit passing at 0.81% right next to another pre-fix commit failing at 6.52% with zero code change between them — undermining the original "confirmed regression" finding too, not just its closure).
