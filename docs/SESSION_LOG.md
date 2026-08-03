@@ -11,6 +11,28 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — D-114 redone correctly with no emergency bypass: `frontend-perf-gate` now live at 7.0%, PR-10 unblocked
+
+**Authoritative checkpoint:** `main`'s tip is this round's own activation merge (round 6 of 6). Confirmed via a fresh `pull_request_target` audit-harness run against a pristine clone at each round's own base commit, plus a full local `ruby scripts/test_check_roadmap_evidence.rb` run (145 runs, 0 failures) after every round.
+
+**Root cause of the original deadlock, per the repository owner's own diagnosis closing PR #290:** the first D-114 attempt (PR #286, reverted via #291 under an owner-authorized emergency bypass — see this log's own previous entry) staged all three D-103-protected targets (`.github/workflows/ci.yml`, `scripts/check_roadmap_evidence.rb`, `scripts/test_check_roadmap_evidence.rb`) in one propose round. `workflow-policy.yml`'s `audit` job runs two independent checks against the same files — `check_ci_permissions.rb`'s `validate_policy_successor_transition` (candidate's live bytes must match what `main`'s manifest already stages) and `check_roadmap_evidence.rb`'s own base-executed `validate_evidence` (candidate's `ci.yml` digest must already be trusted by `main`'s *currently live* checker) — and staging three targets together made no candidate able to satisfy both, in either direction. This is structurally the same deadlock class as the #109/D-112 round 7a/7b history this log already documents below, just with an extra target involved.
+
+**The fix, executed as six separate propose/activate rounds, one live-target change per round:**
+1. [#298](https://github.com/rotnov/pycc/pull/298) — propose a new `D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB` checker constant + widen the D112 measure-job branch to accept either gate-job shape. Inert.
+2. [#299](https://github.com/rotnov/pycc/pull/299) — activate round 1's successor.
+3. [#300](https://github.com/rotnov/pycc/pull/300) — propose adding `D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256` to the checker's accepted-digest array, reusing the already-registered retained historical fixture `tests/fixtures/d114-frontend-perf-threshold-ci.yml` verbatim (its bytes turned out byte-identical to what this round needed — `main` never touched that region of `ci.yml` since that fixture was first reviewed for the original #286 attempt). Inert w.r.t. live `ci.yml`.
+4. [#301](https://github.com/rotnov/pycc/pull/301) — activate round 3's successor.
+5. [#302](https://github.com/rotnov/pycc/pull/302) — propose `ci.yml`'s own successor (the `"7.0"` threshold argument) **and** the matching `scripts/test_check_roadmap_evidence.rb` assertion updates together, in the same round. This is the exact co-staging D-112's own round 6 (PR #277) omitted, which forced round 7a (PR #278) into an emergency-bypass-gated `ci-gate` failure — staging both together here (neither touches live bytes) avoided repeating that.
+6. This round — activate both of round 5's successors together. `.github/workflows/ci.yml` now genuinely has the 7.0% threshold; `scripts/test_check_roadmap_evidence.rb`'s "active digest" assertions now correctly name D114.
+
+**No emergency bypass was needed at any of the six rounds** — every propose/activate pair was verified locally (full test suite + the real `pull_request_target` audit harness against a pristine clone of `main` at that round's own base) before pushing, and GitHub's own automated review (`chatgpt-codex-connector`) caught two real findings along the way (round 3's ADR plan-text not matching the actual fixture-reuse decision; round 5 leaving four stale "not yet active" doc-comments after its own activation-state comments were added) — both fixed and threads resolved before merging.
+
+D-114 is now `accepted`; `docs/DECISIONS.md` records the full six-round Decision text. [Issue #296](https://github.com/rotnov/pycc/issues/296) tracks the eventual threshold reversion toward 2.0% (no promised date — the trigger is a one-time merge cost, not standing noise). [Issue #297](https://github.com/rotnov/pycc/issues/297) tracks adding a documented profiling workflow, filed during this investigation at the user's request.
+
+**What's next:** PR-10 (#236) can now rebase onto this new `main` tip and should pass `frontend-perf-gate` at its measured `~4.5%` regression (well under the new 7.0% threshold). Once PR-10 merges, PR-11/PR-12 (`feat/v0-2-pr11-dict-set-tuple`, content-complete, final review already clean) can finally be rebased and opened as a real PR.
+
+---
+
 ## 2026-08-03 — D-114 revert (PR #291) merged via an owner-authorized emergency bypass; PR-10/#236 unblocked from `BLOCKED` to `BEHIND`
 
 **Authoritative checkpoint:** `main`'s tip is `fee5750274e8c000c5aee007fbd1aeb2d1964248` (was `cdb3f0abfe68b8c107711c595a5cbd6fd11e43f8`, unmoved since D-114's own propose round created a self-referential manifest deadlock — see incident [#292](https://github.com/rotnov/pycc/issues/292) for the first, aborted attempt to resolve it).

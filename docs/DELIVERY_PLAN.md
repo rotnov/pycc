@@ -122,9 +122,16 @@ logic unchanged, though the runner and LLVM install step now differ from the
 D-062 fixture. D-100 (composing D-091's release-runtime/manifest-relaxation
 changes with D-099's Windows vcpkg cache) was the prior active digest and, like
 D-056 and D-062, remains historical audit evidence, coexisting in the checker
-allowlist pending its own retirement round. The 2% threshold,
-`ci-gate` fan-in, benchmark contract, artifact-ID binding, and isolated
-predecessor-owned comparison boundary remain unchanged.
+allowlist pending its own retirement round. The `ci-gate` fan-in,
+benchmark contract, artifact-ID binding, and isolated predecessor-owned
+comparison boundary remain unchanged. **Update (2026-08-03, D-114):** the
+2% threshold itself is no longer current — it was raised to 7.0% via a
+corrected six-round D-103 propose/activate sequence, to accommodate v0.2
+PR-10's real, one-time `Ty`-migration cost (D-109), not runner noise.
+`REVIEWED_PERF_CI_WORKFLOW_SHA256S` now coexists `[D100, D112, D114]`;
+`.github/workflows/ci.yml` matches D-114's shape. Issue #296 tracks
+lowering the threshold back toward 2.0% once this one-time cost is
+absorbed into every future baseline.
 
 ## Autonomy policy ("no questions" mechanics)
 
