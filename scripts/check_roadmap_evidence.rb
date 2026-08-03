@@ -190,9 +190,23 @@ D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
 # digest before any PR can change ci.yml's live bytes to match it.
 D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256 =
   "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
+# Staged (D-114, round 3): the D112-shaped ci.yml plus an explicit "7.0"
+# threshold argument on the "Compare exact predecessor and candidate"
+# step -- byte-identical to the already-registered, retained historical
+# fixture tests/fixtures/d114-frontend-perf-threshold-ci.yml (main has not
+# touched this region of ci.yml since that fixture was first reviewed),
+# so no new fixture file or manifest target is needed here, only this
+# digest re-entering the accepted array. Coexists with D100 and D112
+# until a later round retires them, mirroring this array's own
+# established coexist-then-retire precedent. Not yet active: this array
+# entry only authorizes the shape for a future ci.yml activation (a
+# later, separate round) -- the live ci.yml is untouched by this round.
+D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
+  "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
-  D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256
+  D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
+  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
