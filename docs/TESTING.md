@@ -617,7 +617,7 @@ strict mode, accepting an `audit` context from another app, or dropping a
 job from `ci-gate`'s `needs:` list is a policy regression; all later policy
 changes are evaluated by the trusted checker from their base revision.
 
-## CI temporary-bypass lifecycle (D-116)
+## CI temporary-bypass lifecycle (D-125)
 
 `scripts/test_manage_ci_bypass.py` covers `scripts/manage_ci_bypass.py`'s
 `status`/`relax`/`restore`/`restore_to_baseline` lifecycle at 100% line

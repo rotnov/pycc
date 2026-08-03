@@ -245,7 +245,7 @@ permission for any future bypass.
 A second, narrower relaxation path exists alongside the Emergency path
 above, for exactly one situation: a required CI check that is provably
 stuck due to external repository state, not the current pull request's
-own defect. Recorded in `docs/DECISIONS.md` (D-116), narrowly superseding D-024's
+own defect. Recorded in `docs/DECISIONS.md` (D-125), narrowly superseding D-024's
 "not delegated to routine tasks" and D-054's "grants no reusable
 permission" for this mechanism only. Full workflow: `.claude/skills/ci-temporary-bypass/SKILL.md`.
 
