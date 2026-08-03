@@ -842,6 +842,95 @@ fn check_subcommand_infers_a_private_helper_signature() {
 }
 
 #[test]
+fn check_subcommand_honors_an_annotated_private_local_without_widening_its_source() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_annotated_private_local_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "annotated_private_local.py",
+        "def _identity(x):\n    y: int = x\n    return y\n\nprint(_identity(True))\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn build_accepts_an_annotated_private_local_with_a_bool_initializer() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_build_annotated_private_local_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "annotated_private_local.py",
+        "def _identity(x):\n    y: int = x\n    return y\n\nprint(_identity(True))\n",
+    );
+    let out = dir.join("annotated_private_local");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // Do not execute this exact fixture here: #240 separately tracks the
+    // backend's existing loss of bool object identity in an int-typed slot.
+}
+
+#[test]
+fn annotated_private_local_does_not_widen_an_independently_returned_bool() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_run_annotated_private_echo_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "annotated_private_echo.py",
+        "def _echo(x):\n    y: int = x\n    return x\n\nprint(_echo(True))\n",
+    );
+    let out = dir.join("annotated_private_echo");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = Command::new(out).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"True\n");
+}
+
+#[test]
+fn check_subcommand_still_rejects_annotated_private_local_narrowing() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_e2e_check_annotated_private_narrowing_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "annotated_private_narrowing.py",
+        "def _narrow(x):\n    y: bool = x\n    return y\n\nprint(_narrow(1))\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("T0025"));
+}
+
+#[test]
 fn check_subcommand_rejects_conflicting_private_helper_constraints() {
     let dir = std::env::temp_dir().join(format!(
         "pycc_e2e_check_private_conflict_{}",

@@ -20,6 +20,21 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   assignments, returns, `range` operands, and arithmetic expressions. The
   resulting helper signature is monomorphic within the module. Conflicting
   call-site constraints are `T0021`; conflicting inferred returns are `T0022`.
+- An initialized scalar-annotated local with no earlier representation binding
+  binds its target to the declaration type, while the initializer keeps its
+  independently inferred type and is checked directionally afterward. A
+  compatible re-declaration retains the first representation binding.
+  Scalar declaration bounds act only as deferred fallbacks for
+  otherwise-unresolved initializer variables: all bounds for the same
+  inference root are aggregated and the most-specific compatible type wins,
+  so `bool` evidence is never widened to `int` merely because an annotation or
+  helper body was visited first. A value-less annotation still creates no
+  initialized binding; that separate state-model limitation is tracked by
+  [#245](https://github.com/rotnov/pycc/issues/245).
+  Non-scalar annotated targets receive local-only unresolved solver bindings;
+  an inference root joined to one cannot resolve an otherwise-inferred private
+  parameter or return as a container, even through hard call evidence. Existing
+  container inference from explicit function-signature evidence is unchanged.
 - An unconstrained parameter or return variable is rejected with `T0021` and
   an instruction to add an annotation. It never silently becomes `Any` or
   `None`; only a helper with no value-returning path infers `None`.
