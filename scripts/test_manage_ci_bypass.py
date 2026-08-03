@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import runpy
 import sys
 import tempfile
@@ -800,7 +801,11 @@ class RestoreToBaselineTests(unittest.TestCase):
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_restore_to_baseline_happy_path(self, mock_run_gh):
+        # FULL_PROTECTION_RESPONSE already matches BASELINE_PROTECTION in
+        # every field, so there is no out-of-scope drift and the "Action
+        # needed" section is absent from the created issue body.
         mock_run_gh.side_effect = self._dispatch({
+            ("issue", "list"): "[]",
             ("issue", "create"): "https://github.com/owner/repo/issues/500\n",
             ("api", "-X"): "{}",
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
@@ -813,9 +818,11 @@ class RestoreToBaselineTests(unittest.TestCase):
             "owner/repo", body_path=self.body_path, comment_path=self.comment_path,
         )
         self.assertEqual(readback, mcb.BASELINE_PROTECTION)
-        self.assertIn(
-            "No open `[ci-bypass]` incident", self.body_path.read_text(encoding="utf-8")
-        )
+        body_text = self.body_path.read_text(encoding="utf-8")
+        self.assertIn("No open `[ci-bypass]` incident", body_text)
+        self.assertIn("Captured drifted state", body_text)
+        self.assertNotIn("Action needed from a human administrator", body_text)
+        self.assertNotIn(mcb.SNAPSHOT_MARKER_START, body_text)
         self.assertIn("Forced restore verified", self.comment_path.read_text(encoding="utf-8"))
         mock_run_gh.assert_any_call(
             [
@@ -841,8 +848,13 @@ class RestoreToBaselineTests(unittest.TestCase):
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_restore_to_baseline_raises_on_drift_after_forced_restore(self, mock_run_gh):
+        # Drift is in enforce_admins, a field this function can never PATCH --
+        # it must capture that as out-of-scope, refuse to embed a restorable
+        # snapshot marker, and still fail closed when the (unfixable) drift
+        # persists on readback.
         drifted = {**FULL_PROTECTION_RESPONSE, "enforce_admins": {"enabled": False}}
         mock_run_gh.side_effect = self._dispatch({
+            ("issue", "list"): "[]",
             ("issue", "create"): "https://github.com/owner/repo/issues/501\n",
             ("api", "-X"): "{}",
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(drifted),
@@ -852,13 +864,67 @@ class RestoreToBaselineTests(unittest.TestCase):
                 "owner/repo", body_path=self.body_path, comment_path=self.comment_path,
             )
         message = str(ctx.exception)
-        self.assertIn("DRIFT after forced baseline restore", message)
+        self.assertIn("does not match baseline", message)
         self.assertIn("#501", message)
-        self.assertIn("release-blocking governance incident", message)
+        body_text = self.body_path.read_text(encoding="utf-8")
+        self.assertIn("Action needed from a human administrator", body_text)
+        self.assertIn("enforce_admins", body_text)
+        # Never embed a restorable snapshot marker for a drifted (bad) state
+        # -- `restore --incident` blindly reissues whatever is embedded there,
+        # and this issue's captured "before" is the drift itself, not
+        # something safe to restore back to.
+        self.assertNotIn(mcb.SNAPSHOT_MARKER_START, body_text)
         # No comment/close call should have happened -- the issue must stay
         # open for a human to investigate the still-drifted state.
         for call in mock_run_gh.call_args_list:
             self.assertNotIn(tuple(call.args[0][:2]), (("issue", "comment"), ("issue", "close")))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_restore_to_baseline_refuses_when_incident_already_open(self, mock_run_gh):
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "list"): json.dumps([{"number": 292, "title": "[ci-bypass] existing"}]),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.restore_to_baseline(
+                "owner/repo", body_path=self.body_path, comment_path=self.comment_path,
+            )
+        self.assertIn("already open", str(ctx.exception))
+        # Must refuse before touching protection or creating a second issue --
+        # the only gh call made is the open-incident check itself.
+        self.assertEqual(
+            [tuple(call.args[0][:2]) for call in mock_run_gh.call_args_list],
+            [("issue", "list")],
+        )
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_restore_to_baseline_captures_actual_drifted_state_not_baseline_target(
+        self, mock_run_gh
+    ):
+        # The "before" snapshot embedded in the issue body must be what was
+        # actually found (contexts missing "audit"), not BASELINE_PROTECTION's
+        # target contexts -- otherwise the diagnostic is useless to a human.
+        drifted = {
+            **FULL_PROTECTION_RESPONSE,
+            "required_status_checks": {"strict": True, "contexts": ["ci-gate"]},
+        }
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "list"): "[]",
+            ("issue", "create"): "https://github.com/owner/repo/issues/502\n",
+            ("api", "-X"): "{}",
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(drifted),
+        })
+        with self.assertRaises(mcb.CiBypassError):
+            mcb.restore_to_baseline(
+                "owner/repo", body_path=self.body_path, comment_path=self.comment_path,
+            )
+        body_text = self.body_path.read_text(encoding="utf-8")
+        match = re.search(
+            r"Captured drifted state.*?```json\n(.*?)\n```", body_text, re.DOTALL
+        )
+        self.assertIsNotNone(match, f"no captured-state JSON block found in: {body_text!r}")
+        captured = json.loads(match.group(1))
+        self.assertEqual(captured["contexts"], ["ci-gate"])
+        self.assertNotEqual(captured["contexts"], sorted(mcb.BASELINE_CONTEXTS))
 
 
 class CreateIssueTests(unittest.TestCase):
@@ -970,6 +1036,7 @@ class MainDispatchTests(unittest.TestCase):
     @mock.patch("manage_ci_bypass.run_gh")
     def test_main_restore_to_baseline_dispatches(self, mock_run_gh):
         mock_run_gh.side_effect = self._dispatch({
+            ("issue", "list"): "[]",
             ("issue", "create"): "https://github.com/owner/repo/issues/600\n",
             ("api", "-X"): "{}",
             ("api", "repos/owner/repo/branches/main/protection"): json.dumps(

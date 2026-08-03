@@ -325,24 +325,52 @@ def restore(repo: str, issue_number: int, comment_path: Path) -> dict:
 
 
 def restore_to_baseline(repo: str, body_path: Path, comment_path: Path) -> dict:
+    if find_open_bypass_issue(repo) is not None:
+        raise CiBypassError(
+            "a [ci-bypass] incident is already open; refusing to create a "
+            "second one -- investigate and clean up the existing incident first"
+        )
+    protection = get_protection(repo)
+    before = protection_snapshot(protection)
+    out_of_scope_drift = {
+        key: before[key] for key in before
+        if key not in ("strict", "contexts") and before[key] != BASELINE_PROTECTION[key]
+    }
     title = f"{INCIDENT_TITLE_PREFIX} forced restore to baseline (no tracking incident found)"
-    pre_body = (
+    body_parts = [
         "No open `[ci-bypass]` incident was found while branch protection "
         "showed drift from the documented baseline (AGENTS.md's preflight "
-        "escalation path, for exactly this case). Forcing a restore to "
-        f"baseline directly, target:\n\n```json\n"
-        f"{json.dumps(BASELINE_PROTECTION, indent=2, sort_keys=True)}\n```\n"
-    )
-    body_path.write_text(pre_body, encoding="utf-8")
+        "escalation path, for exactly this case).",
+        "**Captured drifted state (before any change made by this run):**\n\n"
+        f"```json\n{json.dumps(before, indent=2, sort_keys=True)}\n```\n",
+    ]
+    if out_of_scope_drift:
+        body_parts.append(
+            "**Action needed from a human administrator.** This tool can "
+            "only PATCH `required_status_checks` (`strict`/`contexts`) -- "
+            f"drift was also found outside that scope, in: "
+            f"{sorted(out_of_scope_drift)}. This run will restore "
+            "`required_status_checks` only, then leave this incident open. "
+            "Fix the remaining field(s) directly via GitHub's branch "
+            "protection settings, confirm with "
+            "`python3 scripts/manage_ci_bypass.py status`, then close this "
+            "issue manually -- it is deliberately not restorable via "
+            "`restore --incident` (no snapshot marker is embedded here, "
+            "since this issue's own captured 'before' state is the drift "
+            "itself, not something safe to restore back to)."
+        )
+    body_path.write_text("\n\n".join(body_parts), encoding="utf-8")
     issue_number = _create_issue(repo, title, body_path)
     patch_required_status_checks(repo, True, sorted(BASELINE_CONTEXTS))
     protection = get_protection(repo)
     readback = protection_snapshot(protection)
     if readback != BASELINE_PROTECTION:
         raise CiBypassError(
-            f"DRIFT after forced baseline restore (incident #{issue_number}): "
-            f"expected {BASELINE_PROTECTION}, readback {readback} -- this is "
-            f"a release-blocking governance incident even after forced restore"
+            f"restore_to_baseline PATCHed required_status_checks but "
+            f"protection still does not match baseline -- incident "
+            f"#{issue_number} is left open with the captured pre-mutation "
+            f"state for a human administrator; expected {BASELINE_PROTECTION}, "
+            f"readback {readback}"
         )
     comment = (
         "Forced restore verified. Readback matches documented baseline "

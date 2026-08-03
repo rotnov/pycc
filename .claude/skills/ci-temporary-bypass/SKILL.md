@@ -153,6 +153,16 @@ action stays public and auditable even with nothing to restore from),
 `CiBypassError` on any readback mismatch exactly like `restore --incident`
 does. `--incident` and `--to-baseline` are mutually exclusive.
 
+`--to-baseline` can only repair drift in `required_status_checks`
+(`strict`/`contexts`) -- the same narrow scope this whole mechanism is
+authorized to mutate; drift in any of the other six protection fields
+(`enforce_admins`, `required_pull_request_reviews`,
+`required_conversation_resolution`, `allow_force_pushes`,
+`allow_deletions`) requires manual administrator action via GitHub's branch
+protection settings, and the incident it creates in that case is
+deliberately not restorable via `restore --incident` -- close it by hand
+once the out-of-scope field(s) are fixed.
+
 ### 5. Gate 2 -- post-restore verification
 
 Dispatch a second fresh, isolated `Agent()`. Give it the pre-relax snapshot
