@@ -11,6 +11,20 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — PR-11/PR-12 merged to `main`; v0.2 `dict`/`set`/`tuple` generics, comprehensions, slicing, and container methods now live
+
+**Authoritative checkpoint:** `main`'s tip is `9a7a6db8be09ac0a06184d8d5ef4e0be352346ec` ([PR #305](https://github.com/rotnov/pycc/pull/305), squash merge), confirmed via `gh api repos/rotnov/pycc/commits/main --jq '.sha'` immediately before writing this entry. All 13 required checks passed on the merged commit (`gh pr checks 305`, re-confirmed post-merge).
+
+**What happened:** PR #305 (the branch this log's own previous entry describes rebasing onto `main`) merged, delivering `docs/DELIVERY_PLAN.md` rows 11 and 12 in one combined PR: `dict[str, int]`/`set[int]` (PR-11a, D-121–D-124), `tuple[...]` (PR-11b, D-115/D-116), and list/dict/set comprehensions + `list[int]` slicing + `list.pop()`/`dict.get()`/`set.add()` + the PEP-709 fixture (PR-12, D-117–D-120).
+
+**One real P1 finding from the automated review, fixed before merge:** `ForSet`'s loop bound re-reads `pycc_rt_int_set_len` every iteration, mirroring `ForDict`'s own shape (D-123 explicitly accepts this as a bounded divergence for dict) — but `set.add()` existing in this same PR made it genuinely unbounded for set: `for x in s: s.add(x + 1)` would never terminate, since `x + 1` is always a value not yet in `s`. Fixed by capturing the set's length once in the loop's preheader and panicking honestly (`pycc_rt_int_set_check_not_resized`) if a fresh per-iteration read no longer matches it, mirroring real CPython's own catchable `RuntimeError: Set changed size during iteration`. Verified via a new end-to-end test reproducing the exact reported case, plus `cargo llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100` back to 100% (a first attempt left the new `extern "C"` wrapper itself uncovered, since a Rust panic cannot unwind across an `extern "C"` boundary — fixed by testing the private helper for the panic path and the actual wrapper for the non-panic path, mirroring `pycc_rt_int_list_pop`'s own existing split).
+
+**Known, deliberately-unresolved D-number collision:** this PR's own D-115/D-116 (tuple representation/scope) collide with [PR #303](https://github.com/rotnov/pycc/pull/303)'s own independent D-116 claim (a session-driven CI-bypass mechanism), still open as of this entry. Whoever merges `main` second (that PR, since this one just did) will need to renumber its own new ADRs, following this project's established D-056/D-111-style precedent — not this entry's problem to resolve.
+
+**What's next:** v0.2's remaining scope is PR-13 (PEP 695 generics, deferred per D-104) and PR-14 (`pycc_std`/stdlib imports), both entirely unimplemented as of this entry — see `docs/DELIVERY_PLAN.md` for their own rows. Neither has a plan or worktree yet.
+
+---
+
 ## 2026-08-03 — PR-10 merged to `main`; this branch (PR-11a+PR-11b+PR-12) rebased onto it, ready to open as a real PR
 
 **Authoritative checkpoint:** this branch's own head is `9b14098` (a merge commit, `git log --oneline -1`), merging `origin/main` at `48f793e` (`git rev-parse origin/main`) into this branch's own pre-merge tip `8c47c60`. Not yet pushed or opened as a GitHub PR.
