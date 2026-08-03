@@ -726,6 +726,287 @@ fn pep_0526_annotated_assignments_compile_and_run_correctly() {
 }
 
 #[test]
+fn list_int_literal_append_index_len_and_iteration_all_work() {
+    // The v0.2 `list[int]` thin slice (D-105) end to end through the real
+    // `pycc build` CLI: literal construction, `.append()`, indexed read,
+    // `len()`, and `for`-iteration, all in one program. Inside a private
+    // helper (D-038's `_`-prefixed convention), which is one of the two
+    // places D-105's first scope cut says a `list[int]` value can live;
+    // `a_module_level_list_binding_lives_in_a_global_slot` below covers the
+    // other. Expected output verified against `python3` on this exact
+    // source.
+    let source = "\
+def _run() -> None:
+    x = [10, 20, 30]
+    x.append(40)
+    print(len(x))
+    print(x[0])
+    print(x[3])
+    for v in x:
+        print(v)
+
+_run()
+";
+    let output = build_and_run("list_int_thin_slice", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"4\n10\n40\n10\n20\n30\n40\n");
+}
+
+#[test]
+fn a_module_level_list_binding_lives_in_a_global_slot() {
+    // The other half of D-105's first scope cut ("`list[int]` values exist
+    // ... inside module scope or a private helper"): the same operations as
+    // the test above, written at module scope, where the binding becomes an
+    // LLVM global rather than a function-local alloca. Task 5's own report
+    // flagged that `declare_module_globals` had no `Ty::List(_)` arm and
+    // left re-deriving that interaction to this task -- without the arm
+    // added here, this exact program aborts the compiler with
+    // "a `list[int]`-typed module binding is not supported yet" instead of
+    // building. Also covers reading a `list[int]` global from inside a
+    // function (D-041), which a function-local list can't reach.
+    // Verified against `python3` on this exact source.
+    let source = "\
+def _total() -> int:
+    sum = 0
+    for v in xs:
+        sum = sum + v
+    return sum
+
+xs = [1, 2, 3]
+xs.append(4)
+print(len(xs))
+print(xs[2])
+print(_total())
+";
+    let output = build_and_run("list_module_global", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"4\n3\n10\n");
+}
+
+#[test]
+fn reading_a_list_global_before_it_is_assigned_traps_instead_of_dereferencing_null() {
+    // A `list[int]` module global's storage starts as a null pointer, the
+    // same as a `str` global's (see
+    // `calling_a_function_before_its_string_global_is_initialized_fails_safely`
+    // above). The `initialized` flag every module global carries is what
+    // must stop that null from ever reaching `pycc_rt_int_list_len`.
+    let source = "\
+def _size() -> int:
+    return len(later)
+
+captured = _size()
+later = [1]
+";
+    let output = build_and_run("uninitialized_list_global", source);
+    assert!(
+        !output.status.success(),
+        "an uninitialized list global must trap before a null runtime dereference"
+    );
+}
+
+#[test]
+fn iterating_a_list_rereads_its_length_each_step_like_cpython() {
+    // CPython's list iterator compares its cursor against the list's
+    // *current* length on every `__next__`, so appending inside the loop
+    // body extends the iteration. `MirStmt::ForList`'s codegen therefore
+    // calls `pycc_rt_int_list_len` inside its loop-test block rather than
+    // hoisting it into the preheader -- with the length hoisted, this
+    // program would print only "1". Output verified against `python3` on
+    // this exact source.
+    let source = "\
+def _run() -> None:
+    xs = [1]
+    for v in xs:
+        if len(xs) < 3:
+            xs.append(v + 1)
+        print(v)
+
+_run()
+";
+    let output = build_and_run("list_iteration_rereads_len", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n3\n");
+}
+
+#[test]
+fn rebinding_the_iterated_name_inside_the_body_does_not_retarget_the_loop() {
+    // The other half of `MirStmt::ForList`'s iteration contract, alongside
+    // `iterating_a_list_rereads_its_length_each_step_like_cpython` above:
+    // Python binds its iterator to the object the `for` statement
+    // evaluated, so rebinding the *name* mid-loop leaves the iteration on
+    // the original list. That is why the arm reads the list pointer once,
+    // in the loop preheader, rather than per iteration -- with the read
+    // moved into the loop-test block this would print "1" and then loop on
+    // `[9]` forever. Module scope on purpose: it makes the rebinding write
+    // through to the same global slot the loop read from, which is the
+    // case that would actually break. Output verified against `python3` on
+    // this exact source.
+    let source = "\
+xs = [1, 2]
+for v in xs:
+    xs = [9]
+    print(v)
+";
+    let output = build_and_run("list_iteration_name_rebound", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n");
+}
+
+#[test]
+fn list_targets_keep_the_last_element_and_ignore_body_reassignment() {
+    // The `MirStmt::ForList` counterpart of
+    // `range_targets_keep_the_last_element_and_ignore_body_reassignment_for_iteration`
+    // above. `ForList`'s arm is a deliberate inline duplicate of
+    // `ForRange`'s loop-building logic rather than shared code, so that
+    // test protects none of these properties here: the loop target is a
+    // storage slot written once per iteration, so it survives the loop
+    // holding the last element, and reassigning it inside the body cannot
+    // disturb the next iteration (which reads its value from the hidden
+    // index, not from the slot). `ForRange`'s third property -- an empty
+    // sequence leaving the target unbound -- has no `list` counterpart to
+    // test: `pycc_types` rejects an empty list literal outright, and v0.2
+    // has no way to empty a non-empty one. Output verified against
+    // `python3` on this exact source.
+    let source = "\
+xs = [1, 2, 3]
+for i in xs:
+    print(i)
+print(i)
+for k in xs:
+    print(k)
+    k = 99
+print(k)
+";
+    let output = build_and_run("list_target_lifetime", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n2\n3\n3\n1\n2\n3\n99\n");
+}
+
+#[test]
+fn converting_a_list_to_str_stops_the_build_with_an_honest_unsupported_message() {
+    // v0.2 has no `str(list)`, and `pycc_types` type-checks both of these
+    // unconditionally (its `print` arm accepts any argument type, and an
+    // f-string interpolation imposes none), so each passes `pycc check` and
+    // then stops in codegen (D-107). Asserts the honest message rather than
+    // only the failure, since the whole point of D-107's `Scalar::List`
+    // split was to replace silently handing a `PyIntListObj` pointer to a
+    // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
+    //
+    // Both source forms, not just `print(xs)`: `to_str` has exactly two
+    // call sites in `pycc_codegen` -- `emit_print_arg` and `emit_expr`'s
+    // f-string interpolation arm -- and `docs/ARCHITECTURE.md` names both
+    // as reachable, so both need evidence rather than one standing in for
+    // the other. (An earlier version of this test covered only `print(xs)`
+    // while the doc claimed a count of two operations, missing f-strings
+    // entirely.)
+    for (label, expression) in [
+        ("print_list", "print(xs)"),
+        ("fstring_list", "print(f\"{xs}\")"),
+    ] {
+        let source = format!(
+            "\
+def _run() -> None:
+    xs = [1, 2]
+    {expression}
+
+_run()
+"
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "pycc_slice1_{label}_{pid}",
+            pid = std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = write_fixture(&dir, &format!("{label}.py"), &source);
+        let output = Command::new(pycc_bin())
+            .args([
+                "build",
+                src.to_str().unwrap(),
+                "-o",
+                dir.join(label).to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "`{expression}` must not build");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("string conversion of a list[T] value is not supported yet"),
+            "expected the honest unsupported-conversion message for `{expression}`, got: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn appending_a_bigint_valued_element_fails_explicitly_instead_of_corrupting_the_slot() {
+    // D-106's own named regression: `PyIntListObj` stores raw, untagged
+    // `i64` slots with no room for a bigint, and `pycc_rt_int_add`/`_mul`
+    // promote past D-061's 63-bit smallint range on overflow -- reachable
+    // from ordinary type-checked source, as here. The decision requires
+    // this to be an honest runtime failure ("pycc_rt: list[int] does not
+    // support bigint-valued elements or indices yet") rather than a
+    // silently truncated element, and requires a real executing test of it
+    // rather than only a documented gap. Real CPython prints the exact
+    // product here; this is a documented v0.2 scope cut, not a match.
+    //
+    // The overflowing value is built by multiplication rather than written
+    // as a literal: `tag_smallint_const` rejects an out-of-tagged-range
+    // integer *literal* at compile time (bigint literals are their own
+    // separate gap), so a literal would never reach `.append()` at all.
+    // `3000000000 * 3000000000` is the same promotion
+    // `multiplication_promotes_and_float_floor_division_matches_cpython`
+    // above already pins as reaching a real bigint.
+    let source = "\
+def _run() -> None:
+    xs = [1]
+    xs.append(3000000000 * 3000000000)
+    print(xs[1])
+
+_run()
+";
+    let output = build_and_run("list_append_bigint_aborts", source);
+    assert!(
+        !output.status.success(),
+        "a bigint-valued element must fail loudly, not be truncated into a raw i64 slot"
+    );
+    // D-106 requires specifically an *honest panic*, not merely a failure --
+    // asserting the message is what distinguishes it from a segfault or any
+    // other abort that a missing guard could also produce. `pycc_rt`'s panic
+    // handler writes this to stderr before the `extern "C"` boundary turns
+    // the unwind into a process abort.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not support bigint-valued elements or indices"),
+        "expected pycc_rt's honest bigint message, got: {stderr}"
+    );
+}
+
+#[test]
+fn an_out_of_range_index_fails_explicitly() {
+    // `pycc_rt_int_list_get`'s own bounds panic, reached through real
+    // source: the index is only known at runtime, so there is nothing
+    // `pycc_types` could have rejected. Also pins D-108's documented v0.2
+    // scope cut that a *negative* index is out of range too rather than
+    // CPython's last-element behavior.
+    let source = "\
+def _run() -> None:
+    xs = [1, 2, 3]
+    print(xs[0 - 1])
+
+_run()
+";
+    let output = build_and_run("list_index_out_of_range", source);
+    assert!(
+        !output.status.success(),
+        "a negative index is out of range in v0.2, not CPython's last element"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("list index out of range"),
+        "expected pycc_rt's honest bounds message, got: {stderr}"
+    );
+}
+
+#[test]
 fn a_bool_initializer_under_an_int_annotation_widens_before_a_later_reassignment() {
     // Regression test for a cross-task divergence found and fixed while
     // implementing this task: `pycc_types` (Task 4) binds its checker

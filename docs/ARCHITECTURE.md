@@ -47,10 +47,30 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pyc
 The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
 the AST. `pycc_hir::lower_checked` preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,
-calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. Function items
-carry their parameter and return types, while call expressions retain only the
-bare callee name plus ordered argument expressions; HIR does not yet assign
-binding identities or build and memoize a
+calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. A first
+`list[int]` slice (D-105, PR-10) lowers list literals, read-only subscript
+indexing (`base[index]`), a dedicated `.append()` call form, and
+`for var in <bare-name-list>:` iteration through HIR (D-105's HIR-forms
+task), `pycc_types` type-checking including `len()`'s call-dispatch (D-105's
+type-checking task, `T0032`/`T0033`/`T0034`), `pycc_mir` lowering (D-105's
+MIR-lowering task), and `pycc_codegen` (D-105's codegen task) against
+`pycc_rt`'s `PyIntListObj` -- so `build`/`run` compiles and runs a
+`list[int]` program end to end, at module scope or inside a private helper
+(the two places D-105's first scope cut allows a `list[int]` value to live).
+Only `list[int]` reaches codegen: `T0034` rejects every other element type
+first. `pycc_codegen` owns the tagged/raw conversion at that runtime
+boundary in both directions (D-106), and `list[T]` values are deliberately
+never refcounted in v0.2, so their allocations leak for the process's
+lifetime (D-107). Two *operations* on a `list[T]` still type-check and then
+stop codegen with a "not supported yet" panic rather than compiling, because
+v0.2 gives `list[T]` no `str(list)` or `bool(list)` meaning (D-107):
+converting one to `str`, and using one as an `if`/`while` condition. The
+string conversion is reachable from every context that needs one, which
+today means both `print(xs)` and f-string interpolation (`f"{xs}"`) -- they
+share a single conversion helper in `pycc_codegen`, so both fail identically.
+Function items carry their parameter and return types, while call
+expressions retain only the bare callee name plus ordered argument
+expressions; HIR does not yet assign binding identities or build and memoize a
 call graph. Syntactically valid constructs outside that implemented HIR subset
 return a spanned `C0001` capability diagnostic, so `pycc check` never turns an
 unsupported statement or expression into an uncaught lowering panic.

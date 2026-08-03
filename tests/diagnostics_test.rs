@@ -162,6 +162,21 @@ fn d0031_private_helper_calls_shadowed_builtin() {
 }
 
 #[test]
+fn d0032_heterogeneous_list_literal() {
+    assert_diagnostic_matches_fixture("d0032_heterogeneous_list_literal");
+}
+
+#[test]
+fn d0033_subscript_on_non_list() {
+    assert_diagnostic_matches_fixture("d0033_subscript_on_non_list");
+}
+
+#[test]
+fn d0034_list_element_type_not_int() {
+    assert_diagnostic_matches_fixture("d0034_list_element_type_not_int");
+}
+
+#[test]
 fn cli_spec_example() {
     assert_diagnostic_matches_fixture("cli_spec_example");
 }
