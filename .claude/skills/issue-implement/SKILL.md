@@ -212,9 +212,9 @@ objects to the direction taken, that is a stop condition — do not open the pul
 Re-fetch. If the default branch moved, rebase the task branch — own committed work only,
 never over commits this session did not create — and rerun the local gates. Push and open the
 pull request: `Fixes #N` in the body, a summary of what was built, any plan deviations with
-their reasons, and the test evidence. For significant work, update `docs/SESSION_LOG.md`
-within the pull request per D-066, re-fetching immediately before that commit so every
-referenced remote state is current.
+their reasons, and the test evidence. For significant work, add a new dated file under
+`docs/sessions/` within the pull request per D-066/D-130, re-fetching immediately before
+that commit so every referenced remote state is current.
 
 ### 7. Monitor (D-078)
 
