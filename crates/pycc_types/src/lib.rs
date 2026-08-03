@@ -2781,6 +2781,337 @@ fn check_stmt_in_function(
     }
 }
 
+fn t0042(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::error("T0042", message.into(), Span::new(0, 0))
+}
+
+/// Recursively scans one signature-position `Ty` for `Ty::Param` occurrences
+/// (D-133/D-134), threading the type parameter name found so far through
+/// every call. `is_top_level` distinguishes a parameter/return type's own
+/// top-level position (where a bare `Ty::Param` is the one shape v0.2
+/// instantiates) from any position nested inside a container (`list[T]`,
+/// `dict[str, T]`, ...), which D-134 rejects outright regardless of whether
+/// the type parameter is otherwise consistent -- container-of-type-parameter
+/// is out of scope independently of this defense-in-depth pass, matching
+/// D-105's own pre-existing "container element type is fixed, not generic"
+/// restriction.
+///
+/// Defense in depth, not a reachable frontend path: `crates/pycc_hir/src/lib.rs`'s
+/// `lower_function` already enforces at most one PEP 695 `TypeVar` per
+/// function (Task 1) and `annotation_to_ty` never lowers a `Subscript`
+/// annotation at all, so a real `def f[T](x: list[T])` or `def f[T, U](...)`
+/// cannot reach `pycc_types` from parsed source today -- this only fires
+/// for a hand-constructed `HirItem` (a future frontend regression, or a
+/// unit test exercising this function directly, mirroring how this file's
+/// other "defense in depth" checks are exercised elsewhere).
+fn scan_signature_ty_for_param(
+    ty: &Ty,
+    is_top_level: bool,
+    found: &mut Option<String>,
+) -> Result<(), Diagnostic> {
+    match ty {
+        Ty::Param(name) => {
+            if !is_top_level {
+                return Err(t0042(format!(
+                    "type parameter `{name}` used inside a container position is not supported yet -- v0.2 only instantiates a bare type-parameter position, matching D-105's own fixed-container-element-type restriction"
+                )));
+            }
+            match found {
+                Some(existing) if existing != name.as_ref() => {
+                    return Err(t0042(format!(
+                        "generic functions with more than one type parameter are not supported yet (found both `{existing}` and `{name}`)"
+                    )));
+                }
+                _ => *found = Some(name.to_string()),
+            }
+            Ok(())
+        }
+        Ty::List(elem) | Ty::Set(elem) => scan_signature_ty_for_param(elem, false, found),
+        Ty::Dict(kv) => {
+            scan_signature_ty_for_param(&kv.0, false, found)?;
+            scan_signature_ty_for_param(&kv.1, false, found)
+        }
+        Ty::Tuple(elems) => {
+            for elem in elems.iter() {
+                scan_signature_ty_for_param(elem, false, found)?;
+            }
+            Ok(())
+        }
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::None | Ty::Infer => Ok(()),
+    }
+}
+
+/// Finds the single PEP 695 type-parameter name used across a function's
+/// parameter and return types, or `None` if the function isn't generic at
+/// all. Returns `T0042` if it finds two distinct names or any
+/// container-position occurrence (see `scan_signature_ty_for_param`'s own
+/// doc comment for why this is defense-in-depth rather than a reachable
+/// frontend path).
+fn generic_type_param_name(
+    params: &[(String, Ty)],
+    return_ty: &Ty,
+) -> Result<Option<String>, Diagnostic> {
+    let mut found = None;
+    for (_, ty) in params {
+        scan_signature_ty_for_param(ty, true, &mut found)?;
+    }
+    scan_signature_ty_for_param(return_ty, true, &mut found)?;
+    Ok(found)
+}
+
+/// D-133/D-134: type-checks a generic function's body exactly once,
+/// symbolically. `Ty::Param(name)` participates in the existing
+/// `collect_expr_constraints`/`infer_expr_in` traversal (via `check_function`
+/// below) as an ordinary, opaque `Ty` value: `merge_inferred_types`,
+/// `is_assignable`, and `numeric_result_type` already compare `Ty` by
+/// structural equality (plus the one `Bool`/`Int` special case), so
+/// `Ty::Param("T") == Ty::Param("T")` unifies exactly like any other
+/// self-consistent type, while `Ty::Param("T")` used where an `int`-only
+/// operator expects a numeric operand (e.g. `x + 1` where `x: T`) already
+/// falls through those functions' existing "no match" arms and produces the
+/// same `T0021` a real type mismatch would -- no changes to either function
+/// were needed for this. This function's own job is the shape gate
+/// `check_function` cannot express on its own: reject more than one
+/// distinct type-parameter name or any container-position occurrence
+/// (`T0042`, defense in depth per `generic_type_param_name`'s doc comment)
+/// before the body is checked at all.
+pub fn check_generic_function(func: &HirItem) -> Result<(), Diagnostic> {
+    if let HirItem::Function {
+        params, return_ty, ..
+    } = func
+    {
+        generic_type_param_name(params, return_ty)?;
+    }
+    check_function(func)
+}
+
+/// One successful D-134 call-site monomorphization: the concrete return
+/// type the call site's own type-checking needs immediately, plus the
+/// substituted, mangled, ordinary concrete-`Ty` function body that
+/// `pycc_mir` (Task 3) registers exactly like a non-generic function.
+///
+/// `mangled_name` is keyed only by `(generic function name, type-parameter
+/// name, concrete Ty)`, never by anything call-site-specific (argument
+/// expressions, source span, call order) -- two call sites that resolve `T`
+/// to the same concrete `Ty` therefore produce byte-for-byte the same
+/// `mangled_name` and the same `specialized` body content, which is exactly
+/// the key Task 3 needs to deduplicate multiple call sites into one
+/// compiled specialization (D-134's own "two call sites, same concrete
+/// type, one compiled specialization" requirement).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericInstantiation {
+    pub mangled_name: String,
+    pub specialized: HirItem,
+    pub return_ty: Ty,
+}
+
+/// Mangled-name scheme for one generic-function call-site instantiation
+/// (D-133/D-134). `crates/pycc_mir/src` has no existing per-instantiation
+/// function-name-mangling convention to reuse: D-105's own container
+/// monomorphization (`list[int]`, `dict[str, int]`, `set[int]`, ...)
+/// dispatches on `Ty` at codegen time through a fixed set of `pycc_rt`
+/// runtime helper functions (see e.g. `crates/pycc_rt/src/lib.rs`), not by
+/// generating a differently-named MIR/codegen function per instantiation --
+/// there is no prior "list[int]'s specialized entry point" name to mirror,
+/// only a set of runtime helper names that don't vary per call site at all
+/// (plan-deviation note: the task brief asked to reuse an existing
+/// convention; none exists, confirmed by inspection before writing this).
+///
+/// The scheme instead mirrors this same file's (`pycc_hir`)
+/// `synthesize_comp_var_name` precedent for a synthesized identifier that
+/// must never collide with a real user-source name: a real Python `NAME`
+/// token can never start with a decimal digit (confirmed against the
+/// vendored `ruff_python_parser` tokenizer, same fact `synthesize_comp_var_name`'s
+/// own doc comment cites), so prefixing with `0gen_` guarantees this string
+/// can never equal any function name lowering could have produced from real
+/// source, no matter what the user names their own top-level functions --
+/// unlike a merely unusual but still syntactically legal name (e.g. the
+/// task brief's own illustrative `f__T_int`, which a user's own source
+/// *could* spell literally, `__` is ordinary Python identifier syntax).
+fn mangle_generic_instantiation(fn_name: &str, type_param_name: &str, concrete: &Ty) -> String {
+    format!("0gen_{fn_name}__{type_param_name}_{}", concrete.name())
+}
+
+/// D-133: a `Ty`-tree rewrite substituting a top-level `Ty::Param(param_name)`
+/// occurrence with `concrete`, leaving every other `Ty` shape untouched. Not
+/// a *recursive* container walk: `generic_type_param_name` (called by every
+/// public entry point before this function ever runs, both here and in
+/// `check_generic_function`) already rejects any container-position
+/// `Ty::Param` with `T0042`, so by the time `substitute_ty` runs, `ty` is
+/// provably either a bare `Ty::Param(param_name)` or a shape that can never
+/// contain one nested inside `List`/`Set`/`Dict`/`Tuple` -- recursing into
+/// those container variants here would be untestable dead code (D-014's
+/// hard coverage gate has no exemption for it), not genuine generality.
+fn substitute_ty(ty: &Ty, param_name: &str, concrete: &Ty) -> Ty {
+    match ty {
+        Ty::Param(name) if name.as_ref() == param_name => concrete.clone(),
+        other => other.clone(),
+    }
+}
+
+/// D-133: clones a generic function's body, substituting only the `Ty`
+/// annotations `substitute_ty` above would rewrite -- `HirStmt::AnnAssign`'s
+/// `annotation` field is the only place an embedded `Ty` appears inside a
+/// `HirStmt`/`HirExpr` tree (every `HirExpr` variant is untyped; type is
+/// always inferred contextually), so every other statement shape is cloned
+/// unchanged, recursing only into nested bodies (`If`/`While`/`ForRange`/
+/// `ForList`) to reach a nested `AnnAssign`.
+fn substitute_body(body: &[HirStmt], param_name: &str, concrete: &Ty) -> Vec<HirStmt> {
+    body.iter()
+        .map(|stmt| substitute_stmt(stmt, param_name, concrete))
+        .collect()
+}
+
+fn substitute_stmt(stmt: &HirStmt, param_name: &str, concrete: &Ty) -> HirStmt {
+    match stmt {
+        HirStmt::AnnAssign {
+            target,
+            annotation,
+            value,
+        } => HirStmt::AnnAssign {
+            target: target.clone(),
+            annotation: substitute_ty(annotation, param_name, concrete),
+            value: value.clone(),
+        },
+        HirStmt::If { test, body, orelse } => HirStmt::If {
+            test: test.clone(),
+            body: substitute_body(body, param_name, concrete),
+            orelse: substitute_body(orelse, param_name, concrete),
+        },
+        HirStmt::While { test, body } => HirStmt::While {
+            test: test.clone(),
+            body: substitute_body(body, param_name, concrete),
+        },
+        HirStmt::ForRange {
+            var,
+            start,
+            stop,
+            step,
+            body,
+        } => HirStmt::ForRange {
+            var: var.clone(),
+            start: start.clone(),
+            stop: stop.clone(),
+            step: step.clone(),
+            body: substitute_body(body, param_name, concrete),
+        },
+        HirStmt::ForList { var, list, body } => HirStmt::ForList {
+            var: var.clone(),
+            list: list.clone(),
+            body: substitute_body(body, param_name, concrete),
+        },
+        other => other.clone(),
+    }
+}
+
+/// D-133/D-134: resolves one call site's argument types against a generic
+/// function's signature, substituting the single type parameter with the
+/// one concrete `Ty` every occurrence agrees on, and produces the
+/// specialized, mangled, ordinary concrete-`Ty` function body `pycc_mir`
+/// (Task 3) registers as an independent function. Rejects with `T0042`
+/// when: the function has no type parameter to instantiate; the call's own
+/// arity doesn't match (reuses `T0021`'s existing call-arity message shape,
+/// not a new code, mirroring `infer_expr_in`'s own `HirExpr::Call` arm);
+/// two occurrences of the type parameter resolve to different concrete
+/// `Ty`s; the type parameter is never used by any parameter (nothing to
+/// resolve it from); or the resolved `Ty` is not one of
+/// `Int`/`Float`/`Bool`/`Str` (D-134's own scalar-only call-site scope).
+/// Every non-generic parameter position is still checked for ordinary
+/// assignability via the existing `is_assignable`, reusing `T0021`'s
+/// existing "argument N expects ..." message shape exactly (not a new
+/// diagnostic for an unrelated failure mode).
+pub fn instantiate_generic_call(
+    func: &HirItem,
+    arg_tys: &[Ty],
+) -> Result<GenericInstantiation, Diagnostic> {
+    let HirItem::Function {
+        name,
+        params,
+        return_ty,
+        body,
+    } = func
+    else {
+        panic!("instantiate_generic_call called with a non-Function HirItem");
+    };
+    let type_param_name = generic_type_param_name(params, return_ty)?.ok_or_else(|| {
+        t0042(format!(
+            "`{name}` has no PEP 695 type parameter to instantiate"
+        ))
+    })?;
+    if arg_tys.len() != params.len() {
+        return Err(Diagnostic::error(
+            "T0021",
+            format!(
+                "`{name}` expects {} argument(s), got {}",
+                params.len(),
+                arg_tys.len()
+            ),
+            Span::new(0, 0),
+        ));
+    }
+    let mut resolved: Option<Ty> = None;
+    for ((param_name, param_ty), arg_ty) in params.iter().zip(arg_tys) {
+        match param_ty {
+            Ty::Param(name_ref) if name_ref.as_str() == type_param_name => match &resolved {
+                Some(existing) if existing != arg_ty => {
+                    return Err(t0042(format!(
+                        "generic function `{name}`'s type parameter `{type_param_name}` was resolved inconsistently across its own call-site arguments (`{}` vs `{}`)",
+                        existing.name(),
+                        arg_ty.name()
+                    )));
+                }
+                _ => resolved = Some(arg_ty.clone()),
+            },
+            other => {
+                if !is_assignable(arg_ty.clone(), other.clone()) {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "argument `{param_name}` of `{name}` expects `{}`, got `{}`",
+                            other.name(),
+                            arg_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+            }
+        }
+    }
+    let concrete = resolved.ok_or_else(|| {
+        t0042(format!(
+            "generic function `{name}`'s type parameter `{type_param_name}` is not used by any parameter, so no call-site argument can resolve it"
+        ))
+    })?;
+    if !matches!(concrete, Ty::Int | Ty::Float | Ty::Bool | Ty::Str) {
+        return Err(t0042(format!(
+            "generic function `{name}` was called with `{}` for type parameter `{type_param_name}`, but v0.2 only instantiates a type parameter with `int`, `float`, `bool`, or `str`",
+            concrete.name()
+        )));
+    }
+    let substituted_params = params
+        .iter()
+        .map(|(param_name, ty)| {
+            (
+                param_name.clone(),
+                substitute_ty(ty, &type_param_name, &concrete),
+            )
+        })
+        .collect();
+    let substituted_return = substitute_ty(return_ty, &type_param_name, &concrete);
+    let substituted_body = substitute_body(body, &type_param_name, &concrete);
+    let mangled_name = mangle_generic_instantiation(name, &type_param_name, &concrete);
+    Ok(GenericInstantiation {
+        mangled_name: mangled_name.clone(),
+        return_ty: substituted_return.clone(),
+        specialized: HirItem::Function {
+            name: mangled_name,
+            params: substituted_params,
+            return_ty: substituted_return,
+            body: substituted_body,
+        },
+    })
+}
+
 /// Type-checks a module and returns a cloned HIR whose function signatures
 /// contain only the concrete types resolved by private-helper inference.
 /// Consumers after the type boundary must use this module rather than the
@@ -13417,5 +13748,521 @@ mod tests {
             resolved_term(reversed, &mut parents, &concrete),
             Some(Ty::Float)
         );
+    }
+
+    fn generic_identity_fn(param_ty: Ty, return_ty: Ty) -> HirItem {
+        HirItem::Function {
+            name: "identity".to_string(),
+            params: vec![("x".to_string(), param_ty)],
+            return_ty,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        }
+    }
+
+    #[test]
+    fn check_generic_function_accepts_consistent_single_type_param() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = generic_identity_fn(param.clone(), param);
+        assert!(check_generic_function(&func).is_ok());
+    }
+
+    #[test]
+    fn check_generic_function_rejects_scalar_specific_op_on_bare_param() {
+        // `def f[T](x: T) -> T: return x + 1` -- `T` is opaque, so `+` on a
+        // bare `Ty::Param` value must fail exactly like any other
+        // type-incompatible operand pair, reusing the existing `T0021`
+        // numeric-operator diagnostic (`numeric_result_type`'s own
+        // "operator ... not defined for ..." arm), not a new code.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), param.clone())],
+            return_ty: param,
+            body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::Name("x".to_string())),
+                right: Box::new(HirExpr::IntLiteral(1)),
+            }))],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn check_generic_function_rejects_two_distinct_type_parameters() {
+        // Defense in depth (`crates/pycc_hir`'s own frontend arity gate
+        // already prevents this from real source, Task 1): a
+        // hand-constructed `HirItem` with two distinct `Ty::Param` names
+        // across its signature must still be rejected here.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+                ("y".to_string(), Ty::Param(Box::new("U".to_string()))),
+            ],
+            return_ty: Ty::Param(Box::new("T".to_string())),
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn check_generic_function_rejects_container_position_type_parameter() {
+        // Defense in depth, same rationale as the two-type-parameter test
+        // above: `crates/pycc_hir`'s `annotation_to_ty` never lowers a
+        // `list[T]`-shaped annotation from real source at all, so this can
+        // only be exercised via a hand-built `HirItem`.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "xs".to_string(),
+                Ty::List(Box::new(Ty::Param(Box::new("T".to_string())))),
+            )],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn instantiate_generic_call_substitutes_int_and_mangles_name() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = generic_identity_fn(param.clone(), param);
+        let instantiation = instantiate_generic_call(&func, &[Ty::Int]).unwrap();
+        assert_eq!(instantiation.mangled_name, "0gen_identity__T_int");
+        assert_eq!(instantiation.return_ty, Ty::Int);
+        assert_eq!(
+            instantiation.specialized,
+            HirItem::Function {
+                name: "0gen_identity__T_int".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }
+        );
+    }
+
+    #[test]
+    fn instantiate_generic_call_substitutes_str_at_a_different_call_site() {
+        // Two call sites resolving `T` to different concrete types must
+        // produce two independent, differently-mangled specializations
+        // (D-134's own monomorphization requirement) -- and the same
+        // concrete type from two call sites must produce the identical
+        // mangled name and body, which is what Task 3 dedupes on.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = generic_identity_fn(param.clone(), param);
+        let str_instantiation = instantiate_generic_call(&func, &[Ty::Str]).unwrap();
+        assert_eq!(str_instantiation.mangled_name, "0gen_identity__T_str");
+        assert_eq!(str_instantiation.return_ty, Ty::Str);
+
+        let int_instantiation_1 = instantiate_generic_call(&func, &[Ty::Int]).unwrap();
+        let int_instantiation_2 = instantiate_generic_call(&func, &[Ty::Int]).unwrap();
+        assert_eq!(
+            int_instantiation_1.mangled_name,
+            int_instantiation_2.mangled_name
+        );
+        assert_eq!(int_instantiation_1, int_instantiation_2);
+    }
+
+    #[test]
+    fn instantiate_generic_call_substitutes_nested_ann_assign_annotation() {
+        // Exercises the recursive body-substitution walk itself: a nested
+        // `AnnAssign` inside an `If` body is the one HIR shape that carries
+        // an embedded `Ty` beyond the function's own signature, and must be
+        // substituted too, not just `params`/`return_ty`. Compares the whole
+        // specialized item by value (rather than destructuring it with a
+        // `let-else`/`unreachable!()`, which this file's own coverage gate
+        // would otherwise always flag as an untaken branch).
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), param.clone())],
+            return_ty: param.clone(),
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::AnnAssign {
+                    target: "y".to_string(),
+                    annotation: param,
+                    value: None,
+                }],
+                orelse: vec![],
+            }],
+        };
+        let instantiation = instantiate_generic_call(&func, &[Ty::Bool]).unwrap();
+        assert_eq!(
+            instantiation.specialized,
+            HirItem::Function {
+                name: "0gen_f__T_bool".to_string(),
+                params: vec![("x".to_string(), Ty::Bool)],
+                return_ty: Ty::Bool,
+                body: vec![HirStmt::If {
+                    test: HirExpr::BoolLiteral(true),
+                    body: vec![HirStmt::AnnAssign {
+                        target: "y".to_string(),
+                        annotation: Ty::Bool,
+                        value: None,
+                    }],
+                    orelse: vec![],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn instantiate_generic_call_substitutes_nested_while_forrange_forlist_bodies() {
+        // Exercises the remaining recursive-body-walk arms (`While`,
+        // `ForRange`, `ForList`) that the `If` test above doesn't reach --
+        // each must recurse into its own nested `body` to find and
+        // substitute a further-nested `AnnAssign`.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let nested = |marker: &str| {
+            vec![HirStmt::AnnAssign {
+                target: marker.to_string(),
+                annotation: Ty::Param(Box::new("T".to_string())),
+                value: None,
+            }]
+        };
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), param.clone())],
+            return_ty: param,
+            body: vec![
+                HirStmt::While {
+                    test: HirExpr::BoolLiteral(true),
+                    body: nested("w"),
+                },
+                HirStmt::ForRange {
+                    var: "i".to_string(),
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(1),
+                    step: HirExpr::IntLiteral(1),
+                    body: nested("r"),
+                },
+                HirStmt::ForList {
+                    var: "e".to_string(),
+                    list: "xs".to_string(),
+                    body: nested("l"),
+                },
+            ],
+        };
+        let instantiation = instantiate_generic_call(&func, &[Ty::Int]).unwrap();
+        let expected_nested = |marker: &str| {
+            vec![HirStmt::AnnAssign {
+                target: marker.to_string(),
+                annotation: Ty::Int,
+                value: None,
+            }]
+        };
+        assert_eq!(
+            instantiation.specialized,
+            HirItem::Function {
+                name: "0gen_f__T_int".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::While {
+                        test: HirExpr::BoolLiteral(true),
+                        body: expected_nested("w"),
+                    },
+                    HirStmt::ForRange {
+                        var: "i".to_string(),
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(1),
+                        step: HirExpr::IntLiteral(1),
+                        body: expected_nested("r"),
+                    },
+                    HirStmt::ForList {
+                        var: "e".to_string(),
+                        list: "xs".to_string(),
+                        body: expected_nested("l"),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "instantiate_generic_call called with a non-Function HirItem")]
+    fn instantiate_generic_call_panics_on_a_non_function_item() {
+        let _ = instantiate_generic_call(&HirItem::TopLevelStmt(HirStmt::Return(None)), &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "check_function called with a non-Function HirItem")]
+    fn check_generic_function_skips_the_shape_gate_for_a_top_level_statement() {
+        // `check_generic_function`'s own shape gate only applies to a
+        // `HirItem::Function` -- a `TopLevelStmt` item has no signature to
+        // scan for a type parameter at all, so it skips straight to
+        // `check_function`, which still panics on a non-`Function` item
+        // exactly as it always has (see `check_function_panics_on_a_non_function_item`
+        // above): this test's own job is only to prove the `if let` shape
+        // gate itself doesn't reject a `TopLevelStmt` some other way first.
+        let item = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(1)));
+        let _ = check_generic_function(&item);
+    }
+
+    #[test]
+    fn check_generic_function_rejects_type_parameter_nested_in_a_dict_key() {
+        // Defense in depth: a hand-built `dict[T, str]`-shaped parameter,
+        // covering `scan_signature_ty_for_param`'s `Ty::Dict` arm on its
+        // key position (the `?` on the key's own recursive call).
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "d".to_string(),
+                Ty::Dict(Box::new((
+                    Ty::Param(Box::new("T".to_string())),
+                    Ty::Str,
+                ))),
+            )],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn check_generic_function_rejects_type_parameter_nested_in_a_dict_value() {
+        // Covers the dict value position too (the key succeeds, so this
+        // exercises the `Ty::Dict` arm's second recursive call instead of
+        // its first).
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "d".to_string(),
+                Ty::Dict(Box::new((
+                    Ty::Str,
+                    Ty::Param(Box::new("T".to_string())),
+                ))),
+            )],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn check_generic_function_rejects_type_parameter_nested_in_a_set() {
+        // Defense in depth: covers `scan_signature_ty_for_param`'s
+        // `Ty::List(elem) | Ty::Set(elem)` arm's `Set` alternative
+        // specifically (the `List` case is already covered by
+        // `check_generic_function_rejects_container_position_type_parameter`
+        // above).
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "xs".to_string(),
+                Ty::Set(Box::new(Ty::Param(Box::new("T".to_string())))),
+            )],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn check_generic_function_rejects_container_position_type_parameter_in_the_return_type() {
+        // Every other container-position test above puts the offending
+        // shape in a parameter; `generic_type_param_name` scans
+        // `return_ty` too (via its own separate call), which needs its own
+        // test to cover that specific call site's error path.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("n".to_string(), Ty::Int)],
+            return_ty: Ty::List(Box::new(Ty::Param(Box::new("T".to_string())))),
+            body: vec![HirStmt::Return(None)],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn check_generic_function_rejects_type_parameter_nested_in_a_tuple_element() {
+        // Defense in depth: covers `scan_signature_ty_for_param`'s
+        // `Ty::Tuple` arm.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "t".to_string(),
+                Ty::Tuple(Box::new(vec![Ty::Int, Ty::Param(Box::new("T".to_string()))])),
+            )],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn check_generic_function_accepts_a_non_generic_tuple_typed_parameter() {
+        // `check_generic_function` scans every function's signature, not
+        // just an actually-generic one -- a plain, fully concrete
+        // `Ty::Tuple` parameter with no `Ty::Param` anywhere inside it must
+        // scan clean, exercising `scan_signature_ty_for_param`'s `Ty::Tuple`
+        // arm's own success path (its `for` loop finishing without any
+        // element raising `T0042`).
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "t".to_string(),
+                Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])),
+            )],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        assert!(check_generic_function(&func).is_ok());
+    }
+
+    #[test]
+    fn instantiate_generic_call_leaves_a_concrete_sibling_parameter_unchanged() {
+        // A generic function can mix a `T`-typed parameter with an
+        // ordinary concrete-typed one (see the assignability-rejection
+        // test above for the failure path); when the call site's argument
+        // for that concrete parameter is compatible, `substitute_ty` must
+        // still run on it and simply clone it through unchanged, since it
+        // carries no `Ty::Param` occurrence to substitute.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+                ("n".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::Param(Box::new("T".to_string())),
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let instantiation = instantiate_generic_call(&func, &[Ty::Str, Ty::Int]).unwrap();
+        assert_eq!(
+            instantiation.specialized,
+            HirItem::Function {
+                name: "0gen_f__T_str".to_string(),
+                params: vec![
+                    ("x".to_string(), Ty::Str),
+                    ("n".to_string(), Ty::Int),
+                ],
+                return_ty: Ty::Str,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }
+        );
+    }
+
+    #[test]
+    fn instantiate_generic_call_rejects_inconsistent_call_site_substitution() {
+        // `def f[T](x: T, y: T) -> T` called as `f(1, "a")` -- both
+        // occurrences of `T` must agree (D-134's own named example).
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![
+                ("x".to_string(), param.clone()),
+                ("y".to_string(), param.clone()),
+            ],
+            return_ty: param,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let err = instantiate_generic_call(&func, &[Ty::Int, Ty::Str]).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn instantiate_generic_call_rejects_non_scalar_call_site_argument() {
+        // A call site whose argument type used to resolve `T` is not one
+        // of the four scalars is D-134's own named rejection case (e.g.
+        // passing a `list[int]` value where `T` is inferred).
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = generic_identity_fn(param.clone(), param);
+        let err =
+            instantiate_generic_call(&func, &[Ty::List(Box::new(Ty::Int))]).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn instantiate_generic_call_rejects_wrong_arity() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = generic_identity_fn(param.clone(), param);
+        let err = instantiate_generic_call(&func, &[Ty::Int, Ty::Int]).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn instantiate_generic_call_rejects_unresolvable_type_parameter() {
+        // `T` appears only in the return type, never in any parameter --
+        // no call-site argument can resolve it.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::Param(Box::new("T".to_string())),
+            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(0)))],
+        };
+        let err = instantiate_generic_call(&func, &[Ty::Int]).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn instantiate_generic_call_rejects_non_generic_function() {
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let err = instantiate_generic_call(&func, &[Ty::Int]).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn instantiate_generic_call_checks_non_generic_parameter_assignability() {
+        // A generic function can mix a `T`-typed parameter with an
+        // ordinary concrete-typed one; the concrete one still gets
+        // checked for assignability using the existing `is_assignable`
+        // (and the existing `T0021` "argument expects" message shape),
+        // not silently skipped.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+                ("n".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::Param(Box::new("T".to_string())),
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let err = instantiate_generic_call(&func, &[Ty::Int, Ty::Str]).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn instantiate_generic_call_rejects_two_distinct_type_parameters() {
+        // Defense in depth, mirrors `check_generic_function`'s own test.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+                ("y".to_string(), Ty::Param(Box::new("U".to_string()))),
+            ],
+            return_ty: Ty::Param(Box::new("T".to_string())),
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let err = instantiate_generic_call(&func, &[Ty::Int, Ty::Int]).unwrap_err();
+        assert_eq!(err.code, "T0042");
+    }
+
+    #[test]
+    fn instantiate_generic_call_rejects_container_position_type_parameter() {
+        // Defense in depth, mirrors `check_generic_function`'s own test.
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "xs".to_string(),
+                Ty::List(Box::new(Ty::Param(Box::new("T".to_string())))),
+            )],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let err = instantiate_generic_call(&func, &[Ty::List(Box::new(Ty::Int))]).unwrap_err();
+        assert_eq!(err.code, "T0042");
     }
 }
