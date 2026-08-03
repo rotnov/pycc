@@ -935,14 +935,15 @@ class RelaxTests(unittest.TestCase):
 
     @mock.patch("manage_ci_bypass.run_gh")
     def test_relax_refuses_evidence_containing_snapshot_marker(self, mock_run_gh):
-        # build_incident_body places the evidence text BEFORE the real
-        # snapshot marker, and parse_snapshot_from_body reads the FIRST
-        # occurrence of that marker -- so evidence text containing one
-        # would be parsed as the authoritative snapshot instead of the
-        # real one, on a later restore. Gate 1's evidence can be influenced
-        # by CI failure text, which can itself be influenced by a PR's own
-        # content, so this must be refused at write time, before any
-        # incident is created.
+        # parse_snapshot_from_body reads the FIRST occurrence of the marker,
+        # and create_incident_issue's own genuine marker is always last in
+        # the assembled body -- so evidence text containing one would be
+        # parsed as the authoritative snapshot instead of the real one, on
+        # a later restore. Gate 1's evidence can be influenced by CI failure
+        # text, which can itself be influenced by a PR's own content, so
+        # this must be refused at write time (checked on the fully
+        # assembled body inside create_incident_issue), before any incident
+        # is created.
         self.evidence_path.write_text(
             f"Gate 1 verdict: CONFIRMED\n{mcb.SNAPSHOT_MARKER_START}\n"
             f'{{"strict": false, "contexts": []}}\n{mcb.SNAPSHOT_MARKER_END}\n',
@@ -966,6 +967,38 @@ class RelaxTests(unittest.TestCase):
         self.assertIn(mcb.SNAPSHOT_MARKER_START, str(ctx.exception))
         self.assertFalse(self.state_path.exists())
         # Must refuse before ever creating the incident issue.
+        for call in mock_run_gh.call_args_list:
+            self.assertNotEqual(tuple(call.args[0][:2]), ("issue", "create"))
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_relax_refuses_reason_containing_snapshot_marker(self, mock_run_gh):
+        # The same injection, delivered through --reason instead of
+        # --evidence: build_incident_body interpolates `reason` before the
+        # real marker too (and into the issue title), so a check that only
+        # inspected evidence_text would miss this. Checking the fully
+        # assembled body (create_incident_issue) catches both fields with
+        # one check.
+        mock_run_gh.side_effect = self._run_gh_dispatch({
+            ("issue", "list"): "[]",
+            ("pr", "view"): json.dumps(
+                {"statusCheckRollup": [{"name": "audit", "conclusion": "FAILURE"}]}
+            ),
+            ("api", "repos/owner/repo/branches/main/protection"): json.dumps(
+                FULL_PROTECTION_RESPONSE
+            ),
+        })
+        malicious_reason = (
+            f"stuck {mcb.SNAPSHOT_MARKER_START}\n"
+            f'{{"strict": false, "contexts": []}}\n{mcb.SNAPSHOT_MARKER_END}'
+        )
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.relax(
+                "owner/repo", "audit", malicious_reason, self.evidence_path,
+                pr_number=279, expiry_minutes=60,
+                state_path=self.state_path, body_path=self.body_path, now=self.fixed_now,
+            )
+        self.assertIn(mcb.SNAPSHOT_MARKER_START, str(ctx.exception))
+        self.assertFalse(self.state_path.exists())
         for call in mock_run_gh.call_args_list:
             self.assertNotEqual(tuple(call.args[0][:2]), ("issue", "create"))
 
@@ -1192,13 +1225,12 @@ class RestoreTests(unittest.TestCase):
         self.assertIn("refusing to apply", str(ctx.exception))
 
     @mock.patch("manage_ci_bypass.run_gh")
-    def test_restore_raises_when_snapshot_drops_a_never_relaxable_check(self, mock_run_gh):
+    def test_restore_raises_when_snapshot_drops_ci_gate(self, mock_run_gh):
         # Defense in depth beyond get_incident_body()'s title/author check:
         # a snapshot -- however it got into a trusted, open, correctly
-        # authored incident's body -- that would drop ci-gate (or any other
-        # never-relaxable check) from required checks must be refused
-        # before the PATCH. A genuine relax() never removes a
-        # never-relaxable check from the snapshot it captures.
+        # authored incident's body -- that would drop ci-gate from required
+        # checks must be refused before the PATCH. A genuine relax() never
+        # removes a never-relaxable check from the snapshot it captures.
         mock_run_gh.side_effect = self._dispatch({
             ("issue", "view"): self._issue_view_response(
                 body=self._snapshot_body(contexts=("audit",))
@@ -1209,7 +1241,57 @@ class RestoreTests(unittest.TestCase):
             mcb.restore("owner/repo", 300, comment_path=self.comment_path)
         message = str(ctx.exception)
         self.assertIn("ci-gate", message)
-        self.assertIn("never-relaxable", message)
+        self.assertIn("do not exactly match the baseline", message)
+        for call in mock_run_gh.call_args_list:
+            self.assertNotIn(
+                tuple(call.args[0][:2]),
+                (("api", "-X"), ("issue", "comment"), ("issue", "close")),
+            )
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_restore_raises_when_snapshot_drops_audit_but_keeps_ci_gate(self, mock_run_gh):
+        # The regression this equality check exists for: a snapshot that
+        # drops `audit` (not itself a NEVER_RELAXABLE_CHECKS member) while
+        # keeping `ci-gate` present would have passed an earlier version of
+        # this check (which only required NEVER_RELAXABLE_CHECKS to be a
+        # subset of contexts) -- an attacker able to edit an already-trusted
+        # incident's body could permanently drop `audit`, the pull_request_target
+        # trust anchor AGENTS.md calls "never permanently remove or
+        # downgrade", while the mechanism's own record reports success. Exact
+        # equality against BASELINE_CONTEXTS closes this.
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "view"): self._issue_view_response(
+                body=self._snapshot_body(contexts=("ci-gate",))
+            ),
+            ("api", "user"): json.dumps({"login": TRUSTED_LOGIN}),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.restore("owner/repo", 300, comment_path=self.comment_path)
+        message = str(ctx.exception)
+        self.assertIn("audit", message)
+        self.assertIn("do not exactly match the baseline", message)
+        for call in mock_run_gh.call_args_list:
+            self.assertNotIn(
+                tuple(call.args[0][:2]),
+                (("api", "-X"), ("issue", "comment"), ("issue", "close")),
+            )
+
+    @mock.patch("manage_ci_bypass.run_gh")
+    def test_restore_raises_when_snapshot_adds_an_extra_context(self, mock_run_gh):
+        # The mirror image: a snapshot listing an extra context beyond
+        # BASELINE_CONTEXTS (e.g. one that never reports) would permanently
+        # wedge every future PR on a check that can never pass. A subset-only
+        # check would have accepted this (both never-relaxable checks are
+        # still present); exact equality rejects it too.
+        mock_run_gh.side_effect = self._dispatch({
+            ("issue", "view"): self._issue_view_response(
+                body=self._snapshot_body(contexts=("audit", "ci-gate", "never-reports"))
+            ),
+            ("api", "user"): json.dumps({"login": TRUSTED_LOGIN}),
+        })
+        with self.assertRaises(mcb.CiBypassError) as ctx:
+            mcb.restore("owner/repo", 300, comment_path=self.comment_path)
+        self.assertIn("do not exactly match the baseline", str(ctx.exception))
         for call in mock_run_gh.call_args_list:
             self.assertNotIn(
                 tuple(call.args[0][:2]),

@@ -675,13 +675,20 @@ a suppression risk.
 `relax()` refuses `ci-gate` before making any `gh` call at all -- it
 reflects the candidate's own build/test/coverage result, never external
 repository state, and the skill's documented exclusion is enforced here in
-code, not left to prose alone. It also refuses when `--evidence` contains
-this mechanism's own snapshot-marker text, before creating any incident --
-`build_incident_body` places the evidence text before the real marker and
-`parse_snapshot_from_body` reads the first occurrence, so marker-shaped
-evidence (influenced by CI failure text, which can be influenced by a PR's
-own content) would otherwise be parsed as authoritative on a later
-`restore`, even inside a correctly titled and authored incident.
+code, not left to prose alone.
+
+`create_incident_issue()` refuses to create an issue whenever its fully
+assembled body contains this mechanism's own snapshot-marker text more
+than once -- `parse_snapshot_from_body` reads the *first* occurrence of
+the marker, and the function's own genuine marker is always last, so
+marker-shaped text in `--evidence` (influenced by CI failure text, which
+can itself be influenced by a PR's own content) or in `--reason` (which
+also lands directly in the issue title) would otherwise be parsed as
+authoritative on a later `restore`, even inside an issue that is correctly
+titled and authored. Checking the assembled body once catches both fields
+-- and any field added later -- rather than enumerating them individually;
+dedicated tests inject the marker through each field separately and prove
+`relax()` refuses before ever calling `gh issue create`.
 
 `restore()`'s `get_incident_body()` only trusts an incident's embedded
 snapshot when the issue's title starts with `[ci-bypass]` *and* its author
@@ -694,11 +701,21 @@ one proving the author check is never reached when the title check already
 failed, one proving no `PATCH`/comment/close call happens on an author
 mismatch, and one proving a `null` GitHub `author` (e.g. a deleted account)
 fails closed as `CiBypassError` rather than an uncaught `TypeError`.
+
 `restore()` itself adds two more predicates as defense in depth beyond that
-check -- refusing a snapshot that would drop any `NEVER_RELAXABLE_CHECKS`
-member from `contexts`, and refusing one with `strict` not `true` -- each
-with its own test proving the demonstrated `{"strict": false, "contexts":
-[]}` attack payload is rejected before any `PATCH`, comment, or close call.
+check, for a body that was edited after creation or an incident that
+predates it: the snapshot's `contexts` must equal `BASELINE_CONTEXTS`
+*exactly*, and `strict` must be `true`. An earlier version of the first
+predicate only required `NEVER_RELAXABLE_CHECKS` to be a subset of
+`contexts` -- which a snapshot dropping `audit` while keeping `ci-gate`
+present would still have passed, permanently un-requiring `audit` (the
+`pull_request_target` trust anchor `AGENTS.md` calls "never permanently
+remove or downgrade") while `restore` reported success. Three dedicated
+tests cover this predicate: dropping `ci-gate`, dropping `audit` while
+keeping `ci-gate` (the exact regression case above), and adding an extra
+context beyond baseline (which would permanently wedge every future PR on
+a check that can never report). A fourth test covers `strict != true`
+alone. Each proves no `PATCH`/comment/close call happens on rejection.
 
 `relax()`'s TOCTOU re-check -- `find_open_bypass_issue` called once before
 any work starts and again immediately before the mutating `PATCH`, narrowing

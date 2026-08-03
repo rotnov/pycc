@@ -257,6 +257,21 @@ def create_incident_issue(
         check_name, reason, evidence_text, snapshot,
         expiry_minutes, expiry_timestamp, pr_number,
     )
+    # parse_snapshot_from_body reads the FIRST occurrence of the marker, and
+    # this function's own genuine marker is always last in the assembled
+    # body -- so marker-shaped text in ANY attacker- or CI-output-influenced
+    # field (evidence_text, reason, or a field added here later) would win
+    # over the real snapshot on a later restore, even inside an issue that
+    # is otherwise correctly titled and authored. The genuine body always
+    # contains exactly one marker; checking the fully assembled body here
+    # (not just one field) closes this for every field at once.
+    if body.count(SNAPSHOT_MARKER_START) > 1:
+        raise CiBypassError(
+            f"assembled incident body contains {SNAPSHOT_MARKER_START!r} "
+            f"more than once -- refusing to create an issue where "
+            f"attacker- or CI-output-influenced text could be mistaken for "
+            f"this mechanism's own authoritative snapshot marker"
+        )
     body_path.write_text(body, encoding="utf-8")
     return _create_issue(repo, title, body_path)
 
@@ -306,14 +321,6 @@ def relax(
         raise CiBypassError(
             f"could not read --evidence file {evidence_path}: {error}"
         ) from error
-    if SNAPSHOT_MARKER_START in evidence_text:
-        raise CiBypassError(
-            f"--evidence file {evidence_path} contains {SNAPSHOT_MARKER_START!r} "
-            f"-- refusing to embed it in the incident body, where it could be "
-            f"mistaken for this mechanism's own authoritative snapshot marker "
-            f"(build_incident_body places the evidence text before the real "
-            f"marker, and parse_snapshot_from_body reads the first occurrence)"
-        )
     if now is None:
         now = datetime.now(timezone.utc)
     expiry_timestamp = (now + timedelta(minutes=expiry_minutes)).strftime(
@@ -405,19 +412,25 @@ def get_incident_body(repo: str, issue_number: int) -> str:
 def restore(repo: str, issue_number: int, comment_path: Path) -> dict:
     body = get_incident_body(repo, issue_number)
     snapshot = parse_snapshot_from_body(body)
-    # Defense in depth beyond get_incident_body()'s title/author check --
-    # an issue body can be edited after creation, and older incidents may
-    # predate that check. A genuine snapshot is always what relax() itself
-    # captured immediately before its PATCH, which never removes a
-    # never-relaxable check or weakens `strict`; refuse anything that
-    # wouldn't have come from a genuine relax().
-    missing_never_relaxable = NEVER_RELAXABLE_CHECKS - set(snapshot.get("contexts", []))
-    if missing_never_relaxable:
+    # Defense in depth beyond get_incident_body()'s title/author check -- an
+    # issue body can be edited after creation by anyone with write access,
+    # and older incidents may predate that check. A genuine snapshot is
+    # always FULL pre-relax protection, captured by relax() immediately
+    # before its PATCH; AGENTS.md's D-021 preflight discipline keeps
+    # protection at baseline before any relax() begins, so a genuine
+    # snapshot's contexts always equal BASELINE_CONTEXTS exactly -- not a
+    # subset missing more than the mechanism removes and not a superset
+    # carrying an extra, permanently-unmergeable context. An earlier version
+    # of this check only required NEVER_RELAXABLE_CHECKS to be present,
+    # which a snapshot dropping `audit` (present but not never-relaxable)
+    # or adding a bogus context would still have passed; exact equality is
+    # the actual invariant a genuine relax() output satisfies.
+    if sorted(snapshot.get("contexts", [])) != sorted(BASELINE_CONTEXTS):
         raise CiBypassError(
-            f"incident #{issue_number}'s embedded snapshot would drop "
-            f"{sorted(missing_never_relaxable)} from required checks -- "
-            f"refusing to restore a snapshot that violates this "
-            f"mechanism's own never-relaxable set"
+            f"incident #{issue_number}'s embedded snapshot contexts "
+            f"{snapshot.get('contexts')!r} do not exactly match the baseline "
+            f"{sorted(BASELINE_CONTEXTS)!r} -- refusing to restore a "
+            f"snapshot that could not have come from a genuine relax()"
         )
     if snapshot.get("strict") is not True:
         raise CiBypassError(
