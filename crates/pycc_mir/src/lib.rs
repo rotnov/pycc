@@ -529,11 +529,16 @@ fn lookup(scopes: &[HashMap<String, Ty>], name: &str) -> Ty {
 /// (`lower_stmt`'s existing `ForList` arm), reused via this shared helper
 /// rather than duplicated three times (once per comprehension kind, PR-12,
 /// D-117). Takes `scopes` as `&mut [HashMap<String, Ty>]` (a slice), not
-/// `&mut Vec<..>` like `lower_stmt`/`lower_item` -- unlike those two
-/// (mutually self-recursive, so `clippy::ptr_arg` correctly leaves their
-/// signature alone), this helper never pushes/pops a scope itself and never
-/// calls back into `lower_stmt`, so nothing here actually needs the owned
-/// `Vec` type.
+/// `&mut Vec<..>` like `lower_stmt`/`lower_item` -- unlike those two, this
+/// helper never pushes/pops a scope itself, so it needs no owned `Vec`.
+/// `lower_item` genuinely needs the owned `Vec` because its `Function` arm
+/// calls `scopes.push(..)` before lowering the function body and
+/// `scopes.pop()` after, and `&mut [_]` has no such methods; `lower_stmt`
+/// needs the owned `Vec` only because `lower_item` calls it with one. Note
+/// `lower_stmt` is self-recursive (it calls itself for nested statement
+/// bodies, e.g. `If`/`While`), not mutually recursive with `lower_item`:
+/// `lower_item` calls `lower_stmt`, but `lower_stmt` never calls back into
+/// `lower_item`.
 fn resolve_comp_source(
     iter: &CompIter,
     var: &str,
