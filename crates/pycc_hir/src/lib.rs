@@ -231,6 +231,18 @@ pub enum HirExpr {
     /// also fine and matches CPython. `pycc_types` gates the base value's
     /// type (`T0033`); MIR lowering and real runtime behavior are a later
     /// task's job (D-119 point 2 of the delivery split).
+    ///
+    /// One pre-existing, tracked caveat this variant newly reaches (not
+    /// introduced or fixed by this task): `pycc_types`' constraint solver
+    /// gives this expression no unification term (`Ok(None)`, mirroring
+    /// every container-literal expression, per D-116's own correction), so
+    /// once any function in a module is unannotated, assigning `y =
+    /// xs.pop()` inside that solver-checked function's body never registers
+    /// a binding for `y` -- a later read of `y` in the same function then
+    /// fails with a misleading "not bound before this use" instead of the
+    /// expected type. `xs.pop()` is the first *scalar*-typed expression to
+    /// reach this gap (D-116's own reproductions were all container-typed),
+    /// which makes it more surprising here than there.
     ListPop {
         list: String,
     },
@@ -243,7 +255,9 @@ pub enum HirExpr {
     /// shipped: this compiler has no `Optional[int]`/`None`-union
     /// representation for a `dict[str, int]`'s value type, so requiring the
     /// caller to always supply a same-typed default sidesteps that gap
-    /// entirely rather than half-solving it.
+    /// entirely rather than half-solving it. Shares `ListPop`'s own
+    /// pre-existing D-116 solver-binding caveat above verbatim (also
+    /// `Ok(None)` in the solver, also scalar-valued).
     DictGetOrDefault {
         dict: String,
         key: Box<HirExpr>,

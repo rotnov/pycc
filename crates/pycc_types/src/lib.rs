@@ -1671,14 +1671,17 @@ fn infer_expr_in(
             };
             Ok((**elem_ty).clone())
         }
-        // PR-12 Task 10 (D-119): `dict.get(key, default)`. Two independent
-        // `T0021` checks -- the key must be assignable to the dict's key
-        // type, and the default must be assignable to the dict's value
-        // type -- mirroring `ListAppend`'s own `is_assignable` (not exact
-        // `Ty` equality) discipline for the same D-086 `bool`-subtypes-`int`
-        // reason. The overall result is the dict's *value* type, never
-        // `Ty::None`, since a missing key still yields the (same-typed)
-        // default rather than `None`.
+        // PR-12 Task 10 (D-119): `dict.get(key, default)`. The key check
+        // uses exact `Ty` equality, not `is_assignable` -- same reasoning as
+        // `Subscript`'s own `Ty::Dict` read arm and `check_dict_set` above
+        // (every `Ty::Dict` value that survives `DictLiteral`'s own `T0036`
+        // gate has key type exactly `Ty::Str`, so there is no bool/int-style
+        // widening question for a dict *key*, unlike a list index or a
+        // dict *value*). The `default` check does use `is_assignable`,
+        // mirroring `ListAppend`'s/`check_dict_set`'s own value-position
+        // leniency (D-086 `bool`-subtypes-`int`). The overall result is the
+        // dict's *value* type, never `Ty::None`, since a missing key still
+        // yields the (same-typed) default rather than `None`.
         HirExpr::DictGetOrDefault { dict, key, default } => {
             let dict_ty = lookup_bound_name(env, local_names, dict)?;
             let Ty::Dict(kv) = &dict_ty else {
@@ -1689,7 +1692,7 @@ fn infer_expr_in(
                 ));
             };
             let key_ty = infer_expr_in(env, local_names, key)?;
-            if !is_assignable(key_ty.clone(), kv.0.clone()) {
+            if key_ty != kv.0 {
                 return Err(Diagnostic::error(
                     "T0021",
                     format!(
