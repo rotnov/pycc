@@ -462,7 +462,7 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
     let type_param: Option<Box<str>> = match def.type_params.as_deref() {
         None => None,
         Some(type_params) => match type_params.type_params.as_slice() {
-            [single] => Some(type_param_name(single).into()),
+            [single] => Some(type_param_name(single, def.range)?.into()),
             _ => {
                 return Err(unsupported(
                     "generic functions with more than one type parameter are not supported yet",
@@ -493,15 +493,31 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
     })
 }
 
-/// Extracts a PEP 695 type parameter's identifier regardless of which of the
-/// three type-parameter kinds (`TypeVar`, `TypeVarTuple`, `ParamSpec`) it is.
-/// `lower_function` only accepts exactly one type parameter (any kind); the
-/// name is what `Ty::Param` (D-133) carries forward.
-fn type_param_name(type_param: &pycc_ast::TypeParam) -> &str {
+/// Extracts a PEP 695 `TypeVar`'s identifier -- e.g. the `T` in `def
+/// f[T](...)`. `Ty::Param` (D-133) is resolved by call-site substitution
+/// (D-134) into one concrete scalar type per call, which is only a coherent
+/// model for a plain `TypeVar`: `TypeVarTuple` (`def f[*Ts](...)`) stands for
+/// a variable-length sequence of types, and `ParamSpec` (`def f[**P](...)`)
+/// stands for a parameter list shape, neither of which `Ty::Param` can
+/// represent. `def_range` is the enclosing function's range, reused for the
+/// diagnostic span since `TypeParam`'s own range would require reaching past
+/// the `pycc_ast` facade for the `Ranged` trait for no benefit here (the
+/// arity-gate rejection just above already reports the same function-level
+/// span for the analogous "too many type parameters" case).
+fn type_param_name<R>(type_param: &pycc_ast::TypeParam, def_range: R) -> Result<&str, Diagnostic>
+where
+    std::ops::Range<u32>: From<R>,
+{
     match type_param {
-        pycc_ast::TypeParam::TypeVar(tv) => tv.name.as_str(),
-        pycc_ast::TypeParam::TypeVarTuple(tv) => tv.name.as_str(),
-        pycc_ast::TypeParam::ParamSpec(ps) => ps.name.as_str(),
+        pycc_ast::TypeParam::TypeVar(tv) => Ok(tv.name.as_str()),
+        pycc_ast::TypeParam::TypeVarTuple(_) => Err(unsupported(
+            "a `TypeVarTuple` type parameter (`*Ts`) is not supported yet",
+            def_range,
+        )),
+        pycc_ast::TypeParam::ParamSpec(_) => Err(unsupported(
+            "a `ParamSpec` type parameter (`**P`) is not supported yet",
+            def_range,
+        )),
     }
 }
 
@@ -1535,7 +1551,10 @@ mod tests {
         // D-109: before this task, size_of::<Ty>() measured 24 bytes (Vec<Ty>'s
         // ptr+len+cap dominates). This is a real regression guard, not a vibe --
         // it must stay strictly smaller than 24 forever, catching any future
-        // change that re-inflates Ty back to its pre-fix size.
+        // change that re-inflates Ty back to its pre-fix size. PR-13 (D-133)
+        // later added Ty::Param, a new dataful variant -- see the more
+        // general `ty_size_stays_within_d109_ceiling` test below, which
+        // covers the ceiling for the current variant set including it.
         assert_eq!(
             std::mem::size_of::<Ty>(),
             16,
@@ -2535,6 +2554,29 @@ mod tests {
                 return_ty: Ty::Param(Box::new("T".to_string())),
                 body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
             }]
+        );
+    }
+
+    #[test]
+    fn a_type_var_tuple_type_parameter_is_rejected() {
+        // D-133: `Ty::Param` models one `TypeVar` resolved to one concrete
+        // scalar via call-site substitution (D-134) -- `*Ts` stands for a
+        // variable-length sequence of types instead, which `Ty::Param`
+        // cannot represent, so this must be an explicit capability
+        // rejection rather than silently treated like a plain `TypeVar`.
+        assert_capability_error_message(
+            "def f[*Ts](x: int) -> None:\n    return\n",
+            "a `TypeVarTuple` type parameter (`*Ts`) is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_param_spec_type_parameter_is_rejected() {
+        // D-133: same reasoning as the `TypeVarTuple` case above -- `**P`
+        // stands for a parameter-list shape, not a single scalar type.
+        assert_capability_error_message(
+            "def f[**P](x: int) -> None:\n    return\n",
+            "a `ParamSpec` type parameter (`**P`) is not supported yet",
         );
     }
 
