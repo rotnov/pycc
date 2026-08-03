@@ -66,6 +66,17 @@ GitHub Action (`corpus-bot`):
 - Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
 
+The nbody gate is in D-126's evidence-gathering phase. Each of its five
+`--release` pycc launches and five pinned-CPython launches records both elapsed
+wall-clock time and CPU time consumed by that exact child process. Unix obtains
+per-child usage from `wait4`; Windows reads the waited process handle through
+`GetProcessTimes`. The median wall-clock ratio continues to enforce the existing
+20x/12x/15x/18x target-specific floors, while the CPU-time ratio and all four
+medians are non-gating telemetry written on both passes and failures. Switching
+the gate requires a later decision backed by at least five CPU-time observations
+from every Tier-1 leg; Phase A neither reuses the wall-clock floors for CPU time
+nor weakens them to make noisy hosted-runner failures pass.
+
 ## Roadmap acceptance evidence
 
 A checked acceptance item in [ROADMAP.md](./ROADMAP.md) is a release claim, not
