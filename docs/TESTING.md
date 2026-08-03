@@ -646,12 +646,42 @@ pre-relax snapshot and relaxed check (an in-progress relaxation, reported
 an open incident does *not* explain the observed drift (must still report
 DRIFT, never blanket-suppressed just because an incident happens to be
 open) and where the incident's body has no parseable snapshot or "Check
-relaxed" line (skipped, not crashed).
+relaxed" line (skipped, not crashed). Two more tests isolate the exact
+mutants an independent review found surviving an earlier version of this
+suite: one where `contexts` matches the incident's prediction exactly but
+`enforce_admins` also drifted (must still report DRIFT, proving the
+comparison is the full dict, not just `contexts`), and one where the
+incident names the wrong check (`ci-gate` named as relaxed while `audit`
+is the one actually missing -- must still report DRIFT, proving
+`check_name` itself is what's compared, not merely presence/absence of
+any context).
+
+Authenticating an incident's author matters differently depending on what
+trusting the wrong one would cause, and the tests are organized around
+that split. `status()`'s live-incident branch is the one place a forged
+issue's content could *suppress* a safety signal (blind the only automated
+DRIFT detector, indefinitely, using only `BASELINE_PROTECTION` -- a public
+literal in this file -- and a far-future Expiry), so it requires the
+issue's author to match `get_authenticated_login()` before an incident may
+suppress DRIFT; a dedicated regression test reproduces that exact exploit
+(same check, same snapshot, unexpired, but authored by `"attacker"`) and
+asserts DRIFT is still reported, plus a test that the lookup is cached
+(one `gh api user` call even across multiple open issues in the loop).
+`find_open_bypass_issue`'s and `restore_to_baseline`'s stacking guards are
+deliberately left unauthenticated -- a forged issue there only makes the
+tool refuse and escalate to a human, the correct fail-closed outcome, not
+a suppression risk.
 
 `relax()` refuses `ci-gate` before making any `gh` call at all -- it
 reflects the candidate's own build/test/coverage result, never external
 repository state, and the skill's documented exclusion is enforced here in
-code, not left to prose alone.
+code, not left to prose alone. It also refuses when `--evidence` contains
+this mechanism's own snapshot-marker text, before creating any incident --
+`build_incident_body` places the evidence text before the real marker and
+`parse_snapshot_from_body` reads the first occurrence, so marker-shaped
+evidence (influenced by CI failure text, which can be influenced by a PR's
+own content) would otherwise be parsed as authoritative on a later
+`restore`, even inside a correctly titled and authored incident.
 
 `restore()`'s `get_incident_body()` only trusts an incident's embedded
 snapshot when the issue's title starts with `[ci-bypass]` *and* its author
@@ -661,8 +691,14 @@ matches the currently authenticated `gh` actor (`get_authenticated_login()`)
 have its snapshot applied to branch protection by a later `restore
 --incident`. Both rejections (title, author) have dedicated tests, including
 one proving the author check is never reached when the title check already
-failed, and one proving no `PATCH`/comment/close call happens on an author
-mismatch.
+failed, one proving no `PATCH`/comment/close call happens on an author
+mismatch, and one proving a `null` GitHub `author` (e.g. a deleted account)
+fails closed as `CiBypassError` rather than an uncaught `TypeError`.
+`restore()` itself adds two more predicates as defense in depth beyond that
+check -- refusing a snapshot that would drop any `NEVER_RELAXABLE_CHECKS`
+member from `contexts`, and refusing one with `strict` not `true` -- each
+with its own test proving the demonstrated `{"strict": false, "contexts":
+[]}` attack payload is rejected before any `PATCH`, comment, or close call.
 
 `relax()`'s TOCTOU re-check -- `find_open_bypass_issue` called once before
 any work starts and again immediately before the mutating `PATCH`, narrowing
