@@ -1,6 +1,11 @@
 # pycc Runtime Specification
 
-`pycc_rt` — the static library linked into every binary. Pure Rust, no libpython, no platform-visible behavior differences (cross-platform is a hard requirement — see ARCHITECTURE.md).
+`pycc_rt` — the static library linked into every binary. The current runtime
+and every future `deny`/`--pure` artifact are pure Rust with no libpython and
+no platform-visible behavior differences (cross-platform is a hard
+requirement — see ARCHITECTURE.md). Planned v0.7 CPython interop is a
+conditional companion runtime bundled only when a source import resolves to a
+CPython-backed dependency under the selected interop policy (D-128).
 
 ## Object model
 
@@ -23,23 +28,57 @@ Generators/`yield from` compile to resumable state machines (struct + resume fn)
 ## Allocator & startup
 
 - mimalloc bundled on all Tier-1 targets; identical behavior everywhere.
-- Startup: `main()` runs directly — no interpreter boot. Target: `hello` binary < 2 MB, < 5 ms cold start.
-- Module init: top-level code of imported modules runs once, in deterministic import order, at process start (statically scheduled — import cycles are a compile error `E0108`).
+- Native and `deny`/`--pure` startup: `main()` runs directly with no
+  interpreter boot. Target: `hello` binary < 2 MB, < 5 ms cold start. A
+  planned permitted interop artifact initializes its bundled CPython runtime
+  only for the CPython-backed boundary (D-128).
+- Native module init: top-level code of native pycc modules runs once, in
+  deterministic import order, at process start (statically scheduled — a
+  native-module import cycle is a compile error `E0108`). Planned
+  CPython-backed modules instead use the bundled interpreter's normal import
+  initialization, caching, and cycle semantics inside the locked environment;
+  native `E0108` rules do not reject their dependency closure (D-128).
 
-## CPython interop escape hatch (v0.7+)
+## Transparent CPython interop (planned v0.7; not implemented)
 
-For the untyped world (numpy, requests…):
+CPython-backed packages keep ordinary, CPython-compatible source imports:
 
 ```python
-from pycc.interop import cpython
-
-np = cpython.import_module("numpy")   # type: cpython.Object
+import numpy as np
 ```
 
-- Embeds a real CPython 3.14 (dynamically loaded, only if used; binary stays standalone otherwise).
-- `cpython.Object` is the **only** `Any`-like type; conversions at the boundary are explicit and typed (`to_int()`, `from_list(xs)`), misuse is `I0401`.
-- Interop calls hold that interpreter's GIL internally; pycc threads stay GIL-free outside the boundary.
-- Cost model documented: boundary crossing is expensive by design; the escape hatch is a bridge, not a lifestyle.
+pycc classifies each resolved import as a native pycc module or a
+CPython-backed dependency. A CPython-backed import generates an interop bridge
+without requiring a source rewrite to `pycc.interop`. The deployment artifact
+bundles the pinned CPython 3.14 runtime, the resolved package artifacts, and
+their native-library closure, so the target machine does not need a separately
+installed Python or ambient `site-packages`. The exact resolver, `pycc.lock`
+schema, and bundle layout must be specified during v0.7 planning before implementation;
+the embedded interpreter must never search an unpinned ambient environment.
+
+The build policy controls whether that automatic bridge is permitted:
+
+| Policy | Planned behavior |
+|---|---|
+| `auto` | Default. Permit every CPython-backed import root present in the source and bundle its pinned dependency closure. |
+| `allowlist` | Permit only direct CPython-backed import roots listed in `[interop].allow`; their submodules and pinned transitive closure are covered by the root. Reject another direct root with `I0402`. |
+| `deny` | Reject every CPython-backed import. Native pycc modules remain available and the artifact has no CPython/libpython dependency. `--pure` is the CLI shorthand. |
+
+- A source-level `import` is sufficient intent under `auto`; pycc does not ask
+  for a redundant per-package permission.
+- The compiler may retain `pycc.interop.cpython` as a low-level API for
+  advanced explicit handles, but ordinary package use must not require it.
+- CPython-owned values use the compiler's internal `cpython.Object` boundary.
+  Package stubs provide their public types; a genuinely untyped value may not
+  leak into pure pycc code (`I0401`). Standard-Python conversions and supported
+  buffer protocols bridge native values without pycc-only source syntax.
+- Interop calls hold the embedded interpreter's GIL internally; pycc threads
+  stay GIL-free outside the boundary. Packages such as NumPy may release that
+  GIL internally according to their own contracts.
+- The v0.7 cost model and benchmark report distinguish zero-copy buffer
+  transfers from copied scalar/container marshalling. Automatic interop
+  preserves Python semantics, not a promise that every boundary crossing is
+  free.
 
 ## ABI & embedding
 

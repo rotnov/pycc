@@ -426,7 +426,7 @@ if web_page.get("name") != title:
     raise SystemExit("WebPage JSON-LD name must match the page title")
 if web_page.get("description") != metadata["description"][0]["content"]:
     raise SystemExit("WebPage JSON-LD description must match the meta description")
-if web_page.get("dateModified") != "2026-07-30":
+if web_page.get("dateModified") != "2026-08-02":
     raise SystemExit("Landing WebPage dateModified is stale")
 if web_page.get("mainEntity") != {"@id": project_id}:
     raise SystemExit("WebPage JSON-LD must identify the pycc project as its main entity")
@@ -454,6 +454,10 @@ required_disclosures = (
     "v0.1 native backend with documented gaps",
     "v0.1 acceptance criteria met (conformance verified on all five Tier-1 targets)",
     "The full conformance matrix and v0.2 collections/generics are next",
+    (
+        "Native and pure builds emit standalone executables; planned permitted "
+        "CPython interop emits a self-contained bundle with its pinned runtime."
+    ),
 )
 for disclosure in required_disclosures:
     if disclosure not in visible_body_text:
@@ -518,7 +522,7 @@ PAGE_SPECS = {
     },
     "architecture": {
         "canonical": f"{ROOT}architecture/",
-        "date_modified": "2026-07-26",
+        "date_modified": "2026-08-02",
         "title": "pycc architecture — typed Python to LLVM native binaries",
         "description": (
             "Explore pycc's implemented Rust and LLVM compiler pipeline, "
@@ -531,11 +535,16 @@ PAGE_SPECS = {
             "pycc_types::check_and_resolve",
             "MIR and code generation cover the implemented v0.1 surface",
             "Strict checking and inference",
+            (
+                "Planned permitted CPython interop instead adds the pinned "
+                "interpreter and dependency closure to an autonomous "
+                "application bundle."
+            ),
         ),
     },
     "python-aot-compilers": {
         "canonical": f"{ROOT}python-aot-compilers/",
-        "date_modified": "2026-07-27",
+        "date_modified": "2026-08-02",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
             "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "
@@ -560,6 +569,16 @@ PAGE_SPECS = {
         "required_visible_text": (
             "Tools six projects",
             "Alpha; focused on numerical and array-oriented typed Python",
+            (
+                "Standalone native executable without CPython for native "
+                "and pure builds; planned permitted interop bundles a "
+                "pinned CPython runtime"
+            ),
+            (
+                "Native and pure pycc builds target a standalone runtime; "
+                "planned permitted interop carries a pinned CPython runtime "
+                "in the application bundle."
+            ),
             (
                 "v0.1 frontend and native backend implemented with "
                 "documented gaps; not production-ready"
@@ -909,8 +928,15 @@ python3 - \
   "$site_dir/sitemap.xml" \
   "$site_dir/llms.txt" \
   "$site_dir/index.html.md" \
+  "$site_dir/index.html" \
+  "$site_dir/status/index.html" \
+  "$site_dir/architecture/index.html" \
+  "$site_dir/python-aot-compilers/index.html" \
+  "$site_dir/ai-native/index.html" \
   "$canonical" <<'PY'
 from datetime import date
+from html.parser import HTMLParser
+import json
 from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
@@ -919,7 +945,51 @@ import xml.etree.ElementTree as ET
 sitemap_path = Path(sys.argv[1])
 llms_path = Path(sys.argv[2])
 markdown_path = Path(sys.argv[3])
-canonical = sys.argv[4]
+page_paths = [Path(argument) for argument in sys.argv[4:9]]
+canonical = sys.argv[9]
+
+
+class JsonLdParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_json_ld = False
+        self.current = []
+        self.documents = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "script" and attributes.get("type") == "application/ld+json":
+            self.in_json_ld = True
+            self.current = []
+
+    def handle_data(self, data):
+        if self.in_json_ld:
+            self.current.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self.in_json_ld:
+            self.documents.append(json.loads("".join(self.current)))
+            self.in_json_ld = False
+
+
+def webpage_modified(path):
+    parser = JsonLdParser()
+    parser.feed(path.read_text())
+    pages = []
+    for document in parser.documents:
+        candidates = document.get("@graph", []) if isinstance(document, dict) else []
+        candidates = [document, *candidates]
+        pages.extend(
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, dict) and candidate.get("@type") == "WebPage"
+        )
+    if len(pages) != 1 or not pages[0].get("url") or not pages[0].get("dateModified"):
+        raise SystemExit(f"Expected one dated WebPage JSON-LD object in {path}")
+    return pages[0]["url"], pages[0]["dateModified"]
+
+
+expected_last_modified = dict(webpage_modified(path) for path in page_paths)
 
 namespace = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 root = ET.parse(sitemap_path).getroot()
@@ -952,7 +1022,13 @@ if len(locations) != len(set(locations)):
     raise SystemExit("Sitemap contains a duplicate canonical URL")
 
 for entry in urls:
-    last_modified = entry.findtext("s:lastmod", namespaces=namespace)
+    location = (entry.findtext("s:loc", namespaces=namespace) or "").strip()
+    last_modified_nodes = entry.findall("s:lastmod", namespace)
+    if len(last_modified_nodes) != 1:
+        raise SystemExit(
+            "Each sitemap URL entry must contain exactly one lastmod"
+        )
+    last_modified = (last_modified_nodes[0].text or "").strip()
     try:
         last_modified_date = date.fromisoformat(last_modified or "")
     except ValueError as error:
@@ -961,6 +1037,10 @@ for entry in urls:
         ) from error
     if last_modified_date > date.today():
         raise SystemExit("Sitemap lastmod cannot be in the future")
+    if last_modified != expected_last_modified.get(location):
+        raise SystemExit(
+            f"Sitemap lastmod for {location} must match its WebPage dateModified"
+        )
 
 llms = llms_path.read_text()
 if not llms.startswith("# pycc\n\n> "):
@@ -1011,6 +1091,14 @@ backend_status = "`pycc build` and `pycc run` compile that implemented surface"
 if backend_status not in llms or backend_status not in markdown:
     raise SystemExit(
         "LLM-readable files are missing the current backend status"
+    )
+artifact_contract = (
+    "Native and pure builds emit standalone executables; planned permitted CPython\n"
+    "interop emits a self-contained bundle with its pinned runtime."
+)
+if artifact_contract not in markdown:
+    raise SystemExit(
+        "Markdown website is missing the native-versus-interop artifact contract"
     )
 for evidence_link in (
     f"[Current implementation status]({canonical}status/)",

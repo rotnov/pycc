@@ -50,7 +50,7 @@
             "name": "pycc architecture — typed Python to LLVM native binaries",
             "description": "Explore pycc's implemented Rust and LLVM compiler pipeline, current crate boundaries, and the planned path from typed Python 3.14 to native binaries.",
             "inLanguage": "en",
-            "dateModified": "2026-07-26",
+            "dateModified": "2026-08-02",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -110,7 +110,7 @@
       </nav>
 
       <header class="page-hero">
-        <p class="eyebrow">Architecture · Updated 2026-07-26</p>
+        <p class="eyebrow">Architecture · Updated 2026-08-02</p>
         <h1>Python source to <span>native code.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha Rust compiler pipeline with an LLVM backend. The
@@ -234,7 +234,10 @@
               surface into fully typed SSA MIR, ownership and escape analysis,
               optimizations such as reference-count elision and
               monomorphization, and complete runtime and standard-library
-              components linked into the final binary.
+              components linked into a standalone native binary for native and
+              pure builds. Planned permitted CPython interop instead adds the
+              pinned interpreter and dependency closure to an autonomous
+              application bundle.
             </p>
             <div class="callout">
               <strong>Standard Python, not a compiler dialect.</strong>

@@ -10,7 +10,9 @@ The website gives search engines and prospective contributors one stable,
 indexable explanation of pycc:
 
 - pycc is an ahead-of-time compiler for typed, standard Python 3.14;
-- the intended output is a standalone native binary;
+- native and `--pure` output is a standalone native binary, while planned
+  permitted CPython interop produces an autonomous bundle carrying the pinned
+  interpreter and dependency closure (D-128);
 - the implementation is written in Rust and uses LLVM;
 - the project is created entirely by AI agents, while a human manages goals,
   constraints, priorities, and product decisions without writing project code;
@@ -104,9 +106,10 @@ metadata.
 
 `site/robots.txt` and `site/sitemap.xml` must use the same canonical origin.
 The sitemap lists the landing page plus `/status/`, `/architecture/`,
-`/python-aot-compilers/`, and `/ai-native/`; it records `lastmod` when main
-content, structured data, or important links materially change. The social
-preview is `site/og.png`.
+`/python-aot-compilers/`, and `/ai-native/`. Every sitemap URL entry contains
+exactly one `lastmod`, equal to that page's JSON-LD `WebPage.dateModified`, and
+both values advance when main content, structured data, or important links
+materially change. The social preview is `site/og.png`.
 `scripts/check-site.sh` enforces these mechanical requirements locally and in
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
@@ -114,7 +117,9 @@ site and rejects missing evidence pages, wrong canonicals, incomplete sitemaps,
 missing official comparison sources, missing LPython alpha-status evidence, a
 missing pre-alpha comparison warning, or required metadata. The self-test
 independently removes LPython's official project source and alpha positioning
-so a newly covered compiler model cannot silently disappear. It also mutates
+so a newly covered compiler model cannot silently disappear. It rejects both a
+duplicate sitemap `lastmod` and a value that disagrees with the corresponding
+page's `WebPage.dateModified`. It also mutates
 the landing, status, architecture, comparison, Markdown, and `llms.txt`
 frontend/backend claims independently, preventing a structurally valid site
 from silently describing a superseded compiler milestone. It also removes the

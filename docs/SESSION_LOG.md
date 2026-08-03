@@ -11,6 +11,16 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — PR #281 merged to `main`: transparent CPython interop policy specified as D-128
+
+**Authoritative checkpoint:** `main`'s tip is `8c048da` ([PR #281](https://github.com/rotnov/pycc/pull/281), merge commit), confirmed via `git fetch origin main` immediately before writing this entry — one commit ahead of `8bbdb00` (PR #288's own merge, described in the entry directly below). This entry is written from the merged result, not from the in-flight drafting note PR #281 itself carried mid-review (that note's own "what's next" describes steps this merge has already completed).
+
+**What happened:** specifies the planned v0.7 CPython interop contract — ordinary source such as `import numpy as np` keeps compiling, native versus CPython-backed imports are classified, and a pinned CPython/package/native-library closure is bundled for permitted interop. The policy is a closed `auto` (default) / `allowlist` / `deny` enum, with `--pure` as the strict `deny` shorthand. Recorded as **D-128** (renumbered during review after `main` advanced and claimed D-127 for the unrelated autonomous-agent-operation ADR first); this compiler still implements none of this and continues to reject imports before policy evaluation — specification, roadmap, website, and validator work only.
+
+**What's next:** unaffected by this entry — see the PR #288 entry directly below for v0.2's own remaining scope (PR-13/PR-14).
+
+---
+
 ## 2026-08-03 — PR #288 merged to `main`: recorded the autonomous agent operation model as D-127
 
 **Authoritative checkpoint:** `main`'s tip is `8bbdb00fb93fd9b87529cfe0be9d04470303548a` ([PR #288](https://github.com/rotnov/pycc/pull/288), merge commit), confirmed via `git fetch origin` immediately before writing this entry. `gh pr checks 288` only reports the PR head's own check runs, not the separate push-triggered run CI executes on `main` for the merge commit itself — queried that merge commit's actual check runs directly instead (`gh api repos/rotnov/pycc/commits/8bbdb00.../check-runs`): 13 runs, all `success`, including `main-history-audit` (which only runs on `main` pushes, not on the PR head, and so is absent from `gh pr checks`' own 13).
