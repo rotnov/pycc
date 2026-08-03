@@ -1,0 +1,5 @@
+error[C0001]: dict.get() takes exactly two arguments (key, default), got 1
+ --> tests/diagnostics/c0001_dict_get_wrong_argument_count.py:2:5
+  |
+2 | y = x.get("a")
+  |     ^^^^^^^^^^ dict.get() takes exactly two arguments (key, default), got 1

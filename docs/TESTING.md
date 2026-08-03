@@ -28,7 +28,9 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
-**PR-9 status (2026-07-30):** the `pycc_testkit` crate above remains unbuilt — D-102 extended the existing flat `tests/conformance.rs` integration test in place instead (11 fixtures now: the 2 pre-existing plus 9 new PEP fixtures), judging that PR-9's own needs (compile both profiles, run, diff against CPython) were still fully covered by that file's existing helper and didn't justify a new workspace crate. The "matrix file is updated by CI, not by hand" policy above has no automation behind it yet (verified: nothing currently writes `PYTHON_STANDARDS.md`'s status column); D-102's accepted interim policy is to flip a row by hand only once its fixture is observed green on a real, already-completed CI run across all 5 Tier-1 targets in both profiles — never speculatively. Building the real `pycc_testkit` crate and CI-owned status automation both remain deferred to whenever the v1.0-scale, multi-language-level harness this section describes is actually needed.
+**PR-9 status (2026-07-30):** the `pycc_testkit` crate above remains unbuilt — D-102 extended the existing flat `tests/conformance.rs` integration test in place instead (11 fixtures at the time: the 2 pre-existing plus 9 new PEP fixtures), judging that PR-9's own needs (compile both profiles, run, diff against CPython) were still fully covered by that file's existing helper and didn't justify a new workspace crate. The "matrix file is updated by CI, not by hand" policy above has no automation behind it yet (verified: nothing currently writes `PYTHON_STANDARDS.md`'s status column); D-102's accepted interim policy is to flip a row by hand only once its fixture is observed green on a real, already-completed CI run across all 5 Tier-1 targets in both profiles — never speculatively. Building the real `pycc_testkit` crate and CI-owned status automation both remain deferred to whenever the v1.0-scale, multi-language-level harness this section describes is actually needed.
+
+**PR-10 status (2026-07-31):** one more fixture added the same way (12 total now) — `pep_0585_builtin_generics_matches_cpython_3_14_6_byte_for_byte`, exercising `list[int]`'s literal/`.append()`/indexing/`len()`/iteration slice through the same `run_conformance_fixture_with_profile` helper D-102 established; no change to this section's harness shape. This branch's CI ([run 30608030517](https://github.com/rotnov/pycc/actions/runs/30608030517)) has since observed the new fixture passing on all 5 Tier-1 targets, in both profiles — per the same D-102 policy `PYTHON_STANDARDS.md`'s PEP 585 row is flipped to `✅` on that evidence (see `ROADMAP.md`'s v0.2 section and `DELIVERY_PLAN.md`'s PR-10 row).
 
 The current frontend also keeps focused differential sources under
 `tests/diagnostics/` when CPython's runtime behavior defines why strict pycc
@@ -309,10 +311,22 @@ blocking aggregate without result selection, closing #109 (2026-07-26): a
 changed-input `>2%` failure is a real, validated gate result, not
 presumptively known-noise.
 
+**Update (2026-08-03, D-114):** the `>2%` threshold described throughout
+this section's own history is no longer the live value — `frontend-perf-gate`
+now requires `>7.0%` before failing, raised via a corrected six-round D-103
+propose/activate sequence to accommodate v0.2 PR-10's real, one-time
+`Ty`-migration cost (D-109), not runner noise. Every historical `2%`
+reference above still accurately describes what that specific decision
+changed at the time; only the currently-active threshold has moved.
+`REVIEWED_PERF_CI_WORKFLOW_SHA256S` now coexists `[D100, D112, D114]`;
+`.github/workflows/ci.yml` matches D-114's shape. Issue #296 tracks
+lowering the threshold back toward 2.0% once this one-time cost is
+absorbed into every future baseline.
+
 The byte-exact activation retired the D-048 workflow digest and fixture. No
 administrative bootstrap is required because each run of the active workflow
-(D-112, formerly D-100) uses D-062's embedded contract to measure both sides
-of its own comparison. D-054's one-shot
+(D-114, formerly D-112, formerly D-100) uses D-062's embedded contract to
+measure both sides of its own comparison. D-054's one-shot
 staging recovery is historical audit
 evidence only; normal `audit` plus `ci-gate` protection was restored before this
 activation branch was created and is not encoded in repository configuration.
