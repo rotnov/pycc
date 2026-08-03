@@ -155,7 +155,7 @@ does. `--incident` and `--to-baseline` are mutually exclusive.
 
 `--to-baseline` can only repair drift in `required_status_checks`
 (`strict`/`contexts`) -- the same narrow scope this whole mechanism is
-authorized to mutate; drift in any of the other six protection fields
+authorized to mutate; drift in any of the other five protection fields
 (`enforce_admins`, `required_pull_request_reviews`,
 `required_conversation_resolution`, `allow_force_pushes`,
 `allow_deletions`) requires manual administrator action via GitHub's branch
