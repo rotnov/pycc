@@ -239,3 +239,50 @@ remained enabled. [PR #119](https://github.com/rotnov/pycc/pull/119) merged as
 the app-bound `audit` plus `ci-gate` set within seconds, and the full settings
 readback is attached to the incident. The exception is closed and grants no
 permission for any future bypass.
+
+## Session-driven temporary bypass
+
+A second, narrower relaxation path exists alongside the Emergency path
+above, for exactly one situation: a required CI check that is provably
+stuck due to external repository state, not the current pull request's
+own defect. Recorded in `docs/DECISIONS.md` (D-125), narrowly superseding D-024's
+"not delegated to routine tasks" and D-054's "grants no reusable
+permission" for this mechanism only. Full workflow: `.claude/skills/ci-temporary-bypass/SKILL.md`.
+
+Unlike the Emergency path above, this one does not require a human
+administrator to personally operate GitHub's UI/API for each use -- any
+session (attended, or the standing autopilot loop unattended) may invoke
+it using its own authenticated `gh` access, provided every step in the
+linked skill's workflow is followed: two independent adversarial
+`Agent()` verifications (before relaxing, and after restoring), a public
+`[ci-bypass]`-prefixed incident issue created before any protection edit,
+relaxation of exactly the one named check via the scoped `PATCH
+.../protection/required_status_checks` endpoint, and a byte-exact
+restore verification. `scripts/manage_ci_bypass.py status` reports
+drift between current protection and this document's own baseline,
+except when that exact drift is fully explained by a currently open,
+unexpired `[ci-bypass]` incident's own recorded pre-relax snapshot and
+relaxed check (an in-progress relaxation, not a governance incident);
+`AGENTS.md`'s "Protect main" section requires every session's preflight
+to run it and restore immediately if drift is found with no live
+tracking incident.
+
+The canonical protection snapshot requires the four review-policy fields in
+the documented baseline: stale-review dismissal, code-owner review, last-push
+approval, and approving-review count. It removes only explicitly classified
+response metadata (`url`) from GitHub's `required_pull_request_reviews`
+response; every other returned field is preserved in comparisons and persisted
+incident snapshots. Changes to the four baseline fields and any additional
+effective or unclassified field therefore remain drift. If GitHub adds another
+effective review-policy setting, the baseline and metadata classification must
+be extended deliberately before that setting can become part of the repository
+contract.
+Snapshots persisted by an earlier tool version are normalized on read as well,
+so an already-open incident remains restorable after this canonicalization.
+
+Every other requirement from the Emergency path above still applies
+without exception: exactly one control relaxed at a time, immediate
+restoration, full public auditability. The Emergency path itself is
+unchanged and remains the path for anything this narrower mechanism does
+not cover (broader relaxations, or when no session with the owner's own
+`gh` access is available to run it).

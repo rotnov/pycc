@@ -197,16 +197,12 @@ class IevoHookLifecycleTests(unittest.TestCase):
                     ],
                     "PostToolUseFailure": [
                         self.group(
-                            self.command_entry(
-                                manager.SCRIPT_TARGETS["failure-capture"]
-                            )
+                            self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
                         )
                     ],
                     "PermissionDenied": [
                         self.group(
-                            self.command_entry(
-                                manager.SCRIPT_TARGETS["failure-capture"]
-                            )
+                            self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
                         )
                     ],
                     "Stop": [{"matcher": "empty", "hooks": []}],
@@ -1846,12 +1842,16 @@ class IevoHookLifecycleTests(unittest.TestCase):
                     ],
                     "PostToolUseFailure": [
                         self.group(
-                            self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
+                            self.command_entry(
+                                manager.SCRIPT_TARGETS["failure-capture"]
+                            )
                         )
                     ],
                     "PermissionDenied": [
                         self.group(
-                            self.command_entry(manager.SCRIPT_TARGETS["failure-capture"])
+                            self.command_entry(
+                                manager.SCRIPT_TARGETS["failure-capture"]
+                            )
                         )
                     ],
                 }
@@ -1998,7 +1998,7 @@ class IevoHookLifecycleTests(unittest.TestCase):
             self.assertEqual(vendor.read_bytes(), vendor_before)
 
     @unittest.skipUnless(os.name == "nt", "Windows junction regression")
-    def test_windows_junctioned_hook_ancestor_blocks_disable(self) -> None:
+    def test_windows_junctioned_hook_ancestor_blocks_smoke_and_disable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             root = workspace / "repo"
@@ -2008,7 +2008,14 @@ class IevoHookLifecycleTests(unittest.TestCase):
             external_scripts.mkdir(parents=True)
             target = manager.SCRIPT_TARGETS["correction-capture"]
             external_target = external_hooks / target.relative_to(".ievo/hooks")
-            external_target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            smoke_marker = workspace / "smoke-ran"
+            marker_literal = json.dumps(str(smoke_marker))
+            external_target.write_text(
+                "#!/bin/sh\n"
+                "python -c 'from pathlib import Path; "
+                f'Path({marker_literal}).write_text("ran", encoding="utf-8")\'\n',
+                encoding="utf-8",
+            )
             vendor = external_scripts / "vendor"
             vendor.mkdir()
             sentinel = vendor / "sentinel"
@@ -2031,6 +2038,15 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.create_gitignore(root, upstream_shims=False)
+            subprocess.run(
+                ["sh", str(external_target)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(smoke_marker.read_text(encoding="utf-8"), "ran")
+            smoke_marker.unlink()
             junction = root / manager.HOOK_DIRECTORY
             subprocess.run(
                 ["cmd", "/c", "mklink", "/J", str(junction), str(external_hooks)],
@@ -2039,6 +2055,18 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 text=True,
             )
             local_before = (root / manager.CLAUDE_LOCAL).read_bytes()
+            target_before = external_target.read_bytes()
+
+            with self.assertRaisesRegex(
+                manager.HookLifecycleError,
+                "reparse point",
+            ):
+                manager.check(root, smoke=True)
+
+            self.assertFalse(smoke_marker.exists())
+            self.assertEqual((root / manager.CLAUDE_LOCAL).read_bytes(), local_before)
+            self.assertEqual(external_target.read_bytes(), target_before)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
             with self.assertRaisesRegex(
                 manager.HookLifecycleError,
@@ -2047,7 +2075,7 @@ class IevoHookLifecycleTests(unittest.TestCase):
                 manager.disable(root)
 
             self.assertEqual((root / manager.CLAUDE_LOCAL).read_bytes(), local_before)
-            self.assertTrue(external_target.is_file())
+            self.assertEqual(external_target.read_bytes(), target_before)
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep\n")
 
     @unittest.skipUnless(os.name == "nt", "Windows short-path regression")

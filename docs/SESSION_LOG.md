@@ -11,6 +11,20 @@ history alone, not a full narrative.
 
 ---
 
+## 2026-08-03 — PR #303 merged to `main`: session-driven CI temporary-bypass mechanism, as D-125 (renumbered from D-116)
+
+**Authoritative checkpoint:** `main`'s tip is `bc27344ee870ff5006ddab07adbfb872971e9766` ([PR #303](https://github.com/rotnov/pycc/pull/303), merge commit), confirmed via `git fetch origin main` immediately before writing this entry. All 13 required checks passed on the merged head (`gh pr checks 303`, re-confirmed before merge).
+
+**What happened:** delivers `scripts/manage_ci_bypass.py` (`status`/`relax`/`restore`/`restore --to-baseline`), the `ci-temporary-bypass` skill (Claude Code + Codex), and the governance documentation for a mechanism letting an authorized session temporarily relax exactly one required branch-protection check when it is provably stuck on external repository state — narrowly superseding D-024/D-054's "never without a human administrator" stance. Full design/build history predates this entry (subagent-driven-development, final `ievo:deep-reviewer` pass, three adversarial fix waves closing the reviewer's own findings — see the PR body for the wave-by-wave detail).
+
+**The known D-number collision this log's own previous two entries flagged (PR-11/PR-12 and PR-10) is now resolved.** This branch's own `docs/DECISIONS.md` entry (originally authored as D-116) collided with [PR #305](https://github.com/rotnov/pycc/pull/305)'s own independent, unrelated D-116 (tuple[...] v0.2 scope), which had merged to `main` first. Resolved by re-verifying `main`'s highest decision number (D-124, confirmed empirically, not assumed) and renumbering this branch's own entry to **D-125** — the next free number — in a dedicated commit on top of a clean rebase onto `main`: `main`'s own D-115 through D-124 were left byte-for-byte untouched, this branch's entry got its own row in `docs/DECISIONS.md`'s summary table (a table row was missing even under its original D-116 number — a real, separate documentation gap fixed in the same commit), and D-024/D-054 gained back-references to D-125 mirroring this file's existing D-022/D-087 "narrowly superseded" convention. Every cross-reference outside `docs/DECISIONS.md` (`AGENTS.md`, `docs/TESTING.md`, `docs/REPOSITORY_GOVERNANCE.md`, `scripts/manage_ci_bypass.py`) was updated in the same commit; the PR title/body were updated to match.
+
+**Three `chatgpt-codex-connector` P1/P2 findings from the automated review were confirmed and fixed** (reject relaxing `ci-gate` itself; authenticate an incident issue's embedded snapshot before trusting it, including a second round closing a subset-check/marker-injection bypass class the first fix left open; recognize drift fully explained by a live, authenticated in-progress incident instead of false-alarming on it) — evidence and the fixing commits cited in replies to each thread, all three resolved. `scripts/test_manage_ci_bypass.py` sits at 77 tests, 100% line / 99% branch coverage (263 statements; the one partial branch is a pre-existing argparse-unreachable case).
+
+**What's next:** the mechanism is now live and documented; no further work is queued specifically for it. `docs/ROADMAP.md`/`docs/DELIVERY_PLAN.md`'s own v0.2 remaining scope (PR-13 PEP 695 generics, PR-14 stdlib imports) is unaffected by this PR and unchanged from the prior entry below.
+
+---
+
 ## 2026-08-03 — PR-11/PR-12 merged to `main`; v0.2 `dict`/`set`/`tuple` generics, comprehensions, slicing, and container methods now live
 
 **Authoritative checkpoint:** `main`'s tip is `9a7a6db8be09ac0a06184d8d5ef4e0be352346ec` ([PR #305](https://github.com/rotnov/pycc/pull/305), squash merge), confirmed via `gh api repos/rotnov/pycc/commits/main --jq '.sha'` immediately before writing this entry. All 13 required checks passed on the merged commit (`gh pr checks 305`, re-confirmed post-merge).
