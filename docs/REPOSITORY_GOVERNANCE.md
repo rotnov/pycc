@@ -267,6 +267,19 @@ relaxed check (an in-progress relaxation, not a governance incident);
 to run it and restore immediately if drift is found with no live
 tracking incident.
 
+The canonical protection snapshot requires the four review-policy fields in
+the documented baseline: stale-review dismissal, code-owner review, last-push
+approval, and approving-review count. It removes only explicitly classified
+response metadata (`url`) from GitHub's `required_pull_request_reviews`
+response; every other returned field is preserved in comparisons and persisted
+incident snapshots. Changes to the four baseline fields and any additional
+effective or unclassified field therefore remain drift. If GitHub adds another
+effective review-policy setting, the baseline and metadata classification must
+be extended deliberately before that setting can become part of the repository
+contract.
+Snapshots persisted by an earlier tool version are normalized on read as well,
+so an already-open incident remains restorable after this canonicalization.
+
 Every other requirement from the Emergency path above still applies
 without exception: exactly one control relaxed at a time, immediate
 restoration, full public auditability. The Emergency path itself is
