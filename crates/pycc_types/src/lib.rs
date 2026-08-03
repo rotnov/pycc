@@ -1102,6 +1102,19 @@ fn infer_expr_in(
         HirExpr::Subscript { base, index } => {
             let base_ty = infer_expr_in(env, local_names, base)?;
             let index_ty = infer_expr_in(env, local_names, index)?;
+            // Base-checked before index, matching `ListAppend` below and
+            // this project's general "does this value support the
+            // operation at all" precedence: otherwise `x["a"]` for
+            // `x: int` would report T0021 ("list index must be `int`"),
+            // asserting a list-indexing context that doesn't exist, when
+            // the real problem is that `int` isn't subscriptable at all.
+            let Ty::List(elem_ty) = base_ty else {
+                return Err(Diagnostic::error(
+                    "T0033",
+                    format!("`{}` does not support indexing", base_ty.name()),
+                    Span::new(0, 0),
+                ));
+            };
             // Reuses T0021 (an unconstrained/conflicting-constraint shape),
             // not a new code -- a non-int-compatible index is that same
             // "operand type mismatch" failure, not a distinct one.
@@ -1123,14 +1136,7 @@ fn infer_expr_in(
                     Span::new(0, 0),
                 ));
             }
-            match base_ty {
-                Ty::List(elem_ty) => Ok(*elem_ty),
-                other => Err(Diagnostic::error(
-                    "T0033",
-                    format!("`{}` does not support indexing", other.name()),
-                    Span::new(0, 0),
-                )),
-            }
+            Ok(*elem_ty)
         }
         HirExpr::ListAppend { list, value } => {
             let list_ty = lookup_bound_name(env, local_names, list)?;
@@ -3846,6 +3852,26 @@ mod tests {
         // Exact match: same wording as
         // `tests/diagnostics/d0033_subscript_on_non_list.expected.txt`
         // (currently unrunnable end-to-end -- see the T0032 test above).
+        assert_eq!(err.message, "`int` does not support indexing");
+    }
+
+    #[test]
+    fn subscripting_a_non_list_value_with_a_non_int_index_reports_t0033_not_t0021() {
+        // Both operands are ill-typed at once: the base doesn't support
+        // indexing at all, AND the index isn't int-compatible. T0033
+        // ("does this value support the operation at all") must fire
+        // before T0021 ("is this operand's type wrong"), matching
+        // `ListAppend`'s own base-first precedence -- otherwise this would
+        // report "list index must be `int`", asserting a list-indexing
+        // context that doesn't exist.
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Int);
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::StringLiteral("zero".to_string())),
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0033");
         assert_eq!(err.message, "`int` does not support indexing");
     }
 
