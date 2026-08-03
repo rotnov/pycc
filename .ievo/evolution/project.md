@@ -22,3 +22,8 @@
 **Trigger:** user-defined convention
 
 ScheduleWakeup, я бы вешал может фонового агента который следит что луп автопилота живой?
+
+## 2026-08-03 14:10 UTC — Verify live PR readiness before reporting
+**Trigger:** user-observed mistake during pull-request readiness assessment
+
+PR с конфликатми и stale а ты не заметил
