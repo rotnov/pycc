@@ -9,7 +9,7 @@ Every ROADMAP.md milestone is its own sub-project: its own brainstorm → plan �
 | Milestone | New crates / major additions | Depends on | Rough PR count |
 |---|---|---|---|
 | v0.1 hello, binary | `pycc`, `pycc_lexer`/`pycc_parser`/`pycc_ast` (vendored `ruff_python_parser`, D-003), `pycc_hir`, `pycc_types`, `pycc_mir`, `pycc_codegen`, `pycc_rt`, `pycc_diag`, `pycc_testkit`, CI matrix on 5 Tier-1 targets | — | ~7 (detailed below) |
-| v0.2 collections & generics | `pycc_std` created (`math`, `sys`), recursive `Ty` (D-089) + monomorphization in `pycc_types`/`pycc_mir`, `--release`/LTO profile, `pycc.toml` | v0.1 | ~7 (detailed below) |
+| v0.2 collections & generics | `pycc_std` created (`math.sqrt`/`math.pi` only, D-136 — `sys` deferred, see row 14 below), recursive `Ty` (D-089) + monomorphization in `pycc_types`/`pycc_mir`, `--release`/LTO profile, `pycc.toml` | v0.1 | ~7 (detailed below) |
 | v0.3 classes & pattern matching | class model, dataclasses, protocols, `match` w/ exhaustiveness, diagnostics registry grows | v0.2 | ~6 |
 | v0.4 projects & incremental | multi-file/import resolution in `pycc_hir`, salsa-style incremental cache, `os`/`pathlib`/`json`/`datetime` | v0.3 | ~6-7 |
 | v0.5 generators & ownership v1 | new crate `pycc_own` (escape analysis, move semantics, RC elision), generators as state machines | v0.4 | ~6-7 |

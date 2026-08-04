@@ -49,7 +49,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `E0101` | error | monkey-patching foreign class/module |
 | `E0102` | error | dynamic attribute injection |
 | `E0103` | error | dynamic `type()` class creation |
-| `E0104` | error | wildcard import |
+| `E0104` | error | wildcard import *(reserved; not currently emitted — a wildcard `from x import *` is rejected today by the same versioned `C0001` "not implemented yet" capability code every other unsupported import shape uses, not this by-design-rejection code; see D-137)* |
 | `E0105` | error | metaclass with non-static side effects |
 | `E0106` | warning→error | `__del__` relies on refcount timing |
 | `E0107` | error | `sys.getrefcount` unavailable |

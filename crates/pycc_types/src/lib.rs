@@ -118,6 +118,45 @@ fn std_scalar_to_ty(kind: pycc_std::ScalarKind) -> Ty {
     }
 }
 
+/// The module-prefix portion of a `pycc_hir`-qualified stdlib name
+/// (`"math"` from `"math.sqrt"`), used only for the shadowing check
+/// `std_receiver_is_shadowed` performs -- kept separate from
+/// `std_qualified_symbol` above so a caller can check shadowing before
+/// (not after) treating the name as a confirmed stdlib reference.
+fn std_receiver_name(qualified_name: &str) -> &str {
+    qualified_name
+        .split_once('.')
+        .map_or(qualified_name, |(receiver, _)| receiver)
+}
+
+/// D-136 (post-review finding): `pycc_hir::lower_expr` resolves
+/// `math.sqrt`/`math.pi` textually against the receiver's bare source
+/// name (`"math"`), with no visibility into whether that name is actually
+/// shadowed by a real local binding at the same call site (e.g. `def
+/// f(math: float) -> float: return math.sqrt(math)` -- a legal Python
+/// parameter named `math`). Real CPython would raise `AttributeError`
+/// there (`float` has no `.sqrt` attribute), not silently call libm's
+/// `sqrt`. `pycc_types` is the first stage with real binding-scope
+/// information (`env`/`local_names`), so this check happens here rather
+/// than in `pycc_hir` -- mirroring `float`'s own existing
+/// user-definition-takes-priority guard (`env.lookup_function(callee).is_none()`
+/// in `infer_expr_in`, `!signatures.contains_key(callee)` in
+/// `collect_expr_constraints`), which solves the same class of problem
+/// (a hand-recognized name colliding with a real user binding) for a
+/// different hand-recognized name.
+fn std_receiver_shadowed(qualified_name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!(
+            "`{}` is a local name here, not the stdlib `{}` module -- attribute access on a \
+             non-module value is not supported yet",
+            std_receiver_name(qualified_name),
+            std_receiver_name(qualified_name)
+        ),
+        Span::new(0, 0),
+    )
+}
+
 /// A stdlib function symbol (e.g. `math.sqrt`) referenced without a call
 /// (`print(math.sqrt)`, not `math.sqrt(x)`) has no callable `Ty` this
 /// compiler's type system can express -- there is no first-class function
@@ -479,12 +518,19 @@ fn collect_expr_constraints(
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
         HirExpr::Name(name) => {
             // D-136: a `pycc_hir`-qualified stdlib name (`"math.pi"`) is
-            // checked before ordinary binding lookup -- it can never
-            // collide with a real binding (see `std_qualified_symbol`'s own
-            // doc comment), and unlike an ordinary name it is never
-            // `is_local` either (it's never a parameter or a
-            // `HirStmt::Assign` target).
+            // checked before ordinary binding lookup. Post-review finding:
+            // the qualified string itself can never collide with a real
+            // binding (see `std_qualified_symbol`'s own doc comment), but
+            // its *receiver* (`"math"`) can -- a real local/parameter
+            // legally named `math` shadows the stdlib module the same way
+            // `float`'s own user-definition-takes-priority guard elsewhere
+            // in this function handles for that hand-recognized name (see
+            // `std_receiver_shadowed`'s own doc comment).
             if let Some(symbol) = std_qualified_symbol(name) {
+                let receiver = std_receiver_name(name);
+                if env.bindings.contains_key(receiver) || is_local(env.local_names, receiver) {
+                    return Err(std_receiver_shadowed(name));
+                }
                 return match symbol.kind {
                     pycc_std::StdSymbolKind::Constant { ty } => {
                         Ok(Some(Ok(std_scalar_to_ty(ty))))
@@ -599,6 +645,13 @@ fn collect_expr_constraints(
                 return Ok(Some(Ok(Ty::Int)));
             }
             if let Some(symbol) = std_qualified_symbol(callee) {
+                // Post-review finding: see `std_receiver_shadowed`'s own
+                // doc comment -- a real local/parameter named `math`
+                // shadows the stdlib module.
+                let receiver = std_receiver_name(callee);
+                if env.bindings.contains_key(receiver) || is_local(env.local_names, receiver) {
+                    return Err(std_receiver_shadowed(callee));
+                }
                 let pycc_std::StdSymbolKind::Function {
                     arg_tys: expected_arg_tys,
                     ret_ty,
@@ -1650,6 +1703,13 @@ fn infer_expr_in(
         }
         HirExpr::Name(name) => {
             if let Some(symbol) = std_qualified_symbol(name) {
+                // Post-review finding: see `std_receiver_shadowed`'s own
+                // doc comment -- a real local/parameter named `math`
+                // shadows the stdlib module.
+                let receiver = std_receiver_name(name);
+                if env.lookup(receiver).is_some() || is_local(local_names, receiver) {
+                    return Err(std_receiver_shadowed(name));
+                }
                 return match symbol.kind {
                     pycc_std::StdSymbolKind::Constant { ty } => Ok(std_scalar_to_ty(ty)),
                     pycc_std::StdSymbolKind::Function { .. } => {
@@ -1770,6 +1830,13 @@ fn infer_expr_in(
                 return Ok(Ty::Int);
             }
             if let Some(symbol) = std_qualified_symbol(callee) {
+                // Post-review finding: see `std_receiver_shadowed`'s own
+                // doc comment -- a real local/parameter named `math`
+                // shadows the stdlib module.
+                let receiver = std_receiver_name(callee);
+                if env.lookup(receiver).is_some() || is_local(local_names, receiver) {
+                    return Err(std_receiver_shadowed(callee));
+                }
                 let pycc_std::StdSymbolKind::Function {
                     arg_tys: expected_arg_tys,
                     ret_ty,
@@ -9568,6 +9635,102 @@ mod tests {
             err.message,
             "`math.sqrt` is a stdlib function and must be called, e.g. `math.sqrt(...)`"
         );
+    }
+
+    #[test]
+    fn math_sqrt_call_is_shadowed_by_a_bound_local_named_math() {
+        // Post-review finding: a real local/parameter legally named `math`
+        // must shadow the stdlib module -- CPython would raise
+        // `AttributeError` calling `.sqrt` on whatever `math` is actually
+        // bound to here, not silently call libm's `sqrt`.
+        let err = infer_expr_in(
+            &Environment::new(),
+            &["math"],
+            &HirExpr::Call {
+                callee: "math.sqrt".to_string(),
+                args: vec![HirExpr::FloatLiteral(2.0)],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert_eq!(
+            err.message,
+            "`math` is a local name here, not the stdlib `math` module -- attribute access on a non-module value is not supported yet"
+        );
+    }
+
+    #[test]
+    fn math_pi_reference_is_shadowed_by_a_bound_local_named_math() {
+        let err = infer_expr_in(
+            &Environment::new(),
+            &["math"],
+            &HirExpr::Name("math.pi".to_string()),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert_eq!(
+            err.message,
+            "`math` is a local name here, not the stdlib `math` module -- attribute access on a non-module value is not supported yet"
+        );
+    }
+
+    #[test]
+    fn math_sqrt_call_is_shadowed_by_a_module_level_binding_named_math() {
+        let mut env = Environment::new();
+        env.bind("math".to_string(), Ty::Float);
+        let err = infer_expr(
+            &env,
+            &HirExpr::Call {
+                callee: "math.sqrt".to_string(),
+                args: vec![HirExpr::FloatLiteral(2.0)],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn math_sqrt_and_pi_are_shadowed_by_a_bound_local_through_the_constraint_solver_path() {
+        // The other half of the fix -- the private-helper solver pass
+        // (`collect_expr_constraints`) needs the same shadowing guard as
+        // `infer_expr_in` above.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_shadowed".to_string(),
+                params: vec![("math".to_string(), Ty::Float)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![HirExpr::Name("math".to_string())],
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn math_pi_bare_reference_is_shadowed_by_a_bound_local_through_the_constraint_solver_path() {
+        // The `HirExpr::Name` (bare-reference) half of the solver-path
+        // shadowing guard, as opposed to the `HirExpr::Call` half already
+        // covered by `math_sqrt_and_pi_are_shadowed_by_a_bound_local_
+        // through_the_constraint_solver_path` above.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_shadowed_pi".to_string(),
+                params: vec![("math".to_string(), Ty::Float)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("math.pi".to_string())))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "C0001");
     }
 
     #[test]
