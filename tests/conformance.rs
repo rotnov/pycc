@@ -390,6 +390,42 @@ fn pep_0709_comp_inline_matches_cpython_3_14_6_byte_for_byte() {
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0709_comp_inline.py");
 }
 
+// PR-13 Task 5 (D-135): PEP 695 generic-function fixture. One type
+// parameter, called at 3 sites across two scalar types (`int` and `str`),
+// each result printed -- exercises call-site monomorphization end to end.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0695_generics_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0695_generics.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0695_generics_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0695_generics.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0695_generics_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0695_generics.py");
+}
+
+// PR-13 Task 5 (D-135): legacy `TypeAlias` fixture (PEP 613). Deliberately
+// omits `from typing import TypeAlias`, unlike the brief's literal text --
+// see the fixture file's own comment and this task's report for why: pycc
+// has no `Stmt::Import`/`Stmt::ImportFrom` support at all (any `import`
+// statement is unconditionally rejected with `C0001`, confirmed against
+// this exact fixture), and CPython 3.14 defers annotation evaluation by
+// default (PEP 649/749), so the bare `TypeAlias` name in `IntAlias:
+// TypeAlias = int` is never evaluated by the pinned 3.14.6 oracle either --
+// both sides produce identical output with or without the import.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0613_typealias_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0613_typealias.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0613_typealias_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0613_typealias.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0613_typealias_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0613_typealias.py");
+}
+
 // PR-12 Task 13 (D-117/D-118/D-119): a single breadth fixture covering
 // `list[int]` slicing, `.pop()`, `dict.get()`, `set.add()`, and both
 // comprehension source-container combinations (a `range()`-sourced dict
