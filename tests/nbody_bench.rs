@@ -9,7 +9,7 @@ use windows_sys::Win32::Foundation::{FILETIME, HANDLE};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::GetProcessTimes;
 
-const RUNS: usize = 5;
+const RUNS: usize = 7;
 const CPU_TIME_CHILD_ENV: &str = "PYCC_NBODY_CPU_TIME_CHILD";
 
 #[derive(Clone, Copy, Debug)]
@@ -345,15 +345,16 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 }
 
 /// D-094's nbody measurement contract (design doc's own §1): same-machine
-/// paired comparison, `K = 5` runs each, ratio of medians, `--release` pycc
+/// paired comparison, `K = 7` runs each (raised from the design doc's
+/// original `K = 5` by D-140), ratio of medians, `--release` pycc
 /// vs. the pinned CPython 3.14.6 oracle, gate at ratio >= 20 -- preceded by
 /// one untimed correctness check (D-097) that verifies both sides compute
 /// matching output, within a small relative tolerance (D-098, superseding
 /// D-097's original exact-byte comparison), before any ratio is trusted.
 /// `#[ignore]`d like
 /// `tests/conformance.rs`'s two fixtures -- genuinely slow (a full
-/// `--release` LLVM build plus twelve total program executions: one untimed
-/// correctness-check launch per side, then the ten timed launches below) --
+/// `--release` LLVM build plus sixteen total program executions: one untimed
+/// correctness-check launch per side, then the fourteen timed launches below) --
 /// and run explicitly via `--include-ignored`, already passed workspace-wide in
 /// both `build-test-coverage` and every `native-build-test` matrix leg
 /// (`.github/workflows/ci.yml`), so no further CI test-wiring change was
@@ -406,15 +407,17 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// for the full investigation and the task dispatcher's own decision on
 /// how to proceed.
 ///
-/// Runs execute in two back-to-back blocks (all 5 pycc runs, then all 5
-/// CPython runs) rather than interleaved -- matching the design doc's own
-/// "both programs run K = 5 times; take the median of each" wording, which
-/// specifies K and the aggregation but not an interleaving requirement.
+/// Runs execute in two back-to-back blocks (all `RUNS` pycc runs, then all
+/// `RUNS` CPython runs) rather than interleaved -- matching the design doc's
+/// own "both programs run K times; take the median of each" wording, which
+/// specifies K's aggregation (median) but not an interleaving requirement.
 /// Block ordering is slightly more exposed to monotonic drift (thermal
 /// throttling, background-process ramp-up) than interleaving would be,
 /// since drift penalizes whichever side runs second rather than being
-/// averaged across both; taking the median (not the mean) of 5 same-block
-/// runs already blunts most of that exposure.
+/// averaged across both; taking the median (not the mean) of `RUNS`
+/// same-block runs already blunts most of that exposure, and D-140 raising
+/// `RUNS` from 5 to 7 blunts it further still (a median across more samples
+/// is harder for any single outlier run to move).
 ///
 /// D-126 records per-child CPU time alongside wall-clock time while preserving
 /// the existing wall-clock gate and every per-target floor. Unix uses `wait4`
@@ -424,9 +427,17 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// four medians on passes and failures. D-129 completed Phase B after five real
 /// observations on every Tier-1 leg: CPU time did not reduce variance across
 /// the matrix, so wall clock remains the gate and CPU time remains non-gating
-/// diagnostic telemetry rather than gaining its own floors.
+/// diagnostic telemetry rather than gaining its own floors. D-140 records why:
+/// on virtualized hosted runners, "CPU time" per `getrusage`/`GetProcessTimes`
+/// still counts scheduled-but-throttled cycles as full-rate CPU-seconds, so
+/// hypervisor-level noise (CPU steal time from co-tenants, frequency/turbo
+/// scaling driven by neighboring load) leaks into the CPU-time measurement
+/// almost as much as it does into wall-clock -- CPU time is immune to pure
+/// OS-scheduler preemption (that time is correctly excluded), but not to the
+/// virtualization-layer noise that dominates on these runners, so it does not
+/// close the "shared CPU" gap the way it would on dedicated hardware.
 #[test]
-#[ignore = "slow: builds a --release binary, verifies output equality once, then runs both programs 5 times each"]
+#[ignore = "slow: builds a --release binary, verifies output equality once, then runs both programs 7 times each"]
 fn nbody_release_binary_meets_required_speedup_over_cpython() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nbody.py");
 
@@ -456,7 +467,7 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
     // otherwise still pass this gate purely on speed (D-093's own
     // "measurement with near-zero signal for what it's meant to measure"
     // mistake, but for correctness instead of performance). This deliberately
-    // does not reuse `time_command`/`Command::status()` for the RUNS=5 timed
+    // does not reuse `time_command`/`Command::status()` for the RUNS timed
     // launches below -- those must stay exactly as fast and side-effect-free
     // as they already are, since D-095/D-096's own gate floors (12x, 15x)
     // were measured against that exact shape; adding output capture to every
