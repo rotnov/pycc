@@ -3861,7 +3861,7 @@ fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         // lowering, so the resolved HIR's `type_aliases` is empty by design.
         return Ok(HirModule {
             items: hir.items.clone(),
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         });
     }
 
@@ -3969,7 +3969,7 @@ fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     // see the no-generics early return above (PR-13 final review I1).
     Ok(HirModule {
         items,
-        type_aliases: Vec::new(),
+        type_aliases: Vec::new(), imports: Vec::new(),
     })
 }
 
@@ -4130,7 +4130,7 @@ mod tests {
     fn v0_1_slice_always_type_checks() {
         let hir = HirModule {
             items: vec![],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -4144,7 +4144,7 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert_eq!(
@@ -4163,7 +4163,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(concrete_function_signatures(&hir).is_none());
@@ -4192,7 +4192,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let concrete = concrete_function_signatures(&hir).unwrap();
@@ -4246,7 +4246,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body,
                 }],
-                type_aliases: Vec::new(),
+                type_aliases: Vec::new(), imports: Vec::new(),
             };
 
             assert_eq!(check(&hir).unwrap_err().message, expected_message);
@@ -4273,7 +4273,7 @@ mod tests {
                     })],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -4301,7 +4301,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -4329,7 +4329,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
@@ -4360,7 +4360,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -4387,7 +4387,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0032");
     }
@@ -4412,7 +4412,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -4450,7 +4450,7 @@ mod tests {
                     },
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -4473,7 +4473,7 @@ mod tests {
                     },
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0034");
     }
@@ -4512,7 +4512,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -4544,7 +4544,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0034");
     }
@@ -5648,7 +5648,7 @@ mod tests {
                     value: Some(HirExpr::IntLiteral(1)),
                 }],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -5676,7 +5676,7 @@ mod tests {
                     args: vec![HirExpr::BoolLiteral(true)],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         check(&hir).unwrap();
@@ -5710,7 +5710,7 @@ mod tests {
                     args: vec![HirExpr::BoolLiteral(true)],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -5737,7 +5737,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -5764,7 +5764,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -5788,7 +5788,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -5827,7 +5827,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -5860,7 +5860,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -5899,7 +5899,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -5930,7 +5930,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -5960,7 +5960,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -6001,7 +6001,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -6039,7 +6039,7 @@ mod tests {
                     return_ty: Ty::Infer,
                     body,
                 }],
-                type_aliases: Vec::new(),
+                type_aliases: Vec::new(), imports: Vec::new(),
             };
 
             let resolved = check_and_resolve(&hir).unwrap();
@@ -6076,7 +6076,7 @@ mod tests {
                     return_ty: Ty::None,
                     body,
                 }],
-                type_aliases: Vec::new(),
+                type_aliases: Vec::new(), imports: Vec::new(),
             };
 
             let err = check_and_resolve(&hir).unwrap_err();
@@ -6108,7 +6108,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0025");
@@ -6139,7 +6139,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -6174,7 +6174,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0025");
@@ -6192,7 +6192,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert_eq!(check(&hir).unwrap_err().code, "T0024");
@@ -6455,7 +6455,7 @@ mod tests {
         // `pycc_types::check` entry point already does.
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::Return(None))],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0024");
@@ -6702,7 +6702,7 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -6828,7 +6828,7 @@ mod tests {
                     body: vec![],
                 }],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
     }
@@ -6865,7 +6865,7 @@ mod tests {
                     body: vec![],
                 }],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(
@@ -7287,7 +7287,7 @@ mod tests {
                     args: vec![HirExpr::Name("xs".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -7575,7 +7575,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("xs".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -8909,7 +8909,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -8941,7 +8941,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -8965,7 +8965,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -9014,7 +9014,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -9044,7 +9044,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("y".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -9358,7 +9358,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0036");
     }
@@ -9851,7 +9851,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0034");
     }
@@ -9908,7 +9908,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -9953,7 +9953,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -9988,7 +9988,7 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -10034,7 +10034,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -10078,7 +10078,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
     }
@@ -10116,7 +10116,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -10156,7 +10156,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -10195,7 +10195,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -10234,7 +10234,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -10276,7 +10276,7 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -10314,7 +10314,7 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         // The real check pass still rejects this program overall (`0comp_11_i`
         // is a `list[int]`-typed parameter, and the comprehension tries to
@@ -10358,7 +10358,7 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -10389,7 +10389,7 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -10430,7 +10430,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0023");
     }
@@ -10466,7 +10466,7 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -10498,7 +10498,7 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -10530,7 +10530,7 @@ mod tests {
                     HirStmt::Return(None),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -10828,7 +10828,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0038");
     }
@@ -11026,7 +11026,7 @@ mod tests {
                     },
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -11118,7 +11118,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0039");
     }
@@ -11183,7 +11183,7 @@ mod tests {
                 left: Box::new(HirExpr::IntLiteral(1)),
                 right: Box::new(HirExpr::IntLiteral(2)),
             }))],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -11194,7 +11194,7 @@ mod tests {
             items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name(
                 "undefined".to_string(),
             )))],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -11215,7 +11215,7 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -11251,7 +11251,7 @@ mod tests {
                     })],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -11286,7 +11286,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -11311,7 +11311,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -11335,7 +11335,7 @@ mod tests {
                     value: HirExpr::IntLiteral(5),
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -11355,7 +11355,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         // If the global (Ty::Str) leaked through instead of the parameter
         // (Ty::Int), this would fail with a T0022 return-type mismatch.
@@ -11384,7 +11384,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11412,7 +11412,7 @@ mod tests {
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11555,7 +11555,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11584,7 +11584,7 @@ mod tests {
                     },
                 ],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -11621,7 +11621,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11644,7 +11644,7 @@ mod tests {
                     args: vec![],
                 })],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11751,7 +11751,7 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11777,7 +11777,7 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11812,7 +11812,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11852,7 +11852,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -11902,7 +11902,7 @@ mod tests {
                     value: HirExpr::IntLiteral(2),
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11931,7 +11931,7 @@ mod tests {
                     args: vec![HirExpr::Name("undefined_name".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11958,7 +11958,7 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -11994,7 +11994,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -12025,7 +12025,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -12062,7 +12062,7 @@ mod tests {
                     args: vec![],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -12104,7 +12104,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -12147,7 +12147,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -12185,7 +12185,7 @@ mod tests {
                     value: HirExpr::StringLiteral("leaked".to_string()),
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -12223,7 +12223,7 @@ mod tests {
                     }],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -12257,7 +12257,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -12290,7 +12290,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(check_and_resolve(&hir).is_ok());
@@ -12322,7 +12322,7 @@ mod tests {
                     value: HirExpr::IntLiteral(1),
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -12349,7 +12349,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         assert!(check(&hir).is_ok());
@@ -12380,7 +12380,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -12413,7 +12413,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -12447,7 +12447,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -12475,7 +12475,7 @@ mod tests {
                     }],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check(&hir).unwrap_err();
@@ -12505,7 +12505,7 @@ mod tests {
                     ],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let err = check_and_resolve(&hir).unwrap_err();
@@ -12540,7 +12540,7 @@ mod tests {
                 return_ty: Ty::None,
                 body: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -13645,7 +13645,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -13666,7 +13666,7 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("value".to_string())))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -13688,7 +13688,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -13725,7 +13725,7 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(1)),
                 }))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -13757,7 +13757,7 @@ mod tests {
                     right: Box::new(HirExpr::Name("value".to_string())),
                 }))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
 
         let resolved = check_and_resolve(&hir).unwrap();
@@ -13789,7 +13789,7 @@ mod tests {
                     right: Box::new(HirExpr::Name("value".to_string())),
                 }))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -13807,7 +13807,7 @@ mod tests {
                     right: Box::new(HirExpr::StringLiteral("wrong".to_string())),
                 }))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -13841,7 +13841,7 @@ mod tests {
                     })],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -13868,7 +13868,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -13895,7 +13895,7 @@ mod tests {
                     },
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -13919,7 +13919,7 @@ mod tests {
                     ])],
                 })],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -13933,7 +13933,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(None)],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -13947,7 +13947,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::FloatLiteral(1.5)))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -13977,7 +13977,7 @@ mod tests {
                     }],
                 }],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         check(&hir).unwrap();
     }
@@ -13991,7 +13991,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -14007,7 +14007,7 @@ mod tests {
                 return_ty: Ty::Infer,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("missing".to_string())))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -14026,7 +14026,7 @@ mod tests {
                     args: vec![],
                 }))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14044,7 +14044,7 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(1)),
                 }))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14065,7 +14065,7 @@ mod tests {
                     right: Box::new(HirExpr::Name("right".to_string())),
                 }))],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14085,7 +14085,7 @@ mod tests {
                     args: vec![HirExpr::Name("missing".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14109,7 +14109,7 @@ mod tests {
                     args: vec![HirExpr::StringLiteral("one".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14129,7 +14129,7 @@ mod tests {
                     )))],
                 }],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0022");
     }
@@ -14170,7 +14170,7 @@ mod tests {
                     body: vec![stmt],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         }
     }
 
@@ -14298,7 +14298,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -14337,7 +14337,7 @@ mod tests {
                     }))],
                 },
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -14491,7 +14491,7 @@ mod tests {
                     value: HirExpr::Name("missing".to_string()),
                 }],
             }],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14546,7 +14546,7 @@ mod tests {
                     args: vec![HirExpr::StringLiteral("wrong".to_string())],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14572,7 +14572,7 @@ mod tests {
                     body: vec![],
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0022");
     }
@@ -14602,7 +14602,7 @@ mod tests {
                     body: vec![],
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -14626,7 +14626,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
     }
@@ -15341,7 +15341,7 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, top],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }
@@ -15359,7 +15359,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![func],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0042");
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
@@ -15379,12 +15379,12 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity.clone(), top.clone()],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check(&hir).unwrap_err().code, "T0021");
         let hir = HirModule {
             items: vec![identity, top],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0021");
     }
@@ -15402,7 +15402,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![func],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
     }
@@ -15460,7 +15460,7 @@ mod tests {
                     }],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert!(find_function(&resolved, "identity").is_none());
@@ -15533,7 +15533,7 @@ mod tests {
                 call_uses_global,
                 call_identity,
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         // `check` accepts this module (three-pass discipline lets
         // `uses_global` see `g` regardless of source position).
@@ -15570,7 +15570,7 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, call_int, call_str],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert!(find_function(&resolved, "identity").is_none());
@@ -15648,7 +15648,7 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, use_twice, top],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -15689,7 +15689,7 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, helper, use_helper, top],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert!(find_function(&resolved, "identity").is_none());
@@ -15733,7 +15733,7 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, helper, use_helper],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check_and_resolve(&hir).unwrap_err();
         assert_eq!(err.code, "T0042");
@@ -15777,7 +15777,7 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, helper, use_helper],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
         assert_eq!(check(&hir).unwrap_err().code, "T0042");
@@ -15812,7 +15812,7 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, helper, use_helper],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
         assert_eq!(check(&hir).unwrap_err().code, "T0042");
@@ -15850,7 +15850,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f, g],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -15874,7 +15874,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -15918,7 +15918,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -15945,7 +15945,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -15994,7 +15994,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16035,7 +16035,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16075,7 +16075,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
@@ -16129,7 +16129,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_bool"), 1);
@@ -16161,7 +16161,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16195,7 +16195,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
@@ -16226,7 +16226,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16262,7 +16262,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16299,7 +16299,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
@@ -16367,7 +16367,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16398,7 +16398,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = check_and_resolve(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16425,7 +16425,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
     }
@@ -16442,7 +16442,7 @@ mod tests {
         }));
         let hir = HirModule {
             items: vec![identity, top],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
     }
@@ -16479,7 +16479,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
     }
@@ -16508,7 +16508,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
     }
@@ -16757,7 +16757,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = monomorphize(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16786,7 +16786,7 @@ mod tests {
         };
         let hir = HirModule {
             items: vec![identity, f],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let resolved = monomorphize(&hir).unwrap();
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
@@ -16840,7 +16840,7 @@ mod tests {
                     }],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         }
     }
 
@@ -17184,7 +17184,7 @@ mod tests {
         // source order (pass 1 binds every signature before any body runs).
         let hir = HirModule {
             items: vec![f, g],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0042");
@@ -17238,7 +17238,7 @@ mod tests {
                     }],
                 })),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         };
         assert!(check(&hir).is_ok());
         let resolved = check_and_resolve(&hir).unwrap();
@@ -17260,7 +17260,7 @@ mod tests {
                 return_ty: Ty::Int,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
             }],
-            type_aliases: aliases.clone(),
+            type_aliases: aliases.clone(), imports: Vec::new(),
         };
         let generic = HirModule {
             items: vec![
@@ -17270,7 +17270,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })),
             ],
-            type_aliases: aliases,
+            type_aliases: aliases, imports: Vec::new(),
         };
         assert!(
             check_and_resolve(&non_generic)

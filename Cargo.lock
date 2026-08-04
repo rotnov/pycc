@@ -826,6 +826,7 @@ dependencies = [
  "pycc_ast",
  "pycc_diag",
  "pycc_parser",
+ "pycc_std",
 ]
 
 [[package]]
