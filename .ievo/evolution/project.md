@@ -10,25 +10,19 @@
 ## 2026-07-26 12:58 UTC — Check PR state before waiting for CI
 **Trigger:** user-observed mistake during PR monitoring
 
-[rotnov/pycc#132](https://github.com/rotnov/pycc/pull/132)
-агенты ждут CI а на самом деле там конфликты и CI не стартует, нужно учитывать состояние PR перед тем как проверять CI, согласен?
+**Moved to** `.claude/skills/autopilot-async-monitoring/SKILL.md` (extracted 2026-08-04).
 
 ## 2026-07-26 21:37 UTC — Do not monitor historical pull requests
 **Trigger:** user-observed mistake during PR monitoring
 
-а чего ты мониторишь 119 и 125, зачем?
+**Moved to** `.claude/skills/autopilot-async-monitoring/SKILL.md` (extracted 2026-08-04).
 
 ## 2026-07-30 17:50 UTC — Consider a background watcher for the autopilot loop
 **Trigger:** user-defined convention
 
-ScheduleWakeup, я бы вешал может фонового агента который следит что луп автопилота живой?
+**Moved to** `.claude/skills/autopilot-async-monitoring/SKILL.md` (extracted 2026-08-04).
 
-## 2026-08-03 14:10 UTC — Verify live PR readiness before reporting
-**Trigger:** user-observed mistake during pull-request readiness assessment
+## 2026-08-04 05:19 UTC — Dispatched orchestrator agents must not stop-and-wait for their own sub-dispatches
+**Trigger:** user-observed mistake during PR-13/PR-14 autonomous delivery
 
-**Operational rule:** Before reporting a pull request as ready or waiting on
-CI, refresh and verify its live state, draft status, head commit, mergeability
-or conflicts, required checks, and unresolved review threads.
-
-**Verbatim user lesson (provenance only):**
-> PR с конфликатми и stale а ты не заметил
+**Moved to** `.claude/skills/autopilot-async-monitoring/SKILL.md` (extracted 2026-08-04).
