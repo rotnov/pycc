@@ -73,6 +73,20 @@ milestone's Accept criteria are all met by the same evidence bar step 2 used to 
 milestones. On completion: record the "Update (`<date>`): met." note in `docs/ROADMAP.md` (the
 existing convention — see the v0.1/v0.2 sections for examples) and close the GitHub milestone.
 
+**Content-complete is not released.** Meeting a milestone's Accept criteria only means the code and
+its evidence are on `main` — it is not by itself a release. `docs/DISTRIBUTION.md`'s own "Release
+and verification" section states this explicitly: "merging the manifest, or this workflow itself,
+does not by itself create or advertise a release tag." Before tagging:
+
+1. Dispatch `hook-install-check.yml` against the milestone-completing commit
+   (`gh workflow run hook-install-check.yml --ref <sha>`) and wait for its Tier-1 result.
+2. Record that dated run in `docs/DISTRIBUTION.md`'s "Current Tier-1 installation evidence"
+   section, replacing the prior entry.
+3. Only once that evidence is committed, create the release tag (`git tag vX.Y.0 <sha>`, pushed)
+   matching the milestone name. A milestone with no dated post-completion Tier-1 evidence has not
+   been released yet, no matter how long its Accept criteria have been met — this is exactly the
+   gap that left v0.2 content-complete but untagged.
+
 ## Loop
 
 A directive scoped to exactly one named milestone ("finish v0.3") stops at step 6 once that
