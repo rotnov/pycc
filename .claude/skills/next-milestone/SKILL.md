@@ -71,7 +71,9 @@ of that, it only establishes which milestone they're operating against.
 `issue-select`'s own loop (step 5) runs until it hits one of its own stop conditions, or until this
 milestone's Accept criteria are all met by the same evidence bar step 2 used to judge prior
 milestones. On completion: record the "Update (`<date>`): met." note in `docs/ROADMAP.md` (the
-existing convention — see the v0.1/v0.2 sections for examples) and close the GitHub milestone.
+existing convention — see the v0.1/v0.2 sections for examples), update `README.md`'s status blurb
+to describe the newly met milestone (it drifted silently after v0.2 — the v0.1-only wording sat
+unchanged through all of v0.2 landing), and close the GitHub milestone.
 
 **Content-complete is not released.** Meeting a milestone's Accept criteria only means the code and
 its evidence are on `main` — it is not by itself a release. `docs/DISTRIBUTION.md`'s own "Release
