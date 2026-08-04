@@ -1100,7 +1100,7 @@ fn module_type_api_rejects_a_for_target_representation_change() {
                 body: vec![],
             }],
         }],
-    };
+     type_aliases: Vec::new(),};
     assert_eq!(pycc_types::check(&hir).unwrap_err().code, "T0023");
 }
 
@@ -1113,7 +1113,7 @@ fn direct_type_api_rejects_an_unconstrained_private_parameter() {
             return_ty: pycc_hir::Ty::None,
             body: vec![],
         }],
-    };
+     type_aliases: Vec::new(),};
     assert_eq!(
         pycc_types::check_and_resolve(&hir).unwrap_err().code,
         "T0021"
@@ -1131,7 +1131,7 @@ fn direct_type_api_rejects_an_unconstrained_private_return() {
                 "missing".to_string(),
             )))],
         }],
-    };
+     type_aliases: Vec::new(),};
     let err = pycc_types::check_and_resolve(&hir).unwrap_err();
     assert_eq!(err.code, "T0021");
     assert!(err.message.contains("return type"));
@@ -1150,7 +1150,7 @@ fn direct_type_api_propagates_an_annotated_binary_result() {
                 right: Box::new(pycc_hir::HirExpr::IntLiteral(1)),
             }))],
         }],
-    };
+     type_aliases: Vec::new(),};
     assert!(pycc_types::check_and_resolve(&hir).is_ok());
 }
 
@@ -1173,7 +1173,7 @@ fn direct_type_api_rejects_incompatible_resolved_binary_operands() {
                 args: vec![pycc_hir::HirExpr::IntLiteral(1)],
             })),
         ],
-    };
+     type_aliases: Vec::new(),};
     assert_eq!(
         pycc_types::check_and_resolve(&hir).unwrap_err().code,
         "T0021"

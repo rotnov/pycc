@@ -429,24 +429,154 @@ pub enum HirItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirModule {
     pub items: Vec<HirItem>,
+    /// Compile-time-only name-to-`Ty` bindings from a `type X = <expr>`
+    /// statement or a legacy `X: TypeAlias = <expr>` annotated assignment
+    /// (D-135). Populated in source order by `lower_checked` as it walks the
+    /// module body. Neither form lowers to any `HirItem`/`HirStmt` of its
+    /// own -- the alias has zero HIR/MIR/codegen/runtime footprint, and this
+    /// field exists purely so a later annotation naming the alias resolves
+    /// to the same `Ty` (see `annotation_to_ty`'s alias-table lookup).
+    pub type_aliases: Vec<(String, Ty)>,
 }
 
 /// Lowers a parsed module into the HIR subset implemented by this pycc
 /// version. Syntactically valid Python outside that subset returns `C0001`
 /// with the unsupported node's source span instead of panicking.
+///
+/// Type aliases (D-135) are resolved in a single left-to-right pass: a
+/// `type X = <expr>` or legacy `X: TypeAlias = <expr>` statement is
+/// evaluated and recorded into `aliases` as soon as it is reached, so it is
+/// visible to every later statement's annotations (including a later
+/// function's parameter/return annotations and later top-level
+/// `AnnAssign`s) but not to any earlier one -- matching this compiler's
+/// existing single-pass, source-order lowering model instead of
+/// introducing hoisting.
 pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
-    let items = module
-        .body
-        .iter()
-        .map(|stmt| match stmt {
-            Stmt::FunctionDef(def) => lower_function(def),
-            other => lower_stmt(other).map(HirItem::TopLevelStmt),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(HirModule { items })
+    let mut aliases: Vec<(String, Ty)> = Vec::new();
+    let mut items = Vec::with_capacity(module.body.len());
+    for stmt in &module.body {
+        if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases)? {
+            aliases.push((name, ty));
+            continue;
+        }
+        if let Some((name, ty)) = lower_legacy_type_alias_ann_assign(stmt, &aliases)? {
+            aliases.push((name, ty));
+            continue;
+        }
+        let item = match stmt {
+            Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
+            other => HirItem::TopLevelStmt(lower_stmt(other, &aliases)?),
+        };
+        items.push(item);
+    }
+    Ok(HirModule {
+        items,
+        type_aliases: aliases,
+    })
 }
 
-fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic> {
+/// Recognizes a PEP 695 `type X = <expr>` statement and evaluates its RHS as
+/// a type expression, reusing `annotation_to_ty` (D-135) -- the same
+/// resolver used for parameter/return/variable annotations, since a type
+/// alias's RHS is syntactically just another type expression. Returns
+/// `Ok(None)` for any other statement kind, leaving it to the caller's own
+/// dispatch.
+///
+/// A generic alias (`type X[T] = ...`) is rejected with `T0042`, not the
+/// generic `unsupported`/`C0001` catch-all: D-134/D-135 explicitly scope a
+/// generic alias out of this PR, but -- unlike, say, `async def`, which is
+/// simply unrecognized syntax -- this shape *is* recognized and type-checked
+/// far enough to name precisely why it is rejected, the same reasoning
+/// `check_generic_function`'s own `T0042` diagnostics already use for a
+/// generic function's out-of-scope shapes.
+fn lower_type_alias_stmt(
+    stmt: &Stmt,
+    aliases: &[(String, Ty)],
+) -> Result<Option<(String, Ty)>, Diagnostic> {
+    let Stmt::TypeAlias(type_alias) = stmt else {
+        return Ok(None);
+    };
+    // `type_alias.type_params` being `Some(_)` at all is enough to reject:
+    // `ruff_python_parser`'s own `parse_type_params` reports a parse error
+    // (`EmptyTypeParams`, surfaced by this crate's own `pycc_parser::parse`
+    // as `L0001` before this function ever runs) for an empty `[]`, so a
+    // `Some(type_params)` reaching this point always has at least one entry
+    // -- there is no valid parsed input where an extra `.type_params.is_empty()`
+    // check here would ever be reached with a `false` result to skip on
+    // (confirmed against the pinned `ruff_python_parser = "0.0.6"` registry
+    // source, the same way this function's own name-target extraction below
+    // documents its own unreachable shape).
+    if type_alias.type_params.is_some() {
+        return Err(Diagnostic::error(
+            "T0042",
+            "a generic type alias (`type X[T] = ...`) is not supported yet".to_string(),
+            Span::new(0, 0),
+        ));
+    }
+    // Unlike the legacy `AnnAssign` form's target (which can be an
+    // `Attribute`/`Subscript`, see `lower_legacy_type_alias_ann_assign`
+    // below), `ruff_python_parser`'s own `parse_type_alias_statement`
+    // unconditionally builds this field as `Expr::Name(self.parse_name(...))`
+    // -- there is no valid source text that parses a `type` statement with a
+    // non-name target, so there is no `unsupported`/unreachable fallback
+    // branch to write or cover here (confirmed against the pinned
+    // `ruff_python_parser = "0.0.6"` registry source). `.expect(...)`, not a
+    // hand-rolled panic arm, per this crate's own documented coverage
+    // convention (`pycc_ast::re_exported_grammar_types_resolve_and_have_the_expected_shape`'s
+    // comment): the panic path lives in libcore, invisible to instrumented
+    // regions, the same way `.unwrap()`'s does.
+    let name = type_alias
+        .name
+        .as_name_expr()
+        .expect("ruff always parses a `type` statement's name as Expr::Name");
+    let ty = annotation_to_ty(&type_alias.value, None, aliases)?;
+    Ok(Some((name.id.to_string(), ty)))
+}
+
+/// Recognizes the legacy `X: TypeAlias = <expr>` annotated-assignment form
+/// of a type alias (PEP 613). Real Python requires `from typing import
+/// TypeAlias` before this annotation is meaningful, but real import
+/// resolution is explicitly out of scope for this PR (PR-14 owns it, per
+/// D-135's own plan) -- exactly like `Any`/`Optional`/every other
+/// currently-recognized bare `typing`-shaped annotation name in
+/// `annotation_to_ty`, none of which check for an import either. For
+/// consistency with that existing precedent, this accepts the bare
+/// annotation name `TypeAlias` unconditionally rather than inventing
+/// import-awareness that exists nowhere else in this file (plan-deviation
+/// note, since the design doc leaves this specific question open).
+///
+/// Returns `Ok(None)` for any statement that is not this exact shape --
+/// including an ordinary `X: TypeAlias` with no value, which is invalid as a
+/// type alias and instead falls through to the ordinary `AnnAssign` lowering
+/// path, where `annotation_to_ty` rejects the bare name `TypeAlias` with the
+/// same `C0001` catch-all as any other unrecognized annotation name.
+fn lower_legacy_type_alias_ann_assign(
+    stmt: &Stmt,
+    aliases: &[(String, Ty)],
+) -> Result<Option<(String, Ty)>, Diagnostic> {
+    let Stmt::AnnAssign(ann) = stmt else {
+        return Ok(None);
+    };
+    let Expr::Name(annotation_name) = ann.annotation.as_ref() else {
+        return Ok(None);
+    };
+    if annotation_name.id.as_str() != "TypeAlias" {
+        return Ok(None);
+    }
+    let Some(value) = ann.value.as_deref() else {
+        return Ok(None);
+    };
+    let Expr::Name(target) = ann.target.as_ref() else {
+        return Ok(None);
+    };
+    let ty = annotation_to_ty(value, None, aliases)?;
+    Ok(Some((target.id.to_string(), ty)))
+}
+
+fn lower_function(
+    def: &pycc_ast::StmtFunctionDef,
+    aliases: &[(String, Ty)],
+) -> Result<HirItem, Diagnostic> {
     if def.is_async {
         return Err(unsupported(
             "async functions are not supported yet",
@@ -477,14 +607,16 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
         is_public,
         def.name.as_str(),
         type_param.as_deref(),
+        aliases,
     )?;
     let return_ty = lower_return_annotation(
         def.returns.as_deref(),
         is_public,
         def.name.as_str(),
         type_param.as_deref(),
+        aliases,
     )?;
-    let body = lower_body(&def.body)?;
+    let body = lower_body(&def.body, aliases)?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
         params,
@@ -526,6 +658,7 @@ fn lower_params(
     is_public: bool,
     fn_name: &str,
     type_param: Option<&str>,
+    aliases: &[(String, Ty)],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     // Every parameter kind and default value below is silently absent from
     // `parameters.args`/`ParameterWithDefault::default` -- an earlier version
@@ -570,7 +703,7 @@ fn lower_params(
             }
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
-                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann, type_param)?)),
+                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann, type_param, aliases)?)),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
                     format!(
@@ -589,9 +722,10 @@ fn lower_return_annotation(
     is_public: bool,
     fn_name: &str,
     type_param: Option<&str>,
+    aliases: &[(String, Ty)],
 ) -> Result<Ty, Diagnostic> {
     match returns {
-        Some(ann) => annotation_to_ty(ann, type_param),
+        Some(ann) => annotation_to_ty(ann, type_param, aliases),
         None if is_public => Err(Diagnostic::error(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
@@ -601,7 +735,17 @@ fn lower_return_annotation(
     }
 }
 
-fn annotation_to_ty(annotation: &Expr, type_param: Option<&str>) -> Result<Ty, Diagnostic> {
+/// Resolves an annotation expression to a `Ty`. `aliases` is the D-135 type
+/// alias table (`(name, Ty)` pairs recorded by `lower_checked` for every
+/// `type X = ...`/legacy `X: TypeAlias = ...` statement reached so far, in
+/// source order): checked as the last resort for a bare name before falling
+/// through to the `C0001` "not supported yet" catch-all, so an alias name
+/// resolves exactly like any other recognized bare-name annotation.
+fn annotation_to_ty(
+    annotation: &Expr,
+    type_param: Option<&str>,
+    aliases: &[(String, Ty)],
+) -> Result<Ty, Diagnostic> {
     match annotation {
         Expr::NoneLiteral(_) => Ok(Ty::None),
         Expr::Name(name) if Some(name.id.as_str()) == type_param => {
@@ -618,10 +762,17 @@ fn annotation_to_ty(annotation: &Expr, type_param: Option<&str>) -> Result<Ty, D
                     .to_string(),
                 Span::new(0, 0),
             )),
-            other => Err(unsupported(
-                format!("type annotation `{other}` is not supported yet"),
-                pycc_ast::expr_range(annotation),
-            )),
+            other => aliases
+                .iter()
+                .rev()
+                .find(|(alias_name, _)| alias_name == other)
+                .map(|(_, ty)| ty.clone())
+                .ok_or_else(|| {
+                    unsupported(
+                        format!("type annotation `{other}` is not supported yet"),
+                        pycc_ast::expr_range(annotation),
+                    )
+                }),
         },
         other => Err(unsupported(
             format!("only a bare name type annotation is supported so far: {other:?}"),
@@ -630,7 +781,7 @@ fn annotation_to_ty(annotation: &Expr, type_param: Option<&str>) -> Result<Ty, D
     }
 }
 
-fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
+fn lower_stmt(stmt: &Stmt, aliases: &[(String, Ty)]) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
         Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)?),
         Stmt::Assign(assign) => {
@@ -721,7 +872,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     pycc_ast::expr_range(&ann.target),
                 ));
             }
-            let annotation = annotation_to_ty(&ann.annotation, None)?;
+            let annotation = annotation_to_ty(&ann.annotation, None, aliases)?;
             let value = ann.value.as_deref().map(lower_expr).transpose()?;
             HirStmt::AnnAssign {
                 target: name.id.as_str().to_string(),
@@ -731,8 +882,8 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
         }
         Stmt::If(if_stmt) => HirStmt::If {
             test: lower_expr(&if_stmt.test)?,
-            body: lower_body(&if_stmt.body)?,
-            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses)?,
+            body: lower_body(&if_stmt.body, aliases)?,
+            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses, aliases)?,
         },
         Stmt::While(while_stmt) => {
             if !while_stmt.orelse.is_empty() {
@@ -743,7 +894,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
             }
             HirStmt::While {
                 test: lower_expr(&while_stmt.test)?,
-                body: lower_body(&while_stmt.body)?,
+                body: lower_body(&while_stmt.body, aliases)?,
             }
         }
         Stmt::For(for_stmt) => {
@@ -773,7 +924,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                 return Ok(HirStmt::ForList {
                     var: var.id.to_string(),
                     list: list_name.id.as_str().to_string(),
-                    body: lower_body(&for_stmt.body)?,
+                    body: lower_body(&for_stmt.body, aliases)?,
                 });
             }
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
@@ -815,7 +966,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                 start,
                 stop,
                 step,
-                body: lower_body(&for_stmt.body)?,
+                body: lower_body(&for_stmt.body, aliases)?,
             }
         }
         Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr).transpose()?),
@@ -829,26 +980,29 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
     Ok(lowered)
 }
 
-fn lower_body(body: &[Stmt]) -> Result<Vec<HirStmt>, Diagnostic> {
-    body.iter().map(lower_stmt).collect()
+fn lower_body(body: &[Stmt], aliases: &[(String, Ty)]) -> Result<Vec<HirStmt>, Diagnostic> {
+    body.iter().map(|stmt| lower_stmt(stmt, aliases)).collect()
 }
 
-fn lower_elif_else_clauses(clauses: &[ElifElseClause]) -> Result<Vec<HirStmt>, Diagnostic> {
+fn lower_elif_else_clauses(
+    clauses: &[ElifElseClause],
+    aliases: &[(String, Ty)],
+) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
     };
     match &first.test {
         Some(test) => Ok(vec![HirStmt::If {
             test: lower_expr(test)?,
-            body: lower_body(&first.body)?,
-            orelse: lower_elif_else_clauses(rest)?,
+            body: lower_body(&first.body, aliases)?,
+            orelse: lower_elif_else_clauses(rest, aliases)?,
         }]),
         None => {
             assert!(
                 rest.is_empty(),
                 "pycc_hir: an else clause must be the last elif_else_clause"
             );
-            lower_body(&first.body)
+            lower_body(&first.body, aliases)
         }
     }
 }
@@ -4210,6 +4364,110 @@ mod tests {
                 value: Box::new(HirExpr::Name("new".to_string())),
             }
         );
+    }
+
+    // -- D-135: `type` statement and legacy `TypeAlias` -------------------
+
+    #[test]
+    fn a_type_statement_resolves_the_alias_in_a_later_parameter_annotation() {
+        let module = pycc_parser_test_helper::parse(
+            "type IntAlias = int\n\
+             def f(x: IntAlias) -> int:\n\
+             \x20   return x\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+
+        // Zero HIR footprint: the `type` statement itself contributes no
+        // `HirItem` -- the only item present is the function it fed, and its
+        // `x` parameter resolved to `Ty::Int` through the alias.
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+        assert_eq!(hir.type_aliases, vec![("IntAlias".to_string(), Ty::Int)]);
+    }
+
+    #[test]
+    fn a_legacy_type_alias_annotated_assignment_resolves_the_alias_the_same_way() {
+        let module = pycc_parser_test_helper::parse(
+            "IntAlias: TypeAlias = int\n\
+             def f(x: IntAlias) -> int:\n\
+             \x20   return x\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+
+        // Same zero-HIR-footprint contract as the `type` statement form:
+        // the legacy annotated assignment contributes no `HirItem` either.
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+        assert_eq!(hir.type_aliases, vec![("IntAlias".to_string(), Ty::Int)]);
+    }
+
+    #[test]
+    fn a_generic_type_alias_is_rejected_with_t0042() {
+        let module = pycc_parser_test_helper::parse("type Alias[T] = list[T]\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "T0042");
+    }
+
+    #[test]
+    fn an_unresolvable_type_alias_rhs_falls_through_to_the_existing_c0001_diagnostic() {
+        let module = pycc_parser_test_helper::parse("type Bad = NotARealType\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn an_unresolvable_legacy_type_alias_rhs_also_falls_through_to_c0001() {
+        let module = pycc_parser_test_helper::parse("Bad: TypeAlias = NotARealType\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_bare_type_alias_annotation_with_no_value_is_not_treated_as_an_alias() {
+        // `X: TypeAlias` with no assigned value can't define an alias (there
+        // is no RHS to resolve) -- it falls through to the ordinary
+        // `AnnAssign` lowering path, where `annotation_to_ty` rejects the
+        // bare name `TypeAlias` itself with the same `C0001` catch-all as
+        // any other unrecognized annotation name, and the alias table stays
+        // empty.
+        let module = pycc_parser_test_helper::parse("X: TypeAlias\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_legacy_type_alias_annotation_on_a_non_name_target_is_not_treated_as_an_alias() {
+        // Unlike a `type` statement's own target (always a bare name, see
+        // `lower_type_alias_stmt`'s doc comment), a legacy `AnnAssign`
+        // target can be an `Attribute`/`Subscript`, e.g. `obj.x: TypeAlias =
+        // int`. `lower_legacy_type_alias_ann_assign` recognizes the `X:
+        // TypeAlias = ...` shape only for a bare-name target and otherwise
+        // falls through to the ordinary `AnnAssign` lowering path, which
+        // rejects a non-name annotated-assignment target with the same
+        // `C0001` catch-all it already uses for every other non-name
+        // target -- the alias table stays empty either way.
+        let module = pycc_parser_test_helper::parse("obj.x: TypeAlias = int\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
     }
 }
 
