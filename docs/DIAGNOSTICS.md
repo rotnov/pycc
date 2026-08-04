@@ -19,6 +19,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | Code | Severity | Message (short form) |
 |---|---|---|
 | `C0001` | error | valid Python construct is not implemented by this pycc version |
+| `C0002` | error | recognized stdlib module, but the specific imported symbol is not registered (D-136), e.g. `from math import isnan` |
 | `L0001` | error | syntax error (span + expected set) |
 | `L0002` | error | Python version mismatch (feature needs 3.14 level) |
 | `T0001` | error | public function missing annotation |
