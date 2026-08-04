@@ -46,3 +46,27 @@ stop-and-wait violation once on a given task, escalate to a foreground/
 blocking dispatch for the retry rather than repeating the same background
 dispatch with a stronger-worded instruction — the instruction alone did not
 hold on the first retry.
+
+## 2026-08-04 06:56 UTC — Start investigating a failed check as soon as it fails, don't wait for the rest of the suite
+**Trigger:** user-observed mistake during PR #322 CI monitoring
+
+один чек на CI уже упал, можно уже начинать разбираться а не ждать все остальные
+
+Context: while a multi-job CI run (`gh pr checks`) had several jobs still
+`pending`, one job (`agent-assets`) had already finished and failed. The
+correct move was to start diagnosing that failure immediately — the other
+jobs' outcomes don't change what's already known to be broken, and most CI
+job durations here are dominated by long build/test steps (`build-test-coverage`,
+`native-build-test` on several targets, `frontend-perf-measure`), so a
+failure that finishes fast (10s here) can sit fully diagnosable for minutes
+before the rest of the suite even reports in.
+
+**Rule:** when checking `gh pr checks` (or any CI status view) and any job's
+own state is already terminal (`fail`, not `pending`/`in_progress`), pull its
+logs and start root-causing it right away, regardless of whether sibling
+jobs are still running. Do not wait for "all checks" to resolve before
+starting to look at ones that already did. This composes with this skill's
+existing "check real state before waiting" rule (`gh pr checks`/`gh run
+view --log-failed`) — the difference here is act on a partial, still-in-progress
+result the moment it contains a decided outcome, rather than only
+consulting real state once everything is done.
