@@ -67,6 +67,20 @@ terminal state and exits once every tracked item resolves, run via `Monitor`
 — still beats a fixed wakeup interval; write an equivalent small script
 rather than reverting to periodic polling.
 
+## Identify the session in every PR body
+
+When opening a PR (`gh pr create`) from an autonomous agent session, add a
+footer line identifying the session and client, e.g.:
+`Session: claude-code <$CLAUDE_CODE_SESSION_ID>` (Claude Code exposes the
+running session's ID via that env var — check for the Codex-equivalent
+identifier when running under Codex instead of assuming the same var name
+applies). A PR opened by a background-dispatched agent (e.g. from a
+`writing-plans` -> `subagent-driven-development` chain) is otherwise easy to
+lose track of — this makes it traceable back to the exact session/transcript
+that produced it, which matters most for exactly that background-dispatch
+case (see PR #328, which the orchestrating session genuinely forgot about
+for a while).
+
 ## Serialize PRs under strict branch protection — don't open several at once
 
 This repo's branch protection is `strict` (a PR must be up to date with

@@ -167,3 +167,34 @@ docs/overlay-only changes that are extremely unlikely to touch the same
 lines as anything else in flight can still be batched loosely, but even
 then expect at least one round of `STALE` catch-up per merge that lands
 ahead of them — budget for it rather than being surprised by it.
+
+## 2026-08-04 06:53 UTC — Record the session ID and client (Claude/Codex) in every PR body opened by an agent
+**Trigger:** user-observed mistake ("при открытии пр указывать в теле ПР ид сессии и агента (клод, кодекс) что бы можно былл идентифицировать сессию и найти ее")
+
+при открытии пр указывать в теле ПР ид сессии и агента (клод, кодекс) что бы можно былл идентифицировать сессию и найти ее
+
+Context: PR #328 (the final v0.2 PR-14) was opened by a background-dispatched
+agent, and the orchestrating session (this one) genuinely lost track of it
+for a while amid handling a separate CI-noise investigation — it only
+resurfaced when the user asked to check for forgotten open PRs. Nothing in
+the PR body itself said which session or which agent (Claude Code vs.
+Codex, and which invocation) had opened it, so there was no way to look it
+up directly from the PR — only indirect reconstruction from git log/commit
+messages.
+
+On Claude Code, the session identifier is available as the
+`CLAUDE_CODE_SESSION_ID` environment variable (confirmed present this
+session: `791dd9a8-bca2-44f1-b88d-07a97612648b`, also visible in scratchpad
+paths like `/private/tmp/claude-501/.../<session-id>/scratchpad`).
+
+**Rule:** when opening a PR (via `gh pr create`) from an autonomous agent
+session in this project, include a line identifying the session/agent in
+the PR body — e.g. a footer line like `Session: claude-code <CLAUDE_CODE_SESSION_ID>`
+(or the Codex-equivalent identifier when running under Codex, if one is
+exposed the same way — check for it rather than assuming Claude Code's env
+var name applies there too). This makes a PR traceable back to the exact
+session/transcript that produced it, which matters specifically for a
+background-dispatched or otherwise easy-to-lose-track-of PR like #328 was
+here — the alternative (reconstructing which session opened what from
+commit messages and timing alone) is exactly the gap that let #328 go
+unnoticed.
