@@ -23,6 +23,7 @@
 5. Confirm which commit is the actual task base, then run `cargo doc --workspace --no-deps` before making implementation changes. This refreshes the local Rust API documentation in `target/doc/` from that exact source revision.
 6. Read `docs/SPEC.md`, the relevant linked specifications, and the generated documentation for the crates affected by the task.
 7. If documentation generation fails, record and understand the failure before changing code. Do not present documentation generated from an older revision as current.
+8. When the task starts or continues work on a versioned milestone (e.g. "implement v0.3"), also list the open issues assigned to that milestone (`gh issue list --repo <owner>/<repo> --milestone <name>`) and treat every one of them as in-scope alongside `docs/ROADMAP.md`'s own prose for that milestone. A milestone exists specifically to hold blockers discovered after the roadmap prose was last written; skipping this check silently drops them.
 
 ## Keep documentation current
 

@@ -177,6 +177,8 @@ Classes, inheritance+C3, `@property`, dataclasses, enums, protocols, `match` (63
 
 Two P2 diagnostic-classification issues, [#141](https://github.com/rotnov/pycc/issues/141) and [#142](https://github.com/rotnov/pycc/issues/142) (C0001 misclassification for context-invalid statements and unsupported callables), are lower urgency but worth a quick look once `match` introduces new context-invalid-statement shapes (e.g. `case` outside `match`). Every other open P1/P2 compiler issue at review time (string repetition typing, bigint/print/range representation issues, PEP-row fixture scoping) is v0.1/v0.2-scoped and does not touch control flow, the class model, or pattern matching — real bugs worth fixing eventually, but not v0.3 blockers. The remaining ~65 open issues (website/SEO, CI/workflow governance, agent-skill eval/authorization infrastructure) are unrelated to this milestone.
 
+All six issues above are also assigned to the GitHub [v0.3 milestone](https://github.com/rotnov/pycc/milestone/1). The milestone is the live, directly-editable membership list (assign/unassign an issue with no PR as new blockers surface or old ones go stale); this paragraph is the point-in-time rationale for why the original six were judged in-scope. Per [D-021](docs/DECISIONS.md#d-021-agent-task-preflight-and-documentation-refresh) step 8, always check the milestone's current open-issue list, not just this paragraph, before starting v0.3 work.
+
 ## v0.4 — projects & incremental
 
 Multi-file, imports, namespace packages (420), incremental cache, parallel codegen, `os`/`pathlib`/`json`/`datetime` native.
