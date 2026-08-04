@@ -82,6 +82,10 @@ the typed-Python AOT compiler before the separate AI-authorship experiment.
 
 All five v0.1 acceptance criteria are green: per this document's own binary milestone definition above, v0.1 is complete. [DELIVERY_PLAN.md](./DELIVERY_PLAN.md)'s PR-7 buffer slice closed this checklist. The next delivery slices are v0.2's, defined below.
 
+### CI/tooling follow-ups (untracked by any issue yet)
+
+- Skip CI checks on draft pull requests. None of `.github/workflows/*.yml` currently gate a job on `github.event.pull_request.draft == false` (verified 2026-08-04), so opening a PR as a draft only blocks the merge button — the full check suite still runs exactly as on a ready PR. This matters for the autonomous-delivery workflow's own draft-then-ready PR queuing convention (multiple independent changes prepared as drafts, only one marked ready at a time): today that convention still pays full CI cost on every draft, not just the one PR that's actually being landed. Adding the guard is itself a CI-workflow change subject to this project's D-024/D-125 review and permission-audit rules (`scripts/check_ci_permissions.rb`), so it needs its own reviewed PR, not an incidental edit riding along with unrelated work.
+
 ## CPython release alignment
 
 Last reviewed **2026-07-24**. D-012 still fixes v1 to the Python 3.14 language
