@@ -133,3 +133,38 @@ prescribe it, in the same session that developed it. Do not consider the
 work "done" once it merely works once from the scratchpad; it is done once
 a future session (with no memory of this one) can discover and use it via
 the skill alone.
+
+## 2026-08-04 06:40 UTC — `Monitor` doesn't inherit the session's cwd; `cd` into the right worktree first, don't hardcode an absolute path
+**Trigger:** user-observed mistake ("почему не затригерился на ошибочный путь?", "а чего абсолютный?", "скилл то в репе")
+
+Context: right after `scripts/ci-watch.sh` was committed into the repo, it
+was invoked via `Monitor` as `sh scripts/ci-watch.sh rotnov/pycc 324` — a
+path relative to a presumed repo root — and failed immediately with exit
+127 ("command not found"). Root cause: `Monitor` runs its command in its
+own shell, whose current working directory is not guaranteed to match the
+calling session's cwd or any particular worktree. The relative path simply
+didn't resolve to a file there, so the shell couldn't even exec the
+script.
+
+The first fix tried was hardcoding an absolute path
+(`/Users/.../scripts/ci-watch.sh`), which worked but was the wrong lesson
+to generalize from: the script is **committed to the repo**, at the same
+relative path (`scripts/ci-watch.sh`) in every worktree, since every
+worktree shares the same tracked tree. An absolute path only happens to
+work for one specific worktree on one specific machine — it breaks the
+moment that worktree is removed/renamed or the same script needs to run
+against a different worktree, and it's not portable to another machine at
+all. The real fix is to control the *working directory*, not to bypass it
+with an absolute path.
+
+**Rule:** when invoking a repo-committed script via `Monitor` (or any
+background dispatch whose cwd isn't controlled), prefix the command with
+an explicit `cd` into the correct worktree root, then use the normal
+repo-relative path: `cd <worktree-root> && sh scripts/ci-watch.sh ...`.
+Only reach for an absolute path when the target genuinely isn't part of
+the repo's own tracked tree (e.g. a session-scratchpad file) — for
+anything committed, `cd` + relative path is both correct and portable
+across worktrees. This is the same "control the invocation, don't route
+around it" instinct as `gh pr create --head`/`-B` from this skill's own
+earlier lesson: fix the actual cwd assumption rather than hardcoding
+around its symptom.

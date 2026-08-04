@@ -43,7 +43,14 @@ merge) can sit unreported for most of that interval, which is exactly the
 Instead, run `scripts/ci-watch.sh <repo> <pr-number> [<pr-number> ...]` via
 the `Monitor` tool (`persistent: false`, a generous `timeout_ms` — the script
 exits on its own once every listed PR reaches a terminal state, so the
-timeout is just a backstop). The script polls every `POLL_INTERVAL` seconds
+timeout is just a backstop). **`Monitor` does not inherit this session's
+current working directory** — always prefix the command with an explicit
+`cd` into the correct worktree root, then use the normal repo-relative path:
+`cd <worktree-root> && sh scripts/ci-watch.sh <repo> <pr-number> ...`. Do not
+hardcode an absolute path to the script instead — it's committed at the same
+relative path in every worktree, so `cd` + relative path is both correct and
+portable; an absolute path only happens to work for one specific worktree on
+one specific machine. The script polls every `POLL_INTERVAL` seconds
 (default 10, overridable via env) and prints exactly one line per PR the
 moment it becomes: `MERGED`/`CLOSED`, `CONFLICTS` (merge base diverged),
 `STALE` (branch fell behind base — e.g. a sibling PR merged first), `CHECK
