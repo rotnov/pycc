@@ -97,6 +97,53 @@ fn non_callable_binding(name: &str) -> Diagnostic {
     )
 }
 
+/// D-136: resolves a `HirExpr::Call`/`HirExpr::Name` callee/name string
+/// that `pycc_hir`'s lowering already qualified as `<module>.<symbol>`
+/// (e.g. `"math.sqrt"`, `"math.pi"`) back into its `pycc_std` registry
+/// entry. A real Python identifier can never contain `.`, so `split_once`
+/// finding one is itself sufficient evidence this is a stdlib-qualified
+/// name, not an ordinary user identifier -- no additional import-binding
+/// lookup is needed here (pycc_hir already gated construction of this
+/// shape on a successful `pycc_std::resolve_module`/`resolve_symbol`
+/// lookup at lowering time; re-resolving here is cheap and idempotent).
+fn std_qualified_symbol(name: &str) -> Option<pycc_std::StdSymbol> {
+    let (module_name, symbol_name) = name.split_once('.')?;
+    let module = pycc_std::resolve_module(module_name)?;
+    pycc_std::resolve_symbol(module, symbol_name)
+}
+
+fn std_scalar_to_ty(kind: pycc_std::ScalarKind) -> Ty {
+    match kind {
+        pycc_std::ScalarKind::Float => Ty::Float,
+    }
+}
+
+/// A stdlib function symbol (e.g. `math.sqrt`) referenced without a call
+/// (`print(math.sqrt)`, not `math.sqrt(x)`) has no callable `Ty` this
+/// compiler's type system can express -- there is no first-class function
+/// type here, matching `non_callable_binding`'s own "this compiler's
+/// value types are all primitives" precedent (D-110's doc comment above).
+fn std_function_used_as_a_value(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!("`{name}` is a stdlib function and must be called, e.g. `{name}(...)`"),
+        Span::new(0, 0),
+    )
+}
+
+/// A stdlib constant (e.g. `math.pi`) called like a function
+/// (`math.pi()`) -- `pycc_hir`'s lowering does not distinguish
+/// `StdSymbolKind::Function` from `StdSymbolKind::Constant` at the
+/// call-position (it resolves any registered symbol name into
+/// `HirExpr::Call`), so this mismatch surfaces here instead.
+fn std_constant_is_not_callable(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0021",
+        format!("`{name}` is a stdlib constant, not a function, and cannot be called"),
+        Span::new(0, 0),
+    )
+}
+
 /// Looks up a bare name's already-bound type, producing the same
 /// "unbound local" vs. "not defined" distinction `HirExpr::Name` itself
 /// uses in `infer_expr_in` below. `HirStmt::ForList`'s `list` field and
@@ -430,11 +477,29 @@ fn collect_expr_constraints(
         HirExpr::FloatLiteral(_) => Ok(Some(Ok(Ty::Float))),
         HirExpr::BoolLiteral(_) => Ok(Some(Ok(Ty::Bool))),
         HirExpr::StringLiteral(_) => Ok(Some(Ok(Ty::Str))),
-        HirExpr::Name(name) => match env.bindings.get(name).cloned() {
-            Some(term) => Ok(Some(term)),
-            None if is_local(env.local_names, name) => Err(unbound_local(name)),
-            None => Ok(None),
-        },
+        HirExpr::Name(name) => {
+            // D-136: a `pycc_hir`-qualified stdlib name (`"math.pi"`) is
+            // checked before ordinary binding lookup -- it can never
+            // collide with a real binding (see `std_qualified_symbol`'s own
+            // doc comment), and unlike an ordinary name it is never
+            // `is_local` either (it's never a parameter or a
+            // `HirStmt::Assign` target).
+            if let Some(symbol) = std_qualified_symbol(name) {
+                return match symbol.kind {
+                    pycc_std::StdSymbolKind::Constant { ty } => {
+                        Ok(Some(Ok(std_scalar_to_ty(ty))))
+                    }
+                    pycc_std::StdSymbolKind::Function { .. } => {
+                        Err(std_function_used_as_a_value(name))
+                    }
+                };
+            }
+            match env.bindings.get(name).cloned() {
+                Some(term) => Ok(Some(term)),
+                None if is_local(env.local_names, name) => Err(unbound_local(name)),
+                None => Ok(None),
+            }
+        }
         HirExpr::FString(parts) => {
             for part in parts {
                 if let FStringPart::Interpolation(expr) = part {
@@ -532,6 +597,42 @@ fn collect_expr_constraints(
                     ));
                 }
                 return Ok(Some(Ok(Ty::Int)));
+            }
+            if let Some(symbol) = std_qualified_symbol(callee) {
+                let pycc_std::StdSymbolKind::Function {
+                    arg_tys: expected_arg_tys,
+                    ret_ty,
+                } = symbol.kind
+                else {
+                    return Err(std_constant_is_not_callable(callee));
+                };
+                if arg_terms.len() != expected_arg_tys.len() {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "`{callee}` expects {} argument(s), got {}",
+                            expected_arg_tys.len(),
+                            arg_terms.len()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                for (term, expected) in arg_terms.iter().zip(expected_arg_tys) {
+                    if let Some(Ok(arg_ty)) = term
+                        && *arg_ty != std_scalar_to_ty(*expected)
+                    {
+                        return Err(Diagnostic::error(
+                            "T0021",
+                            format!(
+                                "`{callee}` expects `{}`, got `{}`",
+                                std_scalar_to_ty(*expected).name(),
+                                arg_ty.name()
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
+                }
+                return Ok(Some(Ok(std_scalar_to_ty(ret_ty))));
             }
             if callee == "float" && !signatures.contains_key(callee) {
                 // A user-defined `float` takes priority over the builtin -- see
@@ -1547,17 +1648,27 @@ fn infer_expr_in(
             }
             Ok(Ty::Str)
         }
-        HirExpr::Name(name) => env.lookup(name).ok_or_else(|| {
-            if is_local(local_names, name) {
-                unbound_local(name)
-            } else {
-                Diagnostic::error(
-                    "T0021",
-                    format!("name `{name}` is not defined"),
-                    Span::new(0, 0), // real span threading through HIR is out of scope for this task -- see Task 15's follow-up note
-                )
+        HirExpr::Name(name) => {
+            if let Some(symbol) = std_qualified_symbol(name) {
+                return match symbol.kind {
+                    pycc_std::StdSymbolKind::Constant { ty } => Ok(std_scalar_to_ty(ty)),
+                    pycc_std::StdSymbolKind::Function { .. } => {
+                        Err(std_function_used_as_a_value(name))
+                    }
+                };
             }
-        }),
+            env.lookup(name).ok_or_else(|| {
+                if is_local(local_names, name) {
+                    unbound_local(name)
+                } else {
+                    Diagnostic::error(
+                        "T0021",
+                        format!("name `{name}` is not defined"),
+                        Span::new(0, 0), // real span threading through HIR is out of scope for this task -- see Task 15's follow-up note
+                    )
+                }
+            })
+        }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
             let right_ty = infer_expr_in(env, local_names, right)?;
@@ -1657,6 +1768,40 @@ fn infer_expr_in(
                     ));
                 }
                 return Ok(Ty::Int);
+            }
+            if let Some(symbol) = std_qualified_symbol(callee) {
+                let pycc_std::StdSymbolKind::Function {
+                    arg_tys: expected_arg_tys,
+                    ret_ty,
+                } = symbol.kind
+                else {
+                    return Err(std_constant_is_not_callable(callee));
+                };
+                if arg_tys.len() != expected_arg_tys.len() {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "`{callee}` expects {} argument(s), got {}",
+                            expected_arg_tys.len(),
+                            arg_tys.len()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                for (arg_ty, expected) in arg_tys.iter().zip(expected_arg_tys) {
+                    if *arg_ty != std_scalar_to_ty(*expected) {
+                        return Err(Diagnostic::error(
+                            "T0021",
+                            format!(
+                                "`{callee}` expects `{}`, got `{}`",
+                                std_scalar_to_ty(*expected).name(),
+                                arg_ty.name()
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
+                }
+                return Ok(std_scalar_to_ty(ret_ty));
             }
             if callee == "float" && env.lookup_function(callee).is_none() {
                 // D-086's own remedy for the int-to-float boundary: a hand-recognized
@@ -9211,6 +9356,218 @@ mod tests {
             args: vec![HirExpr::Name("undefined".to_string())],
         };
         assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn math_sqrt_and_pi_type_check_through_the_constraint_solver_path() {
+        // `math.sqrt`/`math.pi`'s `infer_expr_in` coverage above only
+        // exercises pass 3 (the final, concrete-environment check). A
+        // private helper with an unannotated (`Ty::Infer`) return forces
+        // `collect_expr_constraints` (the solver pass) to resolve the same
+        // call/name -- this is `inferred_signatures_keep_the_constraint_
+        // solver_path`'s own precedent, applied to the new stdlib branch.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_root_plus_pi".to_string(),
+                // `x` is annotated (not `Ty::Infer`) deliberately: like
+                // `float`/`len`, `math.sqrt`'s solver-pass branch only
+                // validates an already-concretely-resolved argument term
+                // (see that branch's own doc comment on the "lenient-
+                // until-known" precedent) -- it does not itself unify an
+                // unresolved parameter's inference variable against the
+                // stdlib signature's expected argument type. Only the
+                // function's own `Ty::Infer` *return* is left for the
+                // solver to determine here.
+                params: vec![("x".to_string(), Ty::Float)],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Call {
+                        callee: "math.sqrt".to_string(),
+                        args: vec![HirExpr::Name("x".to_string())],
+                    }),
+                    right: Box::new(HirExpr::Name("math.pi".to_string())),
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let signatures = infer_function_signatures_with_solver(&hir, &local_names).unwrap();
+        assert_eq!(signatures["_root_plus_pi"], (vec![Ty::Float], Ty::Float));
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn math_sqrt_wrong_arity_is_rejected_by_the_constraint_solver_path() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_bad_call".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![],
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn math_sqrt_wrong_argument_type_is_rejected_by_the_constraint_solver_path() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_bad_call".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![HirExpr::StringLiteral("x".to_string())],
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn math_pi_called_like_a_function_is_rejected_by_the_constraint_solver_path() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_bad_call".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Call {
+                    callee: "math.pi".to_string(),
+                    args: vec![],
+                }))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn math_sqrt_used_as_a_bare_value_is_rejected_by_the_constraint_solver_path() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_bad_ref".to_string(),
+                params: vec![],
+                return_ty: Ty::Infer,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("math.sqrt".to_string())))],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = infer_function_signatures_with_solver(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn a_dotted_name_whose_module_part_is_not_a_registered_stdlib_module_is_an_ordinary_undefined_name() {
+        // `std_qualified_symbol`'s `resolve_module` step is defense-in-depth
+        // against a hand-constructed `HirModule` (this crate's own public
+        // API accepts any `&HirModule`, not only one `pycc_hir::lower_checked`
+        // produced) -- `pycc_hir`'s real lowering never emits a dotted name
+        // whose module part fails to resolve (see `lower_expr`'s own
+        // `Expr::Attribute` arm), but this crate does not get to assume
+        // that invariant holds for every caller.
+        let env = Environment::new();
+        let expr = HirExpr::Name("os.path".to_string());
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "name `os.path` is not defined");
+    }
+
+    #[test]
+    fn math_sqrt_of_a_float_infers_float() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "math.sqrt".to_string(),
+            args: vec![HirExpr::FloatLiteral(2.0)],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn math_pi_infers_float() {
+        let env = Environment::new();
+        let expr = HirExpr::Name("math.pi".to_string());
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Float));
+    }
+
+    #[test]
+    fn math_sqrt_with_no_arguments_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "math.sqrt".to_string(),
+            args: vec![],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`math.sqrt` expects 1 argument(s), got 0");
+    }
+
+    #[test]
+    fn math_sqrt_of_a_str_is_rejected_as_t0021() {
+        let mut env = Environment::new();
+        env.bind("x".to_string(), Ty::Str);
+        let expr = HirExpr::Call {
+            callee: "math.sqrt".to_string(),
+            args: vec![HirExpr::Name("x".to_string())],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "`math.sqrt` expects `float`, got `str`");
+    }
+
+    #[test]
+    fn math_sqrt_propagates_an_ill_typed_argument_s_error() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "math.sqrt".to_string(),
+            args: vec![HirExpr::Name("undefined".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn math_pi_called_like_a_function_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "math.pi".to_string(),
+            args: vec![],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "`math.pi` is a stdlib constant, not a function, and cannot be called"
+        );
+    }
+
+    #[test]
+    fn math_sqrt_used_as_a_bare_value_is_rejected_as_t0021() {
+        let env = Environment::new();
+        let expr = HirExpr::Name("math.sqrt".to_string());
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(
+            err.message,
+            "`math.sqrt` is a stdlib function and must be called, e.g. `math.sqrt(...)`"
+        );
     }
 
     #[test]

@@ -4911,6 +4911,18 @@ mod tests {
     }
 
     #[test]
+    fn math_sqrt_call_propagates_an_unsupported_argument_expression() {
+        // Exercises the `?` inside the stdlib-call arm's own argument
+        // lowering (`call.arguments.args.iter().map(lower_expr).collect()`)
+        // taking its error path, as opposed to every other stdlib-call test
+        // above, which only exercises the success path.
+        let module = pycc_parser_test_helper::parse("import math\nmath.sqrt(1j)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
     fn method_call_on_a_non_name_receiver_is_unsupported() {
         // Exercises the call-position stdlib-intrinsic branch's own
         // `Expr::Name(receiver)` guard failing (as opposed to the bare

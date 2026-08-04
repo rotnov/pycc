@@ -7,3 +7,4 @@ rust-version.workspace = true
 [dependencies]
 pycc_hir = { path = "../pycc_hir" }
 pycc_diag = { path = "../pycc_diag" }
+pycc_std = { path = "../pycc_std" }
