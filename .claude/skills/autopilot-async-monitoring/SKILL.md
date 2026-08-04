@@ -31,6 +31,42 @@ assuming a prior plan is still accurate:
   result, its branch/worktree's real git log, or its written artifacts —
   never assume "still running" without evidence.
 
+## Use `scripts/ci-watch.sh` + `Monitor` instead of a fixed `ScheduleWakeup` interval
+
+When waiting on one or more open pull requests to reach a terminal CI state,
+do not fall back to a periodic `ScheduleWakeup` (e.g. every 20-30 minutes) as
+the default mechanism — a fixed wakeup interval means a real event (a
+conflict, a stale/behind branch, a failed check, or a fully green PR ready to
+merge) can sit unreported for most of that interval, which is exactly the
+"minutes into hours" dead time this skill exists to eliminate.
+
+Instead, run `scripts/ci-watch.sh <repo> <pr-number> [<pr-number> ...]` via
+the `Monitor` tool (`persistent: false`, a generous `timeout_ms` — the script
+exits on its own once every listed PR reaches a terminal state, so the
+timeout is just a backstop). The script polls every `POLL_INTERVAL` seconds
+(default 10, overridable via env) and prints exactly one line per PR the
+moment it becomes: `MERGED`/`CLOSED`, `CONFLICTS` (merge base diverged),
+`STALE` (branch fell behind base — e.g. a sibling PR merged first), `CHECK
+FAILED -- <name>`, or `READY` (every check green and `mergeStateStatus:
+CLEAN`). It is silent between polls — no per-poll spam, only real terminal
+events reach the conversation as `Monitor` notifications.
+
+This composes with the "check real state before waiting" rule above: the
+script *is* that state check, run in a loop instead of once, so the terminal
+event surfaces itself instead of needing a manual re-check every wakeup.
+After the script reports `STALE` (a common case when multiple PRs from the
+same session are queued and one merges before another), update the affected
+branch (`git fetch origin main && git merge origin/main` or rebase) and
+re-arm a fresh `Monitor` call for the remaining PR(s) — the script does not
+retry a resolved PR itself, by design, so it terminates cleanly rather than
+looping forever on a branch update it cannot perform itself.
+
+If `scripts/ci-watch.sh` is not applicable (e.g. watching something that
+isn't a GitHub PR), the same pattern — a poll loop that emits one line per
+terminal state and exits once every tracked item resolves, run via `Monitor`
+— still beats a fixed wakeup interval; write an equivalent small script
+rather than reverting to periodic polling.
+
 ## Monitor only active work
 
 Do not keep checking on pull requests, branches, or tasks that are no longer
