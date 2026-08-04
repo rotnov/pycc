@@ -541,3 +541,19 @@ fn pep_0594_dead_battery_rejected_produces_c0001() {
         "expected the diagnostic to mention `cgi`, got: {stdout}"
     );
 }
+
+// D-141: bool identity is preserved when a `bool` value crosses a
+// statically int-typed boundary (assignment, parameter, return, container
+// value, or `range` operand) instead of silently rendering as `1`/`0`.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn bool_int_runtime_identity_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bool_int_runtime_identity.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("bool_int_runtime_identity_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/bool_int_runtime_identity.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("bool_int_runtime_identity_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/bool_int_runtime_identity.py");
+}

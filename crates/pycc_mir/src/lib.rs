@@ -16,6 +16,9 @@ pub enum MirExpr {
     IntLiteral(i64),
     FloatLiteral(f64),
     BoolLiteral(bool),
+    /// A `bool` crossing a statically-`int` boundary without becoming the
+    /// arithmetic integer `0` or `1`.
+    IntBoundary(Box<MirExpr>),
     StringLiteral(String),
     Name {
         name: String,
@@ -173,7 +176,7 @@ pub enum MirFStringPart {
 impl MirExpr {
     pub fn ty(&self) -> Ty {
         match self {
-            MirExpr::IntLiteral(_) => Ty::Int,
+            MirExpr::IntLiteral(_) | MirExpr::IntBoundary(_) => Ty::Int,
             MirExpr::FloatLiteral(_) => Ty::Float,
             MirExpr::BoolLiteral(_) => Ty::Bool,
             MirExpr::StringLiteral(_) | MirExpr::FString(_) => Ty::Str,
@@ -617,20 +620,14 @@ fn lower_stmt(stmt: &HirStmt, scopes: &mut Vec<HashMap<String, Ty>>) -> MirStmt 
             // into a slot still permanently sized for `bool` (confirmed
             // empirically before this fix: the program above printed `11`,
             // the raw tagged-int bit pattern truncated through an `i8`
-            // slot, instead of `5`). Widening the lowered value through the
-            // existing `BinOp`/`Add`/`0` path reuses codegen's
-            // already-tested `bool -> tagged int` promotion with no new MIR
-            // node or codegen arm; it is a no-op rebuild when the types
-            // already match.
+            // slot, instead of `5`). Keep the static `int` slot without
+            // manufacturing arithmetic: `True + 0` is the integer `1`, but
+            // an annotated boundary must retain the runtime identity
+            // `True`.
             let value = if value.ty() == *annotation {
                 value
             } else {
-                MirExpr::BinOp {
-                    op: BinOpKind::Add,
-                    left: Box::new(value),
-                    right: Box::new(MirExpr::IntLiteral(0)),
-                    ty: annotation.clone(),
-                }
+                MirExpr::IntBoundary(Box::new(value))
             };
             bind_variable(scopes, target.clone(), annotation.clone());
             MirStmt::Assign {
@@ -1310,10 +1307,10 @@ mod tests {
         // (the annotation), not `Ty::Bool` (the initializer's own type) --
         // see its own comment citing this exact invariant. `lower_stmt`
         // must agree (D-074's "first assignment fixes a binding's
-        // representation" rule): it wraps the lowered `BoolLiteral` in a
-        // `BinOp`/`Add`/`0` node reporting `Ty::Int` (reusing codegen's
-        // already-tested `bool -> tagged int` widening, with no new MIR
-        // node or codegen arm) and binds `x` to `Ty::Int`, so a later
+        // representation" rule): it wraps the lowered `BoolLiteral` in an
+        // `IntBoundary` reporting `Ty::Int`, preserving D-141 runtime
+        // identity without manufacturing arithmetic, and binds `x` to
+        // `Ty::Int`, so a later
         // `Name` reference -- and any later plain reassignment -- agrees.
         // Before this fix, `lower_stmt` bound `Ty::Bool` here instead, and
         // the divergence from `pycc_types`' `Ty::Int` silently mis-sized
@@ -1335,12 +1332,7 @@ mod tests {
             vec![
                 MirItem::TopLevelStmt(MirStmt::Assign {
                     target: "x".to_string(),
-                    value: MirExpr::BinOp {
-                        op: BinOpKind::Add,
-                        left: Box::new(MirExpr::BoolLiteral(true)),
-                        right: Box::new(MirExpr::IntLiteral(0)),
-                        ty: Ty::Int,
-                    },
+                    value: MirExpr::IntBoundary(Box::new(MirExpr::BoolLiteral(true))),
                 }),
                 MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Name {
                     name: "x".to_string(),
@@ -1356,8 +1348,8 @@ mod tests {
         // initializer under an `int` annotation, not merely a literal
         // `True`/`False` -- `pycc_types::is_assignable(Bool, Int)` accepts
         // a `Compare` result, a bool-typed name, or a bool-returning call
-        // identically. This proves the same `BinOp`/`Add`/`0` wrapping
-        // triggers for a `Compare`-sourced `bool`, not only the literal
+        // identically. This proves the same `IntBoundary` wrapping triggers
+        // for a `Compare`-sourced `bool`, not only the literal
         // case the previous test exercises.
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::AnnAssign {
@@ -1375,17 +1367,12 @@ mod tests {
             mir.items,
             vec![MirItem::TopLevelStmt(MirStmt::Assign {
                 target: "x".to_string(),
-                value: MirExpr::BinOp {
-                    op: BinOpKind::Add,
-                    left: Box::new(MirExpr::Compare {
+                value: MirExpr::IntBoundary(Box::new(MirExpr::Compare {
                         op: CmpOpKind::Lt,
                         left: Box::new(MirExpr::IntLiteral(1)),
                         right: Box::new(MirExpr::IntLiteral(2)),
                         ty: Ty::Bool,
-                    }),
-                    right: Box::new(MirExpr::IntLiteral(0)),
-                    ty: Ty::Int,
-                },
+                    })),
             })]
         );
     }
