@@ -1365,22 +1365,20 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                 // practice for the fixtures this PR ships -- but it is a
                 // real, deliberate scope trim from a fully import-gated
                 // design, recorded here rather than silently.
-                if let Expr::Name(receiver) = attr.value.as_ref() {
-                    if let Some(module) = pycc_std::resolve_module(receiver.id.as_str()) {
-                        if let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str())
-                        {
-                            let args = call
-                                .arguments
-                                .args
-                                .iter()
-                                .map(lower_expr)
-                                .collect::<Result<Vec<_>, _>>()?;
-                            return Ok(HirExpr::Call {
-                                callee: format!("{}.{}", receiver.id.as_str(), symbol.name),
-                                args,
-                            });
-                        }
-                    }
+                if let Expr::Name(receiver) = attr.value.as_ref()
+                    && let Some(module) = pycc_std::resolve_module(receiver.id.as_str())
+                    && let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str())
+                {
+                    let args = call
+                        .arguments
+                        .args
+                        .iter()
+                        .map(lower_expr)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(HirExpr::Call {
+                        callee: format!("{}.{}", receiver.id.as_str(), symbol.name),
+                        args,
+                    });
                 }
                 return Err(unsupported(
                     format!(
