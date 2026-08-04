@@ -1,6 +1,6 @@
 ---
 name: next-milestone
-description: Use this alpha project skill when the user wants the next versioned milestone chosen and adopted as this session's standing autonomous goal — "what's next", "start the next milestone", "release the next version", or a bare autopilot directive with no milestone or issue named. Equivalent to the user typing "/goal release <name>" for whichever milestone is determined. Walk docs/ROADMAP.md's ordered milestone sections to find the first one whose Accept criteria are not yet met with real evidence, ensure its GitHub milestone exists, adopt it as the standing goal without asking, then hand off into the issue-select loop scoped to it.
+description: Use this alpha project skill when the user wants the next versioned milestone chosen and adopted as this session's standing autonomous goal — "what's next", "start the next milestone", "release the next version", "release everything", "run the whole roadmap", or a bare autopilot directive with no milestone or issue named. Equivalent to the user typing "/goal release <name>" for whichever milestone is determined, and — for an open-ended directive — repeating that for every subsequent milestone in sequence until v1.0 with no further prompting. Walk docs/ROADMAP.md's ordered milestone sections to find the first one whose Accept criteria are not yet met with real evidence, ensure its GitHub milestone exists, adopt it as the standing goal without asking, then hand off into the issue-select loop scoped to it.
 ---
 
 # next-milestone (Alpha)
@@ -66,17 +66,36 @@ own step 2 milestone-triage housekeeping, its blocker screen's roadmap-fit check
 issue-to-plan gate all already understand milestone-scoped work — this skill does not duplicate any
 of that, it only establishes which milestone they're operating against.
 
-### 6. Milestone completion and continuation
+### 6. Milestone completion
 
-The loop above runs until it hits one of `issue-select`'s own stop conditions, or until this
+`issue-select`'s own loop (step 5) runs until it hits one of its own stop conditions, or until this
 milestone's Accept criteria are all met by the same evidence bar step 2 used to judge prior
 milestones. On completion: record the "Update (`<date>`): met." note in `docs/ROADMAP.md` (the
-existing convention — see the v0.1/v0.2 sections for examples), close the GitHub milestone, and — if
-the original directive was open-ended ("release everything" rather than one named milestone) —
-re-enter step 1 to find the next one. A directive scoped to exactly one milestone stops here instead
-of auto-advancing.
+existing convention — see the v0.1/v0.2 sections for examples) and close the GitHub milestone.
+
+## Loop
+
+A directive scoped to exactly one named milestone ("finish v0.3") stops at step 6 once that
+milestone completes — do not auto-advance past what was actually asked for.
+
+An **open-ended** directive ("release everything", "run the whole roadmap", a standing autopilot
+directive naming no specific version) means a loop, not one milestone: when step 6 closes a
+milestone, re-enter step 1 with a fresh baseline — the just-completed milestone moved the default
+branch and may have changed later sections' standing (a later milestone's Accept bullet can
+reference work the completed one shipped). Every iteration re-derives its milestone determination
+from scratch per step 2; nothing about *which* milestone is next carries forward between
+iterations, only the fact that the directive itself is still open-ended.
+
+The loop ends only when: the user stops it; `docs/ROADMAP.md` has no further `## vX.Y` section
+whose Accept criteria are unmet (v1.0 and, if in scope, v1.x reached); or `issue-select`'s own
+**systemic** stop condition fires partway through a milestone (report which, and at which
+milestone — do not silently drop back to step 1 as if that milestone were complete). A milestone
+that completes with parked Minor/deferred findings per `issue-implement`'s own conventions is a
+normal completion, not a stop condition.
 
 ## Output
 
 The determined milestone name, the evidence review that ruled out every earlier milestone as
-already met, confirmation the GitHub milestone exists, and the handoff to `issue-select`.
+already met, confirmation the GitHub milestone exists, the handoff to `issue-select`, and — once
+that milestone completes under an open-ended directive — the same report for every subsequent
+milestone the loop advances through.

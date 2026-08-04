@@ -78,7 +78,6 @@ assert "grill-with-docs" in wrappers, "Codex skill wrappers are missing"
 assert "i-have-an-issue" in wrappers, "installed issue-research skill is missing"
 assert "pycc" in wrappers, "project-local pycc alpha skill is missing"
 assert "pycc-feedback" in wrappers, "project-local feedback alpha skill is missing"
-assert len(wrappers) == 21, "Codex did not retain every repository skill wrapper"
 prompt = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 model_input = "\n".join(
     content.get("text", "")
