@@ -1345,6 +1345,43 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                         value: Box::new(lower_expr(value)?),
                     });
                 }
+                // `math.sqrt(x)`-shaped stdlib intrinsic call (D-136/D-137).
+                // Resolved textually against `pycc_std`'s registry (receiver
+                // name, then attribute name), the same precedent this file
+                // already uses for `X: TypeAlias` (see
+                // `lower_legacy_type_alias_ann_assign`'s doc comment): real
+                // flow-sensitive "was `math` actually imported before this
+                // use" verification is not attempted here, because
+                // `lower_expr` has no access to the module-level import
+                // side-table `lower_checked` builds (threading it through
+                // every recursive `lower_expr` call site is a materially
+                // larger change than this thin v0.2 slice needs). `math` is
+                // not a valid bare Python identifier binding to anything
+                // else in this compiler's current name-resolution model
+                // (no ordinary variable/import can produce a receiver whose
+                // name doubles as a registered stdlib module and *isn't*
+                // that module), so this narrowing does not accept any
+                // program CPython itself would reject as a `NameError` in
+                // practice for the fixtures this PR ships -- but it is a
+                // real, deliberate scope trim from a fully import-gated
+                // design, recorded here rather than silently.
+                if let Expr::Name(receiver) = attr.value.as_ref() {
+                    if let Some(module) = pycc_std::resolve_module(receiver.id.as_str()) {
+                        if let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str())
+                        {
+                            let args = call
+                                .arguments
+                                .args
+                                .iter()
+                                .map(lower_expr)
+                                .collect::<Result<Vec<_>, _>>()?;
+                            return Ok(HirExpr::Call {
+                                callee: format!("{}.{}", receiver.id.as_str(), symbol.name),
+                                args,
+                            });
+                        }
+                    }
+                }
                 return Err(unsupported(
                     format!(
                         "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.{}(...)`",
@@ -1452,6 +1489,41 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                 left: Box::new(lower_expr(&cmp.left)?),
                 right: Box::new(lower_expr(&cmp.comparators[0])?),
             }
+        }
+        // `math.pi`-shaped bare stdlib constant reference (D-136/D-137),
+        // e.g. `print(math.pi)`. A call-shaped `math.sqrt(x)` is handled
+        // separately inside the `Expr::Call` arm above (it needs the call
+        // arguments, which this bare-attribute position never has). Resolved
+        // with the same textual, non-flow-sensitive precedent documented on
+        // that arm. Encoded as `HirExpr::Name("math.pi")`: real Python
+        // identifiers can never contain `.`, so this qualified spelling is
+        // an unambiguous marker `pycc_types`' ordinary name lookup can
+        // special-case without any risk of colliding with a real variable
+        // named `pi`.
+        Expr::Attribute(attr) => {
+            let Expr::Name(receiver) = attr.value.as_ref() else {
+                return Err(unsupported(
+                    "attribute access is only supported on a stdlib module name so far",
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            let Some(module) = pycc_std::resolve_module(receiver.id.as_str()) else {
+                return Err(unsupported(
+                    "attribute access is only supported on a stdlib module name so far",
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str()) else {
+                return Err(unsupported(
+                    format!(
+                        "module `{}` has no attribute `{}`",
+                        receiver.id.as_str(),
+                        attr.attr
+                    ),
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            HirExpr::Name(format!("{}.{}", receiver.id.as_str(), symbol.name))
         }
         other => {
             return Err(unsupported(
@@ -4765,6 +4837,85 @@ mod tests {
     #[test]
     fn import_two_modules_in_one_statement_is_c0001() {
         let module = pycc_parser_test_helper::parse("import math, os\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_sqrt_call_lowers_to_a_qualified_callee() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.sqrt(2.0))\n");
+        let hir = lower_checked(&module).expect("math.sqrt(...) must lower");
+
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![HirExpr::FloatLiteral(2.0)],
+                }],
+            }))]
+        );
+    }
+
+    #[test]
+    fn math_pi_bare_reference_lowers_to_a_qualified_name() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.pi)\n");
+        let hir = lower_checked(&module).expect("math.pi must lower");
+
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("math.pi".to_string())],
+            }))]
+        );
+    }
+
+    #[test]
+    fn math_tan_call_is_unsupported_since_it_is_not_registered() {
+        let module = pycc_parser_test_helper::parse("import math\nmath.tan(1.0)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_tan_bare_reference_is_unsupported_since_it_is_not_registered() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.tan)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn os_path_bare_attribute_access_is_unsupported() {
+        // No `import os` here on purpose -- `os` isn't a registered
+        // `pycc_std` module at all, so this exercises the "receiver name
+        // does not resolve to a stdlib module" branch directly, distinct
+        // from `math_tan_bare_reference_is_unsupported_since_it_is_not_registered`
+        // above (recognized module, unregistered attribute).
+        let module = pycc_parser_test_helper::parse("print(os.path)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn attribute_access_on_a_non_name_receiver_is_unsupported() {
+        let module = pycc_parser_test_helper::parse("print([1, 2].sqrt)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn method_call_on_a_non_name_receiver_is_unsupported() {
+        // Exercises the call-position stdlib-intrinsic branch's own
+        // `Expr::Name(receiver)` guard failing (as opposed to the bare
+        // attribute-access arm's analogous guard above).
+        let module = pycc_parser_test_helper::parse("[1, 2].sqrt()\n");
         let diagnostic = lower_checked(&module).unwrap_err();
 
         assert_eq!(diagnostic.code, "C0001");
