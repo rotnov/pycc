@@ -134,37 +134,36 @@ work "done" once it merely works once from the scratchpad; it is done once
 a future session (with no memory of this one) can discover and use it via
 the skill alone.
 
-## 2026-08-04 06:40 UTC — `Monitor` doesn't inherit the session's cwd; `cd` into the right worktree first, don't hardcode an absolute path
-**Trigger:** user-observed mistake ("почему не затригерился на ошибочный путь?", "а чего абсолютный?", "скилл то в репе")
+## 2026-08-04 06:49 UTC — Under strict (up-to-date) branch protection, don't open multiple PRs in one session — they chase each other stale
+**Trigger:** user-observed mistake ("если стоит бранч ап ту дейт протекшен, не сиысла в одной сесси открывать несколько ПР, начинается гонка")
 
-Context: right after `scripts/ci-watch.sh` was committed into the repo, it
-was invoked via `Monitor` as `sh scripts/ci-watch.sh rotnov/pycc 324` — a
-path relative to a presumed repo root — and failed immediately with exit
-127 ("command not found"). Root cause: `Monitor` runs its command in its
-own shell, whose current working directory is not guaranteed to match the
-calling session's cwd or any particular worktree. The relative path simply
-didn't resolve to a file there, so the shell couldn't even exec the
-script.
+если стоит бранч ап ту дейт протекшен, не сиысла в одной сесси открывать несколько ПР, начинается гонка
 
-The first fix tried was hardcoding an absolute path
-(`/Users/.../scripts/ci-watch.sh`), which worked but was the wrong lesson
-to generalize from: the script is **committed to the repo**, at the same
-relative path (`scripts/ci-watch.sh`) in every worktree, since every
-worktree shares the same tracked tree. An absolute path only happens to
-work for one specific worktree on one specific machine — it breaks the
-moment that worktree is removed/renamed or the same script needs to run
-against a different worktree, and it's not portable to another machine at
-all. The real fix is to control the *working directory*, not to bypass it
-with an absolute path.
+Context: this repo's branch protection is `strict: true` (a PR's branch must
+be up to date with `main` before merge — see `docs/REPOSITORY_GOVERNANCE.md`).
+Across roughly one hour this session, 4-5 PRs were opened in parallel
+(#322, #324, #326, #327, plus an earlier #320) for genuinely independent,
+small changes. Every single merge of one PR immediately made every *other*
+still-open PR `STALE` (`mergeStateStatus: BEHIND`), which then needed its
+own `git fetch && git merge origin/main`, a re-run of local tests, a push,
+and a fresh CI wait — repeatedly, for every PR still open at the time.
+This is a real race: with N PRs open under strict protection, merging any
+one of them can stale up to N-1 others, and if those others are *also*
+racing to merge, the staleness can cascade multiple times per PR before it
+actually lands. The `ci-watch.sh`/`Monitor` tooling from this same skill
+made the staleness events cheap to *detect* the moment they happened, but
+did nothing to prevent the underlying churn (re-fetch, re-merge, re-test,
+re-push, re-wait) each event still costs.
 
-**Rule:** when invoking a repo-committed script via `Monitor` (or any
-background dispatch whose cwd isn't controlled), prefix the command with
-an explicit `cd` into the correct worktree root, then use the normal
-repo-relative path: `cd <worktree-root> && sh scripts/ci-watch.sh ...`.
-Only reach for an absolute path when the target genuinely isn't part of
-the repo's own tracked tree (e.g. a session-scratchpad file) — for
-anything committed, `cd` + relative path is both correct and portable
-across worktrees. This is the same "control the invocation, don't route
-around it" instinct as `gh pr create --head`/`-B` from this skill's own
-earlier lesson: fix the actual cwd assumption rather than hardcoding
-around its symptom.
+**Rule:** under `strict` (up-to-date-required) branch protection, do not
+open multiple PRs in parallel within one session merely because the
+underlying changes are independent. Serialize instead: fully land one PR
+(open → CI green → merge) before opening the next. This trades a small
+amount of session wall-clock (waiting for one PR's CI before starting the
+next) for eliminating the stale-branch chase entirely — zero merges happen
+concurrently, so no open PR can ever be staled by another one finishing
+first. The one exception worth keeping: genuinely tiny, no-code-conflict
+docs/overlay-only changes that are extremely unlikely to touch the same
+lines as anything else in flight can still be batched loosely, but even
+then expect at least one round of `STALE` catch-up per merge that lands
+ahead of them — budget for it rather than being surprised by it.

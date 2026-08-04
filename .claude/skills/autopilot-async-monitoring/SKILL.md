@@ -43,14 +43,7 @@ merge) can sit unreported for most of that interval, which is exactly the
 Instead, run `scripts/ci-watch.sh <repo> <pr-number> [<pr-number> ...]` via
 the `Monitor` tool (`persistent: false`, a generous `timeout_ms` — the script
 exits on its own once every listed PR reaches a terminal state, so the
-timeout is just a backstop). **`Monitor` does not inherit this session's
-current working directory** — always prefix the command with an explicit
-`cd` into the correct worktree root, then use the normal repo-relative path:
-`cd <worktree-root> && sh scripts/ci-watch.sh <repo> <pr-number> ...`. Do not
-hardcode an absolute path to the script instead — it's committed at the same
-relative path in every worktree, so `cd` + relative path is both correct and
-portable; an absolute path only happens to work for one specific worktree on
-one specific machine. The script polls every `POLL_INTERVAL` seconds
+timeout is just a backstop). The script polls every `POLL_INTERVAL` seconds
 (default 10, overridable via env) and prints exactly one line per PR the
 moment it becomes: `MERGED`/`CLOSED`, `CONFLICTS` (merge base diverged),
 `STALE` (branch fell behind base — e.g. a sibling PR merged first), `CHECK
@@ -73,6 +66,25 @@ isn't a GitHub PR), the same pattern — a poll loop that emits one line per
 terminal state and exits once every tracked item resolves, run via `Monitor`
 — still beats a fixed wakeup interval; write an equivalent small script
 rather than reverting to periodic polling.
+
+## Serialize PRs under strict branch protection — don't open several at once
+
+This repo's branch protection is `strict` (a PR must be up to date with
+`main` before it merges). Under `strict` protection, opening multiple PRs
+in parallel within one session — even for genuinely independent changes —
+creates a real race: merging any one of them immediately makes every other
+open PR `STALE`/`BEHIND`, which then needs its own fetch, merge, re-test,
+push, and CI re-wait. With several PRs open at once this can cascade
+(a catch-up push can itself go stale again before it lands), and it
+happened repeatedly in one session here (#320/#322/#324/#326/#327).
+
+Default to serializing instead: fully land one PR (open → CI green → merge)
+before opening the next. This costs some session wall-clock time waiting on
+one PR's CI before starting the next, but it eliminates the stale-branch
+chase entirely, since no two merges are ever racing. Only batch multiple
+PRs loosely when they are genuinely tiny, docs/overlay-only, and unlikely to
+touch overlapping lines — and even then, expect at least one `STALE`
+catch-up round per PR that lands ahead of the others, not zero.
 
 ## Monitor only active work
 
