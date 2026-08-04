@@ -24,6 +24,7 @@
 6. Read `docs/SPEC.md`, the relevant linked specifications, and the generated documentation for the crates affected by the task.
 7. If documentation generation fails, record and understand the failure before changing code. Do not present documentation generated from an older revision as current.
 8. When the task starts or continues work on a versioned milestone (e.g. "implement v0.3"), also list the open issues assigned to that milestone (`gh issue list --repo <owner>/<repo> --milestone <name>`) and treat every one of them as in-scope alongside `docs/ROADMAP.md`'s own prose for that milestone. A milestone exists specifically to hold blockers discovered after the roadmap prose was last written; skipping this check silently drops them.
+9. In the same pass, also list open issues with no milestone assigned (`gh issue list --repo <owner>/<repo> --milestone "" --state open`) and judge each against the current and immediately-next milestone's scope. Assign an issue to a milestone the moment its relevance becomes clear — either when filing it (the filer is in the best position to judge fit) or, as a backstop, during this preflight pass. Resolve the fit judgment yourself per [D-127](docs/DECISIONS.md#d-127-autonomous-agent-operation-model); do not leave an in-scope issue unassigned because triage wasn't explicitly requested, and do not block on it if scope is genuinely unclear — leave those unassigned rather than guessing, and re-examine them on the next milestone's preflight pass.
 
 ## Keep documentation current
 
