@@ -52,6 +52,41 @@ hold on the first retry.
 
 один чек на CI уже упал, можно уже начинать разбираться а не ждать все остальные
 
+## 2026-08-04 06:20 UTC — Always pass `--head`/`-B` explicitly to `gh pr create`; never rely on the shell's current directory
+**Trigger:** user-observed mistake ("какие то конфликты") while opening the nbody RUNS=7 fix's PR
+
+Context: `gh pr create` was run from the main session's own cwd
+(`.claude/worktrees/project-overview-53ef3d`, the *orchestrating* session's
+workspace), not from `.worktrees/nbody-median`, the worktree that actually
+had the intended commit checked out. `gh pr create` silently used whatever
+branch happened to be checked out in the cwd it ran from
+(`fix/d084-median-throughput`, a stale, already-merged branch from an
+earlier fix) instead of erroring — it produced a real, live PR (#323)
+against the wrong head with no warning, which then showed
+`mergeStateStatus: DIRTY` / `mergeable: CONFLICTING` purely because the
+wrong branch was compared to `main`. The user's first signal was just
+"какие то конфликты" (some conflicts) on a change that should have been a
+trivial two-file diff — the actual bug (wrong branch entirely) only
+surfaced after checking `gh pr view --json headRefOid,headRefName` and
+finding it didn't match the branch that was actually pushed.
+
+**Rule:** when running `gh pr create` (or any `gh`/`git` command whose
+behavior depends on "the currently checked out branch") from a session
+that manages multiple git worktrees, never rely on the shell's cwd having
+the right branch checked out — always pass the target branch explicitly:
+`gh pr create --head <branch> --base <base>` (and `cd` into the correct
+worktree first regardless, as defense in depth — the explicit flags are
+what actually prevent the silent-wrong-branch failure, not the `cd` alone,
+since a forgotten `cd` after several worktree operations is exactly how
+this happened). After creating a PR, verify `gh pr view --json
+headRefName,headRefOid` matches the branch and commit actually intended
+before treating the PR as real — the same "check real state before
+waiting" discipline this skill already covers for CI/PR status, applied to
+verifying a just-created artifact rather than an in-flight one. If a PR
+does turn out to be against the wrong head, closing it and re-opening
+correctly (rather than trying to retarget the existing PR's head, which
+`gh`/GitHub does not support) is the fastest fix.
+
 Context: while a multi-job CI run (`gh pr checks`) had several jobs still
 `pending`, one job (`agent-assets`) had already finished and failed. The
 correct move was to start diagnosing that failure immediately — the other
