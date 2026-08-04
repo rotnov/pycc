@@ -163,7 +163,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [604](https://peps.python.org/pep-0604/) | Union syntax `int \| str` | typing | `py310/pep_0604_union.py` | ☐ |
 | [612](https://peps.python.org/pep-0612/) | `ParamSpec` | typing | `py310/pep_0612_paramspec.py` | ☐ |
-| [613](https://peps.python.org/pep-0613/) | `TypeAlias` | typing | `py310/pep_0613_typealias.py` | ☐ |
+| [613](https://peps.python.org/pep-0613/) | `TypeAlias` | typing | `pep_0613_typealias.py` | ☐ |
 | [626](https://peps.python.org/pep-0626/) | Precise line numbers (debug info) | rt | `py310/pep_0626_lineno.py` | ☐ |
 | [634](https://peps.python.org/pep-0634/)–636 | **Structural pattern matching** | syntax | `py310/pep_0634_match.py` | ☐ |
 | [647](https://peps.python.org/pep-0647/) | `TypeGuard` | typing | `py310/pep_0647_typeguard.py` | ☐ |
@@ -187,7 +187,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [688](https://peps.python.org/pep-0688/) | `Buffer` type | typing | `py312/pep_0688_buffer.py` | ☐ |
 | [692](https://peps.python.org/pep-0692/) | `Unpack[TypedDict]` for `**kwargs` | typing | `py312/pep_0692_kwargs.py` | ☐ |
-| [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `py312/pep_0695_generics.py` | ☐ |
+| [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `pep_0695_generics.py` | ☐ |
 | [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (needs v0.3's class model) | typing | `py312/pep_0695_generic_classes.py` | ☐ |
 | [698](https://peps.python.org/pep-0698/) | `@override` | typing | `py312/pep_0698_override.py` | ☐ |
 | [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
