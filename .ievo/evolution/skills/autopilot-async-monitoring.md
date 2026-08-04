@@ -168,6 +168,46 @@ lines as anything else in flight can still be batched loosely, but even
 then expect at least one round of `STALE` catch-up per merge that lands
 ahead of them — budget for it rather than being surprised by it.
 
+## 2026-08-04 07:20 UTC — Draft-then-ready queuing can make the serialize-PRs rule safe for parallel work, but this repo's CI does not skip drafts today
+**Trigger:** user-defined convention (refines the "Serialize PRs" section above)
+
+касательно параллельных пр, вообще они могу быть, что бы ни чего не потреять, но ПР должен открываться драфт, чеки не должны гнаться на драфте, тогда рейди только один, довели, смержили, берем следующий драфт, ребейзим, ставим в в рейди, чеки идут, правильно?
+
+Context: this refines the "Serialize PRs under strict branch protection"
+section above. That section's blanket "don't open several PRs at once" rule
+is safe but throws away real parallel work that could otherwise be prepared
+ahead of time (a second/third change fully written and committed, just not
+yet in the merge queue).
+
+**Refined rule — draft-then-ready queuing:** it is fine to open several PRs in
+parallel as **drafts** to avoid losing already-completed work, as long as only
+**one** PR is ever marked "Ready for review" (out of draft) at a time. Land
+that one PR fully (CI green -> merge), THEN take the next queued draft, rebase
+it onto the new `main`, mark it ready, and only then let its CI run. This keeps
+the "no two merges ever race" guarantee from the original rule while letting
+independent work be prepared concurrently instead of serialized end-to-end.
+
+**Correction to verify before relying on this in THIS repo:** the premise "CI
+does not run on draft PRs" is NOT automatically true — it depends on whether
+the repo's own CI workflows gate on draft status. Checked this project's
+`.github/workflows/*.yml` on 2026-08-04: none of them contain a
+`if: github.event.pull_request.draft == false`-style guard, so GitHub's
+default `pull_request` trigger fires the full check suite on a draft PR here
+exactly the same as a ready one — opening a PR as draft only blocks the merge
+button, not the CI run. Making "checks don't run on draft" literally true in
+this repo would require adding that guard to the relevant jobs, which is
+itself a CI-workflow change subject to this project's D-024/D-125 review and
+permission-audit rules (`scripts/check_ci_permissions.rb`) — not something to
+assume is already in place.
+
+**Bottom line:** the draft-then-ready *queuing discipline* (only one PR ready
+at a time, rebase the next draft after each merge) is a valid refinement of
+the serialize-PRs rule and should be used when preparing more than one PR's
+worth of work ahead of time. The *CI-cost savings* from drafts specifically is
+a separate, not-yet-implemented workflow change in this repo — do not assume
+draft PRs are free of CI usage here unless/until that guard is added and
+verified.
+
 ## 2026-08-04 06:53 UTC — Record the session ID and client (Claude/Codex) in every PR body opened by an agent
 **Trigger:** user-observed mistake ("при открытии пр указывать в теле ПР ид сессии и агента (клод, кодекс) что бы можно былл идентифицировать сессию и найти ее")
 

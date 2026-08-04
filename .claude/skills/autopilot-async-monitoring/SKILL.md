@@ -100,6 +100,21 @@ PRs loosely when they are genuinely tiny, docs/overlay-only, and unlikely to
 touch overlapping lines — and even then, expect at least one `STALE`
 catch-up round per PR that lands ahead of the others, not zero.
 
+**Draft-then-ready queuing** lets you prepare more than one PR's worth of
+work concurrently without violating this rule: open every independent
+change as a **draft** PR to reserve the work, but mark only **one** PR
+"Ready for review" at a time. Land that one PR fully (CI green -> merge),
+then take the next queued draft, rebase it onto the new `main`, mark it
+ready, and only then let its CI run. This preserves the "no two merges ever
+race" guarantee while avoiding a strict end-to-end serialization of the
+underlying work. Verify per-repo before relying on the CI-cost angle of this:
+opening a PR as draft only blocks the merge button by default — it does NOT
+skip CI unless the repo's own workflows explicitly gate a job on
+`github.event.pull_request.draft == false` (this project's
+`.github/workflows/*.yml` carry no such guard as of 2026-08-04, so a draft
+PR here still runs the full check suite; adding that guard would itself be a
+CI-workflow change subject to this project's D-024/D-125 review rules).
+
 ## Monitor only active work
 
 Do not keep checking on pull requests, branches, or tasks that are no longer
