@@ -19,6 +19,18 @@ pub struct Environment {
     /// `helper = 1; def helper(): ...; helper = "leaked"` reach codegen with
     /// an `int`-allocated slot stored as `str`.
     def_rebound: HashSet<String>,
+    /// PR-13 Task 3 (D-133/D-134): the subset of `functions` whose signature
+    /// contains a `Ty::Param` (a PEP 695 generic function), keyed by its
+    /// *original* (un-mangled) name and carrying the full `HirItem` its
+    /// body was lowered to. `functions` alone only has room for a resolved
+    /// `(Vec<Ty>, Ty)` signature, which cannot express "resolve this call
+    /// site by substituting `T`, don't just check assignability against
+    /// `Ty::Param` structurally" -- `infer_expr_in`'s `HirExpr::Call` arm
+    /// consults this map first, before falling through to the ordinary
+    /// `functions` lookup, so a call to a generic function is dispatched to
+    /// `instantiate_generic_call` instead of being rejected as an ordinary
+    /// argument-type mismatch against an uninstantiated `Ty::Param`.
+    generics: Arc<HashMap<String, HirItem>>,
 }
 
 impl Environment {
@@ -43,6 +55,21 @@ impl Environment {
 
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
         self.functions.get(name)
+    }
+
+    /// Registers `name` as a PEP 695 generic function whose original,
+    /// un-substituted body is `item` (D-133/D-134). Call sites resolve
+    /// through [`Self::lookup_generic`], not `lookup_function`, since a
+    /// generic function's call-site behavior (substitute `T`, then
+    /// type-check) cannot be expressed by a plain `(Vec<Ty>, Ty)` signature.
+    pub fn bind_generic(&mut self, name: String, item: HirItem) {
+        Arc::make_mut(&mut self.generics).insert(name, item);
+    }
+
+    /// Looks up `name`'s original generic-function `HirItem`, if `name` was
+    /// registered via [`Self::bind_generic`].
+    pub fn lookup_generic(&self, name: &str) -> Option<&HirItem> {
+        self.generics.get(name)
     }
 
     fn child_for_function(&self, local_names: &[&str]) -> Self {
@@ -92,6 +119,32 @@ fn lookup_bound_name(
             )
         }
     })
+}
+
+/// True when `ty` contains a `Ty::Param` anywhere in its structure,
+/// including nested inside a container (D-133/D-134). Unlike
+/// `scan_signature_ty_for_param` (which additionally *rejects* a
+/// container-position occurrence with `T0042`), this is a plain structural
+/// predicate used only to decide whether a function needs generic
+/// treatment at all -- the shape gate itself still runs via
+/// `check_generic_function`/`generic_type_param_name` for a function this
+/// predicate says yes to.
+fn ty_contains_param(ty: &Ty) -> bool {
+    match ty {
+        Ty::Param(_) => true,
+        Ty::List(inner) | Ty::Set(inner) => ty_contains_param(inner),
+        Ty::Dict(kv) => ty_contains_param(&kv.0) || ty_contains_param(&kv.1),
+        Ty::Tuple(elems) => elems.iter().any(ty_contains_param),
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::None | Ty::Infer => false,
+    }
+}
+
+/// True when a function's signature makes it a PEP 695 generic function
+/// (D-133/D-134) -- i.e. `check_and_resolve`/`check` must route it through
+/// `check_generic_function`/`instantiate_generic_call` instead of the
+/// ordinary concrete-`Ty` path.
+fn is_generic_signature(params: &[(String, Ty)], return_ty: &Ty) -> bool {
+    params.iter().any(|(_, ty)| ty_contains_param(ty)) || ty_contains_param(return_ty)
 }
 
 fn function_local_names<'a>(params: &'a [(String, Ty)], body: &'a [HirStmt]) -> Vec<&'a str> {
@@ -456,7 +509,10 @@ fn collect_expr_constraints(
                 if arg_terms.len() != 1 {
                     return Err(Diagnostic::error(
                         "T0021",
-                        format!("`float` expects exactly 1 argument, got {}", arg_terms.len()),
+                        format!(
+                            "`float` expects exactly 1 argument, got {}",
+                            arg_terms.len()
+                        ),
                         Span::new(0, 0),
                     ));
                 }
@@ -1170,7 +1226,10 @@ fn concrete_function_signatures(hir: &HirModule) -> Option<HashMap<String, (Vec<
         }
         signatures.insert(
             name.clone(),
-            (params.iter().map(|(_, ty)| ty.clone()).collect(), return_ty.clone()),
+            (
+                params.iter().map(|(_, ty)| ty.clone()).collect(),
+                return_ty.clone(),
+            ),
         );
     }
     Some(signatures)
@@ -1184,6 +1243,7 @@ fn concrete_function_signatures(hir: &HirModule) -> Option<HashMap<String, (Vec<
 /// validate with this registry directly.
 fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
     let mut functions = HashMap::new();
+    let mut generics = HashMap::new();
     for item in &hir.items {
         let HirItem::Function {
             name,
@@ -1197,15 +1257,22 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
             return None;
         }
+        if is_generic_signature(params, return_ty) {
+            generics.insert(name.clone(), item.clone());
+        }
         functions.insert(
             name.clone(),
-            (params.iter().map(|(_, ty)| ty.clone()).collect(), return_ty.clone()),
+            (
+                params.iter().map(|(_, ty)| ty.clone()).collect(),
+                return_ty.clone(),
+            ),
         );
     }
     Some(Environment {
         bindings: HashMap::new(),
         functions: Arc::new(functions),
         def_rebound: HashSet::new(),
+        generics: Arc::new(generics),
     })
 }
 
@@ -1558,6 +1625,18 @@ fn infer_expr_in(
                     ));
                 }
                 return Ok(Ty::Float);
+            }
+            // D-133/D-134: a call to a PEP 695 generic function is resolved
+            // through call-site substitution, not through the ordinary
+            // `functions` signature -- `env.lookup_function(callee)` would
+            // otherwise see a signature still carrying `Ty::Param` and
+            // reject every real (concrete) argument as an assignability
+            // mismatch. Checked before the ordinary lookup below so this
+            // takes precedence for every generic function, including one
+            // reached recursively while inferring a nested call's own
+            // arguments (e.g. `print(identity(1))`).
+            if let Some(generic_func) = env.lookup_generic(callee) {
+                return Ok(instantiate_generic_call(generic_func, arg_tys)?.return_ty);
             }
             let Some((param_tys, return_ty)) = env.lookup_function(callee) else {
                 return Err(Diagnostic::error(
@@ -2524,7 +2603,11 @@ fn check_function_in(
     }
     let mut env = module_env.child_for_function(local_names);
     if !signature_was_registered {
-        env.bind_function(name.clone(), resolved_params.to_vec(), resolved_return.clone());
+        env.bind_function(
+            name.clone(),
+            resolved_params.to_vec(),
+            resolved_return.clone(),
+        );
     }
     for ((param_name, _), param_ty) in params.iter().zip(resolved_params.iter().cloned()) {
         env.bind(param_name.clone(), param_ty);
@@ -3112,11 +3195,455 @@ pub fn instantiate_generic_call(
     })
 }
 
+/// PR-13 Task 3 (D-133/D-134): rewrites every call site whose callee is a
+/// PEP 695 generic function into a call to that call site's mangled,
+/// monomorphized specialization, mutating `expr` and any nested
+/// sub-expression in place. Returns `expr`'s resulting `Ty` exactly like
+/// `infer_expr_in` would (the two agree on every non-generic-call
+/// expression, since this function delegates directly to `infer_expr_in`
+/// once every nested `HirExpr::Call` reachable from `expr` has already been
+/// rewritten to name only ordinary, concrete functions).
+///
+/// This does not repeat `infer_expr_in`'s own validation logic -- `env` is
+/// only ever used here to look up a call's argument types via the ordinary,
+/// unmodified `infer_expr_in`/`instantiate_generic_call`, both of which
+/// this module's callers have already run successfully once (D-133/D-134's
+/// call-arm dispatch in `infer_expr_in` itself) before this rewrite ever
+/// runs. Every `HirExpr` variant with a sub-expression is visited so a
+/// generic call nested at any depth (e.g. `print(identity(1))`) is found
+/// and rewritten; a leaf variant has nothing to recurse into and falls
+/// straight through to `infer_expr_in`.
+fn rewrite_generic_calls_in_expr(
+    env: &mut Environment,
+    local_names: &[&str],
+    expr: &mut HirExpr,
+    instantiations: &mut Vec<GenericInstantiation>,
+    seen: &mut HashSet<String>,
+) -> Result<Ty, Diagnostic> {
+    match expr {
+        HirExpr::Call { callee, args } => {
+            // Each arg's `Ty` comes directly from this same rewriting
+            // recursion's own return value -- not a second, separate
+            // `infer_expr_in` pass over the now-rewritten args -- since
+            // both would always agree (this function delegates to
+            // `infer_expr_in` for exactly the types it doesn't special-case
+            // itself) and only one needs to actually run.
+            let arg_tys = args
+                .iter_mut()
+                .map(|arg| {
+                    rewrite_generic_calls_in_expr(env, local_names, arg, instantiations, seen)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if let Some(generic_func) = env.lookup_generic(callee).cloned() {
+                let instantiation = instantiate_generic_call(&generic_func, &arg_tys)?;
+                // Registered into `env` regardless of whether this is the
+                // first call site to discover this exact specialization --
+                // this scope's own `env` may be an independent clone (e.g.
+                // a fresh `child_for_function` per function) that never
+                // observed a sibling scope's earlier registration, and a
+                // *later* expression in this same scope may itself call the
+                // now-rewritten mangled name (directly, or as a nested
+                // generic-call argument), which needs it bound to resolve
+                // as an ordinary function via `infer_expr_in`.
+                if env.lookup_function(&instantiation.mangled_name).is_none() {
+                    env.bind_function(
+                        instantiation.mangled_name.clone(),
+                        arg_tys,
+                        instantiation.return_ty.clone(),
+                    );
+                }
+                if seen.insert(instantiation.mangled_name.clone()) {
+                    instantiations.push(instantiation.clone());
+                }
+                *callee = instantiation.mangled_name;
+                return Ok(instantiation.return_ty);
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::BinOp { left, right, .. } | HirExpr::Compare { left, right, .. } => {
+            for sub in [left.as_mut(), right.as_mut()] {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::FString(parts) => {
+            for part in parts.iter_mut() {
+                if let FStringPart::Interpolation(inner) = part {
+                    rewrite_generic_calls_in_expr(env, local_names, inner, instantiations, seen)?;
+                }
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::ListLiteral(elements)
+        | HirExpr::SetLiteral(elements)
+        | HirExpr::TupleLiteral(elements) => {
+            for element in elements.iter_mut() {
+                rewrite_generic_calls_in_expr(env, local_names, element, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::DictLiteral(pairs) => {
+            for (key, value) in pairs.iter_mut() {
+                for sub in [key, value] {
+                    rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+                }
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::Subscript { base, index } => {
+            for sub in [base.as_mut(), index.as_mut()] {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => {
+            for sub in std::iter::once(base.as_mut()).chain(
+                [start, stop, step]
+                    .into_iter()
+                    .flatten()
+                    .map(|b| b.as_mut()),
+            ) {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::ListAppend { value, .. } | HirExpr::SetAdd { value, .. } => {
+            rewrite_generic_calls_in_expr(env, local_names, value, instantiations, seen)?;
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::DictGetOrDefault { key, default, .. } => {
+            for sub in [key.as_mut(), default.as_mut()] {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            infer_expr_in(env, local_names, expr)
+        }
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_)
+        | HirExpr::Name(_)
+        | HirExpr::ListPop { .. } => infer_expr_in(env, local_names, expr),
+    }
+}
+
+/// Structural counterpart to `rewrite_generic_calls_in_expr`, one level up:
+/// walks every statement position, rewriting any embedded `HirExpr` in
+/// place and growing `env`'s bindings exactly enough (a plain `env.bind`,
+/// not the validating `check_assignment`) for a later statement in the same
+/// scope to resolve a local name as a generic call's argument. No shape or
+/// assignability validation happens here -- the module already passed that
+/// validation once, via the ordinary `check`/`check_and_resolve` path that
+/// calls this function only afterward (see `monomorphize`).
+fn rewrite_generic_calls_in_stmt(
+    env: &mut Environment,
+    local_names: &[&str],
+    stmt: &mut HirStmt,
+    instantiations: &mut Vec<GenericInstantiation>,
+    seen: &mut HashSet<String>,
+) -> Result<(), Diagnostic> {
+    match stmt {
+        HirStmt::ExprStmt(expr) => {
+            rewrite_generic_calls_in_expr(env, local_names, expr, instantiations, seen)?;
+            Ok(())
+        }
+        HirStmt::Assign { target, value } => {
+            let ty = rewrite_generic_calls_in_expr(env, local_names, value, instantiations, seen)?;
+            env.bind(target.clone(), ty);
+            Ok(())
+        }
+        HirStmt::AnnAssign {
+            target,
+            annotation,
+            value,
+        } => {
+            if let Some(value) = value {
+                rewrite_generic_calls_in_expr(env, local_names, value, instantiations, seen)?;
+            }
+            env.bind(target.clone(), annotation.clone());
+            Ok(())
+        }
+        HirStmt::If { test, body, orelse } => {
+            rewrite_generic_calls_in_expr(env, local_names, test, instantiations, seen)?;
+            for s in body.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            for s in orelse.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            Ok(())
+        }
+        HirStmt::While { test, body } => {
+            rewrite_generic_calls_in_expr(env, local_names, test, instantiations, seen)?;
+            for s in body.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            Ok(())
+        }
+        HirStmt::ForRange {
+            var,
+            start,
+            stop,
+            step,
+            body,
+        } => {
+            for sub in [start, stop, step] {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            env.bind(var.clone(), Ty::Int);
+            for s in body.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            Ok(())
+        }
+        HirStmt::ForList { var, list, body } => {
+            let var_ty = match env.lookup(list) {
+                Some(Ty::List(elem)) => *elem,
+                Some(Ty::Dict(kv)) => kv.0,
+                Some(Ty::Set(elem)) => *elem,
+                _ => {
+                    // Already validated as iterable by the ordinary check
+                    // pass that ran before `monomorphize`; a scalar or
+                    // missing binding here would mean that validation was
+                    // skipped, which no public entry point allows.
+                    Ty::Infer
+                }
+            };
+            env.bind(var.clone(), var_ty);
+            for s in body.iter_mut() {
+                rewrite_generic_calls_in_stmt(env, local_names, s, instantiations, seen)?;
+            }
+            Ok(())
+        }
+        HirStmt::DictSet { key, value, .. } => {
+            for sub in [key, value] {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            Ok(())
+        }
+        HirStmt::ListCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt,
+        } => {
+            let var_ty = rewrite_comp_iter(env, local_names, iter, instantiations, seen)?;
+            env.bind(var.clone(), var_ty);
+            for sub in cond
+                .iter_mut()
+                .map(|c| c.as_mut())
+                .chain(std::iter::once(elt.as_mut()))
+            {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            env.bind(target.clone(), Ty::List(Box::new(Ty::Int)));
+            Ok(())
+        }
+        HirStmt::SetCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            elt,
+        } => {
+            let var_ty = rewrite_comp_iter(env, local_names, iter, instantiations, seen)?;
+            env.bind(var.clone(), var_ty);
+            for sub in cond
+                .iter_mut()
+                .map(|c| c.as_mut())
+                .chain(std::iter::once(elt.as_mut()))
+            {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            env.bind(target.clone(), Ty::Set(Box::new(Ty::Int)));
+            Ok(())
+        }
+        HirStmt::DictCompAssign {
+            target,
+            var,
+            iter,
+            cond,
+            key,
+            value,
+        } => {
+            let var_ty = rewrite_comp_iter(env, local_names, iter, instantiations, seen)?;
+            env.bind(var.clone(), var_ty);
+            for sub in cond
+                .iter_mut()
+                .map(|c| c.as_mut())
+                .chain([key.as_mut(), value.as_mut()])
+            {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            env.bind(target.clone(), Ty::Dict(Box::new((Ty::Str, Ty::Int))));
+            Ok(())
+        }
+        HirStmt::Return(value) => {
+            if let Some(value) = value {
+                rewrite_generic_calls_in_expr(env, local_names, value, instantiations, seen)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// `CompIter`'s own rewrite counterpart -- mirrors `resolve_comp_iter`
+/// exactly (same three iterable shapes, same resulting loop-variable `Ty`),
+/// but also rewrites any generic call reachable from a `CompIter::Range`
+/// bound, which `resolve_comp_iter` (a read-only helper reused as-is
+/// elsewhere in this file) has no reason to do.
+fn rewrite_comp_iter(
+    env: &mut Environment,
+    local_names: &[&str],
+    iter: &mut CompIter,
+    instantiations: &mut Vec<GenericInstantiation>,
+    seen: &mut HashSet<String>,
+) -> Result<Ty, Diagnostic> {
+    match iter {
+        CompIter::Range { start, stop, step } => {
+            for sub in [start, stop, step] {
+                rewrite_generic_calls_in_expr(env, local_names, sub, instantiations, seen)?;
+            }
+            Ok(Ty::Int)
+        }
+        CompIter::Name(name) => match env.lookup(name) {
+            Some(Ty::List(elem)) => Ok(*elem),
+            Some(Ty::Dict(kv)) => Ok(kv.0),
+            Some(Ty::Set(elem)) => Ok(*elem),
+            // Already validated as iterable before `monomorphize` ever
+            // runs; see `ForList`'s own fallback above.
+            _ => Ok(Ty::Infer),
+        },
+    }
+}
+
+/// PR-13 Task 3 (D-133/D-134): the monomorphization pass that turns a
+/// validated module possibly containing PEP 695 generic functions into an
+/// equivalent module containing only ordinary, concrete-`Ty` functions --
+/// exactly what `pycc_mir::build` already expects, with no MIR/codegen
+/// change needed for genericity itself. Every call site whose callee was a
+/// generic function is rewritten to call that call site's mangled,
+/// monomorphized specialization instead; two call sites resolving the same
+/// type parameter to the same concrete `Ty` share one specialization
+/// (deduplicated by `GenericInstantiation::mangled_name`, per
+/// `instantiate_generic_call`'s own documented dedup guarantee). Every
+/// original generic function itself is dropped -- it still carries
+/// `Ty::Param`, which must never reach `pycc_mir` -- and each distinct
+/// specialization is appended as an ordinary `HirItem::Function`, in the
+/// order its first call site was encountered (module item order, depth
+/// first through each function body).
+///
+/// Callers must have already validated `hir` (e.g. via `check` or
+/// `checked_function_signatures`, both of which now dispatch a generic call
+/// site through `instantiate_generic_call` themselves via
+/// `infer_expr_in`'s own generic arm) -- this pass performs no validation
+/// of its own and instead trusts that every generic call site it encounters
+/// resolves successfully.
+fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
+    let generics: HashMap<String, HirItem> = hir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            HirItem::Function {
+                name,
+                params,
+                return_ty,
+                ..
+            } if is_generic_signature(params, return_ty) => Some((name.clone(), item.clone())),
+            _ => None,
+        })
+        .collect();
+    if generics.is_empty() {
+        return Ok(hir.clone());
+    }
+
+    let mut env = Environment::new();
+    for item in &hir.items {
+        if let HirItem::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } = item
+        {
+            let param_tys = params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>();
+            env.bind_function(name.clone(), param_tys, return_ty.clone());
+        }
+    }
+    for (name, item) in &generics {
+        env.bind_generic(name.clone(), item.clone());
+    }
+
+    let function_local_names = module_function_local_names(hir);
+    let mut instantiations: Vec<GenericInstantiation> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut items = Vec::with_capacity(hir.items.len());
+    for (item, local_names) in hir.items.iter().zip(&function_local_names) {
+        match item {
+            HirItem::Function { name, .. } if generics.contains_key(name) => {
+                // Dropped: this is the original, un-substituted generic
+                // function -- only its concrete specializations (appended
+                // below) may reach `pycc_mir`.
+            }
+            HirItem::Function {
+                name,
+                params,
+                return_ty,
+                body,
+            } => {
+                let mut fn_env = env.child_for_function(local_names);
+                for (param_name, param_ty) in params {
+                    fn_env.bind(param_name.clone(), param_ty.clone());
+                }
+                let mut new_body = body.clone();
+                for stmt in new_body.iter_mut() {
+                    rewrite_generic_calls_in_stmt(
+                        &mut fn_env,
+                        local_names,
+                        stmt,
+                        &mut instantiations,
+                        &mut seen,
+                    )?;
+                }
+                items.push(HirItem::Function {
+                    name: name.clone(),
+                    params: params.clone(),
+                    return_ty: return_ty.clone(),
+                    body: new_body,
+                });
+            }
+            HirItem::TopLevelStmt(stmt) => {
+                let mut new_stmt = stmt.clone();
+                rewrite_generic_calls_in_stmt(
+                    &mut env,
+                    local_names,
+                    &mut new_stmt,
+                    &mut instantiations,
+                    &mut seen,
+                )?;
+                items.push(HirItem::TopLevelStmt(new_stmt));
+            }
+        }
+    }
+    for instantiation in instantiations {
+        items.push(instantiation.specialized);
+    }
+    Ok(HirModule { items })
+}
+
 /// Type-checks a module and returns a cloned HIR whose function signatures
 /// contain only the concrete types resolved by private-helper inference.
 /// Consumers after the type boundary must use this module rather than the
 /// unresolved lowering result so `Ty::Infer` can never leak into MIR or code
-/// generation.
+/// generation. PR-13 Task 3 (D-133/D-134): also monomorphizes every PEP 695
+/// generic function call site into a call to a concrete, mangled
+/// specialization (see `monomorphize`) -- the returned module contains only
+/// ordinary concrete-`Ty` functions, exactly what `pycc_mir::build` expects.
 pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     let function_local_names = module_function_local_names(hir);
     let signatures = checked_function_signatures(hir, &function_local_names)?;
@@ -3141,7 +3668,7 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         *return_ty = resolved_return.clone();
     }
 
-    Ok(resolved_hir)
+    monomorphize(&resolved_hir)
 }
 
 fn check_with_signatures(
@@ -3156,10 +3683,26 @@ fn check_with_signatures(
     // code and other function bodies (D-040) both need to see every
     // function regardless of its position in the file.
     for item in &hir.items {
-        if let HirItem::Function { name, .. } = item {
+        if let HirItem::Function {
+            name,
+            params,
+            return_ty: item_return_ty,
+            ..
+        } = item
+        {
             let (param_tys, return_ty) = signatures
                 .get(name)
                 .expect("every HIR function received an inferred signature");
+            // D-133/D-134: a generic function's *original* body (still
+            // carrying `Ty::Param`) is registered separately so a call
+            // site can be resolved via `instantiate_generic_call` --
+            // `signatures` itself already carries the same `Ty::Param`
+            // entries (never `Ty::Infer`, so it survives both the
+            // concrete-fast-path and solver-inferred paths unchanged), but
+            // has no room for the body substitution needs.
+            if is_generic_signature(params, item_return_ty) {
+                env.bind_generic(name.clone(), item.clone());
+            }
             env.bind_function(name.clone(), param_tys.clone(), return_ty.clone());
         }
     }
@@ -3200,8 +3743,22 @@ fn check_with_environment(
     // body when it's *called*, typically after the module has finished
     // running top to bottom.
     for (item, local_names) in hir.items.iter().zip(function_local_names) {
-        if let HirItem::Function { .. } = item {
-            check_function_in(&env, item, local_names)?;
+        if let HirItem::Function {
+            params, return_ty, ..
+        } = item
+        {
+            // D-133/D-134: a generic function's body is checked through
+            // `check_generic_function` (the shape gate plus the same,
+            // unmodified `check_function` body check), not through the
+            // ordinary sibling-aware `check_function_in` -- Task 2 scoped
+            // `check_generic_function` to a standalone check (no module
+            // env), matching the fact that a generic function's own type
+            // parameter has no meaning to resolve against sibling globals.
+            if is_generic_signature(params, return_ty) {
+                check_generic_function(item)?;
+            } else {
+                check_function_in(&env, item, local_names)?;
+            }
         }
     }
     Ok(())
@@ -10086,7 +10643,10 @@ mod tests {
     #[test]
     fn tuple_index_with_a_non_literal_expression_is_rejected_as_t0040() {
         let mut env = Environment::new();
-        env.bind("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])));
+        env.bind(
+            "t".to_string(),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])),
+        );
         env.bind("i".to_string(), Ty::Int);
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::Name("t".to_string())),
@@ -10103,7 +10663,10 @@ mod tests {
     #[test]
     fn tuple_index_out_of_range_is_rejected_as_t0040() {
         let mut env = Environment::new();
-        env.bind("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])));
+        env.bind(
+            "t".to_string(),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])),
+        );
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::Name("t".to_string())),
             index: Box::new(HirExpr::IntLiteral(5)),
@@ -10115,7 +10678,10 @@ mod tests {
     #[test]
     fn a_negative_literal_tuple_index_is_rejected_as_t0040() {
         let mut env = Environment::new();
-        env.bind("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])));
+        env.bind(
+            "t".to_string(),
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Bool])),
+        );
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::Name("t".to_string())),
             index: Box::new(HirExpr::IntLiteral(-1)),
@@ -10152,8 +10718,7 @@ mod tests {
     }
 
     #[test]
-    fn constraint_collection_treats_a_tuple_literal_as_unconstrained_but_recurses_into_elements()
-    {
+    fn constraint_collection_treats_a_tuple_literal_as_unconstrained_but_recurses_into_elements() {
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
@@ -11621,7 +12186,10 @@ mod tests {
         };
         let err = infer_expr(&env, &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
-        assert!(err.message.contains("argument 1 of `identity` expects `float`, got `int`"));
+        assert!(
+            err.message
+                .contains("argument 1 of `identity` expects `float`, got `int`")
+        );
     }
 
     #[test]
@@ -13697,7 +14265,15 @@ mod tests {
             "test",
         )
         .unwrap();
-        unify_terms(typed, empty.clone(), &mut parents, &mut concrete, "T0021", "test").unwrap();
+        unify_terms(
+            typed,
+            empty.clone(),
+            &mut parents,
+            &mut concrete,
+            "T0021",
+            "test",
+        )
+        .unwrap();
         assert_eq!(resolved_term(empty, &mut parents, &concrete), Some(Ty::Str));
 
         let conflicting_left = fresh_term(&mut parents, &mut concrete);
@@ -14012,10 +14588,7 @@ mod tests {
             name: "f".to_string(),
             params: vec![(
                 "d".to_string(),
-                Ty::Dict(Box::new((
-                    Ty::Param(Box::new("T".to_string())),
-                    Ty::Str,
-                ))),
+                Ty::Dict(Box::new((Ty::Param(Box::new("T".to_string())), Ty::Str))),
             )],
             return_ty: Ty::None,
             body: vec![HirStmt::Return(None)],
@@ -14033,10 +14606,7 @@ mod tests {
             name: "f".to_string(),
             params: vec![(
                 "d".to_string(),
-                Ty::Dict(Box::new((
-                    Ty::Str,
-                    Ty::Param(Box::new("T".to_string())),
-                ))),
+                Ty::Dict(Box::new((Ty::Str, Ty::Param(Box::new("T".to_string()))))),
             )],
             return_ty: Ty::None,
             body: vec![HirStmt::Return(None)],
@@ -14089,7 +14659,10 @@ mod tests {
             name: "f".to_string(),
             params: vec![(
                 "t".to_string(),
-                Ty::Tuple(Box::new(vec![Ty::Int, Ty::Param(Box::new("T".to_string()))])),
+                Ty::Tuple(Box::new(vec![
+                    Ty::Int,
+                    Ty::Param(Box::new("T".to_string())),
+                ])),
             )],
             return_ty: Ty::None,
             body: vec![HirStmt::Return(None)],
@@ -14108,10 +14681,7 @@ mod tests {
         // element raising `T0042`).
         let func = HirItem::Function {
             name: "f".to_string(),
-            params: vec![(
-                "t".to_string(),
-                Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])),
-            )],
+            params: vec![("t".to_string(), Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])))],
             return_ty: Ty::None,
             body: vec![HirStmt::Return(None)],
         };
@@ -14140,10 +14710,7 @@ mod tests {
             instantiation.specialized,
             HirItem::Function {
                 name: "0gen_f__T_str".to_string(),
-                params: vec![
-                    ("x".to_string(), Ty::Str),
-                    ("n".to_string(), Ty::Int),
-                ],
+                params: vec![("x".to_string(), Ty::Str), ("n".to_string(), Ty::Int),],
                 return_ty: Ty::Str,
                 body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
             }
@@ -14175,8 +14742,7 @@ mod tests {
         // passing a `list[int]` value where `T` is inferred).
         let param = Ty::Param(Box::new("T".to_string()));
         let func = generic_identity_fn(param.clone(), param);
-        let err =
-            instantiate_generic_call(&func, &[Ty::List(Box::new(Ty::Int))]).unwrap_err();
+        let err = instantiate_generic_call(&func, &[Ty::List(Box::new(Ty::Int))]).unwrap_err();
         assert_eq!(err.code, "T0042");
     }
 
@@ -14264,5 +14830,1210 @@ mod tests {
         };
         let err = instantiate_generic_call(&func, &[Ty::List(Box::new(Ty::Int))]).unwrap_err();
         assert_eq!(err.code, "T0042");
+    }
+
+    // PR-13 Task 3 (D-133/D-134): full pipeline wiring -- `check`/
+    // `check_and_resolve` dispatching a generic call site through
+    // `instantiate_generic_call`, and `check_and_resolve`'s own
+    // `monomorphize` pass rewriting call sites and dropping/appending
+    // items so `pycc_mir::build` only ever sees ordinary concrete
+    // functions.
+
+    fn find_function<'a>(module: &'a HirModule, name: &str) -> Option<&'a HirItem> {
+        module
+            .items
+            .iter()
+            .find(|item| matches!(item, HirItem::Function { name: n, .. } if n == name))
+    }
+
+    fn count_function(module: &HirModule, name: &str) -> usize {
+        module
+            .items
+            .iter()
+            .filter(|item| matches!(item, HirItem::Function { name: n, .. } if n == name))
+            .count()
+    }
+
+    #[test]
+    fn check_alone_type_checks_a_module_containing_a_valid_generic_function() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let top = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            }],
+        }));
+        let hir = HirModule {
+            items: vec![identity, top],
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn check_reports_the_same_generic_diagnostic_as_check_and_resolve() {
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+                ("y".to_string(), Ty::Param(Box::new("U".to_string()))),
+            ],
+            return_ty: Ty::Param(Box::new("T".to_string())),
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let hir = HirModule { items: vec![func] };
+        assert_eq!(check(&hir).unwrap_err().code, "T0042");
+        assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
+    }
+
+    #[test]
+    fn check_and_resolve_rejects_a_generic_call_site_with_the_wrong_arity() {
+        // Exercises `infer_expr_in`'s own generic-dispatch arm propagating
+        // an `instantiate_generic_call` error (as opposed to
+        // `check_generic_function`'s shape gate, covered by the sibling
+        // test above) through both public entry points.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let top = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "identity".to_string(),
+            args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+        }));
+        let hir = HirModule {
+            items: vec![identity.clone(), top.clone()],
+        };
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+        let hir = HirModule {
+            items: vec![identity, top],
+        };
+        assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn check_and_resolve_rejects_a_type_parameter_nested_in_a_parameter_container() {
+        let func = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![(
+                "xs".to_string(),
+                Ty::List(Box::new(Ty::Param(Box::new("T".to_string())))),
+            )],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let hir = HirModule { items: vec![func] };
+        assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
+    }
+
+    #[test]
+    fn ty_contains_param_detects_a_param_nested_in_every_container_shape() {
+        let t = Ty::Param(Box::new("T".to_string()));
+        assert!(ty_contains_param(&t));
+        assert!(ty_contains_param(&Ty::List(Box::new(t.clone()))));
+        assert!(ty_contains_param(&Ty::Set(Box::new(t.clone()))));
+        assert!(ty_contains_param(&Ty::Dict(Box::new((Ty::Str, t.clone())))));
+        assert!(ty_contains_param(&Ty::Dict(Box::new((t.clone(), Ty::Int)))));
+        assert!(ty_contains_param(&Ty::Tuple(Box::new(vec![
+            Ty::Int,
+            t.clone()
+        ]))));
+        assert!(!ty_contains_param(&Ty::Int));
+        assert!(!ty_contains_param(&Ty::Tuple(Box::new(vec![
+            Ty::Int,
+            Ty::Str
+        ]))));
+    }
+
+    #[test]
+    fn is_generic_signature_detects_a_param_nested_in_a_parameter_container() {
+        assert!(is_generic_signature(
+            &[(
+                "xs".to_string(),
+                Ty::List(Box::new(Ty::Param(Box::new("T".to_string()))))
+            )],
+            &Ty::None,
+        ));
+        assert!(is_generic_signature(
+            &[],
+            &Ty::List(Box::new(Ty::Param(Box::new("T".to_string()))))
+        ));
+        assert!(!is_generic_signature(
+            &[("x".to_string(), Ty::Int)],
+            &Ty::Int
+        ));
+    }
+
+    #[test]
+    fn check_and_resolve_monomorphizes_a_nested_generic_call_and_drops_the_original() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let hir = HirModule {
+            items: vec![
+                identity,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    }],
+                })),
+            ],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(find_function(&resolved, "identity").is_none());
+        assert!(find_function(&resolved, "0gen_identity__T_int").is_some());
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+        // Compared against the whole expected statement (not a
+        // `let-else { panic!() }` destructure) so the never-taken failure
+        // arm isn't its own uncovered branch -- mirrors this file's
+        // existing convention (see Task 2's own note on `unreachable!()` in
+        // test bodies).
+        assert_eq!(
+            resolved.items[0],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "0gen_identity__T_int".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                }],
+            }))
+        );
+    }
+
+    #[test]
+    fn check_and_resolve_dedupes_two_call_sites_with_the_same_concrete_type() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let use_twice = HirItem::Function {
+            name: "use_twice".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![
+                HirStmt::Assign {
+                    target: "a".to_string(),
+                    value: HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                },
+                HirStmt::Assign {
+                    target: "b".to_string(),
+                    value: HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(2)],
+                    },
+                },
+                HirStmt::Return(Some(HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("a".to_string())),
+                    right: Box::new(HirExpr::Name("b".to_string())),
+                })),
+            ],
+        };
+        let top = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(3)],
+            }],
+        }));
+        let hir = HirModule {
+            items: vec![identity, use_twice, top],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_monomorphizes_a_generic_function_alongside_an_inferred_private_helper() {
+        // `_helper`'s own `Ty::Infer` signature defeats `concrete_function_environment`/
+        // `concrete_function_signatures`'s fast path, forcing the solver-inferred
+        // path -- this exercises `check_with_signatures`'s own `bind_generic`
+        // registration (the fast path's registration lives in
+        // `concrete_function_environment` instead, already covered by every
+        // other test in this group).
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        // `_helper`'s call site deliberately does not itself involve a
+        // generic call -- the solver path's own constraint collection
+        // (`collect_expr_constraints`, a separate implementation from
+        // `infer_expr_in`) has no generic-call dispatch of its own, so
+        // mixing the two would exercise a distinct, unrelated gap rather
+        // than the `bind_generic` registration this test targets.
+        let helper = HirItem::Function {
+            name: "_helper".to_string(),
+            params: vec![("v".to_string(), Ty::Infer)],
+            return_ty: Ty::Infer,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("v".to_string())))],
+        };
+        let use_helper = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "_helper".to_string(),
+            args: vec![HirExpr::IntLiteral(5)],
+        }));
+        let top = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            }],
+        }));
+        let hir = HirModule {
+            items: vec![identity, helper, use_helper, top],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(find_function(&resolved, "identity").is_none());
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_binop_and_compare() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::Call {
+                    callee: "identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                }),
+                right: Box::new(HirExpr::IntLiteral(2)),
+            }))],
+        };
+        let g = HirItem::Function {
+            name: "g".to_string(),
+            params: vec![],
+            return_ty: Ty::Bool,
+            body: vec![HirStmt::Return(Some(HirExpr::Compare {
+                op: CmpOpKind::Eq,
+                left: Box::new(HirExpr::Call {
+                    callee: "identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                }),
+                right: Box::new(HirExpr::IntLiteral(2)),
+            }))],
+        };
+        let hir = HirModule {
+            items: vec![identity, f, g],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_a_generic_call_inside_an_fstring_interpolation() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::Str,
+            body: vec![HirStmt::Return(Some(HirExpr::FString(vec![
+                FStringPart::Literal("x=".to_string()),
+                FStringPart::Interpolation(Box::new(HirExpr::Call {
+                    callee: "identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+            ])))],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_list_set_and_tuple_literals() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    }]),
+                },
+                HirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: HirExpr::SetLiteral(vec![HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(2)],
+                    }]),
+                },
+                HirStmt::Assign {
+                    target: "zs".to_string(),
+                    value: HirExpr::TupleLiteral(vec![
+                        HirExpr::Call {
+                            callee: "identity".to_string(),
+                            args: vec![HirExpr::IntLiteral(3)],
+                        },
+                        HirExpr::IntLiteral(4),
+                    ]),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_a_generic_call_inside_a_dict_literal() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::DictLiteral(vec![(
+                    HirExpr::StringLiteral("a".to_string()),
+                    HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                )]),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_subscript_and_slice() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                        HirExpr::IntLiteral(3),
+                    ]),
+                },
+                HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::Subscript {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        index: Box::new(HirExpr::Call {
+                            callee: "identity".to_string(),
+                            args: vec![HirExpr::IntLiteral(0)],
+                        }),
+                    },
+                },
+                HirStmt::Assign {
+                    target: "z".to_string(),
+                    value: HirExpr::Slice {
+                        base: Box::new(HirExpr::Name("xs".to_string())),
+                        start: Some(Box::new(HirExpr::Call {
+                            callee: "identity".to_string(),
+                            args: vec![HirExpr::IntLiteral(0)],
+                        })),
+                        stop: Some(Box::new(HirExpr::IntLiteral(2))),
+                        step: None,
+                    },
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_list_append_and_set_add() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                },
+                HirStmt::Assign {
+                    target: "ys".to_string(),
+                    value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]),
+                },
+                HirStmt::ExprStmt(HirExpr::ListAppend {
+                    list: "xs".to_string(),
+                    value: Box::new(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(2)],
+                    }),
+                }),
+                HirStmt::ExprStmt(HirExpr::SetAdd {
+                    set: "ys".to_string(),
+                    value: Box::new(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(3)],
+                    }),
+                }),
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_dict_get_or_default() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                },
+                HirStmt::Assign {
+                    target: "v".to_string(),
+                    value: HirExpr::DictGetOrDefault {
+                        dict: "d".to_string(),
+                        key: Box::new(HirExpr::Call {
+                            callee: "identity".to_string(),
+                            args: vec![HirExpr::StringLiteral("a".to_string())],
+                        }),
+                        default: Box::new(HirExpr::Call {
+                            callee: "identity".to_string(),
+                            args: vec![HirExpr::IntLiteral(0)],
+                        }),
+                    },
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_if_while_and_for_range() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::If {
+                    test: HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::BoolLiteral(true)],
+                    },
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    })],
+                    orelse: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(2)],
+                    })],
+                },
+                HirStmt::While {
+                    test: HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::BoolLiteral(false)],
+                    },
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(3)],
+                    })],
+                },
+                HirStmt::ForRange {
+                    var: "i".to_string(),
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(3)],
+                    },
+                    step: HirExpr::IntLiteral(1),
+                    body: vec![HirStmt::ExprStmt(HirExpr::Name("i".to_string()))],
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_bool"), 1);
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_a_generic_call_inside_for_list_over_a_list() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                },
+                HirStmt::ForList {
+                    var: "x".to_string(),
+                    list: "xs".to_string(),
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::Name("x".to_string())],
+                    })],
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_a_generic_call_inside_for_list_over_a_dict() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                },
+                HirStmt::ForList {
+                    var: "k".to_string(),
+                    list: "d".to_string(),
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::Name("k".to_string())],
+                    })],
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_a_generic_call_inside_for_list_over_a_set() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "s".to_string(),
+                    value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]),
+                },
+                HirStmt::ForList {
+                    var: "x".to_string(),
+                    list: "s".to_string(),
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::Name("x".to_string())],
+                    })],
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_ann_assign_with_and_without_a_value() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AnnAssign {
+                    target: "y".to_string(),
+                    annotation: Ty::Int,
+                    value: None,
+                },
+                HirStmt::AnnAssign {
+                    target: "z".to_string(),
+                    annotation: Ty::Int,
+                    value: Some(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    }),
+                },
+                HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_a_dict_set_statement() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::DictLiteral(vec![(
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    )]),
+                },
+                HirStmt::DictSet {
+                    dict: "d".to_string(),
+                    key: HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::StringLiteral("b".to_string())],
+                    },
+                    value: HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(2)],
+                    },
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_rewrites_generic_calls_inside_comprehension_assignments() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::ListCompAssign {
+                    target: "xs".to_string(),
+                    var: "0comp_v".to_string(),
+                    iter: CompIter::Range {
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::Call {
+                            callee: "identity".to_string(),
+                            args: vec![HirExpr::IntLiteral(3)],
+                        },
+                        step: HirExpr::IntLiteral(1),
+                    },
+                    cond: Some(Box::new(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::BoolLiteral(true)],
+                    })),
+                    elt: Box::new(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::Name("0comp_v".to_string())],
+                    }),
+                },
+                HirStmt::SetCompAssign {
+                    target: "ys".to_string(),
+                    var: "0comp_w".to_string(),
+                    iter: CompIter::Name("xs".to_string()),
+                    cond: Some(Box::new(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::BoolLiteral(true)],
+                    })),
+                    elt: Box::new(HirExpr::Name("0comp_w".to_string())),
+                },
+                HirStmt::DictCompAssign {
+                    target: "zs".to_string(),
+                    var: "0comp_u".to_string(),
+                    iter: CompIter::Name("ys".to_string()),
+                    cond: Some(Box::new(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::BoolLiteral(false)],
+                    })),
+                    key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                    value: Box::new(HirExpr::Name("0comp_u".to_string())),
+                },
+                HirStmt::SetCompAssign {
+                    target: "ks".to_string(),
+                    var: "0comp_p".to_string(),
+                    iter: CompIter::Name("zs".to_string()),
+                    cond: None,
+                    elt: Box::new(HirExpr::IntLiteral(1)),
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+        assert_eq!(count_function(&resolved, "0gen_identity__T_bool"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_leaves_a_list_pop_expression_untouched_as_a_structural_leaf() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                },
+                HirStmt::ExprStmt(HirExpr::ListPop {
+                    list: "xs".to_string(),
+                }),
+                HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(2)],
+                }),
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn monomorphize_propagates_an_instantiation_error_from_inside_a_function_body() {
+        // Bypasses ordinary validation deliberately, same rationale as the
+        // `ForList`/`CompIter` defensive-fallback tests above: a real
+        // program with this wrong-arity call would already be rejected by
+        // `check`/`check_and_resolve` before `monomorphize` ever ran. This
+        // exercises the `?` propagation out of `rewrite_generic_calls_in_stmt`
+        // inside `monomorphize`'s own `HirItem::Function` branch.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+            })],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn monomorphize_propagates_an_instantiation_error_from_a_top_level_statement() {
+        // Same rationale as the function-body variant above, for
+        // `monomorphize`'s `HirItem::TopLevelStmt` branch.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let top = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "identity".to_string(),
+            args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+        }));
+        let hir = HirModule {
+            items: vec![identity, top],
+        };
+        assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn monomorphize_propagates_an_instantiation_error_from_a_dict_comp_assign_cond() {
+        // Bypasses ordinary validation deliberately, same rationale as the
+        // other direct `monomorphize` tests in this group -- exercises the
+        // `?` propagation out of `rewrite_generic_calls_in_stmt`'s
+        // `DictCompAssign` arm specifically for its `cond` sub-expression.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+                },
+                HirStmt::DictCompAssign {
+                    target: "zs".to_string(),
+                    var: "0comp_v".to_string(),
+                    iter: CompIter::Name("xs".to_string()),
+                    cond: Some(Box::new(HirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+                    })),
+                    key: Box::new(HirExpr::StringLiteral("k".to_string())),
+                    value: Box::new(HirExpr::IntLiteral(1)),
+                },
+            ],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
+    }
+
+    /// A generic call that always fails `instantiate_generic_call` with
+    /// `T0021` (wrong arity) -- used throughout the error-propagation group
+    /// below to prove every structural recursion position in
+    /// `rewrite_generic_calls_in_expr`/`rewrite_generic_calls_in_stmt`/
+    /// `rewrite_comp_iter` actually propagates a nested failure instead of
+    /// silently swallowing it.
+    fn bad_generic_call() -> HirExpr {
+        HirExpr::Call {
+            callee: "identity".to_string(),
+            args: vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)],
+        }
+    }
+
+    fn assert_monomorphize_propagates_error(body: Vec<HirStmt>) {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body,
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        assert_eq!(monomorphize(&hir).unwrap_err().code, "T0021");
+    }
+
+    // PR-13 Task 3: every structural recursion position in
+    // `rewrite_generic_calls_in_expr`/`rewrite_generic_calls_in_stmt`/
+    // `rewrite_comp_iter` needs its own covering error-propagation case for
+    // the 100%-region D-014 gate -- grouped into a few multi-assertion
+    // tests (rather than one `#[test]` per position) since each case is a
+    // one-line `bad_generic_call()` substitution, not independent behavior
+    // worth its own test name.
+
+    #[test]
+    fn rewrite_generic_calls_in_expr_propagates_errors_from_every_recursive_position() {
+        // `Call` args (line ~3213) and the `arg_tys` collection step (~3219,
+        // via an unresolved argument name rather than `instantiate_generic_call`
+        // itself).
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "identity".to_string(),
+            args: vec![bad_generic_call()],
+        })]);
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::Call {
+            callee: "identity".to_string(),
+            args: vec![HirExpr::Name("undefined".to_string())],
+        })]);
+        // `BinOp`/`Compare`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::BinOp {
+            op: BinOpKind::Add,
+            left: Box::new(bad_generic_call()),
+            right: Box::new(HirExpr::IntLiteral(1)),
+        })]);
+        // `FString`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::FString(vec![
+            FStringPart::Interpolation(Box::new(bad_generic_call())),
+        ]))]);
+        // `ListLiteral`/`SetLiteral`/`TupleLiteral`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::ListLiteral(vec![
+            bad_generic_call(),
+        ]))]);
+        // `DictLiteral`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::DictLiteral(vec![
+            (HirExpr::StringLiteral("a".to_string()), bad_generic_call()),
+        ]))]);
+        // `Subscript`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::Subscript {
+            base: Box::new(bad_generic_call()),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        })]);
+        // `Slice`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::Slice {
+            base: Box::new(bad_generic_call()),
+            start: None,
+            stop: None,
+            step: None,
+        })]);
+        // `ListAppend`/`SetAdd`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::ListAppend {
+            list: "xs".to_string(),
+            value: Box::new(bad_generic_call()),
+        })]);
+        // `DictGetOrDefault`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
+            dict: "d".to_string(),
+            key: Box::new(bad_generic_call()),
+            default: Box::new(HirExpr::IntLiteral(0)),
+        })]);
+    }
+
+    #[test]
+    fn rewrite_generic_calls_in_stmt_propagates_errors_from_every_recursive_position() {
+        // `Assign`.
+        assert_monomorphize_propagates_error(vec![HirStmt::Assign {
+            target: "y".to_string(),
+            value: bad_generic_call(),
+        }]);
+        // `AnnAssign` (`Some(value)`).
+        assert_monomorphize_propagates_error(vec![HirStmt::AnnAssign {
+            target: "y".to_string(),
+            annotation: Ty::Int,
+            value: Some(bad_generic_call()),
+        }]);
+        // `If`'s own `test`, `body`, and `orelse`.
+        assert_monomorphize_propagates_error(vec![HirStmt::If {
+            test: bad_generic_call(),
+            body: vec![],
+            orelse: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ExprStmt(bad_generic_call())],
+            orelse: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![],
+            orelse: vec![HirStmt::ExprStmt(bad_generic_call())],
+        }]);
+        // `While`'s own `test` and `body`.
+        assert_monomorphize_propagates_error(vec![HirStmt::While {
+            test: bad_generic_call(),
+            body: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::While {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ExprStmt(bad_generic_call())],
+        }]);
+        // `ForRange`'s own bounds and `body`.
+        assert_monomorphize_propagates_error(vec![HirStmt::ForRange {
+            var: "i".to_string(),
+            start: bad_generic_call(),
+            stop: HirExpr::IntLiteral(1),
+            step: HirExpr::IntLiteral(1),
+            body: vec![],
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(1),
+            step: HirExpr::IntLiteral(1),
+            body: vec![HirStmt::ExprStmt(bad_generic_call())],
+        }]);
+        // `ForList`'s own `body`.
+        assert_monomorphize_propagates_error(vec![
+            HirStmt::Assign {
+                target: "xs".to_string(),
+                value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]),
+            },
+            HirStmt::ForList {
+                var: "x".to_string(),
+                list: "xs".to_string(),
+                body: vec![HirStmt::ExprStmt(bad_generic_call())],
+            },
+        ]);
+        // `DictSet`'s own `key`/`value`.
+        assert_monomorphize_propagates_error(vec![
+            HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::DictLiteral(vec![(
+                    HirExpr::StringLiteral("a".to_string()),
+                    HirExpr::IntLiteral(1),
+                )]),
+            },
+            HirStmt::DictSet {
+                dict: "d".to_string(),
+                key: bad_generic_call(),
+                value: HirExpr::IntLiteral(1),
+            },
+        ]);
+        // `ListCompAssign`/`SetCompAssign`/`DictCompAssign`'s own
+        // `rewrite_comp_iter` propagation (a bad `CompIter::Range` bound)
+        // and their own `cond`/`elt`/`key`/`value` propagation.
+        assert_monomorphize_propagates_error(vec![HirStmt::ListCompAssign {
+            target: "xs".to_string(),
+            var: "v".to_string(),
+            iter: CompIter::Range {
+                start: bad_generic_call(),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::ListCompAssign {
+            target: "xs".to_string(),
+            var: "v".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(bad_generic_call()),
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::SetCompAssign {
+            target: "xs".to_string(),
+            var: "v".to_string(),
+            iter: CompIter::Range {
+                start: bad_generic_call(),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::SetCompAssign {
+            target: "xs".to_string(),
+            var: "v".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(bad_generic_call()),
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::DictCompAssign {
+            target: "xs".to_string(),
+            var: "v".to_string(),
+            iter: CompIter::Range {
+                start: bad_generic_call(),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            key: Box::new(HirExpr::StringLiteral("k".to_string())),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        }]);
+        assert_monomorphize_propagates_error(vec![HirStmt::DictCompAssign {
+            target: "xs".to_string(),
+            var: "v".to_string(),
+            iter: CompIter::Range {
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(1),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            key: Box::new(bad_generic_call()),
+            value: Box::new(HirExpr::IntLiteral(1)),
+        }]);
+        // `Return(Some(value))`.
+        assert_monomorphize_propagates_error(vec![HirStmt::Return(Some(bad_generic_call()))]);
+    }
+
+    #[test]
+    fn monomorphize_defends_a_for_list_over_a_non_container_binding_defensively() {
+        // Bypasses ordinary validation deliberately -- `for x in xs` where
+        // `xs: int` would already be rejected by `check`/`check_and_resolve`
+        // before `monomorphize` ever ran. Calling `monomorphize` directly
+        // exercises its own defensive fallback for an already-invalid
+        // binding, matching this file's existing "defense in depth" test
+        // convention (see e.g. `instantiate_generic_call_rejects_two_distinct_type_parameters`).
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("xs".to_string(), Ty::Int)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ForList {
+                var: "x".to_string(),
+                list: "xs".to_string(),
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })],
+            }],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = monomorphize(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn monomorphize_defends_a_comprehension_over_a_non_container_binding_defensively() {
+        // Same defensive-fallback rationale as the `ForList` test above,
+        // for `rewrite_comp_iter`'s own `CompIter::Name` fallback arm.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let f = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![("xs".to_string(), Ty::Int)],
+            return_ty: Ty::None,
+            body: vec![HirStmt::ListCompAssign {
+                target: "ys".to_string(),
+                var: "0comp_v".to_string(),
+                iter: CompIter::Name("xs".to_string()),
+                cond: None,
+                elt: Box::new(HirExpr::Call {
+                    callee: "identity".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                }),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![identity, f],
+        };
+        let resolved = monomorphize(&hir).unwrap();
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
     }
 }
