@@ -12,8 +12,8 @@ Excluded by design: `eval`, `exec`, `compile`, `globals`, `locals`, `vars`, `set
 
 | Module | Version | Notes |
 |---|---|---|
-| `math`, `cmath` | v0.2 | intrinsics → LLVM/libm |
-| `sys` | v0.2 | argv, exit, stdin/out/err, platform; no refcount APIs |
+| `math` (`sqrt`, `pi` only) | v0.2 (PR-14, D-136) | the actual shipped v0.2 subset: `math.sqrt(x: float) -> float` (calls the platform libm `sqrt`), `math.pi` (a compile-time `float` constant). Every other `math` name (`floor`, `pow`, `e`, `cmath`, ...) stays unimplemented, rejected with the ordinary `C0002`/`C0001` import diagnostics like any other unrecognized stdlib symbol/module — growing this registry is ordinary follow-up work under the existing `pycc_std` pattern (`crates/pycc_std/src/lib.rs`), not a new design decision (D-136's own Consequences note) |
+| `sys` | not started | originally planned for v0.2 alongside `math`; deferred out of PR-14's scope entirely (no `pycc_std::StdModule::Sys` variant exists) — `sys.exit` needs `NoReturn`-shaped divergence handling this compiler's type checker/MIR have no precedent for yet, and `sys.argv` needs a `list[str]`-from-process-args construction path that does not exist either (D-136 addendum in `docs/DECISIONS.md`). Revisit alongside a future PR that actually builds one of those two prerequisites |
 | `dataclasses`, `enum`, `typing` | v0.3 | typing = compile-time only, zero runtime cost |
 | `os`, `os.path`, `pathlib` | v0.4 | full Windows/POSIX parity — CI-gated on all Tier-1 |
 | `time`, `datetime` | v0.4 | |

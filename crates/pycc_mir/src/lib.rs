@@ -816,6 +816,16 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
         HirExpr::FloatLiteral(f) => MirExpr::FloatLiteral(*f),
         HirExpr::BoolLiteral(b) => MirExpr::BoolLiteral(*b),
         HirExpr::StringLiteral(s) => MirExpr::StringLiteral(s.clone()),
+        // D-136: `math.pi` (a `pycc_hir`-qualified stdlib constant name --
+        // real Python identifiers never contain `.`, see
+        // `pycc_types::std_qualified_symbol`'s own doc comment for the
+        // same invariant) is never bound in `scopes` the way an ordinary
+        // assigned variable is, so it needs its own arm here rather than
+        // falling into the ordinary `lookup` below, which would panic.
+        HirExpr::Name(name) if name == "math.pi" => MirExpr::Name {
+            name: name.clone(),
+            ty: Ty::Float,
+        },
         HirExpr::Name(name) => MirExpr::Name {
             name: name.clone(),
             ty: lookup(scopes, name),
@@ -824,6 +834,16 @@ fn lower_expr(expr: &HirExpr, scopes: &[HashMap<String, Ty>]) -> MirExpr {
             let args: Vec<MirExpr> = args.iter().map(|a| lower_expr(a, scopes)).collect();
             let ty = if callee == "print" {
                 Ty::None
+            } else if callee == "math.sqrt" {
+                // D-136: `math.sqrt` is the other hand-recognized stdlib
+                // intrinsic this PR lowers to real codegen -- mirrors
+                // `pycc_types`'s own `std_qualified_symbol` dispatch
+                // (always `Ty::Float`, this registry's only lowered
+                // function's fixed return type; not a general per-registry
+                // lookup since `pycc_mir` has no dependency on `pycc_std`
+                // and does not need one for this PR's exactly-one-function
+                // registry).
+                Ty::Float
             } else if callee == "len" {
                 // `len` is a hand-recognized builtin, same as `print` above,
                 // not a user-declarable `$fn:` signature -- mirrors
@@ -1010,7 +1030,7 @@ mod tests {
                     args: vec![HirExpr::Name("x".to_string())],
                 })),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1044,7 +1064,7 @@ mod tests {
                     right: Box::new(HirExpr::Name("b".to_string())),
                 }))],
             }],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1088,7 +1108,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
                 },
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[0],
@@ -1112,7 +1132,7 @@ mod tests {
                     args: vec![HirExpr::Name("n".to_string())],
                 }))],
             }],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1146,7 +1166,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(2)],
                 })],
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1176,7 +1196,7 @@ mod tests {
                     args: vec![HirExpr::IntLiteral(1)],
                 })],
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1204,7 +1224,7 @@ mod tests {
                     args: vec![HirExpr::Name("i".to_string())],
                 })],
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1234,7 +1254,7 @@ mod tests {
                 return_ty: Ty::None,
                 body: vec![HirStmt::Return(None)],
             }],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1265,7 +1285,7 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1308,7 +1328,7 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1349,7 +1369,7 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(2)),
                 }),
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1385,7 +1405,7 @@ mod tests {
                 annotation: Ty::Int,
                 value: None,
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(mir.items, vec![MirItem::TopLevelStmt(MirStmt::NoOp)]);
     }
@@ -1402,7 +1422,7 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("y".to_string()))),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         build(&hir);
     }
 
@@ -1417,7 +1437,7 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(2)),
                 },
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1449,7 +1469,7 @@ mod tests {
                     ]),
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -1477,7 +1497,7 @@ mod tests {
                     right: Box::new(HirExpr::StringLiteral("b".to_string())),
                 },
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1504,7 +1524,7 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(2)),
                 },
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1531,7 +1551,7 @@ mod tests {
                     right: Box::new(HirExpr::IntLiteral(2)),
                 },
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1561,7 +1581,7 @@ mod tests {
                     right: Box::new(HirExpr::FloatLiteral(1.5)),
                 },
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items,
@@ -1592,7 +1612,7 @@ mod tests {
                     value: HirExpr::IntLiteral(5),
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[0],
@@ -1622,7 +1642,7 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("x".to_string()))),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[2],
@@ -1644,7 +1664,7 @@ mod tests {
                     value: HirExpr::IntLiteral(1),
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         build(&hir);
     }
 
@@ -1660,7 +1680,7 @@ mod tests {
             items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name(
                 "undefined".to_string(),
             )))],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         build(&hir);
     }
 
@@ -1691,7 +1711,7 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -1743,7 +1763,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[2],
@@ -1777,7 +1797,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -1820,7 +1840,7 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -1877,7 +1897,7 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -1931,7 +1951,7 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -1986,7 +2006,7 @@ mod tests {
                     ],
                 },
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2156,7 +2176,7 @@ mod tests {
                 target: "x".to_string(),
                 value: HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         // Not a `let PATTERN = ... else { panic!(...) }` destructure -- this
         // file's own coverage-gate convention (see `pycc_hir`'s equivalent
@@ -2194,7 +2214,7 @@ mod tests {
                     })],
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2232,7 +2252,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2262,7 +2282,7 @@ mod tests {
                     value: Box::new(HirExpr::IntLiteral(2)),
                 })),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2295,7 +2315,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2327,7 +2347,7 @@ mod tests {
                     list: "xs".to_string(),
                 })),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         build(&hir);
     }
 
@@ -2354,7 +2374,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2387,7 +2407,7 @@ mod tests {
                     default: Box::new(HirExpr::IntLiteral(0)),
                 })),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         build(&hir);
     }
 
@@ -2407,7 +2427,7 @@ mod tests {
                     value: Box::new(HirExpr::IntLiteral(2)),
                 })),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2415,6 +2435,65 @@ mod tests {
                 set: "s".to_string(),
                 value: Box::new(MirExpr::IntLiteral(2)),
             }))
+        );
+    }
+
+    #[test]
+    fn lowers_math_sqrt_call_to_mir_with_float_type_without_panicking() {
+        // D-136: without the dedicated `callee == "math.sqrt"` branch, this
+        // would panic via `lookup`'s own "has no recorded type" message,
+        // exactly like `len` above -- there is no `$fn:math.sqrt` signature
+        // to find, even though `pycc_types` already accepts `math.sqrt(x)`
+        // as valid, `Ty::Float`-typed.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "n".to_string(),
+                value: HirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![HirExpr::FloatLiteral(2.0)],
+                },
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "n".to_string(),
+                value: MirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![MirExpr::FloatLiteral(2.0)],
+                    ty: Ty::Float,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_math_pi_name_to_mir_with_float_type_without_panicking() {
+        // D-136: without the dedicated `name == "math.pi"` arm, this would
+        // panic via `lookup`'s own "has no recorded type" message -- `pi`
+        // is never bound in `scopes` the way an ordinary assigned variable
+        // is.
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "n".to_string(),
+                value: HirExpr::Name("math.pi".to_string()),
+            })],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let mir = build(&hir);
+        assert_eq!(
+            mir.items[0],
+            MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "n".to_string(),
+                value: MirExpr::Name {
+                    name: "math.pi".to_string(),
+                    ty: Ty::Float,
+                },
+            })
         );
     }
 
@@ -2442,7 +2521,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2482,7 +2561,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2529,7 +2608,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2581,7 +2660,7 @@ mod tests {
                 }),
                 HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Name("y".to_string()))),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         // `y = xs[0]` binds `y` as `Ty::Str`, derived from `xs`'s own
         // `Ty::List(Box::new(Ty::Str))` binding (itself derived from the
@@ -2670,7 +2749,7 @@ mod tests {
                     body: vec![],
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         build(&hir);
     }
 
@@ -2695,7 +2774,7 @@ mod tests {
                     HirExpr::IntLiteral(1),
                 )]),
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         let expected_value = MirExpr::DictLiteral(vec![(
             MirExpr::StringLiteral("a".to_string()),
@@ -2734,7 +2813,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2782,7 +2861,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2816,7 +2895,7 @@ mod tests {
                     value: HirExpr::IntLiteral(2),
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2848,7 +2927,7 @@ mod tests {
                     })],
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -2970,7 +3049,7 @@ mod tests {
                     HirExpr::BoolLiteral(true),
                 ]),
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         let expected_value =
             MirExpr::TupleLiteral(vec![MirExpr::IntLiteral(1), MirExpr::BoolLiteral(true)]);
@@ -2994,7 +3073,7 @@ mod tests {
                 target: "x".to_string(),
                 value: HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         let expected_value =
             MirExpr::SetLiteral(vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)]);
@@ -3028,7 +3107,7 @@ mod tests {
                     })],
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3074,7 +3153,7 @@ mod tests {
                     args: vec![HirExpr::Name("y".to_string())],
                 })),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[0],
@@ -3131,7 +3210,7 @@ mod tests {
                     elt: Box::new(HirExpr::Name("v".to_string())),
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3167,7 +3246,7 @@ mod tests {
                 cond: Some(Box::new(HirExpr::BoolLiteral(true))),
                 elt: Box::new(HirExpr::Name("i".to_string())),
             })],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[0],
@@ -3210,7 +3289,7 @@ mod tests {
                     elt: Box::new(HirExpr::Name("v".to_string())),
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3257,7 +3336,7 @@ mod tests {
                     value: Box::new(HirExpr::IntLiteral(2)),
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[1],
@@ -3298,7 +3377,7 @@ mod tests {
                     elt: Box::new(HirExpr::Name("v".to_string())),
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         build(&hir);
     }
 
@@ -3324,7 +3403,7 @@ mod tests {
                     value: slice,
                 }),
             ],
-            type_aliases: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(),
         }
     }
 
@@ -3525,7 +3604,7 @@ mod tests {
                     },
                 }),
             ],
-         type_aliases: Vec::new(),};
+         type_aliases: Vec::new(), imports: Vec::new(),};
         let mir = build(&hir);
         assert_eq!(
             mir.items[4],

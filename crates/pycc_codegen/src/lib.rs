@@ -1339,6 +1339,16 @@ fn emit_expr<'ctx>(
         MirExpr::StringLiteral(s) => {
             Scalar::Str(emit_string_literal(context, builder, module, rt, s))
         }
+        // D-136: `math.pi` is a compile-time float constant, not a runtime
+        // value bound to any local slot -- Task 4's own thin slice emits
+        // the literal immediate directly, matching the ADR's explicit "no
+        // runtime call at all" design for this one symbol. `std::f64::consts::PI`
+        // is Rust's own IEEE-754 double-precision constant for pi, bit-for-bit
+        // the same value CPython's `math.pi` uses (both are the nearest
+        // representable `f64`/C `double` to the true mathematical constant).
+        MirExpr::Name { name, ty: Ty::Float } if name == "math.pi" => {
+            Scalar::Float(context.f64_type().const_float(std::f64::consts::PI))
+        }
         MirExpr::Name { name, ty } => {
             let slot = locals.get(name).unwrap_or_else(|| {
                 panic!("pycc_codegen: internal error: `{name}` has no local slot")
@@ -1780,6 +1790,58 @@ fn emit_expr<'ctx>(
             if callee == "print" {
                 panic!(
                     "pycc_codegen: using print()'s result as a nested expression is not supported yet"
+                );
+            }
+            // D-136 Task 4: `math.sqrt(x: float) -> float` is this PR's one
+            // lowered stdlib function, calling straight into the platform
+            // libm `sqrt` symbol -- the same C ABI this crate's existing
+            // float codegen already links against for `**`'s `pow` call
+            // (see `main.rs`'s `add_linux_system_libs` doc comment: macOS
+            // folds libm into libSystem and Windows's UCRT bundles it, so
+            // only Linux needs an explicit `-lm`, already added there).
+            // Declared once per module and reused on every call site
+            // (`get_function` first, matching `declare_rt_functions`'s own
+            // idempotent-declare precedent) rather than redeclaring per
+            // call -- LLVM rejects a duplicate `declare` with a different
+            // linkage/signature, and there is no reason to risk that for a
+            // fixed, known-once signature.
+            if callee == "math.sqrt" {
+                let [arg] = args.as_slice() else {
+                    panic!(
+                        "pycc_codegen: internal error: `math.sqrt` takes exactly 1 argument, got {} \
+                         -- pycc_types::check (T0021) should have rejected this before codegen",
+                        args.len()
+                    )
+                };
+                let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+                let f64_type = context.f64_type();
+                let sqrt_fn = module.get_function("sqrt").unwrap_or_else(|| {
+                    module.add_function(
+                        "sqrt",
+                        f64_type.fn_type(&[f64_type.into()], false),
+                        Some(inkwell::module::Linkage::External),
+                    )
+                });
+                // `pycc_types::std_qualified_symbol`'s call-site check
+                // already rejects any argument whose static type isn't
+                // `Ty::Float` (T0021) before codegen runs -- this match
+                // is a defensive backstop against malformed MIR, mirroring
+                // `len`'s/`float`'s own internal-error convention above,
+                // not a real dispatch over legitimate source.
+                let Scalar::Float(arg_value) = scalar else {
+                    panic!(
+                        "pycc_codegen: internal error: `math.sqrt`'s argument was not a float \
+                         -- pycc_types::check (T0021) should have rejected this before codegen"
+                    )
+                };
+                let call_site = builder
+                    .build_call(sqrt_fn, &[arg_value.into()], "math_sqrt")
+                    .expect("build_call should not fail for the libm `sqrt` declaration");
+                return Scalar::Float(
+                    call_site
+                        .try_as_basic_value()
+                        .expect_basic("libm `sqrt` is declared to return a double")
+                        .into_float_value(),
                 );
             }
             // `len` is the second hand-recognized builtin (D-105 point 3),
@@ -9468,6 +9530,53 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "`math.sqrt` takes exactly 1 argument, got 0")]
+    fn a_math_sqrt_call_with_the_wrong_argument_count_is_an_internal_error() {
+        // `pycc_types` already rejects a mis-arity `math.sqrt` call with
+        // T0021, so this is hand-built malformed MIR exercising codegen's
+        // own defensive backstop, mirroring
+        // `a_float_call_with_the_wrong_argument_count_is_an_internal_error`
+        // immediately above.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "math.sqrt".to_string(),
+                args: vec![],
+                ty: Ty::Float,
+            }))],
+        };
+        let dir = tempfile_dir("math_sqrt_wrong_arity_panics");
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("math_sqrt_wrong_arity_panics.o"),
+            None,
+            false,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "`math.sqrt`'s argument was not a float")]
+    fn a_math_sqrt_call_on_a_non_float_argument_is_an_internal_error() {
+        // The other half of `pycc_types`' own T0021 `math.sqrt` check (a
+        // non-`float` argument) -- hand-built malformed MIR, since
+        // `pycc_types::std_qualified_symbol`'s call-site check already
+        // rejects this before codegen runs for any legitimate source.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "math.sqrt".to_string(),
+                args: vec![MirExpr::IntLiteral(1)],
+                ty: Ty::Float,
+            }))],
+        };
+        let dir = tempfile_dir("math_sqrt_non_float_panics");
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("math_sqrt_non_float_panics.o"),
+            None,
+            false,
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "`len`'s argument did not evaluate to a list")]
     fn a_len_call_on_a_non_list_argument_is_an_internal_error() {
         // The other half of `pycc_types`' own T0033 `len` check (a
@@ -9592,6 +9701,48 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"2\n");
+    }
+
+    #[test]
+    fn math_sqrt_call_codegens_and_runs() {
+        // `print(math.sqrt(2.0))` end to end through `compile_to_object` --
+        // D-136 Task 4's one lowered stdlib function, calling the real
+        // libm `sqrt` symbol. Expected output verified against `python3`
+        // on this exact source (`math.sqrt(2.0)` -> `1.4142135623730951`).
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                callee: "math.sqrt".to_string(),
+                args: vec![MirExpr::FloatLiteral(2.0)],
+                ty: Ty::Float,
+            }))],
+        };
+        let dir = tempfile_dir("math_sqrt_call");
+        let obj_path = dir.join("math_sqrt_call.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("math_sqrt_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1.4142135623730951\n");
+    }
+
+    #[test]
+    fn math_pi_codegens_and_runs() {
+        // `print(math.pi)` end to end -- D-136 Task 4's compile-time float
+        // constant, no runtime call at all. Expected output verified
+        // against `python3` on this exact source.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(print_expr(MirExpr::Name {
+                name: "math.pi".to_string(),
+                ty: Ty::Float,
+            }))],
+        };
+        let dir = tempfile_dir("math_pi");
+        let obj_path = dir.join("math_pi.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("math_pi");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3.141592653589793\n");
     }
 
     #[test]

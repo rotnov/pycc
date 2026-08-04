@@ -426,6 +426,35 @@ pub enum HirItem {
     TopLevelStmt(HirStmt),
 }
 
+/// A compile-time-only import binding recorded by a module-level
+/// `import`/`from ... import ...` statement resolved against `pycc_std`'s
+/// registry (D-136/D-137). Mirrors `type_aliases`' side-table shape: an
+/// import has zero runtime footprint of its own (no `HirStmt`/`HirItem` is
+/// produced for it), it only makes a later name/attribute lookup resolve to
+/// a stdlib registry entry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportBinding {
+    /// `import math` -- binds `math` (or, for a dotted-but-single-segment
+    /// name, whatever `local_name` ends up being; D-137 rejects every
+    /// import shape other than a single bare recognized module name, so in
+    /// practice `local_name` always equals the resolved module's source
+    /// spelling) as a module namespace marker. `math` itself never carries
+    /// a `Ty` -- only `math.<attr>` attribute access on this bound name
+    /// resolves further, via `pycc_std::resolve_symbol`.
+    Module {
+        local_name: String,
+        module: pycc_std::StdModule,
+    },
+    /// `from math import sqrt` -- binds `sqrt` directly to the resolved
+    /// registry symbol, as if it were a fixed, non-inferred `Ty`/signature
+    /// (the alias table from PR-13 is the closest existing precedent).
+    Symbol {
+        local_name: String,
+        module: pycc_std::StdModule,
+        symbol: pycc_std::StdSymbol,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirModule {
     pub items: Vec<HirItem>,
@@ -437,6 +466,15 @@ pub struct HirModule {
     /// field exists purely so a later annotation naming the alias resolves
     /// to the same `Ty` (see `annotation_to_ty`'s alias-table lookup).
     pub type_aliases: Vec<(String, Ty)>,
+    /// Compile-time-only stdlib import bindings (D-136/D-137), populated in
+    /// source order by `lower_checked` exactly like `type_aliases`. Only a
+    /// module-level `import`/`from ... import ...` statement is recognized
+    /// here -- one nested inside a function body or any other block still
+    /// reaches plain `lower_stmt`, which has no arm for `Stmt::Import`/
+    /// `Stmt::ImportFrom` and falls through to the generic `C0001`
+    /// catch-all, exactly like every other statement kind this compiler
+    /// does not support inside a nested block.
+    pub imports: Vec<ImportBinding>,
 }
 
 /// Lowers a parsed module into the HIR subset implemented by this pycc
@@ -453,6 +491,7 @@ pub struct HirModule {
 /// introducing hoisting.
 pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let mut aliases: Vec<(String, Ty)> = Vec::new();
+    let mut imports: Vec<ImportBinding> = Vec::new();
     let mut items = Vec::with_capacity(module.body.len());
     for stmt in &module.body {
         if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases)? {
@@ -461,6 +500,10 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         }
         if let Some((name, ty)) = lower_legacy_type_alias_ann_assign(stmt, &aliases)? {
             aliases.push((name, ty));
+            continue;
+        }
+        if let Some(mut bound) = lower_import_stmt(stmt)? {
+            imports.append(&mut bound);
             continue;
         }
         let item = match stmt {
@@ -472,7 +515,117 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     Ok(HirModule {
         items,
         type_aliases: aliases,
+        imports,
     })
+}
+
+/// Recognizes a module-level `Stmt::Import`/`Stmt::ImportFrom` and resolves
+/// it against `pycc_std`'s registry (D-136/D-137). Returns `Ok(None)` for
+/// any other statement kind, leaving it to the caller's own dispatch --
+/// mirroring `lower_type_alias_stmt`'s shape exactly.
+///
+/// D-137 is fail-closed: every recognized-but-out-of-scope shape (multiple
+/// names in one `import` statement, an `as` alias, a relative import, an
+/// unresolvable module) is `C0001`, the same generic "statement kind not
+/// supported yet" diagnostic this file already uses for every other
+/// unimplemented statement kind -- matching the plan's explicit instruction
+/// to reuse `C0001` rather than add a new code for "we recognize this is an
+/// import but don't support this particular shape." A recognized module
+/// with one unresolvable symbol inside an otherwise-valid `from math import
+/// ...` list is instead `C0002` (D-136's own decision text), distinguishing
+/// "we don't support this import shape at all" from "we support `math`,
+/// just not `math.<this-symbol>`" -- and it fails the whole statement, not
+/// a partial bind of the names that did resolve.
+fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>>, Diagnostic> {
+    match stmt {
+        Stmt::Import(import) => {
+            let [alias] = import.names.as_slice() else {
+                return Err(unsupported(
+                    "only a single module per `import` statement is supported so far",
+                    import.range,
+                ));
+            };
+            if alias.asname.is_some() {
+                return Err(unsupported(
+                    "`import ... as ...` aliasing is not supported yet",
+                    import.range,
+                ));
+            }
+            let module_name = alias.name.as_str();
+            let Some(module) = pycc_std::resolve_module(module_name) else {
+                return Err(unsupported(
+                    format!("import of module `{module_name}` is not supported yet"),
+                    import.range,
+                ));
+            };
+            Ok(Some(vec![ImportBinding::Module {
+                local_name: module_name.to_string(),
+                module,
+            }]))
+        }
+        Stmt::ImportFrom(import) => {
+            if import.level != 0 {
+                return Err(unsupported(
+                    "a relative import (`from . import ...`) is not supported yet",
+                    import.range,
+                ));
+            }
+            // A `level == 0` `Stmt::ImportFrom` always carries a module name
+            // -- the only way to reach `module: None` is a relative import
+            // (`from . import x`, `from .. import x`, ...), which always
+            // has `level >= 1` and is already rejected above. Verified
+            // directly against the vendored parser: `from import x` (no
+            // dots, no module name) is a parse error (`L0001`, "Expected a
+            // module name"), so `lower_checked` never sees this shape at
+            // all, matching this file's existing precedent of verifying an
+            // "impossible" shape against the real parser rather than
+            // assuming it.
+            let module_name = import
+                .module
+                .as_ref()
+                .expect("a non-relative `from ... import ...` always names a module")
+                .as_str();
+            let Some(module) = pycc_std::resolve_module(module_name) else {
+                return Err(unsupported(
+                    format!("import of module `{module_name}` is not supported yet"),
+                    import.range,
+                ));
+            };
+            if import.names.is_empty()
+                || import.names.iter().any(|alias| alias.name.as_str() == "*")
+            {
+                return Err(unsupported(
+                    "`from ... import *` (wildcard import) is not supported yet",
+                    import.range,
+                ));
+            }
+            let mut bound = Vec::with_capacity(import.names.len());
+            for alias in &import.names {
+                if alias.asname.is_some() {
+                    return Err(unsupported(
+                        "`from ... import x as y` aliasing is not supported yet",
+                        import.range,
+                    ));
+                }
+                let symbol_name = alias.name.as_str();
+                let Some(symbol) = pycc_std::resolve_symbol(module, symbol_name) else {
+                    return Err(unresolved_symbol(
+                        format!(
+                            "module `{module_name}` has no importable symbol named `{symbol_name}`"
+                        ),
+                        import.range,
+                    ));
+                };
+                bound.push(ImportBinding::Symbol {
+                    local_name: symbol_name.to_string(),
+                    module,
+                    symbol,
+                });
+            }
+            Ok(Some(bound))
+        }
+        _ => Ok(None),
+    }
 }
 
 /// Recognizes a PEP 695 `type X = <expr>` statement and evaluates its RHS as
@@ -1192,6 +1345,41 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                         value: Box::new(lower_expr(value)?),
                     });
                 }
+                // `math.sqrt(x)`-shaped stdlib intrinsic call (D-136/D-137).
+                // Resolved textually against `pycc_std`'s registry (receiver
+                // name, then attribute name), the same precedent this file
+                // already uses for `X: TypeAlias` (see
+                // `lower_legacy_type_alias_ann_assign`'s doc comment): real
+                // flow-sensitive "was `math` actually imported before this
+                // use" verification is not attempted here, because
+                // `lower_expr` has no access to the module-level import
+                // side-table `lower_checked` builds (threading it through
+                // every recursive `lower_expr` call site is a materially
+                // larger change than this thin v0.2 slice needs). `math` is
+                // not a valid bare Python identifier binding to anything
+                // else in this compiler's current name-resolution model
+                // (no ordinary variable/import can produce a receiver whose
+                // name doubles as a registered stdlib module and *isn't*
+                // that module), so this narrowing does not accept any
+                // program CPython itself would reject as a `NameError` in
+                // practice for the fixtures this PR ships -- but it is a
+                // real, deliberate scope trim from a fully import-gated
+                // design, recorded here rather than silently.
+                if let Expr::Name(receiver) = attr.value.as_ref()
+                    && let Some(module) = pycc_std::resolve_module(receiver.id.as_str())
+                    && let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str())
+                {
+                    let args = call
+                        .arguments
+                        .args
+                        .iter()
+                        .map(lower_expr)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(HirExpr::Call {
+                        callee: format!("{}.{}", receiver.id.as_str(), symbol.name),
+                        args,
+                    });
+                }
                 return Err(unsupported(
                     format!(
                         "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.{}(...)`",
@@ -1299,6 +1487,41 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                 left: Box::new(lower_expr(&cmp.left)?),
                 right: Box::new(lower_expr(&cmp.comparators[0])?),
             }
+        }
+        // `math.pi`-shaped bare stdlib constant reference (D-136/D-137),
+        // e.g. `print(math.pi)`. A call-shaped `math.sqrt(x)` is handled
+        // separately inside the `Expr::Call` arm above (it needs the call
+        // arguments, which this bare-attribute position never has). Resolved
+        // with the same textual, non-flow-sensitive precedent documented on
+        // that arm. Encoded as `HirExpr::Name("math.pi")`: real Python
+        // identifiers can never contain `.`, so this qualified spelling is
+        // an unambiguous marker `pycc_types`' ordinary name lookup can
+        // special-case without any risk of colliding with a real variable
+        // named `pi`.
+        Expr::Attribute(attr) => {
+            let Expr::Name(receiver) = attr.value.as_ref() else {
+                return Err(unsupported(
+                    "attribute access is only supported on a stdlib module name so far",
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            let Some(module) = pycc_std::resolve_module(receiver.id.as_str()) else {
+                return Err(unsupported(
+                    "attribute access is only supported on a stdlib module name so far",
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str()) else {
+                return Err(unsupported(
+                    format!(
+                        "module `{}` has no attribute `{}`",
+                        receiver.id.as_str(),
+                        attr.attr
+                    ),
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            HirExpr::Name(format!("{}.{}", receiver.id.as_str(), symbol.name))
         }
         other => {
             return Err(unsupported(
@@ -1649,6 +1872,19 @@ where
 {
     let range = std::ops::Range::<u32>::from(range);
     Diagnostic::error("C0001", message, Span::new(range.start, range.end))
+}
+
+/// `C0002`: "stdlib symbol not supported yet" (D-136) -- distinct from
+/// `C0001`. Used only when the *module* of a `from ... import ...`
+/// statement is recognized but a specific imported name inside it is not
+/// registered (e.g. `from math import isnan`), as opposed to `C0001`'s
+/// "we don't recognize this import shape/module at all."
+fn unresolved_symbol<R>(message: impl Into<String>, range: R) -> Diagnostic
+where
+    std::ops::Range<u32>: From<R>,
+{
+    let range = std::ops::Range::<u32>::from(range);
+    Diagnostic::error("C0002", message, Span::new(range.start, range.end))
 }
 
 #[cfg(test)]
@@ -4492,6 +4728,217 @@ mod tests {
         // `C0001` catch-all it already uses for every other non-name
         // target -- the alias table stays empty either way.
         let module = pycc_parser_test_helper::parse("obj.x: TypeAlias = int\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_math_binds_the_module_namespace() {
+        let module = pycc_parser_test_helper::parse("import math\n");
+        let hir = lower_checked(&module).expect("recognized stdlib import must lower");
+
+        assert_eq!(
+            hir.imports,
+            vec![ImportBinding::Module {
+                local_name: "math".to_string(),
+                module: pycc_std::StdModule::Math,
+            }]
+        );
+        assert!(hir.items.is_empty(), "a bare `import math` has no HirItem");
+    }
+
+    #[test]
+    fn import_cgi_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import cgi\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_sqrt_and_pi_binds_both_names() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt, pi\n");
+        let hir = lower_checked(&module).expect("both registered symbols must resolve");
+
+        let sqrt_symbol = pycc_std::resolve_symbol(pycc_std::StdModule::Math, "sqrt")
+            .expect("math.sqrt is registered");
+        let pi_symbol = pycc_std::resolve_symbol(pycc_std::StdModule::Math, "pi")
+            .expect("math.pi is registered");
+        assert_eq!(
+            hir.imports,
+            vec![
+                ImportBinding::Symbol {
+                    local_name: "sqrt".to_string(),
+                    module: pycc_std::StdModule::Math,
+                    symbol: sqrt_symbol,
+                },
+                ImportBinding::Symbol {
+                    local_name: "pi".to_string(),
+                    module: pycc_std::StdModule::Math,
+                    symbol: pi_symbol,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn from_math_import_sqrt_and_unregistered_tan_is_c0002_not_a_partial_bind() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt, tan\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        // Whole statement fails closed -- `sqrt` is not partially bound
+        // even though it is itself registered.
+        assert_eq!(diagnostic.code, "C0002");
+    }
+
+    #[test]
+    fn import_math_as_m_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import math as m\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_sqrt_as_s_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt as s\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_unregistered_module_import_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from os import path\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_dot_import_x_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from . import x\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_star_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from math import *\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_two_modules_in_one_statement_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import math, os\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_sqrt_call_lowers_to_a_qualified_callee() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.sqrt(2.0))\n");
+        let hir = lower_checked(&module).expect("math.sqrt(...) must lower");
+
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![HirExpr::FloatLiteral(2.0)],
+                }],
+            }))]
+        );
+    }
+
+    #[test]
+    fn math_pi_bare_reference_lowers_to_a_qualified_name() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.pi)\n");
+        let hir = lower_checked(&module).expect("math.pi must lower");
+
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("math.pi".to_string())],
+            }))]
+        );
+    }
+
+    #[test]
+    fn math_tan_call_is_unsupported_since_it_is_not_registered() {
+        let module = pycc_parser_test_helper::parse("import math\nmath.tan(1.0)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_tan_bare_reference_is_unsupported_since_it_is_not_registered() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.tan)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn os_path_bare_attribute_access_is_unsupported() {
+        // No `import os` here on purpose -- `os` isn't a registered
+        // `pycc_std` module at all, so this exercises the "receiver name
+        // does not resolve to a stdlib module" branch directly, distinct
+        // from `math_tan_bare_reference_is_unsupported_since_it_is_not_registered`
+        // above (recognized module, unregistered attribute).
+        let module = pycc_parser_test_helper::parse("print(os.path)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn attribute_access_on_a_non_name_receiver_is_unsupported() {
+        let module = pycc_parser_test_helper::parse("print([1, 2].sqrt)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_sqrt_call_propagates_an_unsupported_argument_expression() {
+        // Exercises the `?` inside the stdlib-call arm's own argument
+        // lowering (`call.arguments.args.iter().map(lower_expr).collect()`)
+        // taking its error path, as opposed to every other stdlib-call test
+        // above, which only exercises the success path.
+        let module = pycc_parser_test_helper::parse("import math\nmath.sqrt(1j)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn method_call_on_a_non_name_receiver_is_unsupported() {
+        // Exercises the call-position stdlib-intrinsic branch's own
+        // `Expr::Name(receiver)` guard failing (as opposed to the bare
+        // attribute-access arm's analogous guard above).
+        let module = pycc_parser_test_helper::parse("[1, 2].sqrt()\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_inside_a_function_body_is_c0001() {
+        // The module-level side-table is populated only by `lower_checked`'s
+        // top-level loop (mirroring `type_aliases`); a nested import still
+        // reaches plain `lower_stmt`, which has no arm for `Stmt::Import`.
+        let module = pycc_parser_test_helper::parse(
+            "def f() -> None:\n    import math\n    return None\n",
+        );
         let diagnostic = lower_checked(&module).unwrap_err();
 
         assert_eq!(diagnostic.code, "C0001");

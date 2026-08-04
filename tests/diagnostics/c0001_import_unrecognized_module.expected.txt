@@ -1,0 +1,5 @@
+error[C0001]: import of module `cgi` is not supported yet
+ --> tests/diagnostics/c0001_import_unrecognized_module.py:1:1
+  |
+1 | import cgi
+  | ^^^^^^^^^^ import of module `cgi` is not supported yet
