@@ -444,3 +444,100 @@ fn container_methods_slicing_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("container_methods_slicing_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/container_methods_slicing.py");
 }
+
+// D-139: the hand-authored container/generics differential corpus -- one
+// fixture combining a `list[int]`/`dict[str, int]`/`set[int]`/
+// `tuple[int, int]` literal (D-116 scopes tuple element compilation to
+// int/bool/float, so this uses `(7, 8)`, not D-139's own illustrative
+// `tuple[int, str]` text -- a plan-deviation narrowing recorded here and
+// on D-139 itself, not silently), a list comprehension and a dict
+// comprehension (PEP 709 scoping), `list[int]` slicing, one use each of
+// `.pop()`/`.get()`/`.add()`, and a one-type-parameter generic function
+// (D-133/D-134) applied to both an `int` and a `str` value -- proving
+// these already-shipped v0.2 features compose in a single program, not
+// re-testing any single feature in isolation. Every value is printed
+// element-wise/via indexing/`len()`, never a container value directly
+// (matching `container_methods_slicing_matches_cpython_3_14_6_byte_for_byte`'s
+// own established precedent immediately above: `print(xs)` panics today,
+// D-107/D-124/D-116).
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn v0_2_container_generics_corpus_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v0_2_container_generics_corpus.py");
+    let (debug_pycc, debug_cpython) = run_conformance_fixture_with_profile(
+        "v0_2_container_generics_corpus_debug",
+        &fixture,
+        false,
+    );
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/v0_2_container_generics_corpus.py"
+    );
+    let (release_pycc, release_cpython) = run_conformance_fixture_with_profile(
+        "v0_2_container_generics_corpus_release",
+        &fixture,
+        true,
+    );
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/v0_2_container_generics_corpus.py"
+    );
+}
+
+// D-138: the PEP-594 (dead-battery stdlib removals) conformance fixture
+// pair. `pep_0594_dead_battery.py` proves import resolution genuinely
+// works now (a passing `import math` fixture using both registered
+// symbols), oracle-diffed dual-profile like every other
+// `*_matches_cpython_3_14_6_byte_for_byte` test above.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0594_dead_battery_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0594_dead_battery.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0594_dead_battery_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0594_dead_battery.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0594_dead_battery_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0594_dead_battery.py"
+    );
+}
+
+// D-138: the second half of the PEP-594 pair -- `import cgi` (a real,
+// removed-in-3.13 stdlib module, absent from pycc_std's registry) must be
+// cleanly rejected with C0001, not silently accepted or a panic. No
+// CPython oracle involved (per D-138's own Context: CPython 3.14 raises
+// `ModuleNotFoundError` for this exact source, a fundamentally different
+// failure shape than pycc's static C0001 -- the two compilers are
+// asserting different things about the same removed module, so
+// byte-for-byte comparison would be misleading here, unlike every other
+// test in this file). Does not need the `python3.14` oracle on PATH, so
+// unlike every other test in this file it runs by default (no
+// `#[ignore]`).
+#[test]
+fn pep_0594_dead_battery_rejected_produces_c0001() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0594_dead_battery_rejected.py");
+    let output = Command::new(pycc_bin())
+        .args(["check", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "`pycc check` should reject tests/fixtures/pep_0594_dead_battery_rejected.py"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("C0001"),
+        "expected a C0001 diagnostic, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("cgi"),
+        "expected the diagnostic to mention `cgi`, got: {stdout}"
+    );
+}

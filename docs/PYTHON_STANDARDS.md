@@ -201,7 +201,7 @@ the pinned interpreter's own GIL only for CPython-backed operations (D-128).*
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [594](https://peps.python.org/pep-0594/) | "Dead batteries" stdlib removals | rt | `py313/pep_0594_removals.py` | ☐ |
+| [594](https://peps.python.org/pep-0594/) | "Dead batteries" stdlib removals | rt | `py313/pep_0594_dead_battery.py` + `py313/pep_0594_dead_battery_rejected.py` (D-138; PR-14 landed the fixture pair and its `tests/conformance.rs` tests — status flips only after a real, completed CI run confirms both across all 5 Tier-1 targets, per this file's own "do not flip by hand" rule below) | ☐ |
 | [696](https://peps.python.org/pep-0696/) | TypeVar defaults | typing | `py313/pep_0696_typevar_defaults.py` | ☐ |
 | [702](https://peps.python.org/pep-0702/) | `@deprecated` | typing | `py313/pep_0702_deprecated.py` | ☐ |
 | [703](https://peps.python.org/pep-0703/) | Free-threading (experimental) | rt | superseded by 779 test | ☐ |
