@@ -122,3 +122,13 @@ commit `2724c606ead99c4d49b4a5dc5a8ed9f1d0eaf1b9`: a tag built from this
 revision may be described as verified on every Tier-1 target for hook use. A
 later revision needs its own dated run recorded here before the same claim
 applies to it.
+
+**Update (2026-08-04):** [`hook-install-check.yml` run
+30894980868](https://github.com/rotnov/pycc/actions/runs/30894980868),
+dispatched against commit `97acf5032e0fb13bbd8cc6036691a20edf53b48f` (`main`,
+2026-08-04 -- v0.2's content-complete revision): `pre-commit validate-manifest`
+and `pre-commit try-repo` both succeeded on all five Tier-1 targets --
+Linux x64, Linux arm64, macOS x64, macOS arm64, and Windows x64 -- by the same
+checklist-items-1-3 evidence bar as the prior run. This satisfies the
+tag-advertising constraint for commit `97acf5032e0fb13bbd8cc6036691a20edf53b48f`
+and is the dated evidence backing the `v0.2.0` release tag.

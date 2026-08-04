@@ -18,8 +18,14 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > work, but v0.1's own acceptance criteria are now met -- `fib` and
 > `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets,
 > `pycc check` clears its <50ms/1000 LOC throughput floor, and diagnostic
-> output matches [`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md)'s example; see
-> [`docs/ROADMAP.md`](./docs/ROADMAP.md).
+> output matches [`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md)'s example.
+> v0.2's own acceptance criteria are now also met: a hand-authored
+> `list`/`dict`/`set`/`tuple` + comprehensions/slicing/methods/generics corpus
+> matches CPython output on all five Tier-1 targets, `--release` clears its
+> nbody-vs-CPython speedup floor on every target, and conformance covers ≥15
+> [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md) matrix rows
+> (17 distinct PEPs); see [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the full,
+> per-bullet evidence.
 > The frontend performance measurement and isolated greater-than-2% regression
 > gate are required through `ci-gate` independently of that compiler sequence.
 > The source-aware paired gate measures the exact predecessor and candidate
