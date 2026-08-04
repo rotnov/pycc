@@ -133,3 +133,108 @@ prescribe it, in the same session that developed it. Do not consider the
 work "done" once it merely works once from the scratchpad; it is done once
 a future session (with no memory of this one) can discover and use it via
 the skill alone.
+
+## 2026-08-04 06:49 UTC — Under strict (up-to-date) branch protection, don't open multiple PRs in one session — they chase each other stale
+**Trigger:** user-observed mistake ("если стоит бранч ап ту дейт протекшен, не сиысла в одной сесси открывать несколько ПР, начинается гонка")
+
+если стоит бранч ап ту дейт протекшен, не сиысла в одной сесси открывать несколько ПР, начинается гонка
+
+Context: this repo's branch protection is `strict: true` (a PR's branch must
+be up to date with `main` before merge — see `docs/REPOSITORY_GOVERNANCE.md`).
+Across roughly one hour this session, 4-5 PRs were opened in parallel
+(#322, #324, #326, #327, plus an earlier #320) for genuinely independent,
+small changes. Every single merge of one PR immediately made every *other*
+still-open PR `STALE` (`mergeStateStatus: BEHIND`), which then needed its
+own `git fetch && git merge origin/main`, a re-run of local tests, a push,
+and a fresh CI wait — repeatedly, for every PR still open at the time.
+This is a real race: with N PRs open under strict protection, merging any
+one of them can stale up to N-1 others, and if those others are *also*
+racing to merge, the staleness can cascade multiple times per PR before it
+actually lands. The `ci-watch.sh`/`Monitor` tooling from this same skill
+made the staleness events cheap to *detect* the moment they happened, but
+did nothing to prevent the underlying churn (re-fetch, re-merge, re-test,
+re-push, re-wait) each event still costs.
+
+**Rule:** under `strict` (up-to-date-required) branch protection, do not
+open multiple PRs in parallel within one session merely because the
+underlying changes are independent. Serialize instead: fully land one PR
+(open → CI green → merge) before opening the next. This trades a small
+amount of session wall-clock (waiting for one PR's CI before starting the
+next) for eliminating the stale-branch chase entirely — zero merges happen
+concurrently, so no open PR can ever be staled by another one finishing
+first. The one exception worth keeping: genuinely tiny, no-code-conflict
+docs/overlay-only changes that are extremely unlikely to touch the same
+lines as anything else in flight can still be batched loosely, but even
+then expect at least one round of `STALE` catch-up per merge that lands
+ahead of them — budget for it rather than being surprised by it.
+
+## 2026-08-04 07:20 UTC — Draft-then-ready queuing can make the serialize-PRs rule safe for parallel work, but this repo's CI does not skip drafts today
+**Trigger:** user-defined convention (refines the "Serialize PRs" section above)
+
+касательно параллельных пр, вообще они могу быть, что бы ни чего не потреять, но ПР должен открываться драфт, чеки не должны гнаться на драфте, тогда рейди только один, довели, смержили, берем следующий драфт, ребейзим, ставим в в рейди, чеки идут, правильно?
+
+Context: this refines the "Serialize PRs under strict branch protection"
+section above. That section's blanket "don't open several PRs at once" rule
+is safe but throws away real parallel work that could otherwise be prepared
+ahead of time (a second/third change fully written and committed, just not
+yet in the merge queue).
+
+**Refined rule — draft-then-ready queuing:** it is fine to open several PRs in
+parallel as **drafts** to avoid losing already-completed work, as long as only
+**one** PR is ever marked "Ready for review" (out of draft) at a time. Land
+that one PR fully (CI green -> merge), THEN take the next queued draft, rebase
+it onto the new `main`, mark it ready, and only then let its CI run. This keeps
+the "no two merges ever race" guarantee from the original rule while letting
+independent work be prepared concurrently instead of serialized end-to-end.
+
+**Correction to verify before relying on this in THIS repo:** the premise "CI
+does not run on draft PRs" is NOT automatically true — it depends on whether
+the repo's own CI workflows gate on draft status. Checked this project's
+`.github/workflows/*.yml` on 2026-08-04: none of them contain a
+`if: github.event.pull_request.draft == false`-style guard, so GitHub's
+default `pull_request` trigger fires the full check suite on a draft PR here
+exactly the same as a ready one — opening a PR as draft only blocks the merge
+button, not the CI run. Making "checks don't run on draft" literally true in
+this repo would require adding that guard to the relevant jobs, which is
+itself a CI-workflow change subject to this project's D-024/D-125 review and
+permission-audit rules (`scripts/check_ci_permissions.rb`) — not something to
+assume is already in place.
+
+**Bottom line:** the draft-then-ready *queuing discipline* (only one PR ready
+at a time, rebase the next draft after each merge) is a valid refinement of
+the serialize-PRs rule and should be used when preparing more than one PR's
+worth of work ahead of time. The *CI-cost savings* from drafts specifically is
+a separate, not-yet-implemented workflow change in this repo — do not assume
+draft PRs are free of CI usage here unless/until that guard is added and
+verified.
+
+## 2026-08-04 06:53 UTC — Record the session ID and client (Claude/Codex) in every PR body opened by an agent
+**Trigger:** user-observed mistake ("при открытии пр указывать в теле ПР ид сессии и агента (клод, кодекс) что бы можно былл идентифицировать сессию и найти ее")
+
+при открытии пр указывать в теле ПР ид сессии и агента (клод, кодекс) что бы можно былл идентифицировать сессию и найти ее
+
+Context: PR #328 (the final v0.2 PR-14) was opened by a background-dispatched
+agent, and the orchestrating session (this one) genuinely lost track of it
+for a while amid handling a separate CI-noise investigation — it only
+resurfaced when the user asked to check for forgotten open PRs. Nothing in
+the PR body itself said which session or which agent (Claude Code vs.
+Codex, and which invocation) had opened it, so there was no way to look it
+up directly from the PR — only indirect reconstruction from git log/commit
+messages.
+
+On Claude Code, the session identifier is available as the
+`CLAUDE_CODE_SESSION_ID` environment variable (confirmed present this
+session: `791dd9a8-bca2-44f1-b88d-07a97612648b`, also visible in scratchpad
+paths like `/private/tmp/claude-501/.../<session-id>/scratchpad`).
+
+**Rule:** when opening a PR (via `gh pr create`) from an autonomous agent
+session in this project, include a line identifying the session/agent in
+the PR body — e.g. a footer line like `Session: claude-code <CLAUDE_CODE_SESSION_ID>`
+(or the Codex-equivalent identifier when running under Codex, if one is
+exposed the same way — check for it rather than assuming Claude Code's env
+var name applies there too). This makes a PR traceable back to the exact
+session/transcript that produced it, which matters specifically for a
+background-dispatched or otherwise easy-to-lose-track-of PR like #328 was
+here — the alternative (reconstructing which session opened what from
+commit messages and timing alone) is exactly the gap that let #328 go
+unnoticed.
