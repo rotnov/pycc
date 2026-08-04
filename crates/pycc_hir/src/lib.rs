@@ -507,10 +507,11 @@ fn lower_type_alias_stmt(
     // source, the same way this function's own name-target extraction below
     // documents its own unreachable shape).
     if type_alias.type_params.is_some() {
+        let range = std::ops::Range::<u32>::from(type_alias.range);
         return Err(Diagnostic::error(
             "T0042",
             "a generic type alias (`type X[T] = ...`) is not supported yet".to_string(),
-            Span::new(0, 0),
+            Span::new(range.start, range.end),
         ));
     }
     // Unlike the legacy `AnnAssign` form's target (which can be an
@@ -535,15 +536,20 @@ fn lower_type_alias_stmt(
 
 /// Recognizes the legacy `X: TypeAlias = <expr>` annotated-assignment form
 /// of a type alias (PEP 613). Real Python requires `from typing import
-/// TypeAlias` before this annotation is meaningful, but real import
-/// resolution is explicitly out of scope for this PR (PR-14 owns it, per
-/// D-135's own plan) -- exactly like `Any`/`Optional`/every other
-/// currently-recognized bare `typing`-shaped annotation name in
-/// `annotation_to_ty`, none of which check for an import either. For
-/// consistency with that existing precedent, this accepts the bare
-/// annotation name `TypeAlias` unconditionally rather than inventing
-/// import-awareness that exists nowhere else in this file (plan-deviation
-/// note, since the design doc leaves this specific question open).
+/// TypeAlias` before this annotation is meaningful, but requiring that
+/// import here is not merely inconsistent with existing precedent -- it is
+/// currently infeasible: `pycc_hir` has no `Stmt::Import`/`Stmt::ImportFrom`
+/// handling anywhere in this crate, so `from typing import TypeAlias` would
+/// itself be unconditionally rejected with the generic `C0001` ("statement
+/// kind not supported yet") diagnostic if pycc tried to require it first.
+/// There is no accepted-bare-typing-name precedent to lean on either --
+/// `Any` is the only other typing-shaped bare name `annotation_to_ty`
+/// currently recognizes, and it is rejected with `T0002`, not accepted. So
+/// this function accepts the bare annotation name `TypeAlias`
+/// unconditionally, not by analogy to an existing precedent, but because
+/// real import verification cannot be expressed with this crate's current
+/// statement coverage (plan-deviation note, since the design doc leaves
+/// this specific question open; import support is PR-14's).
 ///
 /// Returns `Ok(None)` for any statement that is not this exact shape --
 /// including an ordinary `X: TypeAlias` with no value, which is invalid as a
@@ -4421,6 +4427,27 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
 
         assert_eq!(diagnostic.code, "T0042");
+    }
+
+    #[test]
+    fn a_generic_type_alias_t0042_span_points_at_the_type_statement_not_byte_zero() {
+        // The `type` statement is deliberately not the first line, so a
+        // regression back to a hardcoded `Span::new(0, 0)` would be caught:
+        // byte 0 falls inside the preceding `def f() -> int:` line, not the
+        // `type Alias[T] = int` statement this diagnostic is actually about.
+        let source = "def f() -> int:\n    return 1\ntype Alias[T] = int\n";
+        let type_stmt_start = source.find("type Alias").unwrap() as u32;
+        let type_stmt_end = source.rfind('\n').unwrap() as u32;
+
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "T0042");
+        assert_ne!(diagnostic.span, Some(Span::new(0, 0)));
+        assert_eq!(
+            diagnostic.span,
+            Some(Span::new(type_stmt_start, type_stmt_end))
+        );
     }
 
     #[test]
