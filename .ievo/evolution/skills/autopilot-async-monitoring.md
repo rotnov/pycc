@@ -105,3 +105,31 @@ existing "check real state before waiting" rule (`gh pr checks`/`gh run
 view --log-failed`) — the difference here is act on a partial, still-in-progress
 result the moment it contains a decided outcome, rather than only
 consulting real state once everything is done.
+
+## 2026-08-04 06:26 UTC — A useful ad-hoc script must be committed into the skill, not left in the session scratchpad
+**Trigger:** user-observed mistake ("не усилил скилл а положил себе локально")
+
+не усилил скилл а положил себе локально
+
+Context: wrote a genuinely useful CI-polling script (`ci-watch.sh`, poll a
+PR every N seconds and emit exactly one line the moment it hits a terminal
+state: conflicts, stale/behind base, a failed check, or fully green) and
+ran it successfully via `Monitor` — but only saved it to the session's own
+scratchpad directory (`/private/tmp/claude-.../scratchpad/`), never
+committed to the repository or referenced from this skill. The scratchpad
+is session-specific and gets discarded, so the very tool that would have
+prevented the "minutes into hours" idle-waiting problem this skill exists
+to solve would have been lost the moment the session ended, and the next
+session would have had to reinvent it from scratch or fall back to the
+`ScheduleWakeup`-interval pattern this skill already tries to discourage.
+
+**Rule:** when a script, helper, or technique developed ad hoc during a
+session turns out to be a real, reusable improvement to how this project's
+autopilot loop operates — not a one-off debugging aid for the specific bug
+at hand — commit it into the repository (e.g. `scripts/`) with a matching
+local test (`scripts/test-*.sh`/`.py`/`.rb`, matching this repo's existing
+per-script test convention) and update the owning skill to reference and
+prescribe it, in the same session that developed it. Do not consider the
+work "done" once it merely works once from the scratchpad; it is done once
+a future session (with no memory of this one) can discover and use it via
+the skill alone.
