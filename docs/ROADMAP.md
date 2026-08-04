@@ -169,6 +169,14 @@ Classes, inheritance+C3, `@property`, dataclasses, enums, protocols, `match` (63
 
 **Accept:** conformance ≥ 45 PEPs; diagnostics registry fully implemented for shipped features; `pycc explain` live.
 
+**Pre-implementation issue triage (2026-08-04):** a review of every open GitHub issue against v0.3's own scope (class model, `match` exhaustiveness/binding, exception control flow) found no open issue that blocks *starting* v0.3, but four open P1 correctness gaps sit directly in this milestone's blast radius and should be resolved early in v0.3 rather than deferred to its end, since class-body evaluation order, attribute-annotation checking, and `match` arm binding/exhaustiveness all build on the same control-flow/definite-assignment/constraint-collection machinery these issues describe:
+- [#118](https://github.com/rotnov/pycc/issues/118) — definite assignment is not tracked across control-flow joins; every `match` arm is a join, so this directly affects exhaustiveness and post-match binding correctness.
+- [#245](https://github.com/rotnov/pycc/issues/245) — value-less annotations (`x: int` with no assignment) are not preserved for later assignment checks; directly relevant to class attribute annotations (`self.x: int`) with no immediate value.
+- [#239](https://github.com/rotnov/pycc/issues/239) — list bindings are lost during private-helper constraint collection; likely the same binding-collection machinery `case` pattern capture bindings will need.
+- [#22](https://github.com/rotnov/pycc/issues/22) — Python execution order for function definitions/redefinitions is not preserved; directly affects correct class-body statement evaluation order and method redefinition semantics.
+
+Two P2 diagnostic-classification issues, [#141](https://github.com/rotnov/pycc/issues/141) and [#142](https://github.com/rotnov/pycc/issues/142) (C0001 misclassification for context-invalid statements and unsupported callables), are lower urgency but worth a quick look once `match` introduces new context-invalid-statement shapes (e.g. `case` outside `match`). Every other open P1/P2 compiler issue at review time (string repetition typing, bigint/print/range representation issues, PEP-row fixture scoping) is v0.1/v0.2-scoped and does not touch control flow, the class model, or pattern matching — real bugs worth fixing eventually, but not v0.3 blockers. The remaining ~65 open issues (website/SEO, CI/workflow governance, agent-skill eval/authorization infrastructure) are unrelated to this milestone.
+
 ## v0.4 — projects & incremental
 
 Multi-file, imports, namespace packages (420), incremental cache, parallel codegen, `os`/`pathlib`/`json`/`datetime` native.
