@@ -328,6 +328,46 @@ fn unify_terms(
             .map(|_| false)
             .ok_or_else(|| inference_conflict(code, context, left, right)),
         (Err(var), Ok(ty)) | (Ok(ty), Err(var)) => {
+            // D-133/D-134: this constraint solver exists only to infer a
+            // `Ty::Infer` parameter/return of an unannotated private
+            // helper -- it has no notion of PEP 695 call-site substitution
+            // the way `infer_expr_in`'s own generic-dispatch arm does. A
+            // `Ty::Param` merging into a genuinely unresolved inference
+            // variable here (as opposed to the `(Ok, Ok)` arm above, an
+            // ordinary structural comparison -- e.g. a generic function's
+            // own body unifying its parameter's term against its return
+            // term, both already `Ok(Ty::Param(_))`, ordinary and correct
+            // per Task 2's "opaque, self-consistent" design) would
+            // otherwise silently leak the internal type-parameter name
+            // into a private helper's inferred signature, surfacing later
+            // as a confusing, unnamed failure (e.g. "operator Add is not
+            // defined for `T` and `int`") at a span pointing at the
+            // generic `def` rather than the actual call site -- this
+            // project's own practice (D-105) says a precisely nameable
+            // case like this should instead get a clean, specific
+            // diagnostic. Reuses `T0042` (the same family of
+            // "generic-function shape or call-site instantiation
+            // rejected" failures Task 2 introduced) rather than inventing
+            // a new code, since this is exactly that family's
+            // "instantiation rejected" shape, just discovered from the
+            // inference side instead of the call side.
+            //
+            // Checked as a plain `if` inside this arm (not a separate
+            // `(Err(_), Ok(ty)) | (Ok(ty), Err(_))`-guarded arm above it)
+            // deliberately: every current production call site only ever
+            // reaches this function with the "known-or-generic" side in
+            // one fixed position per call site (e.g. `Return`'s own
+            // `unify_terms(return_term, actual)` always puts the declared
+            // return term first), so a guard on a second, differently-
+            // ordered `Ok`/`Err` pattern alternative would be permanently
+            // unreachable dead code under the D-014 coverage gate -- this
+            // single shared check covers both orderings without splitting
+            // into an unreachable region.
+            if ty_contains_param(&ty) {
+                return Err(t0042(format!(
+                    "{context} cannot be inferred through a PEP 695 generic function's own type parameter -- add an explicit type annotation instead of relying on inference here"
+                )));
+            }
             let root = root(parents, var);
             let merged = match concrete[root].clone() {
                 Some(current) => merge_inferred_types(current.clone(), ty.clone())
@@ -545,6 +585,34 @@ fn collect_expr_constraints(
                 if let Some(arg) = arg
                     && matches!((&arg, parameter), (Err(_), _) | (_, Err(_)))
                 {
+                    // Defense in depth against a `Ty::Param` leak (finding
+                    // #2, PR-13 fix round): this solver has no notion of
+                    // `instantiate_generic_call` -- it constrains an
+                    // unannotated parameter's fresh inference variable
+                    // directly against whichever concrete side is
+                    // available. When that "concrete" side is actually a
+                    // still-generic function's own uninstantiated `x: T`
+                    // parameter type, or a still-generic call's `-> T`
+                    // return type flowing in as an argument, unifying it
+                    // in would bind the unannotated parameter's resolved
+                    // type to the raw internal `Ty::Param` representation
+                    // -- which then surfaces to the user in a later
+                    // diagnostic (e.g. an `Add`-not-defined error
+                    // mentioning `T` instead of a real type). Reject this
+                    // shape here, before that leak can happen, with a
+                    // clear, dedicated diagnostic instead.
+                    if matches!(&arg, Ok(ty) if ty_contains_param(ty))
+                        || matches!(parameter, Ok(ty) if ty_contains_param(ty))
+                    {
+                        return Err(Diagnostic::error(
+                            "T0042",
+                            format!(
+                                "cannot infer the type of argument {} of private helper `{callee}` from a generic function's uninstantiated type; add an explicit type annotation",
+                                index + 1
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
                     unify_terms(
                         parameter.clone(),
                         arg,
@@ -3582,54 +3650,83 @@ fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     let function_local_names = module_function_local_names(hir);
     let mut instantiations: Vec<GenericInstantiation> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut items = Vec::with_capacity(hir.items.len());
-    for (item, local_names) in hir.items.iter().zip(&function_local_names) {
-        match item {
-            HirItem::Function { name, .. } if generics.contains_key(name) => {
-                // Dropped: this is the original, un-substituted generic
-                // function -- only its concrete specializations (appended
-                // below) may reach `pycc_mir`.
-            }
-            HirItem::Function {
-                name,
-                params,
-                return_ty,
-                body,
-            } => {
-                let mut fn_env = env.child_for_function(local_names);
-                for (param_name, param_ty) in params {
-                    fn_env.bind(param_name.clone(), param_ty.clone());
-                }
-                let mut new_body = body.clone();
-                for stmt in new_body.iter_mut() {
-                    rewrite_generic_calls_in_stmt(
-                        &mut fn_env,
-                        local_names,
-                        stmt,
-                        &mut instantiations,
-                        &mut seen,
-                    )?;
-                }
-                items.push(HirItem::Function {
-                    name: name.clone(),
-                    params: params.clone(),
-                    return_ty: return_ty.clone(),
-                    body: new_body,
-                });
-            }
-            HirItem::TopLevelStmt(stmt) => {
-                let mut new_stmt = stmt.clone();
-                rewrite_generic_calls_in_stmt(
-                    &mut env,
-                    local_names,
-                    &mut new_stmt,
-                    &mut instantiations,
-                    &mut seen,
-                )?;
-                items.push(HirItem::TopLevelStmt(new_stmt));
-            }
+
+    // Two passes, matching `check_with_environment`'s own D-041 discipline
+    // exactly (register every function's signature -- already done above --
+    // then process every top-level statement in source order against the
+    // *growing* module `env`, then check every function body against the
+    // module `env` as it stands once the whole module's top-level code has
+    // run): a function body must be able to rewrite a generic call whose
+    // argument reads a module-level global assigned *later* in the file
+    // than the function's own `def`, exactly as `check_function_in` already
+    // allows for ordinary type-checking. A single source-order pass here
+    // would process a function body's rewrite before a later top-level
+    // assignment had grown `env`, wrongly reporting the global as
+    // undefined even though `check`/`check_and_resolve`'s own validation
+    // (which already ran successfully before `monomorphize` is ever called)
+    // accepted the exact same program.
+    //
+    // Each item's *original* index is carried alongside its rewritten form
+    // so the final assembly can restore source order -- this pass processes
+    // top-level statements and function bodies in two separate sweeps, not
+    // in original item order.
+    let mut rewritten: Vec<Option<HirItem>> = vec![None; hir.items.len()];
+
+    // Pass 1: every top-level statement, in source order, growing `env`.
+    for (index, (item, local_names)) in hir.items.iter().zip(&function_local_names).enumerate() {
+        if let HirItem::TopLevelStmt(stmt) = item {
+            let mut new_stmt = stmt.clone();
+            rewrite_generic_calls_in_stmt(
+                &mut env,
+                local_names,
+                &mut new_stmt,
+                &mut instantiations,
+                &mut seen,
+            )?;
+            rewritten[index] = Some(HirItem::TopLevelStmt(new_stmt));
         }
     }
+
+    // Pass 2: every function body, against the module `env` as it stands
+    // once the whole module's top-level code has been processed above --
+    // an original generic function is dropped entirely (only its concrete
+    // specializations, appended below, may reach `pycc_mir`).
+    for (index, (item, local_names)) in hir.items.iter().zip(&function_local_names).enumerate() {
+        let HirItem::Function {
+            name,
+            params,
+            return_ty,
+            body,
+        } = item
+        else {
+            continue;
+        };
+        if generics.contains_key(name) {
+            continue;
+        }
+        let mut fn_env = env.child_for_function(local_names);
+        for (param_name, param_ty) in params {
+            fn_env.bind(param_name.clone(), param_ty.clone());
+        }
+        let mut new_body = body.clone();
+        for stmt in new_body.iter_mut() {
+            rewrite_generic_calls_in_stmt(
+                &mut fn_env,
+                local_names,
+                stmt,
+                &mut instantiations,
+                &mut seen,
+            )?;
+        }
+        rewritten[index] = Some(HirItem::Function {
+            name: name.clone(),
+            params: params.clone(),
+            return_ty: return_ty.clone(),
+            body: new_body,
+        });
+    }
+
+    let mut items = rewritten.into_iter().flatten().collect::<Vec<_>>();
     for instantiation in instantiations {
         items.push(instantiation.specialized);
     }
@@ -15000,6 +15097,130 @@ mod tests {
     }
 
     #[test]
+    fn monomorphize_lets_a_non_generic_function_read_a_module_global_defined_later_in_the_file_alongside_a_generic_function()
+     {
+        // Fix-round regression test (finding #1): `check` (via
+        // `check_with_environment`'s three-pass D-041 discipline) and
+        // `check_and_resolve`/`monomorphize` must agree on validity for a
+        // module that mixes a generic function with a non-generic function
+        // reading a module-level global assigned *after* that function's
+        // own `def` -- Python only evaluates a function body when called,
+        // typically after the whole module has already run top to bottom.
+        // Before this fix, `monomorphize` walked `hir.items` in a single
+        // source-order pass, so `uses_global`'s body was rewritten before
+        // the later `g: int = 5` top-level assignment had grown `env`,
+        // wrongly reporting `g` as undefined even though `check` (using the
+        // correct two-phase order) already accepted the exact same program.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let uses_global = HirItem::Function {
+            name: "uses_global".to_string(),
+            params: vec![],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("g".to_string())))],
+        };
+        let global_assign = HirItem::TopLevelStmt(HirStmt::AnnAssign {
+            target: "g".to_string(),
+            annotation: Ty::Int,
+            value: Some(HirExpr::IntLiteral(5)),
+        });
+        let call_uses_global = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "uses_global".to_string(),
+                args: vec![],
+            }],
+        }));
+        let call_identity = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            }],
+        }));
+        let hir = HirModule {
+            items: vec![
+                identity,
+                uses_global.clone(),
+                global_assign,
+                call_uses_global,
+                call_identity,
+            ],
+        };
+        // `check` accepts this module (three-pass discipline lets
+        // `uses_global` see `g` regardless of source position).
+        assert!(check(&hir).is_ok());
+        // `check_and_resolve`/`monomorphize` must accept it too, and must
+        // not have dropped or mis-rewritten the non-generic function.
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert_eq!(find_function(&resolved, "uses_global"), Some(&uses_global));
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn check_and_resolve_monomorphizes_two_call_sites_at_different_concrete_types_into_distinct_specializations()
+     {
+        // Fix-round regression test (finding #3): the actual monomorphization
+        // crux is that two call sites at *different* concrete types produce
+        // two distinct, correctly-routed specializations -- not the same
+        // specialization reused, and not swapped between call sites.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let call_int = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            }],
+        }));
+        let call_str = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::StringLiteral("s".to_string())],
+            }],
+        }));
+        let hir = HirModule {
+            items: vec![identity, call_int, call_str],
+        };
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(find_function(&resolved, "identity").is_none());
+
+        let int_specialization = find_function(&resolved, "0gen_identity__T_int")
+            .expect("an `int` specialization must exist");
+        let str_specialization = find_function(&resolved, "0gen_identity__T_str")
+            .expect("a `str` specialization must exist");
+        assert_ne!(int_specialization, str_specialization);
+        assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+        assert_eq!(count_function(&resolved, "0gen_identity__T_str"), 1);
+
+        // Each call site's rewritten callee must point to its own
+        // specialization -- not the same one, not swapped. The original
+        // generic `identity` def (index 0) is dropped entirely, so the two
+        // top-level call statements shift down to indices 0 and 1.
+        assert_eq!(
+            resolved.items[0],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "0gen_identity__T_int".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                }],
+            }))
+        );
+        assert_eq!(
+            resolved.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "0gen_identity__T_str".to_string(),
+                    args: vec![HirExpr::StringLiteral("s".to_string())],
+                }],
+            }))
+        );
+    }
+
+    #[test]
     fn check_and_resolve_dedupes_two_call_sites_with_the_same_concrete_type() {
         let param = Ty::Param(Box::new("T".to_string()));
         let identity = generic_identity_fn(param.clone(), param);
@@ -15082,6 +15303,125 @@ mod tests {
         let resolved = check_and_resolve(&hir).unwrap();
         assert!(find_function(&resolved, "identity").is_none());
         assert_eq!(count_function(&resolved, "0gen_identity__T_int"), 1);
+    }
+
+    #[test]
+    fn an_unannotated_private_helper_fed_a_generic_call_s_result_reports_a_clean_diagnostic_instead_of_leaking_ty_param()
+     {
+        // Fix-round regression test (finding #2): `_helper(v)` has no
+        // annotation, so its parameter type must be inferred from its call
+        // site's argument -- `_helper(identity(1))`, where `identity` is a
+        // still-generic function whose call this solver-based inference
+        // path cannot instantiate (it has no notion of
+        // `instantiate_generic_call`). Before this fix, the solver
+        // unified `_helper`'s fresh inference variable directly against
+        // `identity`'s raw, uninstantiated `Ty::Param("T")` signature,
+        // producing a confusing diagnostic that named the internal `T`
+        // representation directly (e.g. "operator Add is not defined for
+        // `T` and `int`"). This must instead fail with a clean, dedicated
+        // diagnostic that never mentions `Ty::Param`/`T` as if it were a
+        // real type.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let helper = HirItem::Function {
+            name: "_helper".to_string(),
+            params: vec![("v".to_string(), Ty::Infer)],
+            return_ty: Ty::Infer,
+            body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::Name("v".to_string())),
+                right: Box::new(HirExpr::IntLiteral(1)),
+            }))],
+        };
+        let use_helper = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "_helper".to_string(),
+            args: vec![HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            }],
+        }));
+        let hir = HirModule {
+            items: vec![identity, helper, use_helper],
+        };
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0042");
+        assert!(
+            !err.message.contains("Ty::Param") && !err.message.contains("\"T\""),
+            "diagnostic must never leak the raw `Ty::Param` internal representation, got: {}",
+            err.message
+        );
+        // `check` (the validation-only entry point) must fail the same way.
+        let check_err = check(&hir).unwrap_err();
+        assert_eq!(check_err.code, "T0042");
+    }
+
+    #[test]
+    fn an_unannotated_private_helper_s_argument_passed_directly_into_a_generic_parameter_reports_a_clean_diagnostic()
+     {
+        // Complements the test above by exercising the *other* operand of
+        // `collect_expr_constraints`'s own `Ty::Param`-leak guard: here it
+        // is the callee's own uninstantiated parameter type
+        // (`identity`'s `x: T`) that is `Ok(Ty::Param(_))`, not the
+        // caller-supplied argument -- `_helper(x)`'s own unannotated `x` is
+        // the unresolved (`Err`) side instead. Both operands of the `||`
+        // need their own case to reach `true` (the other test's argument
+        // is already resolved when this one's is not, and vice versa),
+        // since Rust's `||` short-circuits and a covering test for only one
+        // operand leaves the other's `true` branch unreached.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let helper = HirItem::Function {
+            name: "_helper".to_string(),
+            params: vec![("x".to_string(), Ty::Infer)],
+            return_ty: Ty::Infer,
+            body: vec![HirStmt::Return(Some(HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::Name("x".to_string())],
+            }))],
+        };
+        let use_helper = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "_helper".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        }));
+        let hir = HirModule {
+            items: vec![identity, helper, use_helper],
+        };
+        assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
+        assert_eq!(check(&hir).unwrap_err().code, "T0042");
+    }
+
+    #[test]
+    fn an_unannotated_private_helper_s_return_type_fed_directly_from_a_generic_call_reports_a_clean_diagnostic()
+     {
+        // Exercises `unify_terms`'s own dedicated `Ty::Param`-leak guard
+        // directly (as opposed to `collect_expr_constraints`'s own Call-arm
+        // guard, covered by the two tests above): a private helper's
+        // *return* type is unified against its body's final expression
+        // unconditionally (`collect_block_constraints`'s `Return` handling
+        // has no analogous pre-guard of its own), so `_helper`'s
+        // unannotated return type unifying directly against `identity(1)`'s
+        // own uninstantiated `Ty::Param` return term must still produce a
+        // clean `T0042`, not a leaked-`Ty::Param` diagnostic.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let identity = generic_identity_fn(param.clone(), param);
+        let helper = HirItem::Function {
+            name: "_helper".to_string(),
+            params: vec![],
+            return_ty: Ty::Infer,
+            body: vec![HirStmt::Return(Some(HirExpr::Call {
+                callee: "identity".to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            }))],
+        };
+        let use_helper = HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "_helper".to_string(),
+            args: vec![],
+        }));
+        let hir = HirModule {
+            items: vec![identity, helper, use_helper],
+        };
+        assert_eq!(check_and_resolve(&hir).unwrap_err().code, "T0042");
+        assert_eq!(check(&hir).unwrap_err().code, "T0042");
     }
 
     #[test]
