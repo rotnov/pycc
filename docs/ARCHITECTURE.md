@@ -70,8 +70,10 @@ MIR-lowering task), and `pycc_codegen` (D-105's codegen task) against
 `list[int]` program end to end, at module scope or inside a private helper
 (the two places D-105's first scope cut allows a `list[int]` value to live).
 Only `list[int]` reaches codegen: `T0034` rejects every other element type
-first. `pycc_codegen` owns the tagged/raw conversion at that runtime
-boundary in both directions (D-106), and `list[T]` values are deliberately
+first. D-141 supersedes D-106's raw payload: `pycc_codegen` validates each
+int-compatible encoded element at ingress and stores it unchanged, preserving
+`False`/`True` identity markers across append/read/pop/iteration/slicing while
+keeping indices and lengths raw implementation counters. `list[T]` values are deliberately
 never refcounted in v0.2, so their allocations leak for the process's
 lifetime (D-107). Two *operations* on a `list[T]` still type-check and then
 stop codegen with a "not supported yet" panic rather than compiling, because

@@ -34,12 +34,23 @@ fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
 }
 
-/// See D-061: every `Ty::Int` value is one LLVM `i64`. Its low bit is the
-/// discriminant -- `1` means the high 63 bits (arithmetic-shift-recovered)
-/// are the real value; `0` means the full 64 bits are a heap `BigInt`
-/// pointer. `tag_bigint` (Task 9) constructs the `0` case on arithmetic
-/// overflow; `bigint_ref`/`to_sign_and_magnitude` interpret it.
+/// See D-061/D-141: every int-compatible value is one LLVM `i64`. Odd words
+/// are ordinary smallints; exact words `2` and `6` preserve `False` and
+/// `True` identity after a bool-to-int boundary; non-zero words aligned to
+/// four bytes are heap `BigInt` pointers. `classify_encoded_int` is the one
+/// fail-closed classifier used before interpreting any even word.
 const TAG_BIT: i64 = 1;
+const LOW_TAG_MASK: i64 = 0b11;
+const BOOL_FALSE_MARKER: i64 = 0b0010;
+const BOOL_TRUE_MARKER: i64 = 0b0110;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EncodedIntKind {
+    SmallInt,
+    BoolFalse,
+    BoolTrue,
+    BigInt,
+}
 
 fn tag_smallint(value: i64) -> i64 {
     (value << 1) | TAG_BIT
@@ -53,6 +64,34 @@ fn is_smallint(tagged: i64) -> bool {
     tagged & TAG_BIT == TAG_BIT
 }
 
+/// Classifies every word in the int-compatible ABI before any pointer cast.
+/// Odd words are ordinary smallints; two exact low-tag-`10` words preserve
+/// bool identity; non-zero aligned words are bigint pointers. Every other
+/// pattern fails closed instead of being dereferenced as an attacker-chosen
+/// pointer.
+fn classify_encoded_int(encoded: i64) -> EncodedIntKind {
+    if is_smallint(encoded) {
+        EncodedIntKind::SmallInt
+    } else if encoded == BOOL_FALSE_MARKER {
+        EncodedIntKind::BoolFalse
+    } else if encoded == BOOL_TRUE_MARKER {
+        EncodedIntKind::BoolTrue
+    } else if encoded != 0 && encoded & LOW_TAG_MASK == 0 {
+        EncodedIntKind::BigInt
+    } else {
+        panic!("pycc_rt: invalid encoded int word {encoded:#x}")
+    }
+}
+
+fn inline_int_value(encoded: i64) -> Option<i64> {
+    match classify_encoded_int(encoded) {
+        EncodedIntKind::SmallInt => Some(untag_smallint(encoded)),
+        EncodedIntKind::BoolFalse => Some(0),
+        EncodedIntKind::BoolTrue => Some(1),
+        EncodedIntKind::BigInt => None,
+    }
+}
+
 /// `None` when `value` needs the full 64 bits (including sign) to
 /// represent -- i.e. tagging then untagging would not round-trip.
 fn fits_smallint(value: i64) -> Option<i64> {
@@ -60,10 +99,10 @@ fn fits_smallint(value: i64) -> Option<i64> {
     (untag_smallint(tagged) == value).then_some(tagged)
 }
 
-fn require_smallint(tagged: i64, context: &str) {
-    if !is_smallint(tagged) {
-        panic!("pycc_rt: {context} a bigint-valued `int` is not supported yet");
-    }
+fn require_inline_int(encoded: i64, context: &str) -> i64 {
+    inline_int_value(encoded).unwrap_or_else(|| {
+        panic!("pycc_rt: {context} a bigint-valued `int` is not supported yet")
+    })
 }
 
 /// D-058: hand-rolled sign-magnitude limbs, base 2^32, little-endian,
@@ -77,6 +116,10 @@ struct BigIntObj {
     negative: bool,
     limbs: Vec<u32>,
 }
+
+const _: () = assert!(std::mem::align_of::<BigIntObj>() >= 4);
+const _: () =
+    assert!(std::mem::size_of::<*const BigIntObj>() <= std::mem::size_of::<i64>());
 
 fn trim(limbs: &[u32]) -> Vec<u32> {
     let mut end = limbs.len();
@@ -177,15 +220,17 @@ fn tag_bigint(b: BigIntObj) -> i64 {
 }
 
 /// # Safety
-/// `tagged` must be a `BigIntObj` pointer (an even bit pattern -- D-061);
-/// every call site below checks `!is_smallint(tagged)` first.
+/// `tagged` must classify as a `BigIntObj` pointer. Classification is
+/// repeated here so no dereference can bypass the fail-closed tag check.
 unsafe fn bigint_ref<'a>(tagged: i64) -> &'a BigIntObj {
+    if classify_encoded_int(tagged) != EncodedIntKind::BigInt {
+        panic!("pycc_rt: internal error: attempted bigint dereference of a non-pointer int word")
+    }
     unsafe { &*(tagged as *const BigIntObj) }
 }
 
 fn to_sign_and_magnitude(tagged: i64) -> (bool, Vec<u32>) {
-    if is_smallint(tagged) {
-        let v = untag_smallint(tagged);
+    if let Some(v) = inline_int_value(tagged) {
         let negative = v < 0;
         let mag = v.unsigned_abs();
         (
@@ -264,18 +309,15 @@ fn bigint_to_decimal_string(negative: bool, limbs: &[u32]) -> String {
 // calling the public wrapper (also exercising the wrapper's own line, no
 // unwind ever crosses its boundary on those paths).
 fn int_add(a: i64, b: i64) -> i64 {
-    if is_smallint(a) && is_smallint(b) {
-        if let Some(result) = untag_smallint(a)
-            .checked_add(untag_smallint(b))
-            .and_then(fits_smallint)
-        {
+    if let (Some(a), Some(b)) = (inline_int_value(a), inline_int_value(b)) {
+        if let Some(result) = a.checked_add(b).and_then(fits_smallint) {
             return result;
         }
         // Both operands fit 63 bits, so their true sum always fits i128
         // with room to spare -- exact, no further bigint math needed
         // for this specific promotion step.
         return tag_bigint(bigint_from_i128(
-            untag_smallint(a) as i128 + untag_smallint(b) as i128,
+            a as i128 + b as i128,
         ));
     }
     let (a_neg, a_mag) = to_sign_and_magnitude(a);
@@ -302,15 +344,12 @@ pub extern "C" fn pycc_rt_int_add(a: i64, b: i64) -> i64 {
 }
 
 fn int_sub(a: i64, b: i64) -> i64 {
-    if is_smallint(a) && is_smallint(b) {
-        if let Some(result) = untag_smallint(a)
-            .checked_sub(untag_smallint(b))
-            .and_then(fits_smallint)
-        {
+    if let (Some(a), Some(b)) = (inline_int_value(a), inline_int_value(b)) {
+        if let Some(result) = a.checked_sub(b).and_then(fits_smallint) {
             return result;
         }
         return tag_bigint(bigint_from_i128(
-            untag_smallint(a) as i128 - untag_smallint(b) as i128,
+            a as i128 - b as i128,
         ));
     }
     let (a_neg, a_mag) = to_sign_and_magnitude(a);
@@ -324,13 +363,13 @@ pub extern "C" fn pycc_rt_int_sub(a: i64, b: i64) -> i64 {
 }
 
 fn int_mul(a: i64, b: i64) -> i64 {
-    require_smallint(a, "multiplying");
-    require_smallint(b, "multiplying");
-    // Two tagged operands are each at most 62 magnitude bits, so their exact
-    // product always fits in i128. Keep the tagged fast path when possible and
-    // promote only the result, matching add/sub without requiring general
-    // bigint multiplication yet.
-    let product = untag_smallint(a) as i128 * untag_smallint(b) as i128;
+    let a = require_inline_int(a, "multiplying");
+    let b = require_inline_int(b, "multiplying");
+    // Two decoded inline operands are each at most 62 magnitude bits, so
+    // their exact product always fits in i128. Keep the tagged fast path when
+    // possible and promote only the result, matching add/sub without
+    // requiring general bigint multiplication yet.
+    let product = a as i128 * b as i128;
     i64::try_from(product)
         .ok()
         .and_then(fits_smallint)
@@ -343,9 +382,8 @@ pub extern "C" fn pycc_rt_int_mul(a: i64, b: i64) -> i64 {
 }
 
 fn int_floordiv(a: i64, b: i64) -> i64 {
-    require_smallint(a, "dividing");
-    require_smallint(b, "dividing");
-    let (a, b) = (untag_smallint(a), untag_smallint(b));
+    let a = require_inline_int(a, "dividing");
+    let b = require_inline_int(b, "dividing");
     if b == 0 {
         panic!("pycc_rt: integer division by zero");
     }
@@ -353,16 +391,11 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
     // against the classic hardware trap on a raw `i64::MIN / -1` (the
     // mathematical quotient `2^63` doesn't fit `i64`, and Rust's checked
     // `/`/`%` themselves panic/trap on that exact pair). That guard is
-    // unreachable dead code under D-061's fixed tagged representation:
-    // `a`/`b` here are already `untag_smallint`-ed from a valid tagged
-    // `i64` argument, and for *every* `i64` value `t`, `t >> 1` (what
-    // `untag_smallint` computes) lands in `[i64::MIN >> 1, i64::MAX >>
-    // 1]` -- strictly inside `i64`'s own range and excluding `i64::MIN`
-    // itself (verified: `is_smallint`/`require_smallint` only check the
-    // tag *bit*, and every odd `i64` round-trips through
-    // `tag_smallint`/`untag_smallint` exactly, so this bound holds for
-    // literally every value that can reach this function, not just
-    // "typical" callers). `cargo llvm-cov`'s region coverage confirmed
+    // unreachable dead code under D-061/D-141's encoded representation:
+    // `a`/`b` here are already decoded from a valid inline int-compatible
+    // argument. Smallints decode within D-061's 63-bit range and bool markers
+    // decode to `0`/`1`, so neither can equal `i64::MIN`. `cargo llvm-cov`'s
+    // region coverage confirmed
     // this empirically: the removed branch's body never executed under
     // any test, including one written specifically to try to hit it.
     // The `fits_smallint` check below still catches the *actual*
@@ -386,22 +419,21 @@ pub extern "C" fn pycc_rt_int_floordiv(a: i64, b: i64) -> i64 {
 }
 
 fn int_floormod(a: i64, b: i64) -> i64 {
-    require_smallint(a, "computing the modulo of");
-    require_smallint(b, "computing the modulo of");
-    let (a, b) = (untag_smallint(a), untag_smallint(b));
+    let a = require_inline_int(a, "computing the modulo of");
+    let b = require_inline_int(b, "computing the modulo of");
     if b == 0 {
         panic!("pycc_rt: integer modulo by zero");
     }
     // Deviation from the task brief: the brief's own code special-cased
     // `a == i64::MIN && b == -1` here (mirroring `int_floordiv`'s
     // original guard) to sidestep the same raw `%` hardware trap. Under
-    // D-061's fixed tagged representation this is unreachable for the
+    // D-061/D-141 encoded representation this is unreachable for the
     // same reason `int_floordiv`'s removed guard was (see its comment):
-    // an already-tagged operand's untagged form can never equal
+    // a decoded inline operand can never equal
     // `i64::MIN`. Floor-mod's *result* can't overflow the taggable range
     // either -- unlike floor-division, which the comment on
     // `int_floordiv` explains can: floor-mod's result always satisfies
-    // `|result| < |b|`, and every already-tagged `b` satisfies `|b| <=
+    // `|result| < |b|`, and every decoded inline `b` satisfies `|b| <=
     // 2^62` (D-061's 63-bit range), so `floored` always re-fits and the
     // `fits_smallint` round-trip check the brief had here (like
     // `int_floordiv`'s) is provably always-`Some` -- confirmed by
@@ -422,9 +454,8 @@ pub extern "C" fn pycc_rt_int_floormod(a: i64, b: i64) -> i64 {
 }
 
 fn int_pow(base: i64, exp: i64) -> i64 {
-    require_smallint(base, "exponentiating");
-    require_smallint(exp, "exponentiating");
-    let mut exp = untag_smallint(exp);
+    let _ = require_inline_int(base, "exponentiating");
+    let mut exp = require_inline_int(exp, "exponentiating");
     if exp < 0 {
         panic!(
             "pycc_rt: negative exponent for `int ** int` is not supported \
@@ -454,9 +485,9 @@ pub extern "C" fn pycc_rt_int_pow(base: i64, exp: i64) -> i64 {
 }
 
 fn int_cmp(a: i64, b: i64) -> i32 {
-    require_smallint(a, "comparing");
-    require_smallint(b, "comparing");
-    match untag_smallint(a).cmp(&untag_smallint(b)) {
+    let a = require_inline_int(a, "comparing");
+    let b = require_inline_int(b, "comparing");
+    match a.cmp(&b) {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
@@ -492,17 +523,15 @@ pub extern "C" fn pycc_rt_print_i64(value: i64) {
     print!("{}", format_i64_line(value));
 }
 
-/// `int`'s truthiness for `if`/`while` conditions (Task 4). Never panics --
-/// unlike every `pycc_rt_int_*` arithmetic/comparison function above, this
-/// one has no failure mode to guard against, so (per this crate's
-/// established convention -- see the implementation note above `int_add`)
-/// it does not need the private-logic/public-wrapper split: nothing here
-/// ever unwinds, so there's no abort-vs-catch distinction for a caller to
-/// trip over.
+/// `int`'s truthiness for `if`/`while` conditions (Task 4, D-141). Valid
+/// smallints and bool-identity markers are decoded inline; valid bigint
+/// pointers inspect their magnitude. A malformed encoded word is an internal
+/// ABI violation and fails closed at this C boundary rather than being
+/// dereferenced as a pointer.
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
-    if is_smallint(tagged) {
-        return i8::from(untag_smallint(tagged) != 0);
+    if let Some(value) = inline_int_value(tagged) {
+        return i8::from(value != 0);
     }
     // A bigint can now legitimately be zero (Task 9's `bigint_add_signed`
     // "equal magnitude, opposite sign" case), so the old "any bigint tag
@@ -522,7 +551,7 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // past a plain `extern "C" fn`'s own boundary is caught right there and
 // turned into a process abort, regardless of who calls it -- including
 // this crate's own same-binary Rust tests. `pycc_rt_range_continue` *can*
-// panic (`require_smallint`'s bigint-rejection path, and the zero-step
+// panic (`require_inline_int`'s bigint-rejection path, and the zero-step
 // case below), so it needs the same split every other panicking
 // `pycc_rt_int_*` function already gets: a private, ordinary-Rust-ABI
 // `range_continue` holding the real logic (freely panics, unwinds
@@ -532,13 +561,10 @@ pub extern "C" fn pycc_rt_int_truthy(tagged: i64) -> i8 {
 // not the public wrapper, for the same reason every other
 // `#[should_panic]` test in this file does.
 fn range_continue(i: i64, stop: i64, step: i64) -> i8 {
-    require_smallint(i, "iterating");
-    require_smallint(stop, "iterating");
-    require_smallint(step, "iterating");
     let (i, stop, step) = (
-        untag_smallint(i),
-        untag_smallint(stop),
-        untag_smallint(step),
+        require_inline_int(i, "iterating"),
+        require_inline_int(stop, "iterating"),
+        require_inline_int(step, "iterating"),
     );
     match step.cmp(&0) {
         std::cmp::Ordering::Greater => i8::from(i < stop),
@@ -552,10 +578,11 @@ pub extern "C" fn pycc_rt_range_continue(i: i64, stop: i64, step: i64) -> i8 {
     range_continue(i, stop, step)
 }
 
-/// Converts a tagged `int` (D-061) to its `f64` value -- the `int` half of
-/// Python's `int`/`float` arithmetic promotion (Task 6). Can panic (via
-/// `require_smallint`'s bigint-rejection path), so -- per this crate's
-/// established convention, see the implementation note above `int_add` --
+/// Converts an encoded int-compatible value (D-061/D-141) to `f64` -- the
+/// `int` half of Python's `int`/`float` arithmetic promotion (Task 6). Can
+/// panic (via `require_inline_int`'s bigint/invalid-word rejection path), so
+/// -- per this crate's established convention, see the implementation note
+/// above `int_add` --
 /// this is split into this private, ordinary-Rust-ABI function (freely
 /// panics, unwinds normally) and a thin `pub extern "C"` wrapper below.
 /// Deviation from the task brief: the brief's own Step 2 code made this a
@@ -566,8 +593,7 @@ pub extern "C" fn pycc_rt_range_continue(i: i64, stop: i64, step: i64) -> i8 {
 /// function is no exception just because its own tests don't currently
 /// hit that path directly.
 fn int_to_float(tagged: i64) -> f64 {
-    require_smallint(tagged, "converting");
-    untag_smallint(tagged) as f64
+    require_inline_int(tagged, "converting") as f64
 }
 
 #[unsafe(no_mangle)]
@@ -575,22 +601,13 @@ pub extern "C" fn pycc_rt_int_to_float(tagged: i64) -> f64 {
     int_to_float(tagged)
 }
 
-/// D-106: the input-side half of `PyIntListObj`'s raw/tagged boundary
-/// conversion. Takes a D-061-tagged `Ty::Int` value (an `.append()`
-/// argument, a subscript index) and returns the raw, untagged `i64`
-/// `PyIntListObj` actually stores/compares -- panicking honestly instead
-/// of silently corrupting data if `tagged` is bigint-tagged (a raw `i64`
-/// slot has no room to represent a bigint at all; this project's `pycc_rt:
-/// <description>` panic convention applies here exactly as it does
-/// everywhere else in this file).
-///
-/// Checks `is_smallint` directly rather than going through the existing
-/// private `require_smallint` wrapper -- that helper's message template
-/// ("{context} a bigint-valued `int` is not supported yet") is shaped for a
-/// gerund phrase ("comparing", "exponentiating"); this call site names
-/// `list[int]` and covers both elements and indices, which doesn't fit that
-/// template cleanly, so it states its own message directly instead of
-/// forcing an awkward fit.
+/// D-141 checked decoder for an int-compatible ABI word. Ordinary smallints
+/// decode to their numeric value, while the exact `False`/`True` markers
+/// decode to `0`/`1`. Bigints and malformed words fail closed. Generated
+/// code uses the numeric result for container indices, slice bounds, and
+/// range normalization. Container value ingress calls this function only to
+/// validate the word, then stores the original encoded word unchanged so a
+/// bool marker keeps its runtime identity.
 ///
 /// --- Implementation note / deviation from the task brief ---------------
 ///
@@ -609,10 +626,12 @@ pub extern "C" fn pycc_rt_int_to_float(tagged: i64) -> f64 {
 /// the exact brief-specified name and signature for Task 11b's generated
 /// code to call unchanged.
 fn int_untag_checked(tagged: i64) -> i64 {
-    if !is_smallint(tagged) {
-        panic!("pycc_rt: list[int] does not support bigint-valued elements or indices yet");
+    match inline_int_value(tagged) {
+        Some(value) => value,
+        None => {
+            panic!("pycc_rt: int boundary does not support bigint-valued values yet")
+        }
     }
-    untag_smallint(tagged)
 }
 
 /// # Safety
@@ -885,7 +904,7 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
 // The brief's own version of `pycc_rt_int_to_str`/`pycc_rt_float_to_str`
 // gave each straight to a single `#[unsafe(no_mangle)] pub extern "C" fn`
 // (no private-logic/public-wrapper split). Both can panic --
-// `int_to_str` via `require_smallint`'s bigint-rejection path (not yet
+// `int_to_str` via the encoded-int classifier's rejection path (not yet
 // exercised by any test in *this* task, since Task 9 is what first makes a
 // bigint-valued tagged `int` reachable, but still a real panicking path
 // today), `float_to_str` via its own scientific-notation-range rejection
@@ -906,21 +925,24 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
 // literal`'s own doc comment) so it keeps the brief's single-function
 // shape unchanged.
 
-/// Formats a tagged `int` the way CPython's own `str(n)` would (Task 8) --
+/// Formats an encoded int-compatible value the way CPython's own `str(n)`
+/// would (Task 8/D-141) --
 /// reused unchanged by f-string interpolation and Task 10's `print`. Shares
 /// `format_i64_line`'s digit-formatting logic with `pycc_rt_print_i64`
 /// rather than duplicating it, trimming the trailing newline that function
 /// adds for its own (unrelated) purpose.
 fn int_to_str(tagged: i64) -> *mut PyStrObj {
-    if is_smallint(tagged) {
-        return new_pystr(
-            format_i64_line(untag_smallint(tagged))
-                .trim_end()
-                .as_bytes(),
-        );
+    match classify_encoded_int(tagged) {
+        EncodedIntKind::SmallInt => new_pystr(
+            format_i64_line(untag_smallint(tagged)).trim_end().as_bytes(),
+        ),
+        EncodedIntKind::BoolFalse => new_pystr(b"False"),
+        EncodedIntKind::BoolTrue => new_pystr(b"True"),
+        EncodedIntKind::BigInt => {
+            let b = unsafe { bigint_ref(tagged) };
+            new_pystr(bigint_to_decimal_string(b.negative, &b.limbs).as_bytes())
+        }
     }
-    let b = unsafe { bigint_ref(tagged) };
-    new_pystr(bigint_to_decimal_string(b.negative, &b.limbs).as_bytes())
 }
 
 /// See the panic-across-FFI note above `pycc_rt_int_add`: this crosses no
@@ -1086,20 +1108,14 @@ pub extern "C" fn pycc_rt_print_none() {
 /// signature. Both fields stay private, so the "opaque pointer" contract
 /// still holds for any real Rust caller.
 ///
-/// **Element representation -- deliberately *not* D-061-tagged.** Every
-/// `pycc_rt_int_*` function elsewhere in this file takes/returns a
-/// D-061-tagged `i64` (the low bit is the smallint-vs-bigint-pointer
-/// discriminant) -- D-061's own text says so explicitly ("never a raw
-/// untagged value"). This object's stored elements break that pattern on
-/// purpose: they are raw, untagged 64-bit slots, matching `docs/
-/// RUNTIME.md`'s stated `list[T]` design ("growable vec of unboxed `T`...
-/// SIMD-friendly"), the same kind of narrow, justified exception D-061's
-/// own consequences section already grants `bool` (its own untagged `i8`
-/// representation). This is reconciled with its codegen consumer
-/// (Task 11a/11b, D-106) -- see the `# Element representation` note on
-/// `pycc_rt_int_list_append`/`_get`/`_len` below for the exact tag/untag
-/// conversions a caller crossing this boundary performs, and the known
-/// bigint gap that follows from it.
+/// **Element representation (D-141).** Each slot stores the int-compatible
+/// encoded word unchanged: odd ordinary smallint, exact `2`/`6` bool marker,
+/// or (once container bigints are supported) an aligned bigint pointer.
+/// Current generated ingress validates every word with
+/// `pycc_rt_int_untag_checked`, so bigint elements remain an explicit scope
+/// cut, but it stores the original encoded word rather than the decoded
+/// number. Reads, iteration, slicing, and pop therefore preserve `False`/
+/// `True` identity. Lengths and indices remain raw implementation counters.
 pub struct PyIntListObj {
     rc: Cell<u32>,
     items: Cell<Vec<i64>>,
@@ -1125,18 +1141,11 @@ pub extern "C" fn pycc_rt_int_list_new() -> *mut PyIntListObj {
 /// capacity-doubling by hand.
 ///
 /// # Element representation
-/// `value` is stored exactly as given -- a **raw, untagged** `i64` (see
-/// `PyIntListObj`'s own doc comment). A `Ty::Int` value flowing out of
-/// ordinary codegen (`emit_expr` on a `list[int]` element expression) is
-/// D-061-tagged, so a caller crossing this boundary must call
-/// `pycc_rt_int_untag_checked` on it first, exactly once, before passing
-/// it here. A bigint-tagged `Ty::Int` (one that has overflowed past
-/// D-061's 63-bit smallint range) cannot be represented by this raw `i64`
-/// slot at all -- `pycc_rt_int_untag_checked` rejects it with an honest
-/// panic (`"pycc_rt: list[int] does not support bigint-valued elements or
-/// indices yet"`) rather than silently producing garbage, and
-/// `pycc_codegen` calls it at every input-side boundary (D-106), so this
-/// function itself never sees a bigint-tagged value in practice.
+/// `value` is an encoded D-141 word and is stored exactly as given. The FFI
+/// caller must first validate it with `pycc_rt_int_untag_checked`; generated
+/// code does so and deliberately ignores the decoded result. This preserves
+/// a bool marker while retaining the current explicit rejection of bigint
+/// container elements.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.
@@ -1195,17 +1204,10 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 /// last-element behavior.
 ///
 /// # Element representation
-/// Two independent conversions, in opposite directions, both needed by
-/// any caller crossing this boundary (see `PyIntListObj`'s own doc
-/// comment): `index` is a container offset, not a stored element -- it
-/// arrives as a **raw, untagged** `i64` here, so a caller with a
-/// D-061-tagged `Ty::Int` index expression must `pycc_rt_int_untag_checked`
-/// it first, exactly like `pycc_rt_int_list_append`'s `value`. The **return
-/// value**, in contrast, is a raw stored element read straight back out --
-/// a caller that treats it as an ordinary `Ty::Int` value anywhere else in
-/// generated code (printing it, comparing it, arithmetic on it) must
-/// tag it first (`raw_i64_to_tagged_int` on the `pycc_codegen` side),
-/// since every other `pycc_rt_int_*` function expects a tagged operand.
+/// `index` is a raw container offset; generated code obtains it by decoding
+/// an int-compatible expression with `pycc_rt_int_untag_checked`. The return
+/// value is the stored D-141 encoded word unchanged and needs no conversion
+/// before being used as an ordinary `Ty::Int` expression.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.
@@ -1225,8 +1227,8 @@ pub unsafe extern "C" fn pycc_rt_int_list_get(list: *mut PyIntListObj, index: i6
 /// Python semantics, so a caller that uses this return value as a
 /// `Ty::Int` anywhere else in generated code (e.g. passing it to
 /// `pycc_rt_int_to_str` for `print(len(x))`) must `tag_smallint` it
-/// first, the same conversion `pycc_rt_int_list_get`'s own return value
-/// needs.
+/// first. Stored-element reads, unlike this raw count, already return an
+/// encoded word and need no conversion.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.
@@ -1339,9 +1341,9 @@ fn int_list_slice(list: &PyIntListObj, start: i64, stop: i64, step: i64) -> *mut
 /// D-061-tagged `Ty::Int` values -- a caller with a tagged operand must
 /// `pycc_rt_int_untag_checked` each one first, exactly like
 /// `pycc_rt_int_list_get`'s own `index` parameter. The returned list's own
-/// elements are copied through unchanged (already raw, untagged `i64`s per
-/// `PyIntListObj`'s own representation, D-106) -- no per-element tag/untag
-/// conversion happens here at all, unlike a single-element read.
+/// elements are copied through unchanged (already D-141 encoded words per
+/// `PyIntListObj`'s representation) -- no per-element
+/// conversion happens here, exactly like a single-element read.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer. Takes `*mut` rather than
@@ -1388,10 +1390,8 @@ fn int_list_pop(list: &PyIntListObj) -> i64 {
 /// `"pycc_rt: pop from empty list"`.
 ///
 /// # Element representation
-/// The returned value is a raw, untagged `i64` read straight out of the
-/// backing store -- a caller must `raw_i64_to_tagged_int` it before
-/// treating it as an ordinary `Ty::Int`, exactly like
-/// `pycc_rt_int_list_get`'s own return value.
+/// The returned value is the stored D-141 encoded word unchanged, so a bool
+/// marker keeps its runtime identity and no output-side conversion is needed.
 ///
 /// # Safety
 /// `list` must be a live `PyIntListObj` pointer.
@@ -1407,7 +1407,9 @@ pub unsafe extern "C" fn pycc_rt_int_list_pop(list: *mut PyIntListObj) -> i64 {
 /// runtime-panic mode from overlapping borrows. Not `#[repr(C)]` -- never
 /// crosses the LLVM/Rust boundary by value, only as an opaque pointer
 /// (mirrors `PyStrObj`/`PyIntListObj`). Lookup is linear-scan comparison
-/// via `pycc_rt_str_cmp` (D-121), not a hash table.
+/// via `pycc_rt_str_cmp` (D-121), not a hash table. Values are D-141 encoded
+/// words preserved unchanged across set/get/get-or-default; generated ingress
+/// validates them with `pycc_rt_int_untag_checked` before storage.
 pub struct PyDictObj {
     rc: Cell<u32>,
     entries: Cell<Vec<(*mut PyStrObj, i64)>>,
@@ -1585,8 +1587,8 @@ pub unsafe extern "C" fn pycc_rt_dict_decref(dict: *mut PyDictObj) {
     }
 }
 
-/// `set[int]`'s runtime representation (D-121): structurally identical to
-/// `PyIntListObj` (a dense array of raw untagged `i64`), but insertion goes
+/// `set[int]`'s runtime representation (D-121/D-141): structurally identical
+/// to `PyIntListObj` (a dense array of encoded int-compatible words), but insertion goes
 /// through `pycc_rt_int_set_add`'s own dedup check (linear scan, D-121)
 /// instead of `PyIntListObj`'s unconditional append -- this is the one
 /// behavioral difference and the reason this is its own distinct type
@@ -1608,15 +1610,21 @@ pub extern "C" fn pycc_rt_int_set_new() -> *mut PyIntSetObj {
     }))
 }
 
-/// Dedup-checked insert (D-121): linear-scan for an already-present equal
-/// value; appends only if absent, preserving first-insertion order.
+/// Dedup-checked insert (D-121/D-141): linear-scan by decoded Python numeric
+/// value; appends only if absent and preserves the first encoded word. Thus
+/// `{True, 1}` retains `True`, while `{1, True}` retains ordinary integer `1`.
 ///
 /// # Safety
 /// `set` must be a live `PyIntSetObj` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pycc_rt_int_set_add(set: *mut PyIntSetObj, value: i64) {
     let mut items = unsafe { &*set }.items.take();
-    if !items.contains(&value) {
+    let value_numeric = require_inline_int(value, "storing in set[int]");
+    if !items
+        .iter()
+        .copied()
+        .any(|existing| require_inline_int(existing, "reading from set[int]") == value_numeric)
+    {
         items.push(value);
     }
     unsafe { &*set }.items.set(items);
@@ -1894,9 +1902,106 @@ mod tests {
     #[test]
     #[should_panic(expected = "bigint-valued")]
     fn pycc_rt_int_cmp_on_a_bigint_tagged_operand_panics() {
-        // Bit pattern `0` (even) is what D-061 reserves for a heap `BigInt`
-        // pointer -- no real allocation needed to exercise this rejection.
-        int_cmp(0, tag_smallint(1));
+        let bigint = tag_bigint(bigint_from_i128(1i128 << 80));
+        int_cmp(bigint, tag_smallint(1));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid encoded int word 0x0")]
+    fn encoded_int_classification_rejects_null_before_any_pointer_cast() {
+        classify_encoded_int(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid encoded int word 0xa")]
+    fn encoded_int_classification_rejects_unrecognized_low_tag_10_words() {
+        classify_encoded_int(0b1010);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempted bigint dereference of a non-pointer int word")]
+    fn bigint_dereference_rechecks_the_encoded_word_before_casting() {
+        // Even an unsafe internal caller cannot turn a valid bool marker
+        // into a pointer without passing the central classifier again.
+        unsafe {
+            let _ = bigint_ref(BOOL_TRUE_MARKER);
+        }
+    }
+
+    #[test]
+    fn bool_identity_markers_decode_numerically_but_format_as_bools() {
+        assert_eq!(int_untag_checked(BOOL_FALSE_MARKER), 0);
+        assert_eq!(int_untag_checked(BOOL_TRUE_MARKER), 1);
+        assert_eq!(pycc_rt_int_truthy(BOOL_FALSE_MARKER), 0);
+        assert_eq!(pycc_rt_int_truthy(BOOL_TRUE_MARKER), 1);
+        assert_eq!(pycc_rt_int_to_float(BOOL_FALSE_MARKER), 0.0);
+        assert_eq!(pycc_rt_int_to_float(BOOL_TRUE_MARKER), 1.0);
+
+        unsafe {
+            let false_text = int_to_str(BOOL_FALSE_MARKER);
+            let true_text = int_to_str(BOOL_TRUE_MARKER);
+            assert_eq!((&*false_text).bytes(), b"False");
+            assert_eq!((&*true_text).bytes(), b"True");
+            pycc_rt_str_decref(false_text);
+            pycc_rt_str_decref(true_text);
+        }
+    }
+
+    #[test]
+    fn arithmetic_consumes_bool_markers_and_produces_ordinary_ints() {
+        let cases = [
+            (int_add(BOOL_TRUE_MARKER, tag_smallint(1)), 2),
+            (int_add(tag_smallint(1), BOOL_TRUE_MARKER), 2),
+            (int_add(BOOL_FALSE_MARKER, tag_smallint(2)), 2),
+            (int_add(tag_smallint(2), BOOL_FALSE_MARKER), 2),
+            (int_sub(BOOL_TRUE_MARKER, tag_smallint(1)), 0),
+            (int_sub(tag_smallint(1), BOOL_TRUE_MARKER), 0),
+            (int_mul(BOOL_TRUE_MARKER, tag_smallint(2)), 2),
+            (int_mul(tag_smallint(2), BOOL_TRUE_MARKER), 2),
+            (int_mul(BOOL_FALSE_MARKER, tag_smallint(2)), 0),
+            (int_mul(tag_smallint(2), BOOL_FALSE_MARKER), 0),
+            (int_floordiv(BOOL_FALSE_MARKER, tag_smallint(2)), 0),
+            (int_floordiv(tag_smallint(2), BOOL_TRUE_MARKER), 2),
+            (int_floormod(BOOL_FALSE_MARKER, tag_smallint(2)), 0),
+            (int_floormod(tag_smallint(2), BOOL_TRUE_MARKER), 0),
+            (int_pow(BOOL_FALSE_MARKER, BOOL_TRUE_MARKER), 0),
+            (int_pow(tag_smallint(2), BOOL_TRUE_MARKER), 2),
+            (int_pow(BOOL_TRUE_MARKER, tag_smallint(2)), 1),
+            (int_pow(tag_smallint(2), BOOL_FALSE_MARKER), 1),
+        ];
+        for (actual, expected) in cases {
+            assert_eq!(actual, tag_smallint(expected));
+            assert!(is_smallint(actual));
+        }
+
+        assert_eq!(int_cmp(BOOL_FALSE_MARKER, tag_smallint(0)), 0);
+        assert_eq!(int_cmp(tag_smallint(1), BOOL_TRUE_MARKER), 0);
+        assert_eq!(int_cmp(BOOL_FALSE_MARKER, BOOL_TRUE_MARKER), -1);
+        assert_eq!(range_continue(BOOL_FALSE_MARKER, BOOL_TRUE_MARKER, BOOL_TRUE_MARKER), 1);
+        assert_eq!(range_continue(BOOL_TRUE_MARKER, BOOL_TRUE_MARKER, BOOL_TRUE_MARKER), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: range() arg 3 must not be zero")]
+    fn false_identity_marker_is_a_zero_range_step() {
+        range_continue(tag_smallint(0), tag_smallint(1), BOOL_FALSE_MARKER);
+    }
+
+    #[test]
+    fn add_and_sub_accept_bool_markers_next_to_bigints_in_both_positions() {
+        fn assert_value(encoded: i64, expected: i128) {
+            let expected = bigint_from_i128(expected);
+            let (actual_negative, actual_limbs) = to_sign_and_magnitude(encoded);
+            assert_eq!(actual_negative, expected.negative);
+            assert_eq!(actual_limbs, expected.limbs);
+        }
+
+        let magnitude = 1i128 << 80;
+        let bigint = tag_bigint(bigint_from_i128(magnitude));
+        assert_value(int_add(bigint, BOOL_TRUE_MARKER), magnitude + 1);
+        assert_value(int_add(BOOL_TRUE_MARKER, bigint), magnitude + 1);
+        assert_value(int_sub(bigint, BOOL_TRUE_MARKER), magnitude - 1);
+        assert_value(int_sub(BOOL_TRUE_MARKER, bigint), 1 - magnitude);
     }
 
     #[test]
@@ -1970,9 +2075,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "pycc_rt: list[int] does not support bigint-valued elements or indices yet"
-    )]
+    #[should_panic(expected = "pycc_rt: int boundary does not support bigint-valued values yet")]
     fn int_untag_checked_rejects_a_bigint_tagged_value() {
         // A bigint-tagged value has its low bit clear (see TAG_BIT/
         // is_smallint). `tag_bigint` itself takes a `BigIntObj`, not a bare
@@ -2542,13 +2645,31 @@ mod tests {
     fn int_list_append_then_get_round_trips() {
         unsafe {
             let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, 10);
-            pycc_rt_int_list_append(list, 20);
-            pycc_rt_int_list_append(list, 30);
+            pycc_rt_int_list_append(list, tag_smallint(10));
+            pycc_rt_int_list_append(list, tag_smallint(20));
+            pycc_rt_int_list_append(list, tag_smallint(30));
             assert_eq!(pycc_rt_int_list_len(list), 3);
-            assert_eq!(pycc_rt_int_list_get(list, 0), 10);
-            assert_eq!(pycc_rt_int_list_get(list, 1), 20);
-            assert_eq!(pycc_rt_int_list_get(list, 2), 30);
+            assert_eq!(pycc_rt_int_list_get(list, 0), tag_smallint(10));
+            assert_eq!(pycc_rt_int_list_get(list, 1), tag_smallint(20));
+            assert_eq!(pycc_rt_int_list_get(list, 2), tag_smallint(30));
+            pycc_rt_int_list_decref(list);
+        }
+    }
+
+    #[test]
+    fn int_list_read_slice_and_pop_preserve_bool_identity_markers() {
+        unsafe {
+            let list = pycc_rt_int_list_new();
+            pycc_rt_int_list_append(list, BOOL_FALSE_MARKER);
+            pycc_rt_int_list_append(list, BOOL_TRUE_MARKER);
+            assert_eq!(pycc_rt_int_list_get(list, 0), BOOL_FALSE_MARKER);
+            assert_eq!(pycc_rt_int_list_get(list, 1), BOOL_TRUE_MARKER);
+
+            let sliced = pycc_rt_int_list_slice(list, 0, 2, 1);
+            assert_eq!(pycc_rt_int_list_get(sliced, 0), BOOL_FALSE_MARKER);
+            assert_eq!(pycc_rt_int_list_get(sliced, 1), BOOL_TRUE_MARKER);
+            assert_eq!(pycc_rt_int_list_pop(list), BOOL_TRUE_MARKER);
+            pycc_rt_int_list_decref(sliced);
             pycc_rt_int_list_decref(list);
         }
     }
@@ -2558,10 +2679,10 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for i in 0..1000 {
-                pycc_rt_int_list_append(list, i);
+                pycc_rt_int_list_append(list, tag_smallint(i));
             }
             assert_eq!(pycc_rt_int_list_len(list), 1000);
-            assert_eq!(pycc_rt_int_list_get(list, 999), 999);
+            assert_eq!(pycc_rt_int_list_get(list, 999), tag_smallint(999));
             pycc_rt_int_list_decref(list);
         }
     }
@@ -2579,7 +2700,7 @@ mod tests {
         // `float_to_str`/`pycc_rt_float_to_str`).
         unsafe {
             let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, 1);
+            pycc_rt_int_list_append(list, tag_smallint(1));
             int_list_get(&*list, 5);
         }
     }
@@ -2596,7 +2717,7 @@ mod tests {
         // (it would panic instead of byte-for-byte matching CPython).
         unsafe {
             let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, 1);
+            pycc_rt_int_list_append(list, tag_smallint(1));
             int_list_get(&*list, -1);
         }
     }
@@ -2605,11 +2726,11 @@ mod tests {
     fn int_list_incref_decref_round_trip_does_not_free_early() {
         unsafe {
             let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, 1);
+            pycc_rt_int_list_append(list, tag_smallint(1));
             pycc_rt_int_list_incref(list);
             pycc_rt_int_list_decref(list);
             // still alive after one incref/decref pair -- one decref remains
-            assert_eq!(pycc_rt_int_list_get(list, 0), 1);
+            assert_eq!(pycc_rt_int_list_get(list, 0), tag_smallint(1));
             pycc_rt_int_list_decref(list);
         }
     }
@@ -2627,8 +2748,8 @@ mod tests {
         }
     }
 
-    /// Reads every element of `list` (possibly zero, for an empty slice
-    /// result) into a `Vec<i64>`, for asserting a whole slice result's
+    /// Reads every encoded element of `list` (possibly zero, for an empty
+    /// slice result) into a `Vec<i64>`, for asserting a whole slice result's
     /// contents in one line rather than one `pycc_rt_int_list_get` call per
     /// expected element.
     unsafe fn collect_list(list: *mut PyIntListObj) -> Vec<i64> {
@@ -2644,10 +2765,13 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for v in [10, 20, 30, 40, 50] {
-                pycc_rt_int_list_append(list, v);
+                pycc_rt_int_list_append(list, tag_smallint(v));
             }
             let sliced = pycc_rt_int_list_slice(list, 1, 4, 1);
-            assert_eq!(collect_list(sliced), vec![20, 30, 40]);
+            assert_eq!(
+                collect_list(sliced),
+                vec![tag_smallint(20), tag_smallint(30), tag_smallint(40)]
+            );
             pycc_rt_int_list_decref(list);
             pycc_rt_int_list_decref(sliced);
         }
@@ -2660,10 +2784,13 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for v in [1, 2, 3] {
-                pycc_rt_int_list_append(list, v);
+                pycc_rt_int_list_append(list, tag_smallint(v));
             }
             let sliced = pycc_rt_int_list_slice(list, 0, 100, 1);
-            assert_eq!(collect_list(sliced), vec![1, 2, 3]);
+            assert_eq!(
+                collect_list(sliced),
+                vec![tag_smallint(1), tag_smallint(2), tag_smallint(3)]
+            );
             pycc_rt_int_list_decref(list);
             pycc_rt_int_list_decref(sliced);
         }
@@ -2680,7 +2807,7 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for v in [1, 2, 3] {
-                pycc_rt_int_list_append(list, v);
+                pycc_rt_int_list_append(list, tag_smallint(v));
             }
             let sliced = pycc_rt_int_list_slice(list, 100, 200, 1);
             assert_eq!(collect_list(sliced), Vec::<i64>::new());
@@ -2698,7 +2825,7 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for v in [1, 2, 3] {
-                pycc_rt_int_list_append(list, v);
+                pycc_rt_int_list_append(list, tag_smallint(v));
             }
             let sliced = pycc_rt_int_list_slice(list, 2, 1, 1);
             assert_eq!(collect_list(sliced), Vec::<i64>::new());
@@ -2719,7 +2846,7 @@ mod tests {
         // convention above.
         unsafe {
             let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, 1);
+            pycc_rt_int_list_append(list, tag_smallint(1));
             int_list_slice(&*list, -1, 1, 1);
         }
     }
@@ -2729,7 +2856,7 @@ mod tests {
     fn pycc_rt_int_list_slice_rejects_negative_stop() {
         unsafe {
             let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, 1);
+            pycc_rt_int_list_append(list, tag_smallint(1));
             int_list_slice(&*list, 0, -1, 1);
         }
     }
@@ -2739,7 +2866,7 @@ mod tests {
     fn pycc_rt_int_list_slice_rejects_zero_step() {
         unsafe {
             let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, 1);
+            pycc_rt_int_list_append(list, tag_smallint(1));
             int_list_slice(&*list, 0, 1, 0);
         }
     }
@@ -2749,7 +2876,7 @@ mod tests {
     fn pycc_rt_int_list_slice_rejects_negative_step() {
         unsafe {
             let list = pycc_rt_int_list_new();
-            pycc_rt_int_list_append(list, 1);
+            pycc_rt_int_list_append(list, tag_smallint(1));
             int_list_slice(&*list, 0, 1, -1);
         }
     }
@@ -2760,10 +2887,13 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for v in [0, 1, 2, 3, 4, 5] {
-                pycc_rt_int_list_append(list, v);
+                pycc_rt_int_list_append(list, tag_smallint(v));
             }
             let sliced = pycc_rt_int_list_slice(list, 0, 6, 2);
-            assert_eq!(collect_list(sliced), vec![0, 2, 4]);
+            assert_eq!(
+                collect_list(sliced),
+                vec![tag_smallint(0), tag_smallint(2), tag_smallint(4)]
+            );
             pycc_rt_int_list_decref(list);
             pycc_rt_int_list_decref(sliced);
         }
@@ -2778,12 +2908,23 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for v in [1, 2, 3] {
-                pycc_rt_int_list_append(list, v);
+                pycc_rt_int_list_append(list, tag_smallint(v));
             }
             let sliced = pycc_rt_int_list_slice(list, 0, 3, 1);
-            pycc_rt_int_list_append(list, 99);
-            assert_eq!(collect_list(list), vec![1, 2, 3, 99]);
-            assert_eq!(collect_list(sliced), vec![1, 2, 3]);
+            pycc_rt_int_list_append(list, tag_smallint(99));
+            assert_eq!(
+                collect_list(list),
+                vec![
+                    tag_smallint(1),
+                    tag_smallint(2),
+                    tag_smallint(3),
+                    tag_smallint(99)
+                ]
+            );
+            assert_eq!(
+                collect_list(sliced),
+                vec![tag_smallint(1), tag_smallint(2), tag_smallint(3)]
+            );
             pycc_rt_int_list_decref(list);
             pycc_rt_int_list_decref(sliced);
         }
@@ -2797,11 +2938,11 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for v in [1, 2, 3] {
-                pycc_rt_int_list_append(list, v);
+                pycc_rt_int_list_append(list, tag_smallint(v));
             }
-            assert_eq!(pycc_rt_int_list_pop(list), 3);
+            assert_eq!(pycc_rt_int_list_pop(list), tag_smallint(3));
             assert_eq!(pycc_rt_int_list_len(list), 2);
-            assert_eq!(collect_list(list), vec![1, 2]);
+            assert_eq!(collect_list(list), vec![tag_smallint(1), tag_smallint(2)]);
             pycc_rt_int_list_decref(list);
         }
     }
@@ -2816,12 +2957,12 @@ mod tests {
         unsafe {
             let list = pycc_rt_int_list_new();
             for v in [1, 2, 3] {
-                pycc_rt_int_list_append(list, v);
+                pycc_rt_int_list_append(list, tag_smallint(v));
             }
-            assert_eq!(pycc_rt_int_list_pop(list), 3);
-            assert_eq!(pycc_rt_int_list_pop(list), 2);
+            assert_eq!(pycc_rt_int_list_pop(list), tag_smallint(3));
+            assert_eq!(pycc_rt_int_list_pop(list), tag_smallint(2));
             assert_eq!(pycc_rt_int_list_len(list), 1);
-            assert_eq!(collect_list(list), vec![1]);
+            assert_eq!(collect_list(list), vec![tag_smallint(1)]);
             pycc_rt_int_list_decref(list);
         }
     }
@@ -2846,9 +2987,29 @@ mod tests {
         unsafe {
             let dict = pycc_rt_dict_new();
             let key = new_pystr(b"a");
-            pycc_rt_dict_set(dict, key, 42);
-            assert_eq!(pycc_rt_dict_get(dict, key), 42);
+            pycc_rt_dict_set(dict, key, tag_smallint(42));
+            assert_eq!(pycc_rt_dict_get(dict, key), tag_smallint(42));
             assert_eq!(pycc_rt_dict_len(dict), 1);
+            pycc_rt_dict_decref(dict);
+        }
+    }
+
+    #[test]
+    fn dict_update_get_and_default_preserve_bool_identity_markers() {
+        unsafe {
+            let dict = pycc_rt_dict_new();
+            let present = new_pystr(b"present");
+            let missing = new_pystr(b"missing");
+            pycc_rt_dict_set(dict, present, BOOL_TRUE_MARKER);
+            assert_eq!(pycc_rt_dict_get(dict, present), BOOL_TRUE_MARKER);
+            assert_eq!(
+                pycc_rt_dict_get_or_default(dict, present, BOOL_FALSE_MARKER),
+                BOOL_TRUE_MARKER
+            );
+            assert_eq!(
+                pycc_rt_dict_get_or_default(dict, missing, BOOL_FALSE_MARKER),
+                BOOL_FALSE_MARKER
+            );
             pycc_rt_dict_decref(dict);
         }
     }
@@ -2858,9 +3019,9 @@ mod tests {
         unsafe {
             let dict = pycc_rt_dict_new();
             let key = new_pystr(b"a");
-            pycc_rt_dict_set(dict, key, 1);
-            pycc_rt_dict_set(dict, key, 2);
-            assert_eq!(pycc_rt_dict_get(dict, key), 2);
+            pycc_rt_dict_set(dict, key, tag_smallint(1));
+            pycc_rt_dict_set(dict, key, tag_smallint(2));
+            assert_eq!(pycc_rt_dict_get(dict, key), tag_smallint(2));
             assert_eq!(pycc_rt_dict_len(dict), 1);
             pycc_rt_dict_decref(dict);
         }
@@ -2872,8 +3033,8 @@ mod tests {
             let dict = pycc_rt_dict_new();
             let a = new_pystr(b"a");
             let b = new_pystr(b"b");
-            pycc_rt_dict_set(dict, b, 2);
-            pycc_rt_dict_set(dict, a, 1);
+            pycc_rt_dict_set(dict, b, tag_smallint(2));
+            pycc_rt_dict_set(dict, a, tag_smallint(1));
             // "b" was inserted first, so it stays at index 0 even though "a"
             // sorts first lexicographically.
             assert_eq!(pycc_rt_str_cmp(pycc_rt_dict_key_at(dict, 0), b), 0);
@@ -2888,7 +3049,7 @@ mod tests {
         unsafe {
             let dict = pycc_rt_dict_new();
             let key = new_pystr(b"a");
-            pycc_rt_dict_set(dict, key, 1);
+            pycc_rt_dict_set(dict, key, tag_smallint(1));
             // Calls the private `dict_key_at`, not the public
             // `pycc_rt_dict_key_at` wrapper -- the wrapper is a plain
             // `extern "C" fn`, so a panic crossing its boundary aborts the
@@ -2923,8 +3084,11 @@ mod tests {
         unsafe {
             let dict = pycc_rt_dict_new();
             let key = new_pystr(b"a");
-            pycc_rt_dict_set(dict, key, 42);
-            assert_eq!(pycc_rt_dict_get_or_default(dict, key, -1), 42);
+            pycc_rt_dict_set(dict, key, tag_smallint(42));
+            assert_eq!(
+                pycc_rt_dict_get_or_default(dict, key, tag_smallint(-1)),
+                tag_smallint(42)
+            );
             pycc_rt_dict_decref(dict);
         }
     }
@@ -2937,9 +3101,12 @@ mod tests {
         unsafe {
             let dict = pycc_rt_dict_new();
             let key = new_pystr(b"a");
-            pycc_rt_dict_set(dict, key, 42);
+            pycc_rt_dict_set(dict, key, tag_smallint(42));
             let missing = new_pystr(b"missing");
-            assert_eq!(pycc_rt_dict_get_or_default(dict, missing, -1), -1);
+            assert_eq!(
+                pycc_rt_dict_get_or_default(dict, missing, tag_smallint(-1)),
+                tag_smallint(-1)
+            );
             pycc_rt_dict_decref(dict);
         }
     }
@@ -2953,7 +3120,10 @@ mod tests {
         unsafe {
             let dict = pycc_rt_dict_new();
             let key = new_pystr(b"z");
-            assert_eq!(pycc_rt_dict_get_or_default(dict, key, 7), 7);
+            assert_eq!(
+                pycc_rt_dict_get_or_default(dict, key, tag_smallint(7)),
+                tag_smallint(7)
+            );
             pycc_rt_dict_decref(dict);
         }
     }
@@ -3007,9 +3177,9 @@ mod tests {
     fn pycc_rt_int_set_add_deduplicates_repeated_values() {
         unsafe {
             let set = pycc_rt_int_set_new();
-            pycc_rt_int_set_add(set, 1);
-            pycc_rt_int_set_add(set, 1);
-            pycc_rt_int_set_add(set, 2);
+            pycc_rt_int_set_add(set, tag_smallint(1));
+            pycc_rt_int_set_add(set, tag_smallint(1));
+            pycc_rt_int_set_add(set, tag_smallint(2));
             assert_eq!(pycc_rt_int_set_len(set), 2);
             pycc_rt_int_set_decref(set);
         }
@@ -3019,12 +3189,31 @@ mod tests {
     fn pycc_rt_int_set_preserves_first_insertion_order() {
         unsafe {
             let set = pycc_rt_int_set_new();
-            pycc_rt_int_set_add(set, 2);
-            pycc_rt_int_set_add(set, 1);
-            pycc_rt_int_set_add(set, 2); // duplicate, ignored, does not move 2's position
-            assert_eq!(pycc_rt_int_set_get(set, 0), 2);
-            assert_eq!(pycc_rt_int_set_get(set, 1), 1);
+            pycc_rt_int_set_add(set, tag_smallint(2));
+            pycc_rt_int_set_add(set, tag_smallint(1));
+            pycc_rt_int_set_add(set, tag_smallint(2)); // duplicate, ignored, does not move 2's position
+            assert_eq!(pycc_rt_int_set_get(set, 0), tag_smallint(2));
+            assert_eq!(pycc_rt_int_set_get(set, 1), tag_smallint(1));
             pycc_rt_int_set_decref(set);
+        }
+    }
+
+    #[test]
+    fn int_set_numeric_dedup_preserves_the_first_bool_or_int_encoding() {
+        unsafe {
+            let bool_first = pycc_rt_int_set_new();
+            pycc_rt_int_set_add(bool_first, BOOL_TRUE_MARKER);
+            pycc_rt_int_set_add(bool_first, tag_smallint(1));
+            assert_eq!(pycc_rt_int_set_len(bool_first), 1);
+            assert_eq!(pycc_rt_int_set_get(bool_first, 0), BOOL_TRUE_MARKER);
+            pycc_rt_int_set_decref(bool_first);
+
+            let int_first = pycc_rt_int_set_new();
+            pycc_rt_int_set_add(int_first, tag_smallint(0));
+            pycc_rt_int_set_add(int_first, BOOL_FALSE_MARKER);
+            assert_eq!(pycc_rt_int_set_len(int_first), 1);
+            assert_eq!(pycc_rt_int_set_get(int_first, 0), tag_smallint(0));
+            pycc_rt_int_set_decref(int_first);
         }
     }
 
