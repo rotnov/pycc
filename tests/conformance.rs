@@ -390,6 +390,42 @@ fn pep_0709_comp_inline_matches_cpython_3_14_6_byte_for_byte() {
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0709_comp_inline.py");
 }
 
+// PR-13 Task 5 (D-135): PEP 695 generic-function fixture. One type
+// parameter, called at 3 sites across two scalar types (`int` and `str`),
+// each result printed -- exercises call-site monomorphization end to end.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0695_generics_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0695_generics.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0695_generics_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0695_generics.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0695_generics_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0695_generics.py");
+}
+
+// PR-13 Task 5 (D-135): legacy `TypeAlias` fixture (PEP 613). Deliberately
+// omits `from typing import TypeAlias`, unlike the brief's literal text --
+// see the fixture file's own comment and this task's report for why: pycc
+// has no `Stmt::Import`/`Stmt::ImportFrom` support at all (any `import`
+// statement is unconditionally rejected with `C0001`, confirmed against
+// this exact fixture), and CPython 3.14 defers annotation evaluation by
+// default (PEP 649/749), so the bare `TypeAlias` name in `IntAlias:
+// TypeAlias = int` is never evaluated by the pinned 3.14.6 oracle either --
+// both sides produce identical output with or without the import.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0613_typealias_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0613_typealias.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0613_typealias_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0613_typealias.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0613_typealias_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0613_typealias.py");
+}
+
 // PR-12 Task 13 (D-117/D-118/D-119): a single breadth fixture covering
 // `list[int]` slicing, `.pop()`, `dict.get()`, `set.add()`, and both
 // comprehension source-container combinations (a `range()`-sourced dict
@@ -409,21 +445,115 @@ fn container_methods_slicing_matches_cpython_3_14_6_byte_for_byte() {
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/container_methods_slicing.py");
 }
 
+// D-139: the hand-authored container/generics differential corpus -- one
+// fixture combining a `list[int]`/`dict[str, int]`/`set[int]`/
+// `tuple[int, int]` literal (D-116 scopes tuple element compilation to
+// int/bool/float, so this uses `(7, 8)`, not D-139's own illustrative
+// `tuple[int, str]` text -- a plan-deviation narrowing recorded here and
+// on D-139 itself, not silently), a list comprehension and a dict
+// comprehension (PEP 709 scoping), `list[int]` slicing, one use each of
+// `.pop()`/`.get()`/`.add()`, and a one-type-parameter generic function
+// (D-133/D-134) applied to both an `int` and a `str` value -- proving
+// these already-shipped v0.2 features compose in a single program, not
+// re-testing any single feature in isolation. Every value is printed
+// element-wise/via indexing/`len()`, never a container value directly
+// (matching `container_methods_slicing_matches_cpython_3_14_6_byte_for_byte`'s
+// own established precedent immediately above: `print(xs)` panics today,
+// D-107/D-124/D-116).
 #[test]
 #[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
-fn bool_int_runtime_identity_matches_cpython_3_14_6_byte_for_byte() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/bool_int_runtime_identity.py");
+fn v0_2_container_generics_corpus_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v0_2_container_generics_corpus.py");
     let (debug_pycc, debug_cpython) = run_conformance_fixture_with_profile(
-        "bool_int_runtime_identity_debug",
+        "v0_2_container_generics_corpus_debug",
         &fixture,
         false,
     );
-    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/bool_int_runtime_identity.py");
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/v0_2_container_generics_corpus.py"
+    );
     let (release_pycc, release_cpython) = run_conformance_fixture_with_profile(
-        "bool_int_runtime_identity_release",
+        "v0_2_container_generics_corpus_release",
         &fixture,
         true,
     );
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/v0_2_container_generics_corpus.py"
+    );
+}
+
+// D-138: the PEP-594 (dead-battery stdlib removals) conformance fixture
+// pair. `pep_0594_dead_battery.py` proves import resolution genuinely
+// works now (a passing `import math` fixture using both registered
+// symbols), oracle-diffed dual-profile like every other
+// `*_matches_cpython_3_14_6_byte_for_byte` test above.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0594_dead_battery_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0594_dead_battery.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0594_dead_battery_debug", &fixture, false);
+    assert_eq!(
+        debug_pycc, debug_cpython,
+        "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0594_dead_battery.py"
+    );
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0594_dead_battery_release", &fixture, true);
+    assert_eq!(
+        release_pycc, release_cpython,
+        "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0594_dead_battery.py"
+    );
+}
+
+// D-138: the second half of the PEP-594 pair -- `import cgi` (a real,
+// removed-in-3.13 stdlib module, absent from pycc_std's registry) must be
+// cleanly rejected with C0001, not silently accepted or a panic. No
+// CPython oracle involved (per D-138's own Context: CPython 3.14 raises
+// `ModuleNotFoundError` for this exact source, a fundamentally different
+// failure shape than pycc's static C0001 -- the two compilers are
+// asserting different things about the same removed module, so
+// byte-for-byte comparison would be misleading here, unlike every other
+// test in this file). Does not need the `python3.14` oracle on PATH, so
+// unlike every other test in this file it runs by default (no
+// `#[ignore]`).
+#[test]
+fn pep_0594_dead_battery_rejected_produces_c0001() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0594_dead_battery_rejected.py");
+    let output = Command::new(pycc_bin())
+        .args(["check", fixture.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "`pycc check` should reject tests/fixtures/pep_0594_dead_battery_rejected.py"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("C0001"),
+        "expected a C0001 diagnostic, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("cgi"),
+        "expected the diagnostic to mention `cgi`, got: {stdout}"
+    );
+}
+
+// D-141: bool identity is preserved when a `bool` value crosses a
+// statically int-typed boundary (assignment, parameter, return, container
+// value, or `range` operand) instead of silently rendering as `1`/`0`.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn bool_int_runtime_identity_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bool_int_runtime_identity.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("bool_int_runtime_identity_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/bool_int_runtime_identity.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("bool_int_runtime_identity_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/bool_int_runtime_identity.py");
 }

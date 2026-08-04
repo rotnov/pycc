@@ -624,7 +624,7 @@ print(f\"{returns_none()}\")
 ";
     let output = build_and_run("backend_representation_boundaries", source);
     assert!(output.status.success());
-    // D-132 closes the former silent identity loss on the argument, return,
+    // D-141 closes the former silent identity loss on the argument, return,
     // and reassignment lines: those original bool objects remain observable
     // as `True`/`False`. The three `range` targets remain ordinary integers
     // `0`/`1`/`2`, because range consumes its bool operands numerically rather
@@ -1117,7 +1117,7 @@ _run()
 
 #[test]
 fn appending_a_bigint_valued_element_fails_explicitly_instead_of_corrupting_the_slot() {
-    // D-132 supersedes D-106's raw payload but deliberately retains the
+    // D-141 supersedes D-106's raw payload but deliberately retains the
     // bigint-container scope cut. `pycc_rt_int_add`/`_mul` promote past
     // D-061's smallint range on overflow, and the shared encoded-boundary
     // validator must reject that value honestly rather than store it as if
@@ -1144,7 +1144,7 @@ _run()
         !output.status.success(),
         "a bigint-valued element must fail loudly, not be stored as a supported container value"
     );
-    // D-132 retains specifically an *honest panic*, not merely a failure --
+    // D-141 retains specifically an *honest panic*, not merely a failure --
     // asserting the message is what distinguishes it from a segfault or any
     // other abort that a missing guard could also produce. `pycc_rt`'s panic
     // handler writes this to stderr before the `extern "C"` boundary turns

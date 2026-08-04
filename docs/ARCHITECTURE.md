@@ -31,6 +31,8 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native artifact (+ p
 
 **Current state (through PR-5):** the diagram above is the v1.0 target. As of PR-5, `pycc_own` does not exist (deferred to v0.5, per DELIVERY_PLAN.md's crate scope), so there is no separate ownership-analysis stage and no THIR; `pycc_types` produces a checked HIR directly, and `pycc_mir`'s `MIR` is a typed *structural mirror* of HIR (D-057), not the ownership-annotated SSA form shown above -- LLVM codegen uses one `alloca` per local/parameter and relies on no optimization pass, matching this project's `--debug`-only v0.1 profile. The `optimizations` stage does not exist yet either. This is a deliberate, currently-accepted gap between the target architecture and today's implementation, not an unplanned deviation.
 
+**Current state update (PR-14, D-136):** `pycc_std` now exists, but not as the "compiled stdlib subset (typed Python + Rust intrinsics)" the crate table below describes, and it is not linked into the generated native artifact the way the pipeline diagram's `+ pycc_rt + pycc_std` above implies -- as shipped, `pycc_std` is a dependency-free, compile-time-only data crate (a static registry of hand-recognized symbol names/types, currently just `math.sqrt`/`math.pi`) consulted by `pycc_hir`/`pycc_types` while compiling the *user's* program; nothing from `pycc_std` itself is compiled into or linked with the output binary (`math.sqrt` lowers directly to a `pycc_codegen`-emitted libm `sqrt` declaration, not through any `pycc_std` runtime component). The v1.0-target design in the diagram above and the crate table's description remain the long-run direction; whether v0.2's registry approach evolves toward that target or stays a permanent compile-time-only design is an open question for a future milestone, not resolved by this PR.
+
 D-128's conditional CPython/package closure is likewise a planned v0.7
 component, not part of the current pipeline. Native imports continue through
 the static pycc pipeline. A CPython-backed import keeps ordinary Python source
@@ -68,7 +70,7 @@ MIR-lowering task), and `pycc_codegen` (D-105's codegen task) against
 `list[int]` program end to end, at module scope or inside a private helper
 (the two places D-105's first scope cut allows a `list[int]` value to live).
 Only `list[int]` reaches codegen: `T0034` rejects every other element type
-first. D-132 supersedes D-106's raw payload: `pycc_codegen` validates each
+first. D-141 supersedes D-106's raw payload: `pycc_codegen` validates each
 int-compatible encoded element at ingress and stores it unchanged, preserving
 `False`/`True` identity markers across append/read/pop/iteration/slicing while
 keeping indices and lengths raw implementation counters. `list[T]` values are deliberately

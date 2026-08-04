@@ -34,7 +34,7 @@ fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
 }
 
-/// See D-061/D-132: every int-compatible value is one LLVM `i64`. Odd words
+/// See D-061/D-141: every int-compatible value is one LLVM `i64`. Odd words
 /// are ordinary smallints; exact words `2` and `6` preserve `False` and
 /// `True` identity after a bool-to-int boundary; non-zero words aligned to
 /// four bytes are heap `BigInt` pointers. `classify_encoded_int` is the one
@@ -391,7 +391,7 @@ fn int_floordiv(a: i64, b: i64) -> i64 {
     // against the classic hardware trap on a raw `i64::MIN / -1` (the
     // mathematical quotient `2^63` doesn't fit `i64`, and Rust's checked
     // `/`/`%` themselves panic/trap on that exact pair). That guard is
-    // unreachable dead code under D-061/D-132's encoded representation:
+    // unreachable dead code under D-061/D-141's encoded representation:
     // `a`/`b` here are already decoded from a valid inline int-compatible
     // argument. Smallints decode within D-061's 63-bit range and bool markers
     // decode to `0`/`1`, so neither can equal `i64::MIN`. `cargo llvm-cov`'s
@@ -427,7 +427,7 @@ fn int_floormod(a: i64, b: i64) -> i64 {
     // Deviation from the task brief: the brief's own code special-cased
     // `a == i64::MIN && b == -1` here (mirroring `int_floordiv`'s
     // original guard) to sidestep the same raw `%` hardware trap. Under
-    // D-061/D-132 encoded representation this is unreachable for the
+    // D-061/D-141 encoded representation this is unreachable for the
     // same reason `int_floordiv`'s removed guard was (see its comment):
     // a decoded inline operand can never equal
     // `i64::MIN`. Floor-mod's *result* can't overflow the taggable range
@@ -523,7 +523,7 @@ pub extern "C" fn pycc_rt_print_i64(value: i64) {
     print!("{}", format_i64_line(value));
 }
 
-/// `int`'s truthiness for `if`/`while` conditions (Task 4, D-132). Valid
+/// `int`'s truthiness for `if`/`while` conditions (Task 4, D-141). Valid
 /// smallints and bool-identity markers are decoded inline; valid bigint
 /// pointers inspect their magnitude. A malformed encoded word is an internal
 /// ABI violation and fails closed at this C boundary rather than being
@@ -578,7 +578,7 @@ pub extern "C" fn pycc_rt_range_continue(i: i64, stop: i64, step: i64) -> i8 {
     range_continue(i, stop, step)
 }
 
-/// Converts an encoded int-compatible value (D-061/D-132) to `f64` -- the
+/// Converts an encoded int-compatible value (D-061/D-141) to `f64` -- the
 /// `int` half of Python's `int`/`float` arithmetic promotion (Task 6). Can
 /// panic (via `require_inline_int`'s bigint/invalid-word rejection path), so
 /// -- per this crate's established convention, see the implementation note
@@ -601,7 +601,7 @@ pub extern "C" fn pycc_rt_int_to_float(tagged: i64) -> f64 {
     int_to_float(tagged)
 }
 
-/// D-132 checked decoder for an int-compatible ABI word. Ordinary smallints
+/// D-141 checked decoder for an int-compatible ABI word. Ordinary smallints
 /// decode to their numeric value, while the exact `False`/`True` markers
 /// decode to `0`/`1`. Bigints and malformed words fail closed. Generated
 /// code uses the numeric result for container indices, slice bounds, and
@@ -926,7 +926,7 @@ pub unsafe extern "C" fn pycc_rt_str_decref(s: *mut PyStrObj) {
 // shape unchanged.
 
 /// Formats an encoded int-compatible value the way CPython's own `str(n)`
-/// would (Task 8/D-132) --
+/// would (Task 8/D-141) --
 /// reused unchanged by f-string interpolation and Task 10's `print`. Shares
 /// `format_i64_line`'s digit-formatting logic with `pycc_rt_print_i64`
 /// rather than duplicating it, trimming the trailing newline that function
@@ -1108,7 +1108,7 @@ pub extern "C" fn pycc_rt_print_none() {
 /// signature. Both fields stay private, so the "opaque pointer" contract
 /// still holds for any real Rust caller.
 ///
-/// **Element representation (D-132).** Each slot stores the int-compatible
+/// **Element representation (D-141).** Each slot stores the int-compatible
 /// encoded word unchanged: odd ordinary smallint, exact `2`/`6` bool marker,
 /// or (once container bigints are supported) an aligned bigint pointer.
 /// Current generated ingress validates every word with
@@ -1141,7 +1141,7 @@ pub extern "C" fn pycc_rt_int_list_new() -> *mut PyIntListObj {
 /// capacity-doubling by hand.
 ///
 /// # Element representation
-/// `value` is an encoded D-132 word and is stored exactly as given. The FFI
+/// `value` is an encoded D-141 word and is stored exactly as given. The FFI
 /// caller must first validate it with `pycc_rt_int_untag_checked`; generated
 /// code does so and deliberately ignores the decoded result. This preserves
 /// a bool marker while retaining the current explicit rejection of bigint
@@ -1206,7 +1206,7 @@ fn int_list_get(list: &PyIntListObj, index: i64) -> i64 {
 /// # Element representation
 /// `index` is a raw container offset; generated code obtains it by decoding
 /// an int-compatible expression with `pycc_rt_int_untag_checked`. The return
-/// value is the stored D-132 encoded word unchanged and needs no conversion
+/// value is the stored D-141 encoded word unchanged and needs no conversion
 /// before being used as an ordinary `Ty::Int` expression.
 ///
 /// # Safety
@@ -1341,7 +1341,7 @@ fn int_list_slice(list: &PyIntListObj, start: i64, stop: i64, step: i64) -> *mut
 /// D-061-tagged `Ty::Int` values -- a caller with a tagged operand must
 /// `pycc_rt_int_untag_checked` each one first, exactly like
 /// `pycc_rt_int_list_get`'s own `index` parameter. The returned list's own
-/// elements are copied through unchanged (already D-132 encoded words per
+/// elements are copied through unchanged (already D-141 encoded words per
 /// `PyIntListObj`'s representation) -- no per-element
 /// conversion happens here, exactly like a single-element read.
 ///
@@ -1390,7 +1390,7 @@ fn int_list_pop(list: &PyIntListObj) -> i64 {
 /// `"pycc_rt: pop from empty list"`.
 ///
 /// # Element representation
-/// The returned value is the stored D-132 encoded word unchanged, so a bool
+/// The returned value is the stored D-141 encoded word unchanged, so a bool
 /// marker keeps its runtime identity and no output-side conversion is needed.
 ///
 /// # Safety
@@ -1407,7 +1407,7 @@ pub unsafe extern "C" fn pycc_rt_int_list_pop(list: *mut PyIntListObj) -> i64 {
 /// runtime-panic mode from overlapping borrows. Not `#[repr(C)]` -- never
 /// crosses the LLVM/Rust boundary by value, only as an opaque pointer
 /// (mirrors `PyStrObj`/`PyIntListObj`). Lookup is linear-scan comparison
-/// via `pycc_rt_str_cmp` (D-121), not a hash table. Values are D-132 encoded
+/// via `pycc_rt_str_cmp` (D-121), not a hash table. Values are D-141 encoded
 /// words preserved unchanged across set/get/get-or-default; generated ingress
 /// validates them with `pycc_rt_int_untag_checked` before storage.
 pub struct PyDictObj {
@@ -1587,7 +1587,7 @@ pub unsafe extern "C" fn pycc_rt_dict_decref(dict: *mut PyDictObj) {
     }
 }
 
-/// `set[int]`'s runtime representation (D-121/D-132): structurally identical
+/// `set[int]`'s runtime representation (D-121/D-141): structurally identical
 /// to `PyIntListObj` (a dense array of encoded int-compatible words), but insertion goes
 /// through `pycc_rt_int_set_add`'s own dedup check (linear scan, D-121)
 /// instead of `PyIntListObj`'s unconditional append -- this is the one
@@ -1610,7 +1610,7 @@ pub extern "C" fn pycc_rt_int_set_new() -> *mut PyIntSetObj {
     }))
 }
 
-/// Dedup-checked insert (D-121/D-132): linear-scan by decoded Python numeric
+/// Dedup-checked insert (D-121/D-141): linear-scan by decoded Python numeric
 /// value; appends only if absent and preserves the first encoded word. Thus
 /// `{True, 1}` retains `True`, while `{1, True}` retains ordinary integer `1`.
 ///

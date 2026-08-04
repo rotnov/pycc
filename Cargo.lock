@@ -826,6 +826,7 @@ dependencies = [
  "pycc_ast",
  "pycc_diag",
  "pycc_parser",
+ "pycc_std",
 ]
 
 [[package]]
@@ -849,11 +850,16 @@ name = "pycc_rt"
 version = "0.1.0"
 
 [[package]]
+name = "pycc_std"
+version = "0.1.0"
+
+[[package]]
 name = "pycc_types"
 version = "0.1.0"
 dependencies = [
  "pycc_diag",
  "pycc_hir",
+ "pycc_std",
 ]
 
 [[package]]

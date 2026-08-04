@@ -326,3 +326,21 @@ fn d0038_comprehension_set_str() {
 fn c0001_dict_comprehension_unpacking() {
     assert_diagnostic_matches_fixture("c0001_dict_comprehension_unpacking");
 }
+
+// PR-14 (D-136/D-137): an unrecognized stdlib/third-party module name
+// (`import cgi`, `os`, `typing`, ...) fails closed with the same generic
+// C0001 catch-all every other unimplemented statement shape uses -- not a
+// dedicated per-module message.
+#[test]
+fn c0001_import_unrecognized_module() {
+    assert_diagnostic_matches_fixture("c0001_import_unrecognized_module");
+}
+
+// PR-14 (D-136): a recognized module (`math`) with one unresolvable symbol
+// inside an otherwise-valid `from math import ...` list is C0002, distinct
+// from C0001, and fails the whole statement -- `sqrt` is not partially
+// bound even though it is itself registered.
+#[test]
+fn c0002_from_import_unregistered_symbol() {
+    assert_diagnostic_matches_fixture("c0002_from_import_unregistered_symbol");
+}

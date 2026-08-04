@@ -9,6 +9,23 @@ pub enum Ty {
     Str,
     None,
     Infer,
+    /// A generic function's own type parameter (PEP 695, D-133), e.g. the `T`
+    /// in `def f[T](x: T) -> T`. Distinct from `Ty::Infer`: this is resolved by
+    /// call-site substitution (D-134), not by unification, and must never
+    /// reach `pycc_mir` unsubstituted (same invariant `Ty::Infer` already
+    /// holds, see the assertion near this enum's other pre-MIR checks).
+    /// Boxed as `Box<String>`, not `Box<str>`: `str` is unsized, so
+    /// `Box<str>` is itself a fat (16-byte, data-ptr + length) pointer,
+    /// which measured `size_of::<Ty>() == 24` here -- it broke the
+    /// niche-filling layout uniformity the other thin-pointer variants
+    /// rely on (see `Tuple`'s doc comment above for the same phenomenon
+    /// with `Box<[Ty]>` vs `Box<Vec<Ty>>`). `Box<String>` is a single
+    /// (8-byte) thin pointer to a further heap-indirected `String` --
+    /// confirmed by measurement to restore `size_of::<Ty>() == 16`,
+    /// matching `Tuple`'s `Box<Vec<Ty>>` shape. (D-133's ADR text says
+    /// `Box<str>`; this is a deliberate, measurement-driven deviation --
+    /// `Box<str>` does not in fact keep `Ty` at the D-109 ceiling.)
+    Param(Box<String>),
     /// `list[T]`. Type-checking is planned to accept any scalar `T`; only
     /// `T = Ty::Int` gets real codegen in v0.2 (D-105). Codegen rejecting
     /// every other element type before it becomes an unhandled codegen
@@ -63,6 +80,7 @@ impl Ty {
             Ty::Str => "str".to_string(),
             Ty::None => "None".to_string(),
             Ty::Infer => "<inferred>".to_string(),
+            Ty::Param(name) => name.to_string(),
             Ty::List(elem) => format!("list[{}]", elem.name()),
             Ty::Dict(kv) => format!("dict[{}, {}]", kv.0.name(), kv.1.name()),
             Ty::Set(elem) => format!("set[{}]", elem.name()),
@@ -408,27 +426,316 @@ pub enum HirItem {
     TopLevelStmt(HirStmt),
 }
 
+/// A compile-time-only import binding recorded by a module-level
+/// `import`/`from ... import ...` statement resolved against `pycc_std`'s
+/// registry (D-136/D-137). Mirrors `type_aliases`' side-table shape: an
+/// import has zero runtime footprint of its own (no `HirStmt`/`HirItem` is
+/// produced for it), it only makes a later name/attribute lookup resolve to
+/// a stdlib registry entry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportBinding {
+    /// `import math` -- binds `math` (or, for a dotted-but-single-segment
+    /// name, whatever `local_name` ends up being; D-137 rejects every
+    /// import shape other than a single bare recognized module name, so in
+    /// practice `local_name` always equals the resolved module's source
+    /// spelling) as a module namespace marker. `math` itself never carries
+    /// a `Ty` -- only `math.<attr>` attribute access on this bound name
+    /// resolves further, via `pycc_std::resolve_symbol`.
+    Module {
+        local_name: String,
+        module: pycc_std::StdModule,
+    },
+    /// `from math import sqrt` -- binds `sqrt` directly to the resolved
+    /// registry symbol, as if it were a fixed, non-inferred `Ty`/signature
+    /// (the alias table from PR-13 is the closest existing precedent).
+    Symbol {
+        local_name: String,
+        module: pycc_std::StdModule,
+        symbol: pycc_std::StdSymbol,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirModule {
     pub items: Vec<HirItem>,
+    /// Compile-time-only name-to-`Ty` bindings from a `type X = <expr>`
+    /// statement or a legacy `X: TypeAlias = <expr>` annotated assignment
+    /// (D-135). Populated in source order by `lower_checked` as it walks the
+    /// module body. Neither form lowers to any `HirItem`/`HirStmt` of its
+    /// own -- the alias has zero HIR/MIR/codegen/runtime footprint, and this
+    /// field exists purely so a later annotation naming the alias resolves
+    /// to the same `Ty` (see `annotation_to_ty`'s alias-table lookup).
+    pub type_aliases: Vec<(String, Ty)>,
+    /// Compile-time-only stdlib import bindings (D-136/D-137), populated in
+    /// source order by `lower_checked` exactly like `type_aliases`. Only a
+    /// module-level `import`/`from ... import ...` statement is recognized
+    /// here -- one nested inside a function body or any other block still
+    /// reaches plain `lower_stmt`, which has no arm for `Stmt::Import`/
+    /// `Stmt::ImportFrom` and falls through to the generic `C0001`
+    /// catch-all, exactly like every other statement kind this compiler
+    /// does not support inside a nested block.
+    pub imports: Vec<ImportBinding>,
 }
 
 /// Lowers a parsed module into the HIR subset implemented by this pycc
 /// version. Syntactically valid Python outside that subset returns `C0001`
 /// with the unsupported node's source span instead of panicking.
+///
+/// Type aliases (D-135) are resolved in a single left-to-right pass: a
+/// `type X = <expr>` or legacy `X: TypeAlias = <expr>` statement is
+/// evaluated and recorded into `aliases` as soon as it is reached, so it is
+/// visible to every later statement's annotations (including a later
+/// function's parameter/return annotations and later top-level
+/// `AnnAssign`s) but not to any earlier one -- matching this compiler's
+/// existing single-pass, source-order lowering model instead of
+/// introducing hoisting.
 pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
-    let items = module
-        .body
-        .iter()
-        .map(|stmt| match stmt {
-            Stmt::FunctionDef(def) => lower_function(def),
-            other => lower_stmt(other).map(HirItem::TopLevelStmt),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(HirModule { items })
+    let mut aliases: Vec<(String, Ty)> = Vec::new();
+    let mut imports: Vec<ImportBinding> = Vec::new();
+    let mut items = Vec::with_capacity(module.body.len());
+    for stmt in &module.body {
+        if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases)? {
+            aliases.push((name, ty));
+            continue;
+        }
+        if let Some((name, ty)) = lower_legacy_type_alias_ann_assign(stmt, &aliases)? {
+            aliases.push((name, ty));
+            continue;
+        }
+        if let Some(mut bound) = lower_import_stmt(stmt)? {
+            imports.append(&mut bound);
+            continue;
+        }
+        let item = match stmt {
+            Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
+            other => HirItem::TopLevelStmt(lower_stmt(other, &aliases)?),
+        };
+        items.push(item);
+    }
+    Ok(HirModule {
+        items,
+        type_aliases: aliases,
+        imports,
+    })
 }
 
-fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic> {
+/// Recognizes a module-level `Stmt::Import`/`Stmt::ImportFrom` and resolves
+/// it against `pycc_std`'s registry (D-136/D-137). Returns `Ok(None)` for
+/// any other statement kind, leaving it to the caller's own dispatch --
+/// mirroring `lower_type_alias_stmt`'s shape exactly.
+///
+/// D-137 is fail-closed: every recognized-but-out-of-scope shape (multiple
+/// names in one `import` statement, an `as` alias, a relative import, an
+/// unresolvable module) is `C0001`, the same generic "statement kind not
+/// supported yet" diagnostic this file already uses for every other
+/// unimplemented statement kind -- matching the plan's explicit instruction
+/// to reuse `C0001` rather than add a new code for "we recognize this is an
+/// import but don't support this particular shape." A recognized module
+/// with one unresolvable symbol inside an otherwise-valid `from math import
+/// ...` list is instead `C0002` (D-136's own decision text), distinguishing
+/// "we don't support this import shape at all" from "we support `math`,
+/// just not `math.<this-symbol>`" -- and it fails the whole statement, not
+/// a partial bind of the names that did resolve.
+fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>>, Diagnostic> {
+    match stmt {
+        Stmt::Import(import) => {
+            let [alias] = import.names.as_slice() else {
+                return Err(unsupported(
+                    "only a single module per `import` statement is supported so far",
+                    import.range,
+                ));
+            };
+            if alias.asname.is_some() {
+                return Err(unsupported(
+                    "`import ... as ...` aliasing is not supported yet",
+                    import.range,
+                ));
+            }
+            let module_name = alias.name.as_str();
+            let Some(module) = pycc_std::resolve_module(module_name) else {
+                return Err(unsupported(
+                    format!("import of module `{module_name}` is not supported yet"),
+                    import.range,
+                ));
+            };
+            Ok(Some(vec![ImportBinding::Module {
+                local_name: module_name.to_string(),
+                module,
+            }]))
+        }
+        Stmt::ImportFrom(import) => {
+            if import.level != 0 {
+                return Err(unsupported(
+                    "a relative import (`from . import ...`) is not supported yet",
+                    import.range,
+                ));
+            }
+            // A `level == 0` `Stmt::ImportFrom` always carries a module name
+            // -- the only way to reach `module: None` is a relative import
+            // (`from . import x`, `from .. import x`, ...), which always
+            // has `level >= 1` and is already rejected above. Verified
+            // directly against the vendored parser: `from import x` (no
+            // dots, no module name) is a parse error (`L0001`, "Expected a
+            // module name"), so `lower_checked` never sees this shape at
+            // all, matching this file's existing precedent of verifying an
+            // "impossible" shape against the real parser rather than
+            // assuming it.
+            let module_name = import
+                .module
+                .as_ref()
+                .expect("a non-relative `from ... import ...` always names a module")
+                .as_str();
+            let Some(module) = pycc_std::resolve_module(module_name) else {
+                return Err(unsupported(
+                    format!("import of module `{module_name}` is not supported yet"),
+                    import.range,
+                ));
+            };
+            if import.names.is_empty()
+                || import.names.iter().any(|alias| alias.name.as_str() == "*")
+            {
+                return Err(unsupported(
+                    "`from ... import *` (wildcard import) is not supported yet",
+                    import.range,
+                ));
+            }
+            let mut bound = Vec::with_capacity(import.names.len());
+            for alias in &import.names {
+                if alias.asname.is_some() {
+                    return Err(unsupported(
+                        "`from ... import x as y` aliasing is not supported yet",
+                        import.range,
+                    ));
+                }
+                let symbol_name = alias.name.as_str();
+                let Some(symbol) = pycc_std::resolve_symbol(module, symbol_name) else {
+                    return Err(unresolved_symbol(
+                        format!(
+                            "module `{module_name}` has no importable symbol named `{symbol_name}`"
+                        ),
+                        import.range,
+                    ));
+                };
+                bound.push(ImportBinding::Symbol {
+                    local_name: symbol_name.to_string(),
+                    module,
+                    symbol,
+                });
+            }
+            Ok(Some(bound))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Recognizes a PEP 695 `type X = <expr>` statement and evaluates its RHS as
+/// a type expression, reusing `annotation_to_ty` (D-135) -- the same
+/// resolver used for parameter/return/variable annotations, since a type
+/// alias's RHS is syntactically just another type expression. Returns
+/// `Ok(None)` for any other statement kind, leaving it to the caller's own
+/// dispatch.
+///
+/// A generic alias (`type X[T] = ...`) is rejected with `T0042`, not the
+/// generic `unsupported`/`C0001` catch-all: D-134/D-135 explicitly scope a
+/// generic alias out of this PR, but -- unlike, say, `async def`, which is
+/// simply unrecognized syntax -- this shape *is* recognized and type-checked
+/// far enough to name precisely why it is rejected, the same reasoning
+/// `check_generic_function`'s own `T0042` diagnostics already use for a
+/// generic function's out-of-scope shapes.
+fn lower_type_alias_stmt(
+    stmt: &Stmt,
+    aliases: &[(String, Ty)],
+) -> Result<Option<(String, Ty)>, Diagnostic> {
+    let Stmt::TypeAlias(type_alias) = stmt else {
+        return Ok(None);
+    };
+    // `type_alias.type_params` being `Some(_)` at all is enough to reject:
+    // `ruff_python_parser`'s own `parse_type_params` reports a parse error
+    // (`EmptyTypeParams`, surfaced by this crate's own `pycc_parser::parse`
+    // as `L0001` before this function ever runs) for an empty `[]`, so a
+    // `Some(type_params)` reaching this point always has at least one entry
+    // -- there is no valid parsed input where an extra `.type_params.is_empty()`
+    // check here would ever be reached with a `false` result to skip on
+    // (confirmed against the pinned `ruff_python_parser = "0.0.6"` registry
+    // source, the same way this function's own name-target extraction below
+    // documents its own unreachable shape).
+    if type_alias.type_params.is_some() {
+        let range = std::ops::Range::<u32>::from(type_alias.range);
+        return Err(Diagnostic::error(
+            "T0042",
+            "a generic type alias (`type X[T] = ...`) is not supported yet".to_string(),
+            Span::new(range.start, range.end),
+        ));
+    }
+    // Unlike the legacy `AnnAssign` form's target (which can be an
+    // `Attribute`/`Subscript`, see `lower_legacy_type_alias_ann_assign`
+    // below), `ruff_python_parser`'s own `parse_type_alias_statement`
+    // unconditionally builds this field as `Expr::Name(self.parse_name(...))`
+    // -- there is no valid source text that parses a `type` statement with a
+    // non-name target, so there is no `unsupported`/unreachable fallback
+    // branch to write or cover here (confirmed against the pinned
+    // `ruff_python_parser = "0.0.6"` registry source). `.expect(...)`, not a
+    // hand-rolled panic arm, per this crate's own documented coverage
+    // convention (`pycc_ast::re_exported_grammar_types_resolve_and_have_the_expected_shape`'s
+    // comment): the panic path lives in libcore, invisible to instrumented
+    // regions, the same way `.unwrap()`'s does.
+    let name = type_alias
+        .name
+        .as_name_expr()
+        .expect("ruff always parses a `type` statement's name as Expr::Name");
+    let ty = annotation_to_ty(&type_alias.value, None, aliases)?;
+    Ok(Some((name.id.to_string(), ty)))
+}
+
+/// Recognizes the legacy `X: TypeAlias = <expr>` annotated-assignment form
+/// of a type alias (PEP 613). Real Python requires `from typing import
+/// TypeAlias` before this annotation is meaningful, but requiring that
+/// import here is not merely inconsistent with existing precedent -- it is
+/// currently infeasible: `pycc_hir` has no `Stmt::Import`/`Stmt::ImportFrom`
+/// handling anywhere in this crate, so `from typing import TypeAlias` would
+/// itself be unconditionally rejected with the generic `C0001` ("statement
+/// kind not supported yet") diagnostic if pycc tried to require it first.
+/// There is no accepted-bare-typing-name precedent to lean on either --
+/// `Any` is the only other typing-shaped bare name `annotation_to_ty`
+/// currently recognizes, and it is rejected with `T0002`, not accepted. So
+/// this function accepts the bare annotation name `TypeAlias`
+/// unconditionally, not by analogy to an existing precedent, but because
+/// real import verification cannot be expressed with this crate's current
+/// statement coverage (plan-deviation note, since the design doc leaves
+/// this specific question open; import support is PR-14's).
+///
+/// Returns `Ok(None)` for any statement that is not this exact shape --
+/// including an ordinary `X: TypeAlias` with no value, which is invalid as a
+/// type alias and instead falls through to the ordinary `AnnAssign` lowering
+/// path, where `annotation_to_ty` rejects the bare name `TypeAlias` with the
+/// same `C0001` catch-all as any other unrecognized annotation name.
+fn lower_legacy_type_alias_ann_assign(
+    stmt: &Stmt,
+    aliases: &[(String, Ty)],
+) -> Result<Option<(String, Ty)>, Diagnostic> {
+    let Stmt::AnnAssign(ann) = stmt else {
+        return Ok(None);
+    };
+    let Expr::Name(annotation_name) = ann.annotation.as_ref() else {
+        return Ok(None);
+    };
+    if annotation_name.id.as_str() != "TypeAlias" {
+        return Ok(None);
+    }
+    let Some(value) = ann.value.as_deref() else {
+        return Ok(None);
+    };
+    let Expr::Name(target) = ann.target.as_ref() else {
+        return Ok(None);
+    };
+    let ty = annotation_to_ty(value, None, aliases)?;
+    Ok(Some((target.id.to_string(), ty)))
+}
+
+fn lower_function(
+    def: &pycc_ast::StmtFunctionDef,
+    aliases: &[(String, Ty)],
+) -> Result<HirItem, Diagnostic> {
     if def.is_async {
         return Err(unsupported(
             "async functions are not supported yet",
@@ -441,16 +748,34 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
             def.range,
         ));
     }
-    if def.type_params.is_some() {
-        return Err(unsupported(
-            "generic function type parameters are not supported yet",
-            def.range,
-        ));
-    }
+    let type_param: Option<Box<str>> = match def.type_params.as_deref() {
+        None => None,
+        Some(type_params) => match type_params.type_params.as_slice() {
+            [single] => Some(type_param_name(single, def.range)?.into()),
+            _ => {
+                return Err(unsupported(
+                    "generic functions with more than one type parameter are not supported yet",
+                    def.range,
+                ));
+            }
+        },
+    };
     let is_public = !def.name.as_str().starts_with('_'); // D-038
-    let params = lower_params(&def.parameters, is_public, def.name.as_str())?;
-    let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, def.name.as_str())?;
-    let body = lower_body(&def.body)?;
+    let params = lower_params(
+        &def.parameters,
+        is_public,
+        def.name.as_str(),
+        type_param.as_deref(),
+        aliases,
+    )?;
+    let return_ty = lower_return_annotation(
+        def.returns.as_deref(),
+        is_public,
+        def.name.as_str(),
+        type_param.as_deref(),
+        aliases,
+    )?;
+    let body = lower_body(&def.body, aliases)?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
         params,
@@ -459,10 +784,40 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
     })
 }
 
+/// Extracts a PEP 695 `TypeVar`'s identifier -- e.g. the `T` in `def
+/// f[T](...)`. `Ty::Param` (D-133) is resolved by call-site substitution
+/// (D-134) into one concrete scalar type per call, which is only a coherent
+/// model for a plain `TypeVar`: `TypeVarTuple` (`def f[*Ts](...)`) stands for
+/// a variable-length sequence of types, and `ParamSpec` (`def f[**P](...)`)
+/// stands for a parameter list shape, neither of which `Ty::Param` can
+/// represent. `def_range` is the enclosing function's range, reused for the
+/// diagnostic span since `TypeParam`'s own range would require reaching past
+/// the `pycc_ast` facade for the `Ranged` trait for no benefit here (the
+/// arity-gate rejection just above already reports the same function-level
+/// span for the analogous "too many type parameters" case).
+fn type_param_name<R>(type_param: &pycc_ast::TypeParam, def_range: R) -> Result<&str, Diagnostic>
+where
+    std::ops::Range<u32>: From<R>,
+{
+    match type_param {
+        pycc_ast::TypeParam::TypeVar(tv) => Ok(tv.name.as_str()),
+        pycc_ast::TypeParam::TypeVarTuple(_) => Err(unsupported(
+            "a `TypeVarTuple` type parameter (`*Ts`) is not supported yet",
+            def_range,
+        )),
+        pycc_ast::TypeParam::ParamSpec(_) => Err(unsupported(
+            "a `ParamSpec` type parameter (`**P`) is not supported yet",
+            def_range,
+        )),
+    }
+}
+
 fn lower_params(
     parameters: &pycc_ast::Parameters,
     is_public: bool,
     fn_name: &str,
+    type_param: Option<&str>,
+    aliases: &[(String, Ty)],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     // Every parameter kind and default value below is silently absent from
     // `parameters.args`/`ParameterWithDefault::default` -- an earlier version
@@ -507,7 +862,7 @@ fn lower_params(
             }
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
-                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann)?)),
+                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann, type_param, aliases)?)),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
                     format!(
@@ -525,9 +880,11 @@ fn lower_return_annotation(
     returns: Option<&Expr>,
     is_public: bool,
     fn_name: &str,
+    type_param: Option<&str>,
+    aliases: &[(String, Ty)],
 ) -> Result<Ty, Diagnostic> {
     match returns {
-        Some(ann) => annotation_to_ty(ann),
+        Some(ann) => annotation_to_ty(ann, type_param, aliases),
         None if is_public => Err(Diagnostic::error(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
@@ -537,9 +894,22 @@ fn lower_return_annotation(
     }
 }
 
-fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
+/// Resolves an annotation expression to a `Ty`. `aliases` is the D-135 type
+/// alias table (`(name, Ty)` pairs recorded by `lower_checked` for every
+/// `type X = ...`/legacy `X: TypeAlias = ...` statement reached so far, in
+/// source order): checked as the last resort for a bare name before falling
+/// through to the `C0001` "not supported yet" catch-all, so an alias name
+/// resolves exactly like any other recognized bare-name annotation.
+fn annotation_to_ty(
+    annotation: &Expr,
+    type_param: Option<&str>,
+    aliases: &[(String, Ty)],
+) -> Result<Ty, Diagnostic> {
     match annotation {
         Expr::NoneLiteral(_) => Ok(Ty::None),
+        Expr::Name(name) if Some(name.id.as_str()) == type_param => {
+            Ok(Ty::Param(Box::new(name.id.to_string())))
+        }
         Expr::Name(name) => match name.id.as_str() {
             "int" => Ok(Ty::Int),
             "float" => Ok(Ty::Float),
@@ -551,10 +921,17 @@ fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
                     .to_string(),
                 Span::new(0, 0),
             )),
-            other => Err(unsupported(
-                format!("type annotation `{other}` is not supported yet"),
-                pycc_ast::expr_range(annotation),
-            )),
+            other => aliases
+                .iter()
+                .rev()
+                .find(|(alias_name, _)| alias_name == other)
+                .map(|(_, ty)| ty.clone())
+                .ok_or_else(|| {
+                    unsupported(
+                        format!("type annotation `{other}` is not supported yet"),
+                        pycc_ast::expr_range(annotation),
+                    )
+                }),
         },
         other => Err(unsupported(
             format!("only a bare name type annotation is supported so far: {other:?}"),
@@ -563,7 +940,7 @@ fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
     }
 }
 
-fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
+fn lower_stmt(stmt: &Stmt, aliases: &[(String, Ty)]) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
         Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)?),
         Stmt::Assign(assign) => {
@@ -654,7 +1031,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     pycc_ast::expr_range(&ann.target),
                 ));
             }
-            let annotation = annotation_to_ty(&ann.annotation)?;
+            let annotation = annotation_to_ty(&ann.annotation, None, aliases)?;
             let value = ann.value.as_deref().map(lower_expr).transpose()?;
             HirStmt::AnnAssign {
                 target: name.id.as_str().to_string(),
@@ -664,8 +1041,8 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
         }
         Stmt::If(if_stmt) => HirStmt::If {
             test: lower_expr(&if_stmt.test)?,
-            body: lower_body(&if_stmt.body)?,
-            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses)?,
+            body: lower_body(&if_stmt.body, aliases)?,
+            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses, aliases)?,
         },
         Stmt::While(while_stmt) => {
             if !while_stmt.orelse.is_empty() {
@@ -676,7 +1053,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
             }
             HirStmt::While {
                 test: lower_expr(&while_stmt.test)?,
-                body: lower_body(&while_stmt.body)?,
+                body: lower_body(&while_stmt.body, aliases)?,
             }
         }
         Stmt::For(for_stmt) => {
@@ -706,7 +1083,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                 return Ok(HirStmt::ForList {
                     var: var.id.to_string(),
                     list: list_name.id.as_str().to_string(),
-                    body: lower_body(&for_stmt.body)?,
+                    body: lower_body(&for_stmt.body, aliases)?,
                 });
             }
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
@@ -748,7 +1125,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                 start,
                 stop,
                 step,
-                body: lower_body(&for_stmt.body)?,
+                body: lower_body(&for_stmt.body, aliases)?,
             }
         }
         Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr).transpose()?),
@@ -762,26 +1139,29 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
     Ok(lowered)
 }
 
-fn lower_body(body: &[Stmt]) -> Result<Vec<HirStmt>, Diagnostic> {
-    body.iter().map(lower_stmt).collect()
+fn lower_body(body: &[Stmt], aliases: &[(String, Ty)]) -> Result<Vec<HirStmt>, Diagnostic> {
+    body.iter().map(|stmt| lower_stmt(stmt, aliases)).collect()
 }
 
-fn lower_elif_else_clauses(clauses: &[ElifElseClause]) -> Result<Vec<HirStmt>, Diagnostic> {
+fn lower_elif_else_clauses(
+    clauses: &[ElifElseClause],
+    aliases: &[(String, Ty)],
+) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
     };
     match &first.test {
         Some(test) => Ok(vec![HirStmt::If {
             test: lower_expr(test)?,
-            body: lower_body(&first.body)?,
-            orelse: lower_elif_else_clauses(rest)?,
+            body: lower_body(&first.body, aliases)?,
+            orelse: lower_elif_else_clauses(rest, aliases)?,
         }]),
         None => {
             assert!(
                 rest.is_empty(),
                 "pycc_hir: an else clause must be the last elif_else_clause"
             );
-            lower_body(&first.body)
+            lower_body(&first.body, aliases)
         }
     }
 }
@@ -965,6 +1345,41 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                         value: Box::new(lower_expr(value)?),
                     });
                 }
+                // `math.sqrt(x)`-shaped stdlib intrinsic call (D-136/D-137).
+                // Resolved textually against `pycc_std`'s registry (receiver
+                // name, then attribute name), the same precedent this file
+                // already uses for `X: TypeAlias` (see
+                // `lower_legacy_type_alias_ann_assign`'s doc comment): real
+                // flow-sensitive "was `math` actually imported before this
+                // use" verification is not attempted here, because
+                // `lower_expr` has no access to the module-level import
+                // side-table `lower_checked` builds (threading it through
+                // every recursive `lower_expr` call site is a materially
+                // larger change than this thin v0.2 slice needs). `math` is
+                // not a valid bare Python identifier binding to anything
+                // else in this compiler's current name-resolution model
+                // (no ordinary variable/import can produce a receiver whose
+                // name doubles as a registered stdlib module and *isn't*
+                // that module), so this narrowing does not accept any
+                // program CPython itself would reject as a `NameError` in
+                // practice for the fixtures this PR ships -- but it is a
+                // real, deliberate scope trim from a fully import-gated
+                // design, recorded here rather than silently.
+                if let Expr::Name(receiver) = attr.value.as_ref()
+                    && let Some(module) = pycc_std::resolve_module(receiver.id.as_str())
+                    && let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str())
+                {
+                    let args = call
+                        .arguments
+                        .args
+                        .iter()
+                        .map(lower_expr)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(HirExpr::Call {
+                        callee: format!("{}.{}", receiver.id.as_str(), symbol.name),
+                        args,
+                    });
+                }
                 return Err(unsupported(
                     format!(
                         "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.{}(...)`",
@@ -1072,6 +1487,41 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                 left: Box::new(lower_expr(&cmp.left)?),
                 right: Box::new(lower_expr(&cmp.comparators[0])?),
             }
+        }
+        // `math.pi`-shaped bare stdlib constant reference (D-136/D-137),
+        // e.g. `print(math.pi)`. A call-shaped `math.sqrt(x)` is handled
+        // separately inside the `Expr::Call` arm above (it needs the call
+        // arguments, which this bare-attribute position never has). Resolved
+        // with the same textual, non-flow-sensitive precedent documented on
+        // that arm. Encoded as `HirExpr::Name("math.pi")`: real Python
+        // identifiers can never contain `.`, so this qualified spelling is
+        // an unambiguous marker `pycc_types`' ordinary name lookup can
+        // special-case without any risk of colliding with a real variable
+        // named `pi`.
+        Expr::Attribute(attr) => {
+            let Expr::Name(receiver) = attr.value.as_ref() else {
+                return Err(unsupported(
+                    "attribute access is only supported on a stdlib module name so far",
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            let Some(module) = pycc_std::resolve_module(receiver.id.as_str()) else {
+                return Err(unsupported(
+                    "attribute access is only supported on a stdlib module name so far",
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str()) else {
+                return Err(unsupported(
+                    format!(
+                        "module `{}` has no attribute `{}`",
+                        receiver.id.as_str(),
+                        attr.attr
+                    ),
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            HirExpr::Name(format!("{}.{}", receiver.id.as_str(), symbol.name))
         }
         other => {
             return Err(unsupported(
@@ -1424,6 +1874,19 @@ where
     Diagnostic::error("C0001", message, Span::new(range.start, range.end))
 }
 
+/// `C0002`: "stdlib symbol not supported yet" (D-136) -- distinct from
+/// `C0001`. Used only when the *module* of a `from ... import ...`
+/// statement is recognized but a specific imported name inside it is not
+/// registered (e.g. `from math import isnan`), as opposed to `C0001`'s
+/// "we don't recognize this import shape/module at all."
+fn unresolved_symbol<R>(message: impl Into<String>, range: R) -> Diagnostic
+where
+    std::ops::Range<u32>: From<R>,
+{
+    let range = std::ops::Range::<u32>::from(range);
+    Diagnostic::error("C0002", message, Span::new(range.start, range.end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1484,13 +1947,32 @@ mod tests {
         // D-109: before this task, size_of::<Ty>() measured 24 bytes (Vec<Ty>'s
         // ptr+len+cap dominates). This is a real regression guard, not a vibe --
         // it must stay strictly smaller than 24 forever, catching any future
-        // change that re-inflates Ty back to its pre-fix size.
+        // change that re-inflates Ty back to its pre-fix size. PR-13 (D-133)
+        // later added Ty::Param, a new dataful variant -- see the more
+        // general `ty_size_stays_within_d109_ceiling` test below, which
+        // covers the ceiling for the current variant set including it.
         assert_eq!(
             std::mem::size_of::<Ty>(),
             16,
             "size_of::<Ty>() must stay 16 bytes (PR-10 Task 14, D-109) -- PR-11 adds \
              no new Ty variants, so this must not move; if it does, something in this \
              PR accidentally widened Ty's boxing, not the containers themselves",
+        );
+    }
+
+    #[test]
+    fn ty_size_stays_within_d109_ceiling() {
+        // D-133: `Ty::Param(Box<String>)` is a new dataful variant added
+        // after the D-109 boxing fix. `Box<String>` is a single (thin,
+        // 8-byte) pointer -- unlike `Box<str>`, which measured 24 bytes here
+        // because `str` is unsized (see the variant's own doc comment) --
+        // so it must not push `size_of::<Ty>()` back past the 16-byte
+        // ceiling that fix established.
+        assert!(
+            std::mem::size_of::<Ty>() <= 16,
+            "size_of::<Ty>() must stay within the D-109 16-byte ceiling; adding \
+             Ty::Param(Box<String>) (D-133) must not regress it, got {}",
+            std::mem::size_of::<Ty>(),
         );
     }
 
@@ -2440,10 +2922,57 @@ mod tests {
     }
 
     #[test]
-    fn a_generic_function_is_rejected_without_losing_its_type_parameters() {
+    fn a_generic_function_with_two_type_parameters_is_rejected() {
+        // D-133: exactly one type parameter is accepted (see
+        // `a_single_type_parameter_is_lowered_to_ty_param` below); two or
+        // more still hit the frontend arity gate, since the underlying
+        // representation and call-site substitution (D-134) are scoped to
+        // the single-type-parameter case only.
         assert_capability_error_message(
-            "def f[T]() -> None:\n    return\n",
-            "generic function type parameters are not supported yet",
+            "def f[T, U](x: T) -> U:\n    return x\n",
+            "generic functions with more than one type parameter are not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_single_type_parameter_is_lowered_to_ty_param() {
+        // D-133: `Ty::Param` is resolved by call-site substitution (D-134),
+        // not by unification -- this test only asserts the frontend lowers
+        // `T` consistently to `Ty::Param("T")` everywhere it appears in the
+        // signature, not that substitution happens yet.
+        let module = pycc_parser_test_helper::parse("def f[T](x: T) -> T:\n    return x\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+                return_ty: Ty::Param(Box::new("T".to_string())),
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_type_var_tuple_type_parameter_is_rejected() {
+        // D-133: `Ty::Param` models one `TypeVar` resolved to one concrete
+        // scalar via call-site substitution (D-134) -- `*Ts` stands for a
+        // variable-length sequence of types instead, which `Ty::Param`
+        // cannot represent, so this must be an explicit capability
+        // rejection rather than silently treated like a plain `TypeVar`.
+        assert_capability_error_message(
+            "def f[*Ts](x: int) -> None:\n    return\n",
+            "a `TypeVarTuple` type parameter (`*Ts`) is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_param_spec_type_parameter_is_rejected() {
+        // D-133: same reasoning as the `TypeVarTuple` case above -- `**P`
+        // stands for a parameter-list shape, not a single scalar type.
+        assert_capability_error_message(
+            "def f[**P](x: int) -> None:\n    return\n",
+            "a `ParamSpec` type parameter (`**P`) is not supported yet",
         );
     }
 
@@ -4077,6 +4606,342 @@ mod tests {
                 value: Box::new(HirExpr::Name("new".to_string())),
             }
         );
+    }
+
+    // -- D-135: `type` statement and legacy `TypeAlias` -------------------
+
+    #[test]
+    fn a_type_statement_resolves_the_alias_in_a_later_parameter_annotation() {
+        let module = pycc_parser_test_helper::parse(
+            "type IntAlias = int\n\
+             def f(x: IntAlias) -> int:\n\
+             \x20   return x\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+
+        // Zero HIR footprint: the `type` statement itself contributes no
+        // `HirItem` -- the only item present is the function it fed, and its
+        // `x` parameter resolved to `Ty::Int` through the alias.
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+        assert_eq!(hir.type_aliases, vec![("IntAlias".to_string(), Ty::Int)]);
+    }
+
+    #[test]
+    fn a_legacy_type_alias_annotated_assignment_resolves_the_alias_the_same_way() {
+        let module = pycc_parser_test_helper::parse(
+            "IntAlias: TypeAlias = int\n\
+             def f(x: IntAlias) -> int:\n\
+             \x20   return x\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+
+        // Same zero-HIR-footprint contract as the `type` statement form:
+        // the legacy annotated assignment contributes no `HirItem` either.
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+        assert_eq!(hir.type_aliases, vec![("IntAlias".to_string(), Ty::Int)]);
+    }
+
+    #[test]
+    fn a_generic_type_alias_is_rejected_with_t0042() {
+        let module = pycc_parser_test_helper::parse("type Alias[T] = list[T]\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "T0042");
+    }
+
+    #[test]
+    fn a_generic_type_alias_t0042_span_points_at_the_type_statement_not_byte_zero() {
+        // The `type` statement is deliberately not the first line, so a
+        // regression back to a hardcoded `Span::new(0, 0)` would be caught:
+        // byte 0 falls inside the preceding `def f() -> int:` line, not the
+        // `type Alias[T] = int` statement this diagnostic is actually about.
+        let source = "def f() -> int:\n    return 1\ntype Alias[T] = int\n";
+        let type_stmt_start = source.find("type Alias").unwrap() as u32;
+        let type_stmt_end = source.rfind('\n').unwrap() as u32;
+
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "T0042");
+        assert_ne!(diagnostic.span, Some(Span::new(0, 0)));
+        assert_eq!(
+            diagnostic.span,
+            Some(Span::new(type_stmt_start, type_stmt_end))
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_type_alias_rhs_falls_through_to_the_existing_c0001_diagnostic() {
+        let module = pycc_parser_test_helper::parse("type Bad = NotARealType\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn an_unresolvable_legacy_type_alias_rhs_also_falls_through_to_c0001() {
+        let module = pycc_parser_test_helper::parse("Bad: TypeAlias = NotARealType\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_bare_type_alias_annotation_with_no_value_is_not_treated_as_an_alias() {
+        // `X: TypeAlias` with no assigned value can't define an alias (there
+        // is no RHS to resolve) -- it falls through to the ordinary
+        // `AnnAssign` lowering path, where `annotation_to_ty` rejects the
+        // bare name `TypeAlias` itself with the same `C0001` catch-all as
+        // any other unrecognized annotation name, and the alias table stays
+        // empty.
+        let module = pycc_parser_test_helper::parse("X: TypeAlias\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_legacy_type_alias_annotation_on_a_non_name_target_is_not_treated_as_an_alias() {
+        // Unlike a `type` statement's own target (always a bare name, see
+        // `lower_type_alias_stmt`'s doc comment), a legacy `AnnAssign`
+        // target can be an `Attribute`/`Subscript`, e.g. `obj.x: TypeAlias =
+        // int`. `lower_legacy_type_alias_ann_assign` recognizes the `X:
+        // TypeAlias = ...` shape only for a bare-name target and otherwise
+        // falls through to the ordinary `AnnAssign` lowering path, which
+        // rejects a non-name annotated-assignment target with the same
+        // `C0001` catch-all it already uses for every other non-name
+        // target -- the alias table stays empty either way.
+        let module = pycc_parser_test_helper::parse("obj.x: TypeAlias = int\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_math_binds_the_module_namespace() {
+        let module = pycc_parser_test_helper::parse("import math\n");
+        let hir = lower_checked(&module).expect("recognized stdlib import must lower");
+
+        assert_eq!(
+            hir.imports,
+            vec![ImportBinding::Module {
+                local_name: "math".to_string(),
+                module: pycc_std::StdModule::Math,
+            }]
+        );
+        assert!(hir.items.is_empty(), "a bare `import math` has no HirItem");
+    }
+
+    #[test]
+    fn import_cgi_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import cgi\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_sqrt_and_pi_binds_both_names() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt, pi\n");
+        let hir = lower_checked(&module).expect("both registered symbols must resolve");
+
+        let sqrt_symbol = pycc_std::resolve_symbol(pycc_std::StdModule::Math, "sqrt")
+            .expect("math.sqrt is registered");
+        let pi_symbol = pycc_std::resolve_symbol(pycc_std::StdModule::Math, "pi")
+            .expect("math.pi is registered");
+        assert_eq!(
+            hir.imports,
+            vec![
+                ImportBinding::Symbol {
+                    local_name: "sqrt".to_string(),
+                    module: pycc_std::StdModule::Math,
+                    symbol: sqrt_symbol,
+                },
+                ImportBinding::Symbol {
+                    local_name: "pi".to_string(),
+                    module: pycc_std::StdModule::Math,
+                    symbol: pi_symbol,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn from_math_import_sqrt_and_unregistered_tan_is_c0002_not_a_partial_bind() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt, tan\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        // Whole statement fails closed -- `sqrt` is not partially bound
+        // even though it is itself registered.
+        assert_eq!(diagnostic.code, "C0002");
+    }
+
+    #[test]
+    fn import_math_as_m_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import math as m\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_sqrt_as_s_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt as s\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_unregistered_module_import_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from os import path\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_dot_import_x_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from . import x\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_star_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from math import *\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_two_modules_in_one_statement_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import math, os\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_sqrt_call_lowers_to_a_qualified_callee() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.sqrt(2.0))\n");
+        let hir = lower_checked(&module).expect("math.sqrt(...) must lower");
+
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![HirExpr::FloatLiteral(2.0)],
+                }],
+            }))]
+        );
+    }
+
+    #[test]
+    fn math_pi_bare_reference_lowers_to_a_qualified_name() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.pi)\n");
+        let hir = lower_checked(&module).expect("math.pi must lower");
+
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("math.pi".to_string())],
+            }))]
+        );
+    }
+
+    #[test]
+    fn math_tan_call_is_unsupported_since_it_is_not_registered() {
+        let module = pycc_parser_test_helper::parse("import math\nmath.tan(1.0)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_tan_bare_reference_is_unsupported_since_it_is_not_registered() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.tan)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn os_path_bare_attribute_access_is_unsupported() {
+        // No `import os` here on purpose -- `os` isn't a registered
+        // `pycc_std` module at all, so this exercises the "receiver name
+        // does not resolve to a stdlib module" branch directly, distinct
+        // from `math_tan_bare_reference_is_unsupported_since_it_is_not_registered`
+        // above (recognized module, unregistered attribute).
+        let module = pycc_parser_test_helper::parse("print(os.path)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn attribute_access_on_a_non_name_receiver_is_unsupported() {
+        let module = pycc_parser_test_helper::parse("print([1, 2].sqrt)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_sqrt_call_propagates_an_unsupported_argument_expression() {
+        // Exercises the `?` inside the stdlib-call arm's own argument
+        // lowering (`call.arguments.args.iter().map(lower_expr).collect()`)
+        // taking its error path, as opposed to every other stdlib-call test
+        // above, which only exercises the success path.
+        let module = pycc_parser_test_helper::parse("import math\nmath.sqrt(1j)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn method_call_on_a_non_name_receiver_is_unsupported() {
+        // Exercises the call-position stdlib-intrinsic branch's own
+        // `Expr::Name(receiver)` guard failing (as opposed to the bare
+        // attribute-access arm's analogous guard above).
+        let module = pycc_parser_test_helper::parse("[1, 2].sqrt()\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_inside_a_function_body_is_c0001() {
+        // The module-level side-table is populated only by `lower_checked`'s
+        // top-level loop (mirroring `type_aliases`); a nested import still
+        // reaches plain `lower_stmt`, which has no arm for `Stmt::Import`.
+        let module = pycc_parser_test_helper::parse(
+            "def f() -> None:\n    import math\n    return None\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
     }
 }
 

@@ -19,6 +19,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | Code | Severity | Message (short form) |
 |---|---|---|
 | `C0001` | error | valid Python construct is not implemented by this pycc version |
+| `C0002` | error | recognized stdlib module, but the specific imported symbol is not registered (D-136), e.g. `from math import isnan` |
 | `L0001` | error | syntax error (span + expected set) |
 | `L0002` | error | Python version mismatch (feature needs 3.14 level) |
 | `T0001` | error | public function missing annotation |
@@ -40,6 +41,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0038` | error | set codegen only supports `set[int]` in v0.2 (D-122) |
 | `T0039` | error | tuple element type not compiled yet (int/bool/float only, D-116) |
 | `T0040` | error | tuple index must be a non-negative literal integer within range (D-116) |
+| `T0042` | error | generic-function shape or call-site instantiation rejected beyond the PR-13 v0.2 thin slice (D-133/D-134): more than one PEP 695 type parameter; a type parameter used in a container position (`list[T]`); a call site whose occurrences of the type parameter resolve to different concrete types; a call site whose argument for the type parameter is not `int`/`float`/`bool`/`str`; a generic function's body calling itself or any other generic function (recursive generic instantiation is outside D-134's single-call-site monomorphization slice); also reused (D-135) for a generic `type` alias declaring its own type parameters |
 | `O0201` | error | value used after move across scope boundary *(internal-only: never fires on legal Python — see note)* |
 | `O0301` | error | non-Shareable value crosses thread boundary without move |
 | `O0302` | error | lock-guarded field accessed without holding lock |
@@ -47,7 +49,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `E0101` | error | monkey-patching foreign class/module |
 | `E0102` | error | dynamic attribute injection |
 | `E0103` | error | dynamic `type()` class creation |
-| `E0104` | error | wildcard import |
+| `E0104` | error | wildcard import *(reserved; not currently emitted — a wildcard `from x import *` is rejected today by the same versioned `C0001` "not implemented yet" capability code every other unsupported import shape uses, not this by-design-rejection code; see D-137)* |
 | `E0105` | error | metaclass with non-static side effects |
 | `E0106` | warning→error | `__del__` relies on refcount timing |
 | `E0107` | error | `sys.getrefcount` unavailable |

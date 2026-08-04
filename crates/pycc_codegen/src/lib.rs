@@ -138,7 +138,7 @@ enum Scalar<'ctx> {
     /// `BasicMetadataValueEnum` both already include a `StructValue` arm.
     ///
     /// Field values are stored exactly as the corresponding `Scalar`
-    /// carries them. D-132 makes that identical to the current
+    /// carries them. D-141 makes that identical to the current
     /// `PyIntListObj`/`PyDictObj`/`PyIntSetObj` value contract: an int field
     /// or container element is already an int-compatible encoded word,
     /// including a bool-identity marker. A tuple still crosses no runtime
@@ -196,7 +196,7 @@ struct RtFns<'ctx> {
     print_space: FunctionValue<'ctx>,
     print_newline: FunctionValue<'ctx>,
     print_none: FunctionValue<'ctx>,
-    /// D-132's checked numeric decoder. Container ingress calls it for
+    /// D-141's checked numeric decoder. Container ingress calls it for
     /// validation and keeps the original encoded word; range/index/slice
     /// sites use its raw `0`/`1`/smallint result as an implementation
     /// counter. It rejects bigint and malformed words in `pycc_rt`, which
@@ -577,7 +577,7 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
     }
 }
 
-/// Converts a numeric `Int`/`Bool` scalar to D-132's encoded-int carrier.
+/// Converts a numeric `Int`/`Bool` scalar to D-141's encoded-int carrier.
 /// An existing `Int` passes through unchanged, whether it contains an odd
 /// ordinary smallint, a bool-identity marker, or a bigint pointer. A
 /// standalone `Bool` is being consumed numerically at these call sites, so
@@ -682,7 +682,7 @@ fn to_encoded_int<'ctx>(
 }
 
 /// Tags an already-known-in-range raw counter as an ordinary smallint.
-/// D-132 leaves this only for user-visible lengths and for normalizing a
+/// D-141 leaves this only for user-visible lengths and for normalizing a
 /// decoded `range()` operand before it enters an induction phi. Container
 /// elements/values now carry their encoded words unchanged and never use
 /// this helper on read.
@@ -729,7 +729,7 @@ fn expect_list_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'
     ptr
 }
 
-/// Calls D-132's runtime-owned classifier/decoder. Container-value ingress
+/// Calls D-141's runtime-owned classifier/decoder. Container-value ingress
 /// uses the call only to validate bigint exclusion and then stores the
 /// original encoded word; index, slice, and range sites consume its decoded
 /// raw result. Keeping classification in `pycc_rt` prevents codegen from
@@ -750,7 +750,7 @@ fn build_untag_checked<'ctx>(
 
 /// Reads one encoded element out of a `PyIntListObj`. The positional index
 /// is a raw runtime counter; the returned word is already a user-visible
-/// D-132 int-compatible value and is forwarded unchanged.
+/// D-141 int-compatible value and is forwarded unchanged.
 fn build_int_list_get<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
@@ -773,7 +773,7 @@ fn build_int_list_get<'ctx>(
 /// Task 11, D-119). Mirrors `build_int_list_get`'s own one-`build_call`
 /// shape exactly, minus the `index` parameter -- `.pop()` always targets
 /// the last element, so there is nothing else to pass. The returned value
-/// is already an encoded D-132 int-compatible word, exactly like
+/// is already an encoded D-141 int-compatible word, exactly like
 /// `build_int_list_get`'s own return value.
 fn build_int_list_pop<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
@@ -811,7 +811,7 @@ fn build_int_list_len<'ctx>(
 /// must already be raw, untagged `i64`s with every default/untag conversion
 /// already applied by the caller (`MirExpr::Slice`'s own `emit_expr` arm
 /// below) -- this helper is a thin one-`build_call` wrapper, exactly like
-/// `build_int_list_get` above, not a place that itself interprets D-132's
+/// `build_int_list_get` above, not a place that itself interprets D-141's
 /// encoded elements or D-118's defaulting rules.
 fn build_int_list_slice<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
@@ -833,7 +833,7 @@ fn build_int_list_slice<'ctx>(
         .into_pointer_value()
 }
 
-/// Appends one already-validated encoded D-132 value to a `PyIntListObj`, shared by
+/// Appends one already-validated encoded D-141 value to a `PyIntListObj`, shared by
 /// `MirExpr::ListLiteral`'s per-element construction and
 /// `MirExpr::ListAppend`. Returns nothing: `pycc_rt_int_list_append` is
 /// declared `void`, so unlike every other `pycc_rt_int_list_*` helper above
@@ -875,7 +875,7 @@ fn expect_dict_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'
     ptr
 }
 
-/// Inserts or updates one already-validated encoded D-132 value under `key`
+/// Inserts or updates one already-validated encoded D-141 value under `key`
 /// in a `PyDictObj`, shared by `MirExpr::DictLiteral`'s per-pair
 /// construction and `MirStmt::DictSet`'s own `d[k] = v` (D-123's
 /// insert-or-update operation -- `pycc_rt_dict_set` itself decides which of
@@ -902,7 +902,7 @@ fn build_dict_set<'ctx>(
 /// (`dict.get(key, default)`, PR-12 Task 11, D-119). Mirrors
 /// `build_int_list_pop`'s own one-`build_call` shape exactly, with one
 /// extra `i64` operand for the default. Both the default and returned value
-/// are D-132 int-compatible encoded words and retain bool identity.
+/// are D-141 int-compatible encoded words and retain bool identity.
 fn build_dict_get_or_default<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
     rt: &RtFns<'ctx>,
@@ -958,7 +958,7 @@ fn expect_set_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'c
     ptr
 }
 
-/// Inserts one already-validated encoded D-132 value into a `PyIntSetObj`,
+/// Inserts one already-validated encoded D-141 value into a `PyIntSetObj`,
 /// shared by `MirExpr::SetLiteral`'s per-element construction and
 /// `MirExpr::SetAdd`'s own user-facing `s.add(value)` call (PR-12 Task 11,
 /// D-119 -- the second call site; `SetLiteral`'s per-element construction
@@ -1022,7 +1022,7 @@ fn build_int_set_check_not_resized<'ctx>(
 
 /// Reads one element out of a `PyIntSetObj` by insertion-order index, used
 /// only by `MirStmt::ForSet`'s own per-iteration element read. The index is
-/// a raw counter and the result is an encoded D-132 value, mirroring
+/// a raw counter and the result is an encoded D-141 value, mirroring
 /// `build_int_list_get`.
 fn build_int_set_get<'ctx>(
     builder: &inkwell::builder::Builder<'ctx>,
@@ -1039,7 +1039,7 @@ fn build_int_set_get<'ctx>(
 }
 
 /// Applies the one representation-changing assignment conversion accepted by
-/// the v0.1 type system: standalone `i8` bool to D-132's identity-preserving
+/// the v0.1 type system: standalone `i8` bool to D-141's identity-preserving
 /// int-compatible `i64`. All other assignable pairs already share a representation.
 fn coerce_scalar_to_type<'ctx>(
     context: &'ctx Context,
@@ -1091,7 +1091,7 @@ fn range_operand_to_tagged_int<'ctx>(
 
 /// Promotes any numeric `Scalar` to `f64`: an existing `Float` passes
 /// through; `Int` goes through `pycc_rt_int_to_float` (never a raw LLVM
-/// cast -- the value is D-132 encoded, so only `pycc_rt` may interpret its
+/// cast -- the value is D-141 encoded, so only `pycc_rt` may interpret its
 /// bits); `Bool` uses a plain unsigned-int-to-float conversion
 /// (unambiguous for a 0/1 value, no tagging involved).
 fn to_float<'ctx>(
@@ -1353,6 +1353,16 @@ fn emit_expr<'ctx>(
         }
         MirExpr::StringLiteral(s) => {
             Scalar::Str(emit_string_literal(context, builder, module, rt, s))
+        }
+        // D-136: `math.pi` is a compile-time float constant, not a runtime
+        // value bound to any local slot -- Task 4's own thin slice emits
+        // the literal immediate directly, matching the ADR's explicit "no
+        // runtime call at all" design for this one symbol. `std::f64::consts::PI`
+        // is Rust's own IEEE-754 double-precision constant for pi, bit-for-bit
+        // the same value CPython's `math.pi` uses (both are the nearest
+        // representable `f64`/C `double` to the true mathematical constant).
+        MirExpr::Name { name, ty: Ty::Float } if name == "math.pi" => {
+            Scalar::Float(context.f64_type().const_float(std::f64::consts::PI))
         }
         MirExpr::Name { name, ty } => {
             let slot = locals.get(name).unwrap_or_else(|| {
@@ -1797,6 +1807,58 @@ fn emit_expr<'ctx>(
                     "pycc_codegen: using print()'s result as a nested expression is not supported yet"
                 );
             }
+            // D-136 Task 4: `math.sqrt(x: float) -> float` is this PR's one
+            // lowered stdlib function, calling straight into the platform
+            // libm `sqrt` symbol -- the same C ABI this crate's existing
+            // float codegen already links against for `**`'s `pow` call
+            // (see `main.rs`'s `add_linux_system_libs` doc comment: macOS
+            // folds libm into libSystem and Windows's UCRT bundles it, so
+            // only Linux needs an explicit `-lm`, already added there).
+            // Declared once per module and reused on every call site
+            // (`get_function` first, matching `declare_rt_functions`'s own
+            // idempotent-declare precedent) rather than redeclaring per
+            // call -- LLVM rejects a duplicate `declare` with a different
+            // linkage/signature, and there is no reason to risk that for a
+            // fixed, known-once signature.
+            if callee == "math.sqrt" {
+                let [arg] = args.as_slice() else {
+                    panic!(
+                        "pycc_codegen: internal error: `math.sqrt` takes exactly 1 argument, got {} \
+                         -- pycc_types::check (T0021) should have rejected this before codegen",
+                        args.len()
+                    )
+                };
+                let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
+                let f64_type = context.f64_type();
+                let sqrt_fn = module.get_function("sqrt").unwrap_or_else(|| {
+                    module.add_function(
+                        "sqrt",
+                        f64_type.fn_type(&[f64_type.into()], false),
+                        Some(inkwell::module::Linkage::External),
+                    )
+                });
+                // `pycc_types::std_qualified_symbol`'s call-site check
+                // already rejects any argument whose static type isn't
+                // `Ty::Float` (T0021) before codegen runs -- this match
+                // is a defensive backstop against malformed MIR, mirroring
+                // `len`'s/`float`'s own internal-error convention above,
+                // not a real dispatch over legitimate source.
+                let Scalar::Float(arg_value) = scalar else {
+                    panic!(
+                        "pycc_codegen: internal error: `math.sqrt`'s argument was not a float \
+                         -- pycc_types::check (T0021) should have rejected this before codegen"
+                    )
+                };
+                let call_site = builder
+                    .build_call(sqrt_fn, &[arg_value.into()], "math_sqrt")
+                    .expect("build_call should not fail for the libm `sqrt` declaration");
+                return Scalar::Float(
+                    call_site
+                        .try_as_basic_value()
+                        .expect_basic("libm `sqrt` is declared to return a double")
+                        .into_float_value(),
+                );
+            }
             // `len` is the second hand-recognized builtin (D-105 point 3),
             // dispatched here for the same reason `print` is: it has no
             // `user_functions` entry, so it must be claimed before the
@@ -2033,7 +2095,7 @@ fn emit_expr<'ctx>(
         // growth (see that struct's doc comment), so a reserve entry point
         // would be new runtime surface for no behavioral difference.
         //
-        // D-132: each element becomes an int-compatible encoded word. The
+        // D-141: each element becomes an int-compatible encoded word. The
         // checked decoder validates bigint exclusion, but storage keeps the
         // original word so a bool marker survives the round-trip.
         //
@@ -2119,7 +2181,7 @@ fn emit_expr<'ctx>(
                     let field_value = builder
                         .build_extract_value(struct_value, *literal_index as u32, "tuple_extract")
                         .expect("build_extract_value should not fail for a validated index");
-                    // No output conversion: like D-132's container payloads,
+                    // No output conversion: like D-141's container payloads,
                     // a tuple field already holds the encoded value that
                     // `TupleLiteral` inserted. Re-tagging would corrupt every
                     // ordinary `int` element and erase bool identity.
@@ -2136,7 +2198,7 @@ fn emit_expr<'ctx>(
                     }
                 }
                 // `base[index]`, read-only (D-105 scope cut 2). The index is
-                // decoded to a raw positional counter; the D-132 element
+                // decoded to a raw positional counter; the D-141 element
                 // word read back out is already user-visible and passes
                 // through unchanged.
                 //
@@ -2158,7 +2220,7 @@ fn emit_expr<'ctx>(
                 }
             }
         }
-        // `list.append(value)` (D-105 point 3). Same D-132 validation and
+        // `list.append(value)` (D-105 point 3). Same D-141 validation and
         // identity-preserving storage as `ListLiteral` above. `list` is a plain
         // variable name rather than a sub-expression (mirroring
         // `HirExpr::ListAppend`), so it is read through
@@ -2184,7 +2246,7 @@ fn emit_expr<'ctx>(
         // already handles growth itself, same reasoning as
         // `ListLiteral`'s own doc comment).
         //
-        // D-132's encoded-value contract applies to the value half only:
+        // D-141's encoded-value contract applies to the value half only:
         // the key is a `Ty::Str` expression that crosses into `PyDictObj`
         // unchanged (a dict key is a raw pointer either way, no tagging
         // scheme), while each value is validated against bigint storage and
@@ -2287,7 +2349,7 @@ fn emit_expr<'ctx>(
         // D-123's own T0038 gate means every `set[int]` element is exactly
         // `Ty::Int`).
         //
-        // D-132 applies to every element: validate bigint exclusion, then
+        // D-141 applies to every element: validate bigint exclusion, then
         // store the original encoded word. The dedup check that makes a repeated element
         // collapse to one (D-121) lives entirely inside
         // `pycc_rt_int_set_add` itself (see `build_int_set_add`'s own doc
@@ -2327,9 +2389,9 @@ fn emit_expr<'ctx>(
         // so nothing for D-107/D-124's leak-only policy to apply to.
         //
         // Deliberately no `build_untag_checked` per element: a tuple has no
-        // runtime storage boundary to validate. Like D-132 containers, a
+        // runtime storage boundary to validate. Like D-141 containers, a
         // tuple field stores exactly the `Scalar` it was given. An `int`
-        // element therefore goes in as its D-132 encoded word (ordinary
+        // element therefore goes in as its D-141 encoded word (ordinary
         // smallint, bool marker, or bigint pointer), and `MirExpr::Subscript`'s
         // tuple branch returns that word unchanged, so the two sides never
         // disagree and no conversion happens on either.
@@ -2546,7 +2608,7 @@ fn emit_expr<'ctx>(
         }
         // `set.add(value)` (PR-12 Task 11, D-119): mirrors `MirExpr::
         // ListAppend`'s own shape exactly (a plain-name base read through
-        // `emit_set_name_read`, D-132 validation on `value`, the canonical
+        // `emit_set_name_read`, D-141 validation on `value`, the canonical
         // `Ty::None` `i8 0` result
         // carrier) -- `set` is read only once, `build_int_set_add` is
         // `MirExpr::SetLiteral`'s own already-existing helper (this is
@@ -2947,7 +3009,7 @@ fn storage_slot_at_entry<'ctx>(
 
 /// Reuses the predeclared slot backing `target`. The slot's established type
 /// wins over the current expression type, including the accepted
-/// `bool`-to-`int` assignment that must store a D-132 encoded i64 rather than raw i8.
+/// `bool`-to-`int` assignment that must store a D-141 encoded i64 rather than raw i8.
 fn emit_assign<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
@@ -4380,7 +4442,7 @@ fn emit_stmt<'ctx>(
         //    there, and would terminate here if the length were hoisted.
         // 3. Each iteration prepends one `pycc_rt_int_list_get` read.
         //
-        // D-132 leaves the induction variable and raw `len` as private LLVM
+        // D-141 leaves the induction variable and raw `len` as private LLVM
         // counters. The element read is already encoded and is assigned to
         // the user-visible `Ty::Int` loop target unchanged.
         MirStmt::ForList { var, list, body } => {
@@ -4550,7 +4612,7 @@ fn emit_stmt<'ctx>(
         // already compares equal to a stored key. `dict` is read by name
         // (mirrors `MirExpr::ListAppend`'s own `list` field), `key` crosses
         // in as a `Ty::Str` expression unchanged, exactly like
-        // `MirExpr::DictGet`'s key, and `value` gets D-132 validation plus
+        // `MirExpr::DictGet`'s key, and `value` gets D-141 validation plus
         // identity-preserving encoded storage.
         MirStmt::DictSet { dict, key, value } => {
             let dict_ptr =
@@ -4747,7 +4809,7 @@ fn emit_stmt<'ctx>(
         // 2. Each iteration reads the current element via
         //    `pycc_rt_int_set_get`, not `pycc_rt_int_list_get`.
         //
-        // D-132 mirrors `ForList`: the induction variable and `len` are raw
+        // D-141 mirrors `ForList`: the induction variable and `len` are raw
         // private counters, while the element is an encoded user value.
         MirStmt::ForSet { var, set, body } => {
             let function = builder.get_insert_block().unwrap().get_parent().unwrap();
@@ -7991,7 +8053,7 @@ mod tests {
         // rejected any non-`Int` scalar outright, crashing the compiler on
         // this legitimate, accepted program instead of applying range's
         // numeric normalization from `True` to the ordinary tagged int `1`.
-        // Identity-preserving int boundaries intentionally keep D-132's
+        // Identity-preserving int boundaries intentionally keep D-141's
         // encoded `True` marker instead.
         let mir = MirModule {
             items: vec![MirItem::TopLevelStmt(MirStmt::ForRange {
@@ -8053,7 +8115,7 @@ mod tests {
     fn for_range_normalizes_int_typed_bool_markers_before_the_induction_phi() {
         // Unlike the literal-bool range tests above, both helpers return an
         // `i64`-carried `Ty::Int`: their bool results have already crossed
-        // the return boundary and become D-132 markers before `ForRange`
+        // the return boundary and become D-141 markers before `ForRange`
         // sees them. All three operands therefore exercise
         // `range_operand_to_tagged_int`'s `Scalar::Int` path. The first
         // visible target must print ordinary integer `0`, not `False`.
@@ -9583,6 +9645,53 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "`math.sqrt` takes exactly 1 argument, got 0")]
+    fn a_math_sqrt_call_with_the_wrong_argument_count_is_an_internal_error() {
+        // `pycc_types` already rejects a mis-arity `math.sqrt` call with
+        // T0021, so this is hand-built malformed MIR exercising codegen's
+        // own defensive backstop, mirroring
+        // `a_float_call_with_the_wrong_argument_count_is_an_internal_error`
+        // immediately above.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "math.sqrt".to_string(),
+                args: vec![],
+                ty: Ty::Float,
+            }))],
+        };
+        let dir = tempfile_dir("math_sqrt_wrong_arity_panics");
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("math_sqrt_wrong_arity_panics.o"),
+            None,
+            false,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "`math.sqrt`'s argument was not a float")]
+    fn a_math_sqrt_call_on_a_non_float_argument_is_an_internal_error() {
+        // The other half of `pycc_types`' own T0021 `math.sqrt` check (a
+        // non-`float` argument) -- hand-built malformed MIR, since
+        // `pycc_types::std_qualified_symbol`'s call-site check already
+        // rejects this before codegen runs for any legitimate source.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                callee: "math.sqrt".to_string(),
+                args: vec![MirExpr::IntLiteral(1)],
+                ty: Ty::Float,
+            }))],
+        };
+        let dir = tempfile_dir("math_sqrt_non_float_panics");
+        let _ = compile_to_object(
+            &mir,
+            &dir.join("math_sqrt_non_float_panics.o"),
+            None,
+            false,
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "`len`'s argument did not evaluate to a list")]
     fn a_len_call_on_a_non_list_argument_is_an_internal_error() {
         // The other half of `pycc_types`' own T0033 `len` check (a
@@ -9707,6 +9816,48 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"2\n");
+    }
+
+    #[test]
+    fn math_sqrt_call_codegens_and_runs() {
+        // `print(math.sqrt(2.0))` end to end through `compile_to_object` --
+        // D-136 Task 4's one lowered stdlib function, calling the real
+        // libm `sqrt` symbol. Expected output verified against `python3`
+        // on this exact source (`math.sqrt(2.0)` -> `1.4142135623730951`).
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                callee: "math.sqrt".to_string(),
+                args: vec![MirExpr::FloatLiteral(2.0)],
+                ty: Ty::Float,
+            }))],
+        };
+        let dir = tempfile_dir("math_sqrt_call");
+        let obj_path = dir.join("math_sqrt_call.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("math_sqrt_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1.4142135623730951\n");
+    }
+
+    #[test]
+    fn math_pi_codegens_and_runs() {
+        // `print(math.pi)` end to end -- D-136 Task 4's compile-time float
+        // constant, no runtime call at all. Expected output verified
+        // against `python3` on this exact source.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(print_expr(MirExpr::Name {
+                name: "math.pi".to_string(),
+                ty: Ty::Float,
+            }))],
+        };
+        let dir = tempfile_dir("math_pi");
+        let obj_path = dir.join("math_pi.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("math_pi");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"3.141592653589793\n");
     }
 
     #[test]
@@ -10306,7 +10457,7 @@ mod tests {
         // Heterogeneous on purpose, and reading all three positions on
         // purpose. A single-type tuple would not catch a positional
         // mix-up, and the `int` read in particular is what pins D-115's
-        // encoded-word rule: a tuple field stores the already D-132 encoded
+        // encoded-word rule: a tuple field stores the already D-141 encoded
         // value, so `Subscript`'s tuple branch must not re-tag it. List and
         // dict reads now follow the same pass-through rule. With a stray
         // `raw_i64_to_tagged_int` here this prints `3` instead of `1`,
@@ -10956,7 +11107,7 @@ mod tests {
         // no other unit test in this file reaches (`appending_to_a_non_
         // list_local_is_an_internal_error` above panics inside
         // `emit_list_name_read` before any of it runs). Reading the
-        // appended element straight back out pins D-132's round trip for
+        // appended element straight back out pins D-141's round trip for
         // this arm: ingress validates but stores the encoded word unchanged.
         let mir = list_fixture_module(vec![
             assign_list_literal("xs"),
@@ -11053,7 +11204,7 @@ mod tests {
         // than requiring a `Scalar::Int` outright -- Python's `bool` is an
         // `int` subtype, so widening is the correct answer if a `bool`
         // element ever does reach it, exactly as `emit_expr`'s own
-        // `BinOp`/`Ty::Int` arm treats a `bool` operand. D-132 requires the
+        // `BinOp`/`Ty::Int` arm treats a `bool` operand. D-141 requires the
         // stored marker to print `True`, while arithmetic still produces `1`.
         let mir = list_fixture_module(vec![
             MirStmt::Assign {
@@ -11237,7 +11388,7 @@ mod tests {
         // evaluated `Scalar::Bool` (an `i8`) straight through with no
         // widening, so the built call's argument type didn't match `f`'s
         // declared `i64` parameter -- `module.verify()` rejected the IR.
-        // `x` is statically `int`-typed, but D-132 preserves and prints the
+        // `x` is statically `int`-typed, but D-141 preserves and prints the
         // source object's `True` identity.
         let mir = MirModule {
             items: vec![
@@ -11278,7 +11429,7 @@ mod tests {
         // the returned `Scalar::Bool` straight to a `BasicValueEnum` with no
         // widening, so the built `ret` instruction's operand type didn't
         // match `f`'s declared `i64` return type -- `module.verify()`
-        // rejected the IR. D-132 now preserves and prints `True`.
+        // rejected the IR. D-141 now preserves and prints `True`.
         let mir = MirModule {
             items: vec![
                 MirItem::Function {
@@ -11317,7 +11468,7 @@ mod tests {
         // alloca but stored the second assignment's raw `Scalar::Bool` (an
         // `i8`) into it verbatim -- an `i8` store into an `i64`-sized slot,
         // followed by an `i64` load expecting a full encoded int word.
-        // D-132 stores the `True` marker rather than ordinary integer `1`.
+        // D-141 stores the `True` marker rather than ordinary integer `1`.
         let mir = MirModule {
             items: vec![
                 MirItem::TopLevelStmt(MirStmt::Assign {
