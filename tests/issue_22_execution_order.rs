@@ -199,3 +199,163 @@ fn redefinition_fixture_matches_cpython() {
         "redefinition fixture should print 1 then 2"
     );
 }
+
+/// Issue #22 review fix: a redefinition with a different signature must be
+/// rejected by `pycc check`. The codegen uses the first definition's LLVM
+/// function type for indirect calls through the per-name function-pointer
+/// slot, so all definitions of the same name must share one signature.
+/// Without this check, the mismatched `fn_type` produces silent runtime UB
+/// (a `ptr::copy_nonoverlapping` precondition violation on arm64).
+#[test]
+fn incompatible_redefinition_is_a_check_error() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_issue22_incompat_check_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "incompat.py",
+        "def foo(x: int) -> int:\n    return x\n\ndef foo(x: int, y: int) -> int:\n    return x + y\n\nprint(foo(1, 2))\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pycc check should reject incompatible redefinition with exit code 1"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cannot redefine function `foo` with a different signature"),
+        "stdout should mention incompatible redefinition, got: {stdout}"
+    );
+}
+
+/// Issue #22 review fix: a redefinition with a different signature must
+/// also be rejected by `pycc build` (the post-resolution check in
+/// `check_and_resolve` catches the solver path too).
+#[test]
+fn incompatible_redefinition_is_a_build_error() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_issue22_incompat_build_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "incompat.py",
+        "def foo(x: int) -> int:\n    return x\n\ndef foo(x: int, y: int) -> int:\n    return x + y\n\nprint(foo(1, 2))\n",
+    );
+    let out = dir.join("incompat");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pycc build should reject incompatible redefinition with exit code 1"
+    );
+}
+
+/// Issue #22 review fix: a redefinition with a different return type is
+/// also rejected (not just parameter count/type mismatches).
+#[test]
+fn incompatible_redefinition_with_different_return_type_is_rejected() {
+    let dir = std::env::temp_dir()
+        .join(format!(
+            "pycc_issue22_incompat_ret_{}",
+            std::process::id()
+        ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "incompat_ret.py",
+        "def foo(x: int) -> int:\n    return x\n\ndef foo(x: int) -> None:\n    print(x)\n\nfoo(1)\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pycc check should reject redefinition with a different return type"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cannot redefine function `foo` with a different signature"),
+        "stdout should mention incompatible redefinition, got: {stdout}"
+    );
+}
+
+/// Issue #22 review fix: a compatible redefinition (same signature) still
+/// works after the incompatible-redefinition check was added. This is the
+/// regression fixture's own shape -- same signature, different body.
+#[test]
+fn compatible_redefinition_with_same_signature_still_works() {
+    let dir = std::env::temp_dir()
+        .join(format!(
+            "pycc_issue22_compat_redef_{}",
+            std::process::id()
+        ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "compat_redef.py",
+        "def foo() -> None:\n    print(1)\n\nfoo()\n\ndef foo() -> None:\n    print(2)\n\nfoo()\n",
+    );
+    let out = dir.join("compat_redef");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "pycc build should succeed for a compatible redefinition (same signature)"
+    );
+
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(
+        output.stdout, b"1\n2\n",
+        "compatible redefinition should print 1 then 2"
+    );
+}
+
+/// Issue #22 review fix: multiple calls to the same function work correctly.
+/// This exercises the single `fnname_` global created once per function name
+/// and reused at every call site (the fix for the duplicate-named global
+/// that was previously created on each call).
+#[test]
+fn multiple_calls_to_same_function_work() {
+    let dir = std::env::temp_dir()
+        .join(format!(
+            "pycc_issue22_multi_call_{}",
+            std::process::id()
+        ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "multi_call.py",
+        "def foo(x: int) -> int:\n    return x + 1\n\ndef bar(x: int) -> int:\n    return foo(x) + foo(x) + foo(x)\n\nprint(bar(1))\nprint(foo(2))\nprint(foo(3))\n",
+    );
+    let out = dir.join("multi_call");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "pycc build should succeed for multiple calls to the same function"
+    );
+
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(
+        output.stdout, b"6\n3\n4\n",
+        "multiple calls should produce correct output"
+    );
+}

@@ -180,6 +180,12 @@ struct UserFunction<'ctx> {
     /// (the type checker resolves to one signature per name). Needed to
     /// type the indirect call through `fn_ptr_global`.
     fn_type: inkwell::types::FunctionType<'ctx>,
+    /// Issue #22: a global string constant holding the function name as a
+    /// null-terminated C string, passed to `pycc_rt_name_error` on the
+    /// null-pointer (call-before-`def`) path. Created once per function
+    /// name in the declaration pass and reused at every call site, rather
+    /// than recreating a duplicate-named global on each call.
+    name_global: inkwell::values::GlobalValue<'ctx>,
 }
 
 #[derive(Clone)]
@@ -3219,18 +3225,11 @@ fn build_call_to_with_leading_args<'ctx>(
         .build_conditional_branch(is_null, is_null_block, not_null_block)
         .expect("build_conditional_branch should not fail for a null-check dispatch");
     // Null path: call pycc_rt_name_error with the function name as a C
-    // string, then unreachable (name_error never returns).
+    // string, then unreachable (name_error never returns). The name
+    // global was created once per function name in the declaration pass
+    // and is reused at every call site.
     builder.position_at_end(is_null_block);
-    let name_global = module
-        .add_global(
-            context.i8_type().array_type(callee_name.len() as u32 + 1),
-            None,
-            &format!("fnname_{callee_name}"),
-        );
-    name_global.set_linkage(Linkage::Internal);
-    name_global.set_constant(true);
-    name_global.set_initializer(&context.const_string(callee_name.as_bytes(), true));
-    let name_ptr = name_global.as_pointer_value();
+    let name_ptr = user_function.name_global.as_pointer_value();
     builder
         .build_call(rt.name_error, &[name_ptr.into()], "name_error")
         .expect("build_call should not fail for a well-formed runtime error call");
@@ -4250,10 +4249,23 @@ fn compile_to_object_with_observer(
                     &format!("fnptr_{name}"),
                 );
                 fn_ptr_global.set_initializer(&fn_ptr_type.const_null());
+                // Issue #22: create the function-name string constant once
+                // per name and reuse it at every call site's null-pointer
+                // (call-before-`def`) path, instead of recreating a
+                // duplicate-named global on each call.
+                let name_global = module.add_global(
+                    context.i8_type().array_type(name.len() as u32 + 1),
+                    None,
+                    &format!("fnname_{name}"),
+                );
+                name_global.set_linkage(Linkage::Internal);
+                name_global.set_constant(true);
+                name_global.set_initializer(&context.const_string(name.as_bytes(), true));
                 UserFunction {
                     param_tys: params.iter().map(|(_, ty)| ty.clone()).collect(),
                     fn_ptr_global,
                     fn_type,
+                    name_global,
                 }
             });
         }
