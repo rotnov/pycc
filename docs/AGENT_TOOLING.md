@@ -108,7 +108,10 @@ implementation code and mutates no tracked file on its own. Like
 per-payload user confirmation before creating a comment in `rotnov/pycc`
 (delegated invocation by exactly `issue-implement` — a closed, named
 exception, not an open class any future skill could self-qualify into — is
-the one exception). An issue authored by the repository owner, or labeled
+the one exception; D-143 extends this to a generic `Agent` that
+`issue-implement` dispatched to run `issue-to-plan` on its behalf, acting
+under that same delegated authorization — see `issue-to-plan`'s own Publish
+step). An issue authored by the repository owner, or labeled
 `approved`, is trusted; any other issue gets an explicit security check
 before the agent acts on anything beyond its stated defect or request.
 
@@ -117,7 +120,12 @@ driven session: it triages the issue for staleness against the refreshed
 default branch, applying the same trust-policy and issue-content-is-data
 rules as `issue-to-plan`, and closes it with cited evidence when its premise
 no longer holds; obtains or refreshes an implementation plan through
-`issue-to-plan`; implements on a clean task branch under D-021's preflight
+`issue-to-plan` (D-143: the delegated invocation, when a fresh or refreshed
+plan is needed, also runs inside a dispatched `Agent` — instructed to invoke
+the `issue-to-plan` skill itself and run it to completion, including its own
+adversarial review loop via a further, nested `Agent` dispatch — rather than
+in the orchestrating session's own context); implements on a clean task
+branch under D-021's preflight
 (D-142: dispatched to a fresh `Agent` working inside that same branch/worktree
 rather than in the orchestrating session's own context, so `issue-select`'s
 loop can carry many issues in one sitting instead of growing that session's
