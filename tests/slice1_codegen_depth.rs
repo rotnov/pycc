@@ -917,6 +917,67 @@ fn none_typed_list_append_result_from_issue_242_matches_cpython() {
 }
 
 #[test]
+fn issue_239_list_subscript_return_infers_int_and_prints_1() {
+    // D-146 (#239): an unannotated private helper that assigns a list literal
+    // to a local and returns a subscript of that local now infers `int` and
+    // builds/runs correctly. Before this fix the solver's
+    // `collect_expr_constraints` produced no term for the list literal or the
+    // subscript, so the local was never bound and the return failed with the
+    // misleading "not bound before this use" (T0021).
+    let source = "\
+def _first():
+    xs = [1]
+    return xs[0]
+
+
+print(_first())
+";
+    let output = build_and_run("issue_239_list_subscript", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
+
+#[test]
+fn issue_239_list_subscript_return_with_annotation_infers_int_and_prints_1() {
+    // D-146 (#239): annotated companion for parity -- the same program with
+    // an explicit `-> int` return annotation builds and runs identically.
+    let source = "\
+def _first() -> int:
+    xs = [1]
+    return xs[0]
+
+
+print(_first())
+";
+    let output = build_and_run("issue_239_list_subscript_annotated", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"1\n");
+}
+
+#[test]
+fn issue_239_list_pop_return_infers_int_and_prints_2() {
+    // D-146 (#239): an unannotated private helper that assigns a list literal
+    // to a local, pops from it, and returns the result now infers `int` and
+    // builds/runs correctly. The `ListLiteral` arm produces the
+    // `Ty::List(Box::new(Ty::Int))` carrier, the `ListPop` arm destructures
+    // it to extract `Ty::Int`. Before this fix the `ListPop` arm returned
+    // `Ok(None)`, so the local was never bound and the return failed with
+    // T0021.
+    let source = "\
+def _pop():
+    xs = [1, 2]
+    y = xs.pop()
+    return y
+
+
+print(_pop())
+";
+    let output = build_and_run("issue_239_list_pop", source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n");
+}
+
+#[test]
 fn none_typed_module_global_list_append_result_is_storable() {
     let source = "\
 xs = [1]

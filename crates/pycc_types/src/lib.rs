@@ -370,6 +370,34 @@ fn is_private_solver_scalar(ty: &Ty) -> bool {
     matches!(ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::None)
 }
 
+/// D-146 (#239): determines whether a list literal's collected element terms
+/// represent a homogeneous scalar-element list this solver can carry as a
+/// `Ty::List` element-type carrier. Returns the shared element `Ty` when every
+/// element produced `Some(Ok(ty))`, all element types are exactly equal (exact
+/// `Ty` equality, matching `infer_expr_in`'s own homogeneity rule -- NOT
+/// `merge_inferred_types`, which would silently widen `bool` to `int`), and the
+/// shared element type is a private-solver scalar (`is_private_solver_scalar`).
+/// Returns `None` for heterogeneous lists, empty lists, non-scalar element
+/// lists, or any element producing `None`/`Err` -- those keep the historical
+/// `Ok(None)` behavior. The `is_private_solver_scalar` gate prevents
+/// nested-container carriers (`list[list[int]]`) and non-scalar element types
+/// this solver has no representation for. The returned carrier is destructured
+/// by the `Subscript`/`ListPop` arms, never unified -- `unify_terms` and
+/// `merge_inferred_types` are unchanged.
+fn homogeneous_private_solver_scalar_list_element(element_terms: &[Option<TypeTerm>]) -> Option<Ty> {
+    let first = element_terms.first()?.as_ref()?.as_ref().ok()?;
+    if !is_private_solver_scalar(first) {
+        return None;
+    }
+    if !element_terms
+        .iter()
+        .all(|term| matches!(term, Some(Ok(ty)) if ty == first))
+    {
+        return None;
+    }
+    Some(first.clone())
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct AnnotationDefaultConstraint {
     initializer: TypeTerm,
@@ -830,30 +858,62 @@ fn collect_expr_constraints(
             }
             Ok(Some(signature.2.clone()))
         }
-        // `TypeTerm` (`Result<Ty, usize>`) has no unification-friendly
-        // representation for `Ty::List` -- this solver only exists to infer
-        // scalar `Ty::Infer` parameters/returns of underscore-prefixed
-        // private helpers (D-045), and list homogeneity/element-type
-        // checking is `infer_expr_in`'s job, not this constraint collector's
-        // (see that function's `HirExpr::ListLiteral`/`Subscript`/
-        // `ListAppend` arms below). Recurse only to keep propagating
-        // genuine errors (e.g. an unbound local used as a list element) and
-        // otherwise report "no term produced," exactly like an unresolved
-        // `Name` or a call to an unregistered function above -- returning
-        // `Err` here for a case this solver can't actually validate would
-        // wrongly preempt `checked_function_signatures`' fallback to the
-        // real, list-aware check pass (`check_with_signatures`) that runs
-        // after this solver.
+        // D-146 (#239): `TypeTerm` (`Result<Ty, usize>`) has no unification-
+        // friendly representation for `Ty::List` -- this solver only exists to
+        // infer scalar `Ty::Infer` parameters/returns of underscore-prefixed
+        // private helpers (D-045), and list homogeneity/element-type checking
+        // is `infer_expr_in`'s job, not this constraint collector's (see that
+        // function's `HirExpr::ListLiteral`/`Subscript`/`ListAppend` arms
+        // below). Recurse into every element to keep propagating genuine
+        // errors (e.g. an unbound local used as a list element). When every
+        // element produces `Some(Ok(ty))`, all element types are exactly equal
+        // (exact `Ty` equality, matching `infer_expr_in`'s own homogeneity
+        // rule -- NOT `merge_inferred_types`, which would silently widen
+        // `bool` to `int`), and the shared element type is a private-solver
+        // scalar (`is_private_solver_scalar` -- `Ty::Int`/`Ty::Float`/
+        // `Ty::Bool`/`Ty::Str`/`Ty::None`), return `Some(Ok(Ty::List(...)))`
+        // as a destructured element-type carrier -- never unified, only
+        // destructured by the `Subscript`/`ListPop` arms below to extract the
+        // scalar element type for a scalar return-type inference. The
+        // `is_private_solver_scalar` gate prevents nested-container carriers
+        // (`list[list[int]]`) and non-scalar element types this solver has no
+        // representation for. Heterogeneous lists, empty lists, non-scalar
+        // element lists, or any element producing `None`/`Err` keep the
+        // historical `Ok(None)` behavior -- returning `Err` here for a case
+        // this solver can't actually validate would wrongly preempt
+        // `checked_function_signatures`' fallback to the real, list-aware
+        // check pass (`check_with_signatures`) that runs after this solver.
+        // `unify_terms` and `merge_inferred_types` are unchanged -- the
+        // carrier is destructured, never unified.
         HirExpr::ListLiteral(elements) => {
+            let mut element_terms = Vec::with_capacity(elements.len());
             for element in elements {
-                collect_expr_constraints(signatures, parents, concrete, binops, env, element)?;
+                element_terms.push(collect_expr_constraints(
+                    signatures, parents, concrete, binops, env, element,
+                )?);
             }
-            Ok(None)
+            if let Some(element_ty) = homogeneous_private_solver_scalar_list_element(&element_terms)
+            {
+                Ok(Some(Ok(Ty::List(Box::new(element_ty)))))
+            } else {
+                Ok(None)
+            }
         }
         HirExpr::Subscript { base, index } => {
-            collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
+            let base_term =
+                collect_expr_constraints(signatures, parents, concrete, binops, env, base)?;
             collect_expr_constraints(signatures, parents, concrete, binops, env, index)?;
-            Ok(None)
+            // D-146 (#239): when the base resolves to a `Ty::List` element-
+            // type carrier (produced by the `ListLiteral` arm above or a
+            // `Ty::List`-bound name), extract the scalar element type -- the
+            // carrier is destructured, never unified. Otherwise keep the
+            // historical `Ok(None)` behavior (the base/index recursion above
+            // already propagated genuine errors).
+            if let Some(Ok(Ty::List(element_ty))) = base_term {
+                Ok(Some(Ok(*element_ty)))
+            } else {
+                Ok(None)
+            }
         }
         // PR-12 Task 7 (D-118): structurally identical to `Subscript` above
         // -- a slice's base/bounds are, like a subscript's base/index,
@@ -916,8 +976,18 @@ fn collect_expr_constraints(
         // value/key/default-type gate (`T0021`) are `infer_expr_in`'s job,
         // not this solver's -- same reasoning as `ListAppend` above. `list`
         // is a plain `String`, not a sub-expression, so there is nothing to
-        // recurse into for `ListPop`.
-        HirExpr::ListPop { list: _ } => Ok(None),
+        // recurse into for `ListPop`. D-146 (#239): when `list` is bound in
+        // `env.bindings` to a `Ty::List` element-type carrier (produced by
+        // the `ListLiteral` arm above or a `Ty::List`-typed parameter),
+        // extract the scalar element type -- the carrier is destructured,
+        // never unified. Otherwise keep the historical `Ok(None)` behavior.
+        HirExpr::ListPop { list } => {
+            if let Some(Ok(Ty::List(element_ty))) = env.bindings.get(list).cloned() {
+                Ok(Some(Ok(*element_ty)))
+            } else {
+                Ok(None)
+            }
+        }
         HirExpr::DictGetOrDefault {
             dict: _,
             key,
@@ -5041,13 +5111,13 @@ mod tests {
     }
 
     #[test]
-    fn constraint_collection_treats_a_list_literal_as_unconstrained_but_recurses_into_elements() {
-        // `TypeTerm` has no unification-friendly representation for
-        // `Ty::List` -- this solver only infers scalar `Ty::Infer`
-        // parameters/returns (see the comment on this arm in
-        // `collect_expr_constraints`). It must still recurse into elements
-        // to propagate genuine errors (see the next test) rather than
-        // ignoring them outright.
+    fn constraint_collection_carries_a_homogeneous_scalar_list_literal_as_an_element_type_carrier() {
+        // D-146 (#239): a homogeneous scalar-element list literal now produces
+        // `Some(Ok(Ty::List(...)))` as a destructured element-type carrier --
+        // never unified, only destructured by the `Subscript`/`ListPop` arms
+        // to extract the scalar element type for scalar return-type inference.
+        // Exact `Ty` equality (not `merge_inferred_types`) determines
+        // homogeneity, matching `infer_expr_in`'s own rule.
         let signatures = HashMap::new();
         let mut parents = Vec::new();
         let mut concrete = Vec::new();
@@ -5069,7 +5139,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(term.is_none());
+        assert_eq!(term, Some(Ok(Ty::List(Box::new(Ty::Int)))));
     }
 
     #[test]
@@ -5184,6 +5254,536 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code, "T0021");
+    }
+
+    #[test]
+    fn constraint_collection_carries_a_homogeneous_float_list_literal_as_an_element_type_carrier() {
+        // D-146 (#239): a homogeneous `float`-element list literal produces
+        // `Some(Ok(Ty::List(Box::new(Ty::Float))))`, proving the carrier is
+        // generic over any private-solver scalar, not `Ty::Int`-specific.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListLiteral(vec![
+            HirExpr::FloatLiteral(1.0),
+            HirExpr::FloatLiteral(2.0),
+        ]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::List(Box::new(Ty::Float)))));
+    }
+
+    #[test]
+    fn constraint_collection_carries_a_single_element_scalar_list_literal() {
+        // D-146 (#239): a single-element list is trivially homogeneous -- the
+        // carrier is produced for arity 1 just as for arity 2+.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::List(Box::new(Ty::Int)))));
+    }
+
+    #[test]
+    fn constraint_collection_does_not_carry_a_heterogeneous_list_literal() {
+        // D-146 (#239): a heterogeneous `int`/`float` list keeps the
+        // historical `Ok(None)` behavior -- exact `Ty` equality (not
+        // `merge_inferred_types`) determines homogeneity, so `int` and
+        // `float` are not merged even though `merge_inferred_types` would
+        // reject them anyway.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::FloatLiteral(2.0),
+        ]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_does_not_carry_an_empty_list_literal() {
+        // D-146 (#239): an empty list has no element type to carry -- keeps
+        // the historical `Ok(None)` behavior.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListLiteral(vec![]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_does_not_carry_a_list_literal_with_a_non_scalar_element() {
+        // D-146 (#239): a nested-container element (`list[list[int]]`) is
+        // rejected by the `is_private_solver_scalar` gate -- the carrier is
+        // scalar-element-only to prevent nested-container carriers this
+        // solver has no representation for.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListLiteral(vec![HirExpr::ListLiteral(vec![
+            HirExpr::IntLiteral(1),
+        ])]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_does_not_carry_a_list_literal_when_an_element_has_no_term() {
+        // D-146 (#239): when an element produces `None` (here an unbound
+        // module-global name, not a local so no `T0021`), the list keeps the
+        // historical `Ok(None)` behavior -- the carrier requires every
+        // element to produce `Some(Ok(ty))`.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::Name("unbound_global".to_string()),
+        ]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_subscript_on_a_list_literal_base_extracts_the_element_type() {
+        // D-146 (#239): `xs[0]` where `xs` is a `Ty::List`-bound name
+        // extracts the scalar element type. This is the core reproduction
+        // for #239: before this fix the `Subscript` arm returned `Ok(None)`
+        // regardless of the base's resolved type.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn constraint_collection_subscript_on_a_non_list_bound_base_keeps_ok_none() {
+        // D-146 (#239): a `Ty::Int`-bound name is not a `Ty::List` carrier,
+        // so the `Subscript` arm keeps the historical `Ok(None)` behavior --
+        // the real check pass (`infer_expr_in`) validates it later.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("x".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_subscript_on_an_unresolved_list_base_keeps_ok_none() {
+        // D-146 (#239): a genuinely unresolved inference variable (a fresh
+        // term, not yet unified) is not a `Ty::List` carrier, so the
+        // `Subscript` arm keeps the historical `Ok(None)` behavior -- the
+        // real check pass validates it once its type is actually known.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let unresolved = fresh_term(&mut parents, &mut concrete);
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("xs".to_string(), unresolved)]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::Name("xs".to_string())),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_list_pop_on_a_list_typed_bound_name_extracts_the_element_type() {
+        // D-146 (#239): `xs.pop()` where `xs` is a `Ty::List`-bound name
+        // extracts the scalar element type -- the carrier is destructured,
+        // never unified.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Str))))]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListPop {
+            list: "xs".to_string(),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Str)));
+    }
+
+    #[test]
+    fn constraint_collection_list_pop_on_an_unbound_name_keeps_ok_none() {
+        // D-146 (#239): `xs.pop()` where `xs` is not in `env.bindings` keeps
+        // the historical `Ok(None)` behavior -- the real check pass
+        // (`infer_expr_in`) validates it later.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListPop {
+            list: "xs".to_string(),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_list_pop_on_a_non_list_bound_name_keeps_ok_none() {
+        // D-146 (#239): `xs.pop()` where `xs` is a `Ty::Int`-bound name is
+        // not a `Ty::List` carrier, so the `ListPop` arm keeps the
+        // historical `Ok(None)` behavior.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("xs".to_string(), Ok(Ty::Int))]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListPop {
+            list: "xs".to_string(),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_list_append_after_a_list_binding_still_keeps_ok_none() {
+        // D-146 (#239): `ListAppend` is unchanged -- it still returns
+        // `Ok(None)` and recurses into `value` only, even when the list is
+        // bound. The carrier is for element-type extraction, not for
+        // append's own void (`Ty::None`) result.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListAppend {
+            list: "xs".to_string(),
+            value: Box::new(HirExpr::IntLiteral(2)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
+    fn constraint_collection_inline_subscript_on_a_list_literal_extracts_the_element_type() {
+        // D-146 (#239): `[1][0]` -- an inline subscript on a list literal --
+        // extracts the element type. The `ListLiteral` arm produces the
+        // carrier, and the `Subscript` arm destructures it.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Subscript {
+            base: Box::new(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
+            index: Box::new(HirExpr::IntLiteral(0)),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_rejects_an_empty_slice() {
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&[]),
+            None
+        );
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_rejects_a_none_element_term() {
+        let terms = vec![Some(Ok(Ty::Int)), None];
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&terms),
+            None
+        );
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_rejects_a_none_first_element() {
+        // Covers the `.as_ref()?` None path when the first element itself is
+        // `None` (distinct from the test above where `None` is at index 1).
+        let terms = vec![None, Some(Ok(Ty::Int))];
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&terms),
+            None
+        );
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_rejects_an_err_element_term() {
+        let terms = vec![Some(Ok(Ty::Int)), Some(Err(0))];
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&terms),
+            None
+        );
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_rejects_an_err_first_element() {
+        // Covers the `.ok()?` None path when the first element is `Some(Err(_))`
+        // (distinct from the test above where `Err` is at index 1).
+        let terms = vec![Some(Err(0)), Some(Ok(Ty::Int))];
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&terms),
+            None
+        );
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_rejects_a_non_scalar_first_element() {
+        let terms = vec![Some(Ok(Ty::List(Box::new(Ty::Int))))];
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&terms),
+            None
+        );
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_rejects_heterogeneous_scalars() {
+        let terms = vec![Some(Ok(Ty::Int)), Some(Ok(Ty::Bool))];
+        // Exact `Ty` equality, NOT `merge_inferred_types` -- `bool` and `int`
+        // are not merged even though `merge_inferred_types` would widen them.
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&terms),
+            None
+        );
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_accepts_homogeneous_scalars() {
+        let terms = vec![Some(Ok(Ty::Int)), Some(Ok(Ty::Int))];
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&terms),
+            Some(Ty::Int)
+        );
+    }
+
+    #[test]
+    fn homogeneous_private_solver_scalar_list_element_accepts_a_single_scalar() {
+        let terms = vec![Some(Ok(Ty::Str))];
+        assert_eq!(
+            homogeneous_private_solver_scalar_list_element(&terms),
+            Some(Ty::Str)
+        );
     }
 
     #[test]
@@ -9636,34 +10236,19 @@ mod tests {
     }
 
     #[test]
-    fn list_pop_assigned_inside_an_unannotated_private_helper_hits_the_pre_existing_solver_binding_gap_today()
+    fn list_pop_on_a_list_typed_parameter_infers_the_scalar_element_type_inside_an_unannotated_private_helper()
      {
-        // Pins a pre-existing, tracked gap (D-116's correction, "Three
-        // concrete reproductions") -- NOT introduced or fixed by this task.
-        // `collect_expr_constraints`'s `ListPop` arm returns `Ok(None)` (no
-        // unification term), mirroring `ListAppend`/every container-literal
-        // arm exactly (D-116's own stated reasoning: this solver only
-        // infers scalar `Ty::Infer` parameters/returns, and a container-
-        // producing expression has no unification-friendly term to give).
-        // Once any function in the module is unannotated, EVERY function
-        // (including this one) is checked via the solver path, whose
-        // `collect_block_constraints`' `Assign` arm never registers a
-        // binding for a target assigned from an `Ok(None)`-producing
-        // expression -- so a *later* read of that target inside the same
-        // solver-path function fails with the actively misleading
-        // "not bound before this use", even though the assignment is
-        // textually right above it. D-116's own three reproductions were
-        // all container-*typed* (`tuple`/`list` literals); `.pop()` is
-        // NOT the first *scalar*-typed expression to reach this same gap,
-        // though -- `HirExpr::Subscript`'s own `collect_expr_constraints`
-        // arm (predates D-116/D-119 entirely, commit `0930903`) already
-        // returns `Ok(None)` the same way, so plain `xs[0]` indexing already
-        // hit this exact failure mode first. This test just pins that
-        // `.pop()` is another, independently confirmed instance of the same
-        // pre-existing class, not a new or different one. Fixing this is
-        // out of Task 10's scope (frontend+types only) -- tracked as
-        // `docs/ROADMAP.md`'s existing D-116 follow-up, unaffected by this
-        // task.
+        // D-146 (#239): `collect_expr_constraints`'s `ListPop` arm now looks
+        // up `list` in `env.bindings` and, when bound to a `Ty::List` element-
+        // type carrier, extracts the scalar element type -- the carrier is
+        // destructured, never unified. Here `xs` is a parameter typed
+        // `list[int]`, so `xs.pop()` produces `Some(Ok(Ty::Int))`, `y` is
+        // bound to `Ok(Ty::Int)`, and `return y` resolves the unannotated
+        // return to `Ty::Int`. This was the pre-existing D-116 solver binding
+        // gap: before this fix the `ListPop` arm returned `Ok(None)`, so `y`
+        // was never bound and the later `return y` failed with the actively
+        // misleading "not bound before this use" even though the assignment
+        // was textually right above it.
         let hir = HirModule {
             items: vec![HirItem::Function {
                 name: "_h".to_string(),
@@ -9681,9 +10266,10 @@ mod tests {
             }],
             type_aliases: Vec::new(), imports: Vec::new(),
         };
-        let err = check(&hir).unwrap_err();
-        assert_eq!(err.code, "T0021");
-        assert!(err.message.contains("not bound before this use"));
+        let local_names = module_function_local_names(&hir);
+        let signatures = infer_function_signatures_with_solver(&hir, &local_names).unwrap();
+        assert_eq!(signatures["_h"], (vec![Ty::List(Box::new(Ty::Int))], Ty::Int));
+        assert!(check(&hir).is_ok());
     }
 
     #[test]
