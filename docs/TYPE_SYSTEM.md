@@ -38,6 +38,14 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 - An unconstrained parameter or return variable is rejected with `T0021` and
   an instruction to add an annotation. It never silently becomes `Any` or
   `None`; only a helper with no value-returning path infers `None`.
+- D-146 (#239): the solver now carries `Ty::List` as a destructured element-
+  type carrier for homogeneous scalar-element list literals. The `ListLiteral`
+  arm produces `Some(Ok(Ty::List(...)))` when all elements share an exact-equal
+  private-solver scalar type; the `Subscript` and `ListPop` arms destructure
+  that carrier to extract the scalar element type for scalar return-type
+  inference (e.g. `def _first(): xs = [1]; return xs[0]` infers `int`). The
+  carrier is never unified — `unify_terms` and `merge_inferred_types` are
+  unchanged — and `dict`/`set`/`tuple` remain in the scalar-only gap.
 - Function-local names are classified before the body is checked. Parameters
   are local from entry; every assignment target and `for` target anywhere in
   the implemented nested control-flow grammar is local throughout that
