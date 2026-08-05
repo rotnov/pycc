@@ -5,8 +5,9 @@
 //!
 //! Extracted from `lib.rs` per AGENTS.md's file-decomposition rule (issue
 //! #141): this is the one part of `crates/pycc_hir/src/lib.rs` this change
-//! touches, and it was already a well-defined, low-fan-in cohesion unit (14
-//! call sites total, all in production code, zero from the inline test
+//! touches, and it was already a well-defined, low-fan-in cohesion unit (11
+//! call expressions total -- 9 within this module's own recursive descent
+//! plus 2 from `lib.rs` -- all in production code, zero from the inline test
 //! module -- every existing test reaches lowering exclusively through the
 //! public `lower_checked` entry point in `lib.rs`).
 //!
