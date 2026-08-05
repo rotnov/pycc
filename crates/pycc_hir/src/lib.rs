@@ -1,5 +1,7 @@
-use pycc_ast::{CmpOp, ElifElseClause, Expr, ModModule, Number, Operator, Stmt};
+use pycc_ast::{CmpOp, Expr, ModModule, Number, Operator, Stmt};
 use pycc_diag::{Diagnostic, Span};
+
+mod stmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -508,7 +510,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         }
         let item = match stmt {
             Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
-            other => HirItem::TopLevelStmt(lower_stmt(other, &aliases)?),
+            other => HirItem::TopLevelStmt(stmt::lower_stmt(other, &aliases, false)?),
         };
         items.push(item);
     }
@@ -775,7 +777,7 @@ fn lower_function(
         type_param.as_deref(),
         aliases,
     )?;
-    let body = lower_body(&def.body, aliases)?;
+    let body = stmt::lower_body(&def.body, aliases, false)?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
         params,
@@ -937,232 +939,6 @@ fn annotation_to_ty(
             format!("only a bare name type annotation is supported so far: {other:?}"),
             pycc_ast::expr_range(other),
         )),
-    }
-}
-
-fn lower_stmt(stmt: &Stmt, aliases: &[(String, Ty)]) -> Result<HirStmt, Diagnostic> {
-    let lowered = match stmt {
-        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)?),
-        Stmt::Assign(assign) => {
-            let [target] = assign.targets.as_slice() else {
-                return Err(unsupported(
-                    format!(
-                        "only a single assignment target is supported so far: {:?}",
-                        assign.targets
-                    ),
-                    assign.range,
-                ));
-            };
-            match target {
-                Expr::Name(name) => match assign.value.as_ref() {
-                    // Comprehension expressions are recognized only in this
-                    // one position: the direct RHS of a bare-name
-                    // `Stmt::Assign` (PR-12, D-117). Every other position
-                    // (function args, nested expressions, `return`,
-                    // `Expr::Subscript` assignment targets) still routes
-                    // through plain `lower_expr`, which has no arm for
-                    // `Expr::ListComp`/`SetComp`/`DictComp`/`GeneratorExp`
-                    // and falls through to that function's existing
-                    // generic "expression kind not supported yet"
-                    // catch-all.
-                    Expr::ListComp(comp) => lower_list_comp_assign(name.id.as_str(), comp)?,
-                    Expr::SetComp(comp) => lower_set_comp_assign(name.id.as_str(), comp)?,
-                    Expr::DictComp(comp) => lower_dict_comp_assign(name.id.as_str(), comp)?,
-                    _ => HirStmt::Assign {
-                        target: name.id.as_str().to_string(),
-                        value: lower_expr(&assign.value)?,
-                    },
-                },
-                // `<bare name>[key] = value`, PR-11 Task 3 (D-123): unlike
-                // `list[int]`'s own read-only-indexing consequence (D-105),
-                // `dict[str, int]` ships `d[k] = v`. This lowering step has
-                // no type information (mirroring `ForList`'s own bare-name
-                // iterable, which is resolved to `Ty::List`, `Ty::Dict`, or
-                // rejected downstream), so a `list[int]` subscript-assignment target
-                // also reaches `HirStmt::DictSet` here -- `pycc_types`
-                // rejects it with `T0033` once the base's real type is
-                // known, relocating (not removing) the invariant this file's
-                // own `subscript_assignment_target_is_unsupported` test used
-                // to enforce at the lowering level.
-                Expr::Subscript(sub) => {
-                    let Expr::Name(base_name) = sub.value.as_ref() else {
-                        return Err(unsupported(
-                            "only assigning to a bare-name subscript target (`name[key] = value`) is supported so far",
-                            pycc_ast::expr_range(target),
-                        ));
-                    };
-                    HirStmt::DictSet {
-                        dict: base_name.id.as_str().to_string(),
-                        key: lower_expr(&sub.slice)?,
-                        value: lower_expr(&assign.value)?,
-                    }
-                }
-                other => {
-                    return Err(unsupported(
-                        format!("only assigning to a bare name is supported so far: {other:?}"),
-                        pycc_ast::expr_range(other),
-                    ));
-                }
-            }
-        }
-        Stmt::AnnAssign(ann) => {
-            let Expr::Name(name) = ann.target.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only assigning to a bare name is supported so far: {:?}",
-                        ann.target
-                    ),
-                    pycc_ast::expr_range(&ann.target),
-                ));
-            };
-            // `ann.simple` is false either when the target isn't a bare name
-            // (already rejected above) or when a bare name target is itself
-            // parenthesized, e.g. `(x): int = 1` -- upstream's own parser
-            // sets `simple = target.is_name_expr() && !target.is_parenthesized`
-            // (verified against the pinned ruff_python_parser = "0.0.6"
-            // registry source). CPython treats a parenthesized target as not
-            // "simple" (it doesn't record a `__annotations__` entry the same
-            // way), a real semantic difference this compiler doesn't model
-            // yet -- reject explicitly instead of silently treating it the
-            // same as the unparenthesized form.
-            if !ann.simple {
-                return Err(unsupported(
-                    "a parenthesized annotated-assignment target is not supported yet",
-                    pycc_ast::expr_range(&ann.target),
-                ));
-            }
-            let annotation = annotation_to_ty(&ann.annotation, None, aliases)?;
-            let value = ann.value.as_deref().map(lower_expr).transpose()?;
-            HirStmt::AnnAssign {
-                target: name.id.as_str().to_string(),
-                annotation,
-                value,
-            }
-        }
-        Stmt::If(if_stmt) => HirStmt::If {
-            test: lower_expr(&if_stmt.test)?,
-            body: lower_body(&if_stmt.body, aliases)?,
-            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses, aliases)?,
-        },
-        Stmt::While(while_stmt) => {
-            if !while_stmt.orelse.is_empty() {
-                return Err(unsupported(
-                    "while/else is not supported yet",
-                    while_stmt.range,
-                ));
-            }
-            HirStmt::While {
-                test: lower_expr(&while_stmt.test)?,
-                body: lower_body(&while_stmt.body, aliases)?,
-            }
-        }
-        Stmt::For(for_stmt) => {
-            if for_stmt.is_async {
-                return Err(unsupported(
-                    "async for is not supported yet",
-                    for_stmt.range,
-                ));
-            }
-            if !for_stmt.orelse.is_empty() {
-                return Err(unsupported("for/else is not supported yet", for_stmt.range));
-            }
-            let Expr::Name(var) = for_stmt.target.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only a bare name for-target is supported so far: {:?}",
-                        for_stmt.target
-                    ),
-                    pycc_ast::expr_range(&for_stmt.target),
-                ));
-            };
-            // A bare-name iterable is `for v in some_list:` (D-105) or
-            // `for k in some_dict:` (PR-11 Task 3, D-123) -- resolved to
-            // `Ty::List`, `Ty::Dict`, or rejected by pycc_types, not here;
-            // HIR only records the syntactic shape.
-            if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
-                return Ok(HirStmt::ForList {
-                    var: var.id.to_string(),
-                    list: list_name.id.as_str().to_string(),
-                    body: lower_body(&for_stmt.body, aliases)?,
-                });
-            }
-            let Expr::Call(call) = for_stmt.iter.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only `for x in range(...)` or `for x in <list>` is supported so far: {:?}",
-                        for_stmt.iter
-                    ),
-                    pycc_ast::expr_range(&for_stmt.iter),
-                ));
-            };
-            let Expr::Name(callee) = call.func.as_ref() else {
-                return Err(unsupported(
-                    format!(
-                        "only `for x in range(...)` is supported so far: {:?}",
-                        call.func
-                    ),
-                    pycc_ast::expr_range(&call.func),
-                ));
-            };
-            if callee.id.as_str() != "range" {
-                return Err(unsupported(
-                    format!(
-                        "only iterating over `range(...)` is supported so far, got `{}`",
-                        callee.id
-                    ),
-                    call.range,
-                ));
-            }
-            if !call.arguments.keywords.is_empty() {
-                return Err(unsupported(
-                    "keyword arguments to range() are not supported yet",
-                    call.range,
-                ));
-            }
-            let (start, stop, step) = lower_range_call(call)?;
-            HirStmt::ForRange {
-                var: var.id.to_string(),
-                start,
-                stop,
-                step,
-                body: lower_body(&for_stmt.body, aliases)?,
-            }
-        }
-        Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr).transpose()?),
-        other => {
-            return Err(unsupported(
-                "statement kind not supported yet",
-                pycc_ast::stmt_range(other),
-            ));
-        }
-    };
-    Ok(lowered)
-}
-
-fn lower_body(body: &[Stmt], aliases: &[(String, Ty)]) -> Result<Vec<HirStmt>, Diagnostic> {
-    body.iter().map(|stmt| lower_stmt(stmt, aliases)).collect()
-}
-
-fn lower_elif_else_clauses(
-    clauses: &[ElifElseClause],
-    aliases: &[(String, Ty)],
-) -> Result<Vec<HirStmt>, Diagnostic> {
-    let Some((first, rest)) = clauses.split_first() else {
-        return Ok(vec![]);
-    };
-    match &first.test {
-        Some(test) => Ok(vec![HirStmt::If {
-            test: lower_expr(test)?,
-            body: lower_body(&first.body, aliases)?,
-            orelse: lower_elif_else_clauses(rest, aliases)?,
-        }]),
-        None => {
-            assert!(
-                rest.is_empty(),
-                "pycc_hir: an else clause must be the last elif_else_clause"
-            );
-            lower_body(&first.body, aliases)
-        }
     }
 }
 
@@ -1887,6 +1663,22 @@ where
     Diagnostic::error("C0002", message, Span::new(range.start, range.end))
 }
 
+/// `L0001`: reused (not a new code, D-148) for a post-parse
+/// statement-context violation caught during HIR lowering -- a construct
+/// that is syntactically well-formed but only valid Python in a context the
+/// enclosing statement isn't in (`break`/`continue` outside a loop, `async
+/// for` outside an async function). CPython itself raises `SyntaxError` for
+/// all of these, the same failure class `L0001` already covers for the
+/// parser's own grammar violations; unlike a genuine parser `L0001`, one
+/// emitted from here carries no "expected set" in its message.
+fn context_invalid<R>(message: impl Into<String>, range: R) -> Diagnostic
+where
+    std::ops::Range<u32>: From<R>,
+{
+    let range = std::ops::Range::<u32>::from(range);
+    Diagnostic::error("L0001", message, Span::new(range.start, range.end))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1905,6 +1697,19 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
 
         assert_eq!(diagnostic.code, "C0001");
+        assert!(diagnostic.message.contains(expected_message));
+        assert!(diagnostic.span.is_some());
+    }
+
+    /// Sibling of `assert_capability_error_message` for the new `L0001`
+    /// context-invalidity diagnostic (issue #141, D-148) -- kept separate
+    /// rather than parameterizing the existing helper so every other
+    /// existing `C0001` call site stays untouched.
+    fn assert_context_invalid_error_message(source: &str, expected_message: &str) {
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "L0001");
         assert!(diagnostic.message.contains(expected_message));
         assert!(diagnostic.span.is_some());
     }
@@ -2743,10 +2548,85 @@ mod tests {
     }
 
     #[test]
-    fn a_top_level_async_for_is_not_supported_yet() {
-        assert_capability_error_message(
+    fn a_top_level_async_for_is_context_invalid() {
+        // Issue #141 / D-148: `async for` outside an async function is
+        // syntactically well-formed but CPython rejects it as a
+        // `SyntaxError`, so this is now `L0001`, not `C0001` -- there is no
+        // reachable "valid, just unimplemented" case here (see Correction 2
+        // in the published plan): `lower_function` already rejects any
+        // `async def` before this arm could ever be reached from inside a
+        // real async function.
+        assert_context_invalid_error_message(
             "async for i in range(3):\n    print(i)\n",
-            "async for is not supported yet",
+            "'async for' outside async function",
+        );
+    }
+
+    #[test]
+    fn an_async_for_inside_a_synchronous_function_is_context_invalid() {
+        // The issue's own "other invalid async context" example beyond top
+        // level: a synchronous `def` body reaches `lower_function`'s body
+        // lowering (which resets `in_loop` but not any async-context state),
+        // then this `for_stmt.is_async` arm -- unconditionally `L0001`,
+        // exactly like the top-level case, since a synchronous function
+        // provides no more of an "async function" context than module scope
+        // does.
+        assert_context_invalid_error_message(
+            "def f() -> None:\n    async for i in range(3):\n        print(i)\n",
+            "'async for' outside async function",
+        );
+    }
+
+    #[test]
+    fn a_top_level_break_is_context_invalid() {
+        assert_context_invalid_error_message("break\n", "'break' outside loop");
+    }
+
+    #[test]
+    fn a_top_level_continue_is_context_invalid() {
+        assert_context_invalid_error_message("continue\n", "'continue' not properly in loop");
+    }
+
+    #[test]
+    fn a_break_inside_a_synchronous_function_with_no_loop_is_context_invalid() {
+        // Regression guard for `lower_function`'s own `false` call site
+        // (entering a function body resets `in_loop`): a `break` directly in
+        // a function body, with no enclosing loop, must still be
+        // context-invalid, not silently inherit `true` from some outer
+        // caller state.
+        assert_context_invalid_error_message(
+            "def f() -> None:\n    break\n",
+            "'break' outside loop",
+        );
+    }
+
+    #[test]
+    fn a_break_inside_a_for_loop_is_still_unsupported() {
+        // Regression guard: a real enclosing loop keeps break/continue on
+        // the existing valid-but-unimplemented `C0001` path -- this issue is
+        // scoped to classification, not to implementing loop control flow.
+        assert_capability_error_message(
+            "for i in range(3):\n    break\n",
+            "statement kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_continue_inside_a_while_loop_is_still_unsupported() {
+        assert_capability_error_message(
+            "while True:\n    continue\n",
+            "statement kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_break_inside_an_if_inside_a_for_loop_is_still_unsupported() {
+        // Guards the `If` arm's and `lower_elif_else_clauses`' pass-through
+        // of the caller's `in_loop` value: an `if` nested inside a loop body
+        // must not reset loop context to `false`.
+        assert_capability_error_message(
+            "for i in range(3):\n    if i:\n        break\n",
+            "statement kind not supported yet",
         );
     }
 
