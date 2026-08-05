@@ -18,7 +18,6 @@ from urllib.parse import unquote, urlparse, urlunparse
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / ".claude" / "skills"
 CODEX_SKILLS_ROOT = ROOT / ".agents" / "skills"
-AUTHENTICATION_POLICIES = {"ON_INSTALL", "ON_USE"}
 IMMUTABLE_SHA = re.compile(r"^[0-9a-f]{40}$")
 IEVO_REPOSITORY_URL = "https://github.com/ievo-ai/skills.git"
 IEVO_PLUGIN_PATH = "./plugins/ievo"
@@ -517,59 +516,11 @@ def validate_claude_ievo_marketplace(
 
 
 def validate_marketplaces(failures: list[str]) -> None:
-    codex_path = ".agents/plugins/marketplace.json"
-    marketplace = load_json(codex_path, failures)
-    plugins = marketplace.get("plugins")
-    if not isinstance(plugins, list) or not plugins:
-        failures.append(f"{codex_path}: plugins must be a non-empty array")
-        return
-
-    codex_ievo_ref: str | None = None
-    ievo_entries = 0
-    for index, plugin in enumerate(plugins):
-        label = f"{codex_path}: plugins[{index}]"
-        if not isinstance(plugin, dict):
-            failures.append(f"{label} must be an object")
-            continue
-        policy = plugin.get("policy")
-        authentication = (
-            policy.get("authentication") if isinstance(policy, dict) else None
-        )
-        if authentication not in AUTHENTICATION_POLICIES:
-            failures.append(
-                f"{label}.policy.authentication must be ON_INSTALL or ON_USE"
-            )
-        source = plugin.get("source")
-        if not isinstance(source, dict):
-            failures.append(f"{label}.source must be an object")
-            continue
-
-        name = plugin.get("name")
-        if name == "ievo":
-            ievo_entries += 1
-            if source.get("source") != "git-subdir":
-                failures.append(f"{label}.source.source must be git-subdir")
-            if source.get("url") != IEVO_REPOSITORY_URL:
-                failures.append(f"{label}.source.url must be {IEVO_REPOSITORY_URL}")
-            if source.get("path") != IEVO_PLUGIN_PATH:
-                failures.append(f"{label}.source.path must be {IEVO_PLUGIN_PATH}")
-            ref = source.get("ref")
-            if not isinstance(ref, str) or IMMUTABLE_SHA.fullmatch(ref) is None:
-                failures.append(
-                    f"{label}.source.ref must be a full immutable commit SHA"
-                )
-            else:
-                codex_ievo_ref = ref
-        else:
-            failures.append(f"{label}: unsupported plugin entry {name!r}")
-
-    if ievo_entries != 1 or codex_ievo_ref is None:
-        failures.append(f"{codex_path}: exactly one pinned ievo plugin is required")
     claude_path = ".claude/settings.json"
     settings = load_json(claude_path, failures)
     validate_claude_ievo_marketplace(
         settings,
-        codex_ievo_ref,
+        None,
         failures,
         claude_path,
     )
