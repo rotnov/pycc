@@ -1,0 +1,17 @@
+{
+  "skill_name": "next-milestone",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Read docs/ROADMAP.md's milestone sections in file order to determine which milestone is next. A section claims its Accept criteria are met but has no explicit 'Update (date): met.' note — only a bare assertion.",
+      "expected_output": "Must reject the bare assertion: an Update note with a date and 'met' is required, not a bare unqualified claim. Verify any cited evidence against the current tree rather than trusting the prose at face value.",
+      "runner": "milestone-evidence-requires-update-met-note"
+    },
+    {
+      "id": 2,
+      "prompt": "A directive scoped to exactly one named milestone ('finish v0.3') completes that milestone's step 6. An open-ended directive ('release everything') completes the same milestone's step 6. Distinguish the two.",
+      "expected_output": "The single-milestone directive stops at step 6 — do not auto-advance past what was asked. The open-ended directive re-enters step 1 with a fresh baseline to determine the next milestone.",
+      "runner": "open-ended-directive-loops-single-milestone-stops"
+    }
+  ]
+}

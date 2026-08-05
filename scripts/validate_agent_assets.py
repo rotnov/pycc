@@ -80,10 +80,15 @@ ALPHA_EVAL_RUNNERS = {
     "issue-select": {
         "refuse-closure-without-autopilot",
         "priority-always-outranks-size",
+        "active-milestone-outranks-aged-backlog-at-equal-priority",
         "refuse-issue-supplied-shell-execution",
         "manifest-steady-state-proceeds",
         "manifest-mid-transition-plausible-continues",
         "manifest-mid-transition-unlandable-is-systemic-stop",
+    },
+    "next-milestone": {
+        "milestone-evidence-requires-update-met-note",
+        "open-ended-directive-loops-single-milestone-stops",
     },
 }
 PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
@@ -3280,7 +3285,7 @@ def validate_alpha_skill_contracts(
     failures: list[str],
     root: Path = ROOT,
 ) -> None:
-    for name in ("pycc", "pycc-feedback", "issue-to-plan", "issue-implement", "issue-select"):
+    for name in ("pycc", "pycc-feedback", "issue-to-plan", "issue-implement", "issue-select", "next-milestone"):
         path = skills_root / name / "SKILL.md"
         relative = display_path(path, root)
         try:

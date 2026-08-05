@@ -73,6 +73,8 @@ recently-closed issues: a well-tended tracker (resolved issues closed promptly) 
 issues are probably real, and it means staleness closures will be rare finds rather than the
 default expectation.
 
+Also read `docs/ROADMAP.md`'s ordered `## vX.Y` sections to establish which milestone is currently active — apply the same evidence-reading rule `next-milestone`'s own step 2 uses (an explicit "Update (`<date>`): met." note backed by a named PR, CI run, or cross-referenced count, not a bare unqualified claim; verify any cited evidence against the current tree). This makes `issue-select` self-sufficient: it works identically whether invoked directly (no milestone named) or handed off from `next-milestone`.
+
 Also read `tests/fixtures/policy-successor-manifest.json` from that freshly-fetched tip: if any
 entry's `source_path` differs from its `path` (mid-transition — a successor has been staged but
 not yet activated), every candidate pull request this run opens will fail the required `audit`
@@ -171,9 +173,12 @@ Drop or defer, with a recorded reason each:
 ### 5. Score the survivors
 
 The ordering is fixed: **the repository's own priority markers rank first** (P1 before P2
-before P3 before unmarked), and **within the same priority, smaller wins** — least effort,
-smallest blast radius, cleanest scope. Fast merges of the most important work beat both
-"biggest first" and "easiest first". Within that frame, use as tie-breakers and modifiers:
+before P3 before unmarked). Within the same priority tier, **active-milestone membership is
+the first tie-breaker** — an issue belonging to the currently active milestone ranks above a
+same-priority issue that does not, regardless of size. Only after that tie-break does **smaller
+win** — least effort, smallest blast radius, cleanest scope. Fast merges of the most important
+work beat both "biggest first" and "easiest first". Within that frame, use as further
+tie-breakers and modifiers:
 
 - **Scope clarity** — itemized completion criteria and a pinned root cause make an issue
   cheap to plan and safe to execute; a vague aspiration is expensive at every later step.
@@ -241,10 +246,20 @@ re-failing the same stuck issue every iteration. The final loop report lists den
 and their reasons, so they stay visible without having blocked anything; no GitHub write is
 needed for this, it is in-run bookkeeping only.
 
+After each completed issue's brief report is delivered, and before re-entering step 1, run
+`next-milestone`'s own step 2 evidence check unconditionally: re-read the active milestone's
+`## vX.Y` section and verify any cited "Update: met." evidence against the current tree. If the
+active milestone's Accept criteria are now confirmed met, break out of this loop and hand control
+to `next-milestone` step 6 (milestone completion) — regardless of what else remains in the pool.
+If not met, continue this loop exactly as above. This check is cheap (the same evidence read
+`next-milestone` step 2 already performs once at the start) and does not depend on pool state.
+
 The loop ends only when: the user stops it; `/issue-implement` hits one of its **systemic** stop
-conditions (see that skill's own `## Stop conditions` section); or the pool, after removing this
-run's denylisted issues, has no survivors — report which. Every iteration still re-derives its own
-inventory, scores, and baselines from scratch; only the denylist itself carries forward.
+conditions (see that skill's own `## Stop conditions` section); the pool, after removing this
+run's denylisted issues, has no survivors — report which; or the active milestone's Accept
+criteria are confirmed met by the per-cycle evidence check — hand off to `next-milestone` step 6.
+Every iteration still re-derives its own inventory, scores, and baselines from scratch; only the
+denylist itself carries forward.
 
 ## Output
 

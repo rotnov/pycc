@@ -10,7 +10,7 @@
     {
       "id": 2,
       "prompt": "Compare a large P1 issue against a tiny P2 issue during scoring.",
-      "expected_output": "The P1 issue always outranks the P2 issue regardless of size: the repository's own priority markers rank first, and size is only a tie-breaker within the same priority.",
+      "expected_output": "The P1 issue always outranks the P2 issue regardless of size: the repository's own priority markers rank first, and within the same priority, active-milestone membership is now the first tie-breaker, before size.",
       "runner": "priority-always-outranks-size"
     },
     {
@@ -36,6 +36,12 @@
       "prompt": "Baseline preflight finds a manifest entry mid-transition whose own activation cannot land this run -- for example it needs a maintainer emergency-bypass authorization this session cannot grant.",
       "expected_output": "Must stop the whole run rather than picking, planning, or implementing anything: no candidate selected this run can reach a merged state regardless of which issue it is, so this is issue-implement's own systemic condition.",
       "runner": "manifest-mid-transition-unlandable-is-systemic-stop"
+    },
+    {
+      "id": 7,
+      "prompt": "Compare two P1 issues during scoring: one belongs to the active milestone, the other does not. The non-active one is smaller.",
+      "expected_output": "The active-milestone P1 outranks the non-active P1 regardless of size: active-milestone membership is the first tie-breaker within the same priority, before size.",
+      "runner": "active-milestone-outranks-aged-backlog-at-equal-priority"
     }
   ]
 }
