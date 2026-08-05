@@ -78,6 +78,19 @@ and comment counts. This repository has no priority labels — the marker is the
 leading `P1:`/`P2:`/`P3:` prefix (see `docs/DECISIONS.md`); an issue without that prefix is
 unmarked.
 
+**Milestone triage as a housekeeping side effect.** This pass already reads every open issue
+against the current roadmap and delivery-plan scope (step 4 does this explicitly for the
+blocker screen) — reuse that same read to keep GitHub milestone membership current, since this
+is the one place in the whole autopilot loop that walks the complete open-issue list on every
+iteration. For each issue with no milestone assigned, judge it against the active and
+immediately-next milestone's scope (`docs/ROADMAP.md`'s per-milestone sections): assign
+(`gh issue edit <n> --milestone <name>`) the moment fit is clear, per
+[D-127](../../../docs/DECISIONS.md#d-127-autonomous-agent-operation-model) judgment — do not ask
+the user. Leave genuinely unclear ones unassigned rather than guessing; the next iteration's
+fresh inventory re-examines them. This is a low-risk metadata write (unlike the staleness
+screen's closures), so it applies regardless of whether a standing autopilot directive is in
+effect. Note assignments made in the step 8 report alongside the selection.
+
 ### 3. Staleness screen
 
 Cheap pass over the inventory before any scoring: read newest comments first — this tracker

@@ -27,6 +27,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Local git worktrees
+.worktrees/
+
 # iEvo local-only artifacts
 .claude/settings.local.json
 .codex/hooks.json
