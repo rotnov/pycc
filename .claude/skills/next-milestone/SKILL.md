@@ -73,7 +73,10 @@ milestone's Accept criteria are all met by the same evidence bar step 2 used to 
 milestones. On completion: record the "Update (`<date>`): met." note in `docs/ROADMAP.md` (the
 existing convention — see the v0.1/v0.2 sections for examples), update `README.md`'s status blurb
 to describe the newly met milestone (it drifted silently after v0.2 — the v0.1-only wording sat
-unchanged through all of v0.2 landing), and close the GitHub milestone.
+unchanged through all of v0.2 landing), refresh `docs/ROADMAP.md`'s "Current delivery status"
+section — update the "Current milestone: ..." line to reflect the newly met milestone and bump the
+"Last reviewed on ..." date to match (this third update was missing from step 6's original list and
+let the section drift after v0.2 completed), and close the GitHub milestone.
 
 **Content-complete is not released.** Meeting a milestone's Accept criteria only means the code and
 its evidence are on `main` — it is not by itself a release. `docs/DISTRIBUTION.md`'s own "Release

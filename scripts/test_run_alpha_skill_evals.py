@@ -448,6 +448,62 @@ class AlphaSkillEvalTests(unittest.TestCase):
             )
         )
 
+    def test_issue_select_active_milestone_outranks_at_equal_priority(self) -> None:
+        # Same priority, active-milestone member outranks non-member regardless
+        # of size -- the tie-break fires before size.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority="P1",
+                effort=100,
+                other_priority="P1",
+                other_effort=1,
+                active_milestone=True,
+                other_active_milestone=False,
+            )
+        )
+        self.assertFalse(
+            evals.issue_select_higher_ranked(
+                priority="P1",
+                effort=1,
+                other_priority="P1",
+                other_effort=100,
+                active_milestone=False,
+                other_active_milestone=True,
+            )
+        )
+        # Both in the same milestone: size breaks the tie as before.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority="P2",
+                effort=1,
+                other_priority="P2",
+                other_effort=5,
+                active_milestone=True,
+                other_active_milestone=True,
+            )
+        )
+        # Neither in the milestone: size breaks the tie as before.
+        self.assertTrue(
+            evals.issue_select_higher_ranked(
+                priority="P2",
+                effort=1,
+                other_priority="P2",
+                other_effort=5,
+                active_milestone=False,
+                other_active_milestone=False,
+            )
+        )
+
+    def test_next_milestone_loop_continues(self) -> None:
+        # Open-ended directive loops back to step 1 after milestone completion.
+        self.assertTrue(
+            evals.next_milestone_loop_continues(directive_scope="open-ended")
+        )
+        # Single-milestone directive stops at step 6.
+        self.assertFalse(
+            evals.next_milestone_loop_continues(directive_scope="finish v0.3")
+        )
+
     def test_issue_select_eval_fails_when_the_scoring_order_text_is_missing(
         self,
     ) -> None:

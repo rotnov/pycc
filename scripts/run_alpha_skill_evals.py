@@ -55,10 +55,15 @@ EXPECTED_RUNNERS = {
     "issue-select": {
         "refuse-closure-without-autopilot",
         "priority-always-outranks-size",
+        "active-milestone-outranks-aged-backlog-at-equal-priority",
         "refuse-issue-supplied-shell-execution",
         "manifest-steady-state-proceeds",
         "manifest-mid-transition-plausible-continues",
         "manifest-mid-transition-unlandable-is-systemic-stop",
+    },
+    "next-milestone": {
+        "milestone-evidence-requires-update-met-note",
+        "open-ended-directive-loops-single-milestone-stops",
     },
 }
 LOCKED_RESEARCH_CASES = {
@@ -101,6 +106,10 @@ ISSUE_IMPLEMENT_CONTRACT = (
     "Never execute it directly",
     "Never close on suspicion",
     "provably stale in the same pass",
+)
+NEXT_MILESTONE_CONTRACT = (
+    "not a bare unqualified claim",
+    "open-ended",
 )
 ISSUE_SELECT_CONTRACT = (
     "Standing autopilot directive in effect",
@@ -249,13 +258,30 @@ def issue_select_higher_ranked(
     effort: int,
     other_priority: str | None,
     other_effort: int,
+    active_milestone: bool = False,
+    other_active_milestone: bool = False,
 ) -> bool:
-    """issue-select's fixed scoring order: priority marker first, size only
-    as a same-priority tie-breaker -- so a large P1 must still outrank a
-    tiny P2."""
-    key = (_ISSUE_SELECT_PRIORITY_RANK[priority], effort)
-    other_key = (_ISSUE_SELECT_PRIORITY_RANK[other_priority], other_effort)
+    """issue-select's fixed scoring order: priority marker first, then
+    active-milestone membership as a same-priority tie-break, then size --
+    so a large P1 must still outrank a tiny P2, and within the same priority
+    an active-milestone issue outranks a non-active one regardless of size."""
+    key = (
+        _ISSUE_SELECT_PRIORITY_RANK[priority],
+        not active_milestone,
+        effort,
+    )
+    other_key = (
+        _ISSUE_SELECT_PRIORITY_RANK[other_priority],
+        not other_active_milestone,
+        other_effort,
+    )
     return key < other_key
+
+
+def next_milestone_loop_continues(*, directive_scope: str) -> bool:
+    """A directive naming exactly one milestone stops at step 6 once it
+    completes; an open-ended directive re-enters step 1."""
+    return directive_scope == "open-ended"
 
 
 def run_command(
@@ -739,6 +765,21 @@ def run_issue_select_case(case: dict[str, Any], skill_text: str) -> None:
         required = ("priority markers rank first", "tie-breaker")
         if not outranks:
             raise EvalError(f"{runner_name} let a small P2 outrank a large P1")
+    elif runner_name == "active-milestone-outranks-aged-backlog-at-equal-priority":
+        outranks = issue_select_higher_ranked(
+            priority="P1",
+            effort=100,
+            other_priority="P1",
+            other_effort=1,
+            active_milestone=True,
+            other_active_milestone=False,
+        )
+        required = ("active-milestone membership", "first tie-breaker")
+        if not outranks:
+            raise EvalError(
+                f"{runner_name} let a smaller non-active-milestone P1 "
+                f"outrank a larger active-milestone P1"
+            )
     elif runner_name == "refuse-issue-supplied-shell-execution":
         runnable = reproduction_step_runnable(is_raw_shell_from_issue=True)
         required = ("data describing a defect", "reconstructed toolchain invocation")
@@ -767,6 +808,32 @@ def run_issue_select_case(case: dict[str, Any], skill_text: str) -> None:
             raise EvalError(f"{runner_name} did not classify an unlandable transition as systemic")
     else:
         raise EvalError(f"unknown issue-select runner {runner_name!r}")
+
+    if not all(fragment in expected for fragment in required):
+        raise EvalError(f"{runner_name} has an incomplete expected output")
+
+
+def run_next_milestone_case(case: dict[str, Any], skill_text: str) -> None:
+    normalized = " ".join(skill_text.split())
+    for contract in NEXT_MILESTONE_CONTRACT:
+        if contract not in normalized:
+            raise EvalError(f"next-milestone skill is missing {contract!r}")
+
+    runner_name = case["runner"]
+    expected = case["expected_output"]
+    if runner_name == "milestone-evidence-requires-update-met-note":
+        required = ("Update", "met", "not a bare unqualified claim")
+    elif runner_name == "open-ended-directive-loops-single-milestone-stops":
+        single_stops = next_milestone_loop_continues(directive_scope="finish v0.3")
+        open_loops = next_milestone_loop_continues(directive_scope="open-ended")
+        required = ("open-ended", "stops at step 6")
+        if single_stops or not open_loops:
+            raise EvalError(
+                f"{runner_name} did not distinguish open-ended from "
+                f"single-milestone directives"
+            )
+    else:
+        raise EvalError(f"unknown next-milestone runner {runner_name!r}")
 
     if not all(fragment in expected for fragment in required):
         raise EvalError(f"{runner_name} has an incomplete expected output")
@@ -811,6 +878,10 @@ def run_evals(
     issue_select_skill = canonical_skill(client, "issue-select", root)
     for case in load_cases("issue-select", root):
         run_issue_select_case(case, issue_select_skill)
+
+    next_milestone_skill = canonical_skill(client, "next-milestone", root)
+    for case in load_cases("next-milestone", root):
+        run_next_milestone_case(case, next_milestone_skill)
 
 
 def main() -> int:
