@@ -143,9 +143,9 @@ If no plan exists, or an existing one needs refreshing per above, invoke `/issue
 a freshly-dispatched `Agent` — the same
 context-isolation reasoning as step 4's dispatched implementation (see
 `docs/DECISIONS.md#d-142-issue-implements-step-4-implementation-runs-in-a-dispatched-agent-not-the-orchestrating-sessions-own-context`)
-applies equally here: `issue-to-plan`'s own steps 1-5 (baseline, refuting the issue's claims
+applies equally here: `issue-to-plan`'s own steps 1-6 (baseline, refuting the issue's claims
 against the tree, establishing constraints, empirical verification including real
-builds/`cargo`/`pycc` runs, drafting) and step 6's adversarial review loop generate as much
+builds/`cargo`/`pycc` runs, decomposition when needed, drafting) and step 7's adversarial review loop generate as much
 file-reading and tool-call volume as the implementation itself, and none of it needs to remain
 in this session's own context once the plan is published. Instruct the dispatched agent to
 invoke the `issue-to-plan` skill itself (via the `Skill` tool, passing the issue number) and run
