@@ -123,3 +123,19 @@ checkout. The same staleness also caused `gh pr create` to pick up this
 worktree's stale checked-out branch as the PR head by mistake (a distinct,
 already-recorded lesson), compounding the cost of not having refreshed to
 the fresh default branch first.
+
+## 2026-08-05 09:22 UTC — Keep AGENTS.md corrections terse, don't inline research
+**Trigger:** user-observed mistake during doc editing
+
+а нафига мусор добавил AGENTS.md раздуваешь контекст, можно было вообще убрать пункт
+
+**Context (provenance only):** while correcting an overstated claim in
+AGENTS.md's D-127 section (about whether a settings field controls
+auto-compact), the fix re-explained the whole hooks/SDK research finding
+inline as a multi-clause sentence instead of just stating the corrected
+rule. AGENTS.md is loaded into every session's context, so bloating one
+sentence into a paragraph has a real, recurring token cost across every
+future session, not just a one-time editing cost. The user's alternative
+framing -- it would have been fine to just remove the point entirely --
+underscores that a rule's *usefulness in future sessions* is the bar for
+keeping it in AGENTS.md at all, not "is it accurate and well-cited."
