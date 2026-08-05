@@ -39,7 +39,7 @@ jobs:
           codex --version
           claude --version
 
-      - name: Validate Codex marketplace from a fresh environment
+      - name: Validate Codex skills from a fresh environment
         run: ./scripts/check-codex-marketplace.sh
 
       - name: Validate Claude marketplace from a fresh environment
