@@ -347,7 +347,11 @@ that commit so every referenced remote state is current.
 Establish the monitoring checkpoint, then react only to real events: a new default-branch
 commit, a state, head, mergeability, review-thread, or required-check change on the task pull
 request. Before waiting on CI, query the pull request's current state; stop waiting the
-moment it closes, becomes conflicting, or its head is superseded.
+moment it closes, becomes conflicting, or its head is superseded. Use the
+`autopilot-async-monitoring` skill's mechanism for the wait itself — `scripts/ci-watch.sh
+<repo> <pr-number>` via a background poll that emits one line per terminal state and exits on
+its own, instead of a fixed `sleep`/`ScheduleWakeup` interval that can leave a ready-to-merge
+PR sitting idle for most of the interval.
 
 Read every review comment, including inline pull-request comments, not just top-level reviews.
 For each: a confirmed finding is fixed through step 5's loop and pushed; a refuted finding
