@@ -56,3 +56,86 @@ directory, or `find` with an explicit, narrow, bounded path and (for a
 large directory) a `-maxdepth` limit. If genuinely uncertain where
 something lives, ask or use a narrower repeated search rather than
 defaulting to a whole-filesystem scan.
+
+## 2026-08-04 05:54 UTC — Run a project's own local validation scripts before pushing, not just after CI fails
+**Trigger:** user-observed mistake while pushing the autopilot-async-monitoring skill
+
+а ты локально не гоняешь его перед пушем?
+
+поогоняй лоакально его перед пушем и вообще все тесты перед пушем, это быстрее чем ждать ci
+
+Context: pushed a new skill (`.claude/skills/autopilot-async-monitoring/`)
+without first running this repo's own CI-equivalent local checks
+(`python3 -m unittest discover -s scripts`, `python3
+scripts/validate_agent_assets.py`, `bash scripts/check-codex-marketplace.sh`).
+CI caught two real, sequential problems that local runs would have caught
+immediately: a missing `.agents/skills/` Codex wrapper (AGENTS.md's
+cross-platform-discoverability rule), then a stale hardcoded `assert
+len(wrappers) == 20` completeness count in
+`scripts/check-codex-marketplace.sh` that needed bumping to 21 for the new
+skill. Both were fixed in separate follow-up pushes, each waiting on a full
+CI round-trip (multiple minutes) to surface, when running the same checks
+locally first would have caught both in seconds and produced one clean
+push instead of three.
+
+**Rule:** before pushing any change in this repository, run the relevant
+local test/validation suite(s) first, not just a narrowly-scoped script —
+the user's own framing was "и вообще все тесты перед пушем" (and really
+all the tests before pushing), not merely the one check most obviously
+related to the diff. Concretely: grep `.github/workflows/ci.yml` for the
+exact commands each relevant job runs (e.g. `python3 -m unittest discover
+-s scripts -p 'test_*.py'`, `python3 scripts/validate_agent_assets.py`,
+`bash scripts/check-codex-marketplace.sh`, and for Rust changes `cargo
+test --workspace` / the relevant crate's tests) and run all of them locally
+before pushing, rather than relying on CI to be the first place a
+mechanical, locally-reproducible check runs. Local iteration is strictly
+faster than a CI round-trip (multiple minutes per push) for anything that
+CAN be run locally — this is the same "check real state before waiting"
+discipline `autopilot-async-monitoring/SKILL.md` already covers for
+PR/CI/agent status, applied one step earlier: verify locally before
+creating the async wait in the first place, not just before consuming its
+result.
+
+## 2026-08-03 14:10 UTC — Verify live PR readiness before reporting
+**Trigger:** user-observed mistake during pull-request readiness assessment
+
+**Operational rule:** Before reporting a pull request as ready or waiting on
+CI, refresh and verify its live state, draft status, head commit, mergeability
+or conflicts, required checks, and unresolved review threads.
+
+**Verbatim user lesson (provenance only):**
+> PR с конфликатми и stale а ты не заметил
+
+## 2026-08-05 07:52 UTC — Pull the fresh default branch before starting a task
+**Trigger:** user-defined convention
+
+перед началом задачи подтягивать свежий дефолт
+
+**Context (provenance only):** this session worked an entire task
+(`issue-implement` for #245) inside a git worktree checked out on a stale
+local branch (`fix/d084-median-throughput`, from 2026-08-03) instead of a
+fresh checkout of the repository's current default branch. Consequences:
+the `autopilot-async-monitoring` skill and `next-milestone` skill were both
+missing from this worktree's `.claude/skills/` (added to `main` after this
+worktree was created) and so could not be dispatched via the `Skill` tool at
+all -- their content had to be read manually from a separate, more current
+checkout. The same staleness also caused `gh pr create` to pick up this
+worktree's stale checked-out branch as the PR head by mistake (a distinct,
+already-recorded lesson), compounding the cost of not having refreshed to
+the fresh default branch first.
+
+## 2026-08-05 09:22 UTC — Keep AGENTS.md corrections terse, don't inline research
+**Trigger:** user-observed mistake during doc editing
+
+а нафига мусор добавил AGENTS.md раздуваешь контекст, можно было вообще убрать пункт
+
+**Context (provenance only):** while correcting an overstated claim in
+AGENTS.md's D-127 section (about whether a settings field controls
+auto-compact), the fix re-explained the whole hooks/SDK research finding
+inline as a multi-clause sentence instead of just stating the corrected
+rule. AGENTS.md is loaded into every session's context, so bloating one
+sentence into a paragraph has a real, recurring token cost across every
+future session, not just a one-time editing cost. The user's alternative
+framing -- it would have been fine to just remove the point entirely --
+underscores that a rule's *usefulness in future sessions* is the bar for
+keeping it in AGENTS.md at all, not "is it accurate and well-cited."

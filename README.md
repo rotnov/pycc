@@ -3,9 +3,9 @@
 [![CI](https://github.com/rotnov/pycc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rotnov/pycc/actions/workflows/ci.yml)
 [![test coverage: 100%](https://img.shields.io/badge/test%20coverage-100%25-brightgreen)](./docs/TESTING.md)
 
-**A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14—the v1.0 language target—into standalone native binaries. Like `gcc`, but for Python.**
+**A strict ahead-of-time (AOT) compiler that turns type-annotated Python 3.14—the v1.0 language target—into autonomous native deployment artifacts. Like `gcc`, but for Python.**
 
-`pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast, standalone native binary. No interpreter, no venv, no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
+`pycc` is being built to take standard Python 3.14 source code, enforce every type annotation at compile time, and produce a fast, autonomous artifact. Native and `--pure` builds are standalone binaries without CPython; planned permitted interop dependencies are bundled with a pinned CPython runtime instead of requiring an installed interpreter or venv. There is no new language to learn — the design contract is that valid typed Python compiles and incorrect types do not.
 
 Written in Rust (1.97+). Built to be extremely fast — both the compiler itself and the binaries it produces.
 
@@ -18,8 +18,14 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > work, but v0.1's own acceptance criteria are now met -- `fib` and
 > `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets,
 > `pycc check` clears its <50ms/1000 LOC throughput floor, and diagnostic
-> output matches [`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md)'s example; see
-> [`docs/ROADMAP.md`](./docs/ROADMAP.md).
+> output matches [`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md)'s example.
+> v0.2's own acceptance criteria are now also met: a hand-authored
+> `list`/`dict`/`set`/`tuple` + comprehensions/slicing/methods/generics corpus
+> matches CPython output on all five Tier-1 targets, `--release` clears its
+> nbody-vs-CPython speedup floor on every target, and conformance covers ≥15
+> [`docs/PYTHON_STANDARDS.md`](./docs/PYTHON_STANDARDS.md) matrix rows
+> (17 distinct PEPs); see [`docs/ROADMAP.md`](./docs/ROADMAP.md) for the full,
+> per-bullet evidence.
 > The frontend performance measurement and isolated greater-than-2% regression
 > gate are required through `ci-gate` independently of that compiler sequence.
 > The source-aware paired gate measures the exact predecessor and candidate
@@ -57,7 +63,7 @@ claim that pycc is ready to replace released tools:
 
 | | Enforces types at compile time | Native executable without CPython | Standard Python input |
 |---|---|---|---|
-| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ design target | ✅ CPython 3.14 target |
+| **pycc (v1.0 design target)** | ✅ hard compile error | ✅ native/`--pure`; CPython bundled only for permitted interop | ✅ CPython 3.14 target |
 | LPython | ✅ typed subset | ✅ AOT executable | ⚠️ CPython-compatible subset |
 | Codon | ✅ static language | ✅ | ⚠️ Python-like language with documented differences |
 | Nuitka | ❌ | ❌ packages CPython runtime components | ✅ compatibility-focused |
@@ -124,19 +130,27 @@ the exact contract and limitations.
 
 ## How it works
 
-```
-.py source ──► parser (Python 3.14 grammar) ──► strict type checker ──► typed IR ──► LLVM ──► native binary
-                                                                                       │
-                                                                          minimal runtime (str, list, dict, GC)
+```text
+.py source ──► parser ──► strict type checker ──► typed IR ──► LLVM ──► native binary + minimal pycc runtime
+                                                                │
+                                                                └─ planned permitted interop: autonomous bundle
+                                                                   + pinned CPython/package/native-library closure
 ```
 
 Design principles:
 
 - **Standard Python only.** No pycc-specific keywords or dialect. The v1.0 target grammar and semantics are CPython 3.14 (t-strings, deferred annotations per PEP 649/749, pattern matching, PEP 695 generics); later standard Python levels use separate versioned gates.
-- **Types are the contract.** Public functions must be annotated; annotations are verified, then used for static dispatch and unboxed native representations. No interpreter loop in the output.
+- **Types are the contract.** Public functions must be annotated; annotations
+  are verified, then used for static dispatch and unboxed native
+  representations. Native pycc execution has no interpreter loop; only the
+  planned CPython-backed boundary executes package operations in its bundled
+  interpreter (D-128).
 - **Fast above all.** Compiler in Rust 1.97+, zero-copy parsing, per-module parallel compilation, incremental caching. Goal: frontend + type check of a mid-size project in well under a second — compiling should feel like `ruff`, not like `webpack`.
 - **Ownership under the hood.** Rust-style ownership and escape analysis *inferred* from standard Python — no new syntax. Locals that don't escape live on the stack, values with a single owner are moved instead of shared, reference counting only where sharing is proven. Goal: predictable memory, no tracing-GC pauses.
-- **No GIL in output.** Compiled binaries have no interpreter and no GIL; `threading` maps to real OS threads (roadmap).
+- **No pycc-wide GIL.** Native pycc execution has no interpreter or GIL, and
+  `threading` maps to real OS threads (roadmap). The planned embedded CPython
+  boundary retains CPython's own GIL only while it executes CPython-backed
+  operations (D-128).
 
 ## What won't compile (by design)
 
@@ -168,7 +182,7 @@ are especially important:
 - [ ] Ownership & escape analysis: move semantics, stack allocation, RC elision
 - [ ] GIL-free threads
 - [ ] Ecosystem bot: compile top PyPI packages nightly, auto-file incompatibility issues
-- [ ] CPython interop escape hatch (call untyped third-party libs through an embedded interpreter)
+- [ ] Transparent CPython interop (keep ordinary imports, automatically bundle the embedded interpreter when needed, and offer strict `allowlist`/`deny` build policies)
 
 Cross-platform is not a roadmap item — Linux, macOS and Windows (x64 + arm64) are CI-gated from v0.1, including `pycc build --target` cross-compilation. Full spec: [`docs/SPEC.md`](./docs/SPEC.md).
 

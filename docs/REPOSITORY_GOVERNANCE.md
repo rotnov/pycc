@@ -15,8 +15,9 @@ enforce the normal delivery path.
   rather than each matrix leg, since a matrix job's GitHub-generated check
   name bakes in its matrix values and would go stale the moment an
   `os`/`target` entry changes. D-044's untrusted `frontend-perf-measure` job
-  and isolated `frontend-perf-gate`, which make a measured >2% regression
-  merge-blocking without executing PR-head comparator code, are required by
+  and isolated `frontend-perf-gate`, which make a measured >7% regression
+  merge-blocking (D-114; originally >2%, see below) without executing
+  PR-head comparator code, are required by
   this fan-in. D-051/D-053 supersede D-048's cross-run artifact transport with
   exact predecessor and candidate timings measured sequentially on one hosted
   runner, and D-056 adds trusted pre-execution source identity. The predecessor
@@ -103,20 +104,35 @@ non-blocking environment telemetry only when all executable inputs are proven
 identical. D-062 retains that classifier and the existing `>2%` block for
 changed source, but fixes the sample plan at five complete runs per revision.
 
+**Update (2026-08-03, D-114):** every `2%`/`>2%` figure in this subsection
+(the reviewed D-051 design, D-056's residual-noise fix, and D-062's
+five-replicate sample plan above, and the PR #131 incident narrative below)
+accurately describes what that specific decision set or retained at the
+time. D-114 later raised the live regression threshold to `7%` to
+accommodate v0.2 PR-10's real, one-time `Ty`-migration cost -- see the
+"active `.github/workflows/ci.yml`" paragraph immediately below for the
+current governance contract, and issue #296 for the plan to lower it back
+toward 2% once that one-time cost is absorbed into every future baseline.
+
 The active `.github/workflows/ci.yml` is byte-identical to the reviewed
-[`d112-ubuntu-frontend-perf-ci.yml`](../tests/fixtures/d112-ubuntu-frontend-perf-ci.yml)
+[`d114-frontend-perf-threshold-ci.yml`](../tests/fixtures/d114-frontend-perf-threshold-ci.yml)
 (D-112: `frontend-perf-measure`/`frontend-perf-gate` moved from `macos-14` to
 `ubuntu-latest`, confirmed by five real shadow-measurement runs before
-activation). The allowlist currently accepts both D-100's and D-112's
-whole-workflow digests (a deliberate coexist window per D-103's
-propose/activate discipline — a single PR cannot both change a protected
-target's bytes and authorize that change), pending a later, separate round
-that retires D-100. `frontend-perf-gate`'s comparator logic and D-062's
-five-replicate/`>2%` contract are unchanged; only the job's runner and LLVM
-install step differ from the D-062 fixture, so its content is no longer
-byte-identical to that fixture, though the reviewed behavior it exercises is
-the same. D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091, pre-D-100
-D-099, and now D-100 itself remain historical audit evidence; D-048 remains
+activation; D-114: the gate's regression threshold raised from 2% to 7% to
+accommodate v0.2 PR-10's real, one-time `Ty`-migration cost, not runner
+noise — issue #296 tracks lowering it back toward 2% once that one-time cost
+is absorbed into every future baseline). The allowlist currently accepts
+D-100's, D-112's, and D-114's whole-workflow digests (a deliberate coexist
+window per D-103's propose/activate discipline — a single PR cannot both
+change a protected target's bytes and authorize that change), pending a
+later, separate round that retires D-100 and D-112. `frontend-perf-gate`'s
+comparator logic and D-062's five-replicate sample plan are unchanged; the
+regression threshold itself is now `>7%` (D-114, not D-062's original `>2%`),
+and the job's runner, LLVM install step, and comparator threshold argument
+all differ from the D-062 fixture, so its content is no longer byte-identical
+to that fixture, though the reviewed sampling behavior it exercises is the
+same. D-051, D-056, D-062, D-080, D-084, pre-D-100 D-091, pre-D-100 D-099,
+D-100, and D-112 itself all remain historical audit evidence; D-048 remains
 absent. Every pull request and `main` push still measures both exact
 revisions inside its own run, so no successful external baseline artifact or
 administrative bootstrap state is required.
@@ -223,3 +239,50 @@ remained enabled. [PR #119](https://github.com/rotnov/pycc/pull/119) merged as
 the app-bound `audit` plus `ci-gate` set within seconds, and the full settings
 readback is attached to the incident. The exception is closed and grants no
 permission for any future bypass.
+
+## Session-driven temporary bypass
+
+A second, narrower relaxation path exists alongside the Emergency path
+above, for exactly one situation: a required CI check that is provably
+stuck due to external repository state, not the current pull request's
+own defect. Recorded in `docs/DECISIONS.md` (D-125), narrowly superseding D-024's
+"not delegated to routine tasks" and D-054's "grants no reusable
+permission" for this mechanism only. Full workflow: `.claude/skills/ci-temporary-bypass/SKILL.md`.
+
+Unlike the Emergency path above, this one does not require a human
+administrator to personally operate GitHub's UI/API for each use -- any
+session (attended, or the standing autopilot loop unattended) may invoke
+it using its own authenticated `gh` access, provided every step in the
+linked skill's workflow is followed: two independent adversarial
+`Agent()` verifications (before relaxing, and after restoring), a public
+`[ci-bypass]`-prefixed incident issue created before any protection edit,
+relaxation of exactly the one named check via the scoped `PATCH
+.../protection/required_status_checks` endpoint, and a byte-exact
+restore verification. `scripts/manage_ci_bypass.py status` reports
+drift between current protection and this document's own baseline,
+except when that exact drift is fully explained by a currently open,
+unexpired `[ci-bypass]` incident's own recorded pre-relax snapshot and
+relaxed check (an in-progress relaxation, not a governance incident);
+`AGENTS.md`'s "Protect main" section requires every session's preflight
+to run it and restore immediately if drift is found with no live
+tracking incident.
+
+The canonical protection snapshot requires the four review-policy fields in
+the documented baseline: stale-review dismissal, code-owner review, last-push
+approval, and approving-review count. It removes only explicitly classified
+response metadata (`url`) from GitHub's `required_pull_request_reviews`
+response; every other returned field is preserved in comparisons and persisted
+incident snapshots. Changes to the four baseline fields and any additional
+effective or unclassified field therefore remain drift. If GitHub adds another
+effective review-policy setting, the baseline and metadata classification must
+be extended deliberately before that setting can become part of the repository
+contract.
+Snapshots persisted by an earlier tool version are normalized on read as well,
+so an already-open incident remains restorable after this canonicalization.
+
+Every other requirement from the Emergency path above still applies
+without exception: exactly one control relaxed at a time, immediate
+restoration, full public auditability. The Emergency path itself is
+unchanged and remains the path for anything this narrower mechanism does
+not cover (broader relaxations, or when no session with the owner's own
+`gh` access is available to run it).

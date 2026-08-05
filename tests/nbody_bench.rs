@@ -2,19 +2,126 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-const RUNS: usize = 5;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{FILETIME, HANDLE};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::GetProcessTimes;
+
+const RUNS: usize = 7;
+const CPU_TIME_CHILD_ENV: &str = "PYCC_NBODY_CPU_TIME_CHILD";
+
+#[derive(Clone, Copy, Debug)]
+struct Timings {
+    wall: f64,
+    cpu: f64,
+}
 
 fn median(mut values: Vec<f64>) -> f64 {
     values.sort_by(|a, b| a.partial_cmp(b).expect("timings are never NaN"));
     values[values.len() / 2]
 }
 
-fn time_command(mut command: Command) -> f64 {
+fn nbody_summary(
+    wall_ratio: f64,
+    cpu_ratio: f64,
+    cpython_wall_median: f64,
+    pycc_wall_median: f64,
+    cpython_cpu_median: f64,
+    pycc_cpu_median: f64,
+    required_wall: f64,
+) -> String {
+    format!(
+        "nbody speedup: wall_ratio={wall_ratio:.4}x cpu_ratio={cpu_ratio:.4}x \
+         cpython_wall_median={cpython_wall_median:.6}s \
+         pycc_wall_median={pycc_wall_median:.6}s \
+         cpython_cpu_median={cpython_cpu_median:.6}s \
+         pycc_cpu_median={pycc_cpu_median:.6}s \
+         required_wall={required_wall:.0}x wall_pass={}",
+        wall_ratio >= required_wall
+    )
+}
+
+#[cfg(unix)]
+fn rusage_seconds(sec: i64, usec: i64) -> f64 {
+    sec as f64 + usec as f64 * 1e-6
+}
+
+#[cfg(windows)]
+fn filetime_seconds(high: u32, low: u32) -> f64 {
+    (((high as u64) << 32) | low as u64) as f64 * 1e-7
+}
+
+#[cfg(unix)]
+// `wait4` below is the deliberate reaping operation, which Clippy cannot
+// associate with `std::process::Child`. The `i64` casts normalize ABI-varying
+// `time_t`/`suseconds_t` field types at the fixed conversion-helper boundary.
+#[allow(clippy::unnecessary_cast, clippy::zombie_processes)]
+fn time_command(mut command: Command) -> Timings {
     let start = Instant::now();
-    let status = command.status().expect("command must spawn");
-    let elapsed = start.elapsed().as_secs_f64();
+    let child = command.spawn().expect("command must spawn");
+    let pid = child.id() as libc::pid_t;
+    let mut status = 0;
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+
+    let waited = loop {
+        // SAFETY: `pid` identifies the live child spawned immediately above;
+        // both output pointers are valid for writes for the duration of this
+        // call. A successful `wait4` initializes the complete `rusage` value.
+        let result = unsafe { libc::wait4(pid, &mut status, 0, usage.as_mut_ptr()) };
+        if result != -1 {
+            break result;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            panic!("command wait failed: {command:?}: {error}");
+        }
+    };
+    let wall = start.elapsed().as_secs_f64();
+    assert_eq!(waited, pid, "wait4 reaped the wrong child for {command:?}");
+    // SAFETY: the successful `wait4` above initialized `usage`.
+    let usage = unsafe { usage.assume_init() };
+    assert!(
+        libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+        "command failed: {command:?}"
+    );
+    let cpu = rusage_seconds(usage.ru_utime.tv_sec as i64, usage.ru_utime.tv_usec as i64)
+        + rusage_seconds(usage.ru_stime.tv_sec as i64, usage.ru_stime.tv_usec as i64);
+    Timings { wall, cpu }
+}
+
+#[cfg(windows)]
+fn time_command(mut command: Command) -> Timings {
+    let start = Instant::now();
+    let mut child = command.spawn().expect("command must spawn");
+    let status = child.wait().expect("command wait must succeed");
+    let wall = start.elapsed().as_secs_f64();
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: `child` still owns a valid process handle after `wait()`, and
+    // all four `FILETIME` pointers are valid for writes during the call.
+    let result = unsafe {
+        GetProcessTimes(
+            child.as_raw_handle() as HANDLE,
+            &mut creation,
+            &mut exit,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    assert_ne!(
+        result,
+        0,
+        "GetProcessTimes failed for {command:?}: {}",
+        std::io::Error::last_os_error()
+    );
     assert!(status.success(), "command failed: {command:?}");
-    elapsed
+    let cpu = filetime_seconds(kernel.dwHighDateTime, kernel.dwLowDateTime)
+        + filetime_seconds(user.dwHighDateTime, user.dwLowDateTime);
+    Timings { wall, cpu }
 }
 
 /// The pinned CPython 3.14.6 oracle (D-001's "python3.14" pin). Duplicated
@@ -34,7 +141,11 @@ fn time_command(mut command: Command) -> f64 {
 /// Passing the extension explicitly on Windows sidesteps the mismatch,
 /// exactly like `tests/conformance.rs::oracle_binary_name` (D-080 addendum).
 fn oracle_binary_name(is_windows: bool) -> &'static str {
-    if is_windows { "python3.14.exe" } else { "python3.14" }
+    if is_windows {
+        "python3.14.exe"
+    } else {
+        "python3.14"
+    }
 }
 
 fn oracle_python_bin() -> PathBuf {
@@ -124,6 +235,61 @@ fn median_returns_the_middle_of_five_sorted_values() {
 }
 
 #[test]
+fn nbody_summary_schema_is_exact_for_pass_and_failure() {
+    assert_eq!(
+        nbody_summary(21.25, 18.5, 2.0, 0.1, 1.5, 0.08, 20.0),
+        "nbody speedup: wall_ratio=21.2500x cpu_ratio=18.5000x \
+         cpython_wall_median=2.000000s pycc_wall_median=0.100000s \
+         cpython_cpu_median=1.500000s pycc_cpu_median=0.080000s \
+         required_wall=20x wall_pass=true"
+    );
+    assert_eq!(
+        nbody_summary(19.0, 17.25, 1.9, 0.1, 1.38, 0.08, 20.0),
+        "nbody speedup: wall_ratio=19.0000x cpu_ratio=17.2500x \
+         cpython_wall_median=1.900000s pycc_wall_median=0.100000s \
+         cpython_cpu_median=1.380000s pycc_cpu_median=0.080000s \
+         required_wall=20x wall_pass=false"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rusage_seconds_combines_seconds_and_microseconds() {
+    assert_eq!(rusage_seconds(2, 500_000), 2.5);
+}
+
+#[cfg(windows)]
+#[test]
+fn filetime_seconds_combines_halves_and_converts_100ns_ticks() {
+    assert_eq!(filetime_seconds(1, 5_000_000), 429.9967296);
+}
+
+#[test]
+fn timed_child_burns_cpu() {
+    if std::env::var_os(CPU_TIME_CHILD_ENV).is_none() {
+        return;
+    }
+    let start = Instant::now();
+    let mut value = 1_u64;
+    while start.elapsed().as_millis() < 50 {
+        value = std::hint::black_box(value.wrapping_mul(6364136223846793005).wrapping_add(1));
+    }
+    std::hint::black_box(value);
+}
+
+#[test]
+fn time_command_reports_positive_wall_and_per_child_cpu_time() {
+    let mut command = Command::new(std::env::current_exe().expect("test executable must exist"));
+    command
+        .arg("--exact")
+        .arg("timed_child_burns_cpu")
+        .env(CPU_TIME_CHILD_ENV, "1");
+    let timings = time_command(command);
+    assert!(timings.wall.is_finite() && timings.wall > 0.0);
+    assert!(timings.cpu.is_finite() && timings.cpu > 0.0);
+}
+
+#[test]
 fn parse_three_floats_reads_whitespace_separated_values() {
     assert_eq!(
         parse_three_floats(b"0.5 -1.25 3.0\n"),
@@ -179,23 +345,25 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 }
 
 /// D-094's nbody measurement contract (design doc's own §1): same-machine
-/// paired comparison, `K = 5` runs each, ratio of medians, `--release` pycc
+/// paired comparison, `K = 7` runs each (raised from the design doc's
+/// original `K = 5` by D-140), ratio of medians, `--release` pycc
 /// vs. the pinned CPython 3.14.6 oracle, gate at ratio >= 20 -- preceded by
 /// one untimed correctness check (D-097) that verifies both sides compute
 /// matching output, within a small relative tolerance (D-098, superseding
 /// D-097's original exact-byte comparison), before any ratio is trusted.
 /// `#[ignore]`d like
 /// `tests/conformance.rs`'s two fixtures -- genuinely slow (a full
-/// `--release` LLVM build plus twelve total program executions: one untimed
-/// correctness-check launch per side, then the ten timed launches below) --
+/// `--release` LLVM build plus sixteen total program executions: one untimed
+/// correctness-check launch per side, then the fourteen timed launches below) --
 /// and run explicitly via `--include-ignored`, already passed workspace-wide in
 /// both `build-test-coverage` and every `native-build-test` matrix leg
 /// (`.github/workflows/ci.yml`), so no further CI test-wiring change was
 /// needed beyond D-092's own release-`pycc_rt`-build step addition there.
 ///
 /// This test now passes on every Tier-1 target given the per-target floors
-/// below (20x on three of five, 12x on macOS aarch64 per D-095, 15x on
-/// `windows-latest` per D-096) -- it originally failed, for a narrower,
+/// below (20x on two of five, 12x on macOS aarch64 per D-095, 15x on
+/// `windows-latest` per D-096, and 18x on Linux aarch64 per D-101) -- it
+/// originally failed, for a narrower,
 /// better understood reason than the ~10-11x this benchmark first measured
 /// (D-093): that first measurement conflated a real methodology gap with
 /// what turned out to be a real, separate implementation bug, both fixed
@@ -239,17 +407,37 @@ fn oracle_binary_name_appends_the_exe_extension_only_for_windows() {
 /// for the full investigation and the task dispatcher's own decision on
 /// how to proceed.
 ///
-/// Runs execute in two back-to-back blocks (all 5 pycc runs, then all 5
-/// CPython runs) rather than interleaved -- matching the design doc's own
-/// "both programs run K = 5 times; take the median of each" wording, which
-/// specifies K and the aggregation but not an interleaving requirement.
+/// Runs execute in two back-to-back blocks (all `RUNS` pycc runs, then all
+/// `RUNS` CPython runs) rather than interleaved -- matching the design doc's
+/// own "both programs run K times; take the median of each" wording, which
+/// specifies K's aggregation (median) but not an interleaving requirement.
 /// Block ordering is slightly more exposed to monotonic drift (thermal
 /// throttling, background-process ramp-up) than interleaving would be,
 /// since drift penalizes whichever side runs second rather than being
-/// averaged across both; taking the median (not the mean) of 5 same-block
-/// runs already blunts most of that exposure.
+/// averaged across both; taking the median (not the mean) of `RUNS`
+/// same-block runs already blunts most of that exposure, and D-140 raising
+/// `RUNS` from 5 to 7 blunts it further still (a median across more samples
+/// is harder for any single outlier run to move).
+///
+/// D-126 records per-child CPU time alongside wall-clock time while preserving
+/// the existing wall-clock gate and every per-target floor. Unix uses `wait4`
+/// for the exact spawned child rather than process-global `RUSAGE_CHILDREN`;
+/// Windows reads the waited child's retained process handle with
+/// `GetProcessTimes`. The frozen step-summary record exposes both ratios and all
+/// four medians on passes and failures. D-129 completed Phase B after five real
+/// observations on every Tier-1 leg: CPU time did not reduce variance across
+/// the matrix, so wall clock remains the gate and CPU time remains non-gating
+/// diagnostic telemetry rather than gaining its own floors. D-140 records why:
+/// on virtualized hosted runners, "CPU time" per `getrusage`/`GetProcessTimes`
+/// still counts scheduled-but-throttled cycles as full-rate CPU-seconds, so
+/// hypervisor-level noise (CPU steal time from co-tenants, frequency/turbo
+/// scaling driven by neighboring load) leaks into the CPU-time measurement
+/// almost as much as it does into wall-clock -- CPU time is immune to pure
+/// OS-scheduler preemption (that time is correctly excluded), but not to the
+/// virtualization-layer noise that dominates on these runners, so it does not
+/// close the "shared CPU" gap the way it would on dedicated hardware.
 #[test]
-#[ignore = "slow: builds a --release binary, verifies output equality once, then runs both programs 5 times each"]
+#[ignore = "slow: builds a --release binary, verifies output equality once, then runs both programs 7 times each"]
 fn nbody_release_binary_meets_required_speedup_over_cpython() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nbody.py");
 
@@ -263,7 +451,10 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
         .arg("--release")
         .status()
         .expect("pycc build must spawn");
-    assert!(build_status.success(), "pycc --release build of nbody.py failed");
+    assert!(
+        build_status.success(),
+        "pycc --release build of nbody.py failed"
+    );
 
     // Resolved once, not per run: `oracle_python_bin()` itself spawns a
     // `--version` check, and re-running that inside the loop below would
@@ -276,7 +467,7 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
     // otherwise still pass this gate purely on speed (D-093's own
     // "measurement with near-zero signal for what it's meant to measure"
     // mistake, but for correctness instead of performance). This deliberately
-    // does not reuse `time_command`/`Command::status()` for the RUNS=5 timed
+    // does not reuse `time_command`/`Command::status()` for the RUNS timed
     // launches below -- those must stay exactly as fast and side-effect-free
     // as they already are, since D-095/D-096's own gate floors (12x, 15x)
     // were measured against that exact shape; adding output capture to every
@@ -319,10 +510,10 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
     ));
     assert_relative_eq(pycc_values, cpython_values);
 
-    let pycc_times: Vec<f64> = (0..RUNS)
+    let pycc_times: Vec<Timings> = (0..RUNS)
         .map(|_| time_command(Command::new(&bin_path)))
         .collect();
-    let cpython_times: Vec<f64> = (0..RUNS)
+    let cpython_times: Vec<Timings> = (0..RUNS)
         .map(|_| {
             let mut cpython = Command::new(&cpython_bin);
             cpython.arg(&fixture);
@@ -330,9 +521,12 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
         })
         .collect();
 
-    let pycc_median = median(pycc_times);
-    let cpython_median = median(cpython_times);
-    let ratio = cpython_median / pycc_median;
+    let pycc_wall_median = median(pycc_times.iter().map(|timing| timing.wall).collect());
+    let cpython_wall_median = median(cpython_times.iter().map(|timing| timing.wall).collect());
+    let pycc_cpu_median = median(pycc_times.iter().map(|timing| timing.cpu).collect());
+    let cpython_cpu_median = median(cpython_times.iter().map(|timing| timing.cpu).collect());
+    let wall_ratio = cpython_wall_median / pycc_wall_median;
+    let cpu_ratio = cpython_cpu_median / pycc_cpu_median;
     let required = required_nbody_ratio(
         cfg!(target_os = "macos") && cfg!(target_arch = "aarch64"),
         cfg!(target_os = "windows"),
@@ -362,18 +556,26 @@ fn nbody_release_binary_meets_required_speedup_over_cpython() {
             .create(true)
             .open(summary_path)
             .and_then(|mut file| {
-                writeln!(
-                    file,
-                    "nbody speedup ratio: {ratio:.4}x (required {required:.0}x, pass={})",
-                    ratio >= required
-                )
+                let summary = nbody_summary(
+                    wall_ratio,
+                    cpu_ratio,
+                    cpython_wall_median,
+                    pycc_wall_median,
+                    cpython_cpu_median,
+                    pycc_cpu_median,
+                    required,
+                );
+                writeln!(file, "{summary}")
             });
     }
 
     assert!(
-        ratio >= required,
-        "nbody speedup ratio {ratio:.2}x is below the required {required:.0}x gate \
-         (cpython median {cpython_median:.4}s, pycc --release median {pycc_median:.4}s)"
+        wall_ratio >= required,
+        "nbody wall-clock speedup ratio {wall_ratio:.2}x is below the required {required:.0}x gate \
+         (cpython wall median {cpython_wall_median:.4}s, \
+         pycc --release wall median {pycc_wall_median:.4}s; \
+         CPU-time ratio {cpu_ratio:.2}x, cpython CPU median {cpython_cpu_median:.4}s, \
+         pycc --release CPU median {pycc_cpu_median:.4}s)"
     );
 }
 

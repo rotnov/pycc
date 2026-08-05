@@ -44,9 +44,11 @@ evidence-gated closure authority extends to any other issue that screen identifi
 stale in the same pass — not just the named target issue.
 
 When the issue's own fix requires this repository's established two-PR CI-digest
-stage-then-activate pattern (see `docs/DECISIONS.md`'s D-080 Staging note), a second,
-stage-only pull request that does not itself carry `Fixes #N` is also authorized — see step 4's
-detection branch.
+stage-then-activate pattern (see `docs/DECISIONS.md`'s D-080 Staging note), or its separate
+D-103 policy-successor-manifest stage-then-activate pattern
+(see `docs/DECISIONS.md#d-103-keep-search-policy-successors-base-owned-through-a-complete-two-merge-manifest`),
+a second, stage-only pull request that does not itself carry `Fixes #N` is also authorized — see
+step 4's detection branches.
 
 Anything outside this set — touching another issue, editing an existing comment, force-pushing
 over commits this session did not create, changing repository settings — still requires asking
@@ -78,6 +80,17 @@ worktree. Run `cargo doc --workspace --no-deps`. Read `docs/SPEC.md` and the spe
 owning the affected area. Checkpoint the open pull requests per D-078: number, state, draft
 status, head; they may already be changing the files this issue targets, and they consume
 shared decision-log numbering.
+
+Also read `tests/fixtures/policy-successor-manifest.json` from that exact tip: if any entry's
+`source_path` differs from its `path` (mid-transition — a successor staged but not yet
+activated), every pull request opened this run will fail the required `audit` check, regardless
+of what it touches — `scripts/check_ci_permissions.rb`'s `validate_policy_successor_transition`
+compares every manifest target's content in the candidate tree against the trusted staged
+content unconditionally, so an unrelated PR still inherits the stale pre-successor content at
+that path from the base branch. Search open pull requests for that entry's own pending
+activation; if it cannot plausibly land this session (e.g. it needs a maintainer
+`emergency-bypass` authorization this session cannot grant), this is the systemic stop condition
+below — stop before doing any further work on this or any other issue, not just this one.
 
 ### 2. Triage for staleness
 
@@ -124,13 +137,54 @@ Look for an implementation plan in the issue's comments. Plans published by `/is
 record the baseline commit they were planned against: check whether the default branch has
 since moved in ways that matter — files the plan touches, gates it cites, open pull requests
 it reasons about. A plan whose relevant ground has shifted is refreshed by invoking
-`/issue-to-plan` again, not followed on faith.
+`/issue-to-plan` again, exactly as below, not followed on faith.
 
-If no plan exists, invoke `/issue-to-plan`. This skill's declared write authorization
-substitutes for that skill's per-payload publish approval; everything else about its workflow,
-including its adversarial review loop, runs unchanged.
+If no plan exists, or an existing one needs refreshing per above, invoke `/issue-to-plan` inside
+a freshly-dispatched `Agent` — the same
+context-isolation reasoning as step 4's dispatched implementation (see
+`docs/DECISIONS.md#d-142-issue-implements-step-4-implementation-runs-in-a-dispatched-agent-not-the-orchestrating-sessions-own-context`)
+applies equally here: `issue-to-plan`'s own steps 1-5 (baseline, refuting the issue's claims
+against the tree, establishing constraints, empirical verification including real
+builds/`cargo`/`pycc` runs, drafting) and step 6's adversarial review loop generate as much
+file-reading and tool-call volume as the implementation itself, and none of it needs to remain
+in this session's own context once the plan is published. Instruct the dispatched agent to
+invoke the `issue-to-plan` skill itself (via the `Skill` tool, passing the issue number) and run
+it to completion inside the same task branch/worktree this session already created in step 1 —
+read/build access for its own empirical verification, but no commits: `issue-to-plan`'s own Non-negotiable
+#4 (no repository mutation beyond the published comment) is unchanged by running inside a
+dispatched agent rather than directly. This skill's declared write authorization substitutes for
+`issue-to-plan`'s own per-payload publish approval exactly as before delegation moved inside a
+dispatched agent; everything else about its workflow, including the adversarial review loop
+(which the dispatched agent runs via its own further, nested `Agent` dispatch — confirmed
+directly to work in this environment, not assumed), runs unchanged. Expect back exactly what
+`issue-to-plan`'s own Output section already specifies: the published comment URL plus its short
+summary — nothing more is needed in this session's own context. A dispatch that fails to start,
+hangs, or returns no usable report is a failure of the dispatch mechanism itself, distinct from
+`issue-to-plan`'s own internal stop condition (its 5-round review loop without a clean round):
+re-dispatch once with the same instructions before treating it as a per-issue stop, mirroring step
+4's identical retry discipline for its own implementation dispatch.
 
 ### 4. Implement
+
+Dispatch the actual implementation — reading and editing source, writing tests, running builds
+— to a freshly-spawned `Agent`, rather than doing it directly in this session's own context.
+This keeps the orchestrating session's own context bounded to the plan, the dispatched agent's
+compact report, and review-loop findings, instead of every file read, edit, and build/test
+invocation the implementation itself produces — the difference between a session that can carry
+`issue-select`'s loop through many issues in one sitting and one whose context grows unboundedly
+after the first. The dispatched agent works inside the same task branch and worktree this
+session already created in step 1's D-021 preflight, so its commits are this session's own
+committed work, not something foreign to it. Give it a self-contained brief: the plan's own
+published text (or its issue-comment URL), the exact task branch and worktree to work in, which
+of the D-080/D-103 staged-pattern branches below applies if any (this session, not the
+dispatched agent, makes that classification while reading the plan in step 3, since it decides
+how many pull requests this run opens), and the precise gate commands and thresholds below.
+Instruct it to return a compact report — files changed, gate results, any plan deviations — not
+a full transcript of its own work. An initial dispatch that fails to start, hangs, or returns no
+usable report is the same "plan refuted" stop condition below as any other implementation
+failure — re-dispatch once with the same brief before treating it as a per-issue stop, exactly
+as the retry discipline elsewhere in this workflow (step 8's rejected-merge retry) already
+applies once, not unboundedly.
 
 Follow the plan. Write tests for success, failure, and edge paths alongside the behavior —
 the coverage gate is a merge invariant, not a target. Update every affected document in the
@@ -173,6 +227,71 @@ The stage PR's step 5 review explicitly verifies the fixture-to-allowlisted-dige
 correct and that the fixture is byte-identical to what the activation PR intends to ship, and
 treats any ambiguity in that verification as a stop condition rather than a best-effort guess.
 
+**Separately, and independently of whether the digest-allowlist case above applies:** check
+whether the diff touches any path listed in `tests/fixtures/policy-successor-manifest.json`
+(`grep` its `path` entries). That manifest (D-103) protects a broader set than `ci.yml` alone —
+checker scripts, their own self-tests, and staging fixtures are listed too. Notably,
+`scripts/check_roadmap_evidence.rb` — the very file the digest-allowlist case above instructs
+editing directly in its stage PR — is itself commonly a manifest entry; check it too, every
+time, rather than assuming the digest-allowlist template above is self-sufficient. When it is
+listed and steady-state, editing it (for a digest-allowlist stage PR or any other reason) first
+needs its own D-103 stage-then-activate cycle before a PR containing that edit can pass `audit`
+— this repository's own real precedent staged and activated `check_roadmap_evidence.rb` through
+this exact process (PRs #271/#273) as its own separate, prior two-PR cycle, strictly before the
+later `ci.yml` stage/activate pair (PRs #277/#278) that depended on the new digest it registered.
+Treat the two mechanisms as independently triggered and, when both apply to a change, sequenced
+one after the other (inner target first), not merged into a single combined stage PR.
+
+`scripts/check_ci_permissions.rb`'s `audit` check enforces the manifest independently of the
+digest-allowlist check above: a candidate PR that edits any listed path directly while its entry
+is steady-state fails with "candidate protected policy target `<path>` lacks a base-staged
+successor" — this fires even for a file with nothing to do with `ci.yml` or coverage, such as a
+checker script's own self-test file. If the target's own entry is already mid-transition when
+you reach this step (not steady-state), preflight's run-wide check above should already have
+caught and stopped on it; treat that discrepancy as the tree refuting the plan mid-implementation
+(below), not as a variant path through this section.
+
+When a manifest-listed path needs editing and its entry is currently steady-state, split the
+work the same two-PR way, following this repository's demonstrated propose/activate pairs as the
+exact template: PR #271/#273 for `check_roadmap_evidence.rb` is a complete, merged example of
+the full cycle; PR #277 for `ci.yml` is the stage half only — its activation, PR #278, was still
+open and blocked on a maintainer `emergency-bypass` authorization as of this writing, so treat
+#277 as evidence for the stage PR's shape, not yet as proof the full cycle lands cleanly.
+
+- **Stage PR:** add the target's final, fully-edited byte content as a new file under
+  `tests/fixtures/policy-successors/<basename>` (matching the path's own basename; create the
+  entry if the manifest has none yet for this path), and update that path's manifest entry so
+  `source_path` points at the staged copy with its SHA-256 — touch no other byte of the live
+  target, and no `Fixes #N`, for the same reason the digest-allowlist stage PR above carries
+  none. Tag its body "Stage 1/2 for #N — see issue-implement's D-103 manifest-staging pattern."
+- **Activation PR:** opened only after the stage PR's commit is confirmed present on the default
+  branch. Copies the staged content into the live target byte-for-byte and resets the manifest
+  entry to steady-state (`source_path` equal to `path` again). The
+  activation commit must byte-identically match what the stage PR already landed.
+
+**`Fixes #N` goes only on the composed sequence's own final PR, never on an intermediate one.**
+When this D-103 cycle is itself a prerequisite for a larger composed change — the chained case
+just above, where an inner D-103 cycle for a manifest-protected checker script must complete
+before an outer D-080 `ci.yml` stage/activate pair can even open its own stage PR — this
+activation PR does not deliver the issue's actual requested fix yet; it only clears the way for
+the next PR in the sequence. Carrying `Fixes #N` here would close the issue on merge, before the
+outer pair (or any further intermediate cycle) has landed. Tag an intermediate activation's body
+instead: "Intermediate activation for #N (step `<k>` of `<total>`) — see issue-implement's D-103
+manifest-staging pattern; does not itself close #N." Only the sequence's own last PR — the one
+that actually satisfies the issue's premise — carries `Fixes #N`, and every PR the composed
+sequence requires (every stage and every intermediate activation) is explicitly named and
+authorized up front, exactly like the systemic stop condition below already requires for a
+transition this session cannot land at all. A D-103 activation that is *not* part of any larger
+composed change (the common case: the issue's own fix is simply "edit this one manifest-listed
+file") remains the final PR of its own two-PR cycle and does carry `Fixes #N`, unchanged from
+before.
+
+The stage PR's own step 5 review explicitly verifies the staged-copy-to-manifest-entry binding
+is correct (the SHA-256 matches, and the staged content is what the activation PR intends to
+ship byte-for-byte), and treats any ambiguity in that verification as a stop condition rather
+than a best-effort guess — the same discipline the digest-allowlist stage PR above already
+requires.
+
 If the tree refutes the plan mid-implementation — an assumption fails, a gate behaves
 differently than planned — do not force it. Record what refuted it, refresh the plan if the
 refutation changes the approach, and note the deviation in the pull request body. A plan
@@ -195,6 +314,13 @@ fixes whenever the previous findings may no longer describe the diff. The loop e
 round reports no actionable findings. The same finding surviving two genuine fix attempts is
 a stop condition, not a reason for a third identical attempt.
 
+When a fix touches the implementation, resume step 4's own dispatched agent (`SendMessage` to
+its agent id, which resumes it with full context of the code it just wrote) rather than
+re-deriving the change in this session's own context or dispatching a stateless fresh one — a
+fresh dispatch is the fallback only once the original agent's run has already ended and cannot
+be resumed. This keeps the same context-isolation benefit through the fix loop, not just the
+first implementation pass.
+
 Fixes to review findings deserve the same suspicion as the original diff — often more. A fix
 made under review pressure is written against one counterexample and inherits none of the
 original design's caution: expect the loop to find real defects in its own previous round's
@@ -212,9 +338,9 @@ objects to the direction taken, that is a stop condition — do not open the pul
 Re-fetch. If the default branch moved, rebase the task branch — own committed work only,
 never over commits this session did not create — and rerun the local gates. Push and open the
 pull request: `Fixes #N` in the body, a summary of what was built, any plan deviations with
-their reasons, and the test evidence. For significant work, update `docs/SESSION_LOG.md`
-within the pull request per D-066, re-fetching immediately before that commit so every
-referenced remote state is current.
+their reasons, and the test evidence. For significant work, add a new dated file under
+`docs/sessions/` within the pull request per D-066/D-130, re-fetching immediately before
+that commit so every referenced remote state is current.
 
 ### 7. Monitor (D-078)
 
@@ -280,7 +406,14 @@ progress on every other issue (systemic) versus only this one (per-issue) — se
 **Systemic** (no other issue would fare differently — a caller looping across issues should
 stop the whole run, not just skip this one):
 
-- the pinned reviewer cannot be bound.
+- the pinned reviewer cannot be bound;
+- `tests/fixtures/policy-successor-manifest.json` has any entry mid-transition (`source_path`
+  differs from `path`) whose own activation cannot land this session — for example it needs a
+  maintainer `emergency-bypass` authorization this session cannot grant. This blocks the required
+  `audit` check on every candidate PR regardless of which issue or which files it touches (see
+  preflight above), so it is caught there in the normal case; list it here for the case where it
+  is discovered later — mid-plan, mid-implementation, or mid-monitoring, if the base branch moves
+  into this state after preflight ran.
 
 **Per-issue** (a caller looping across issues should set this one issue aside and continue with
 the rest of the pool):
@@ -297,7 +430,11 @@ the rest of the pool):
   session;
 - two consecutive merge rejections;
 - the delegated `/issue-to-plan` call is stopped by its own stop condition;
-- (when executing the staged CI-digest pattern) the digest computation is ambiguous.
+- the step 3 dispatch of `/issue-to-plan` itself fails to start, hangs, or returns no usable
+  report twice in a row (the mechanical dispatch failure, distinct from the case above);
+- (when executing the staged CI-digest pattern) the digest computation is ambiguous;
+- (when executing the D-103 manifest-staging pattern) the staged successor's byte-content
+  binding to its manifest entry is ambiguous.
 
 Stop and report — with everything completed so far delivered — for any of the above.
 

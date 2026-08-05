@@ -162,6 +162,190 @@ fn d0031_private_helper_calls_shadowed_builtin() {
 }
 
 #[test]
+fn d0032_heterogeneous_list_literal() {
+    assert_diagnostic_matches_fixture("d0032_heterogeneous_list_literal");
+}
+
+#[test]
+fn d0033_subscript_on_non_list() {
+    assert_diagnostic_matches_fixture("d0033_subscript_on_non_list");
+}
+
+#[test]
+fn d0034_list_element_type_not_int() {
+    assert_diagnostic_matches_fixture("d0034_list_element_type_not_int");
+}
+
+#[test]
+fn d0035_heterogeneous_dict_literal() {
+    assert_diagnostic_matches_fixture("d0035_heterogeneous_dict_literal");
+}
+
+#[test]
+fn d0036_dict_key_value_type_not_str_int() {
+    assert_diagnostic_matches_fixture("d0036_dict_key_value_type_not_str_int");
+}
+
+#[test]
+fn d0037_heterogeneous_set_literal() {
+    assert_diagnostic_matches_fixture("d0037_heterogeneous_set_literal");
+}
+
+#[test]
+fn d0038_set_element_type_not_int() {
+    assert_diagnostic_matches_fixture("d0038_set_element_type_not_int");
+}
+
+#[test]
+fn d0039_tuple_element_type_not_int_bool_float() {
+    assert_diagnostic_matches_fixture("d0039_tuple_element_type_not_int_bool_float");
+}
+
+#[test]
+fn d0040_tuple_index_not_a_literal() {
+    assert_diagnostic_matches_fixture("d0040_tuple_index_not_a_literal");
+}
+
+#[test]
+fn d0041_value_less_annotation_later_assignment_mismatch() {
+    assert_diagnostic_matches_fixture("d0041_value_less_annotation_later_assignment_mismatch");
+}
+
+#[test]
+fn d0021_float_wrong_arity() {
+    assert_diagnostic_matches_fixture("d0021_float_wrong_arity");
+}
+
+#[test]
+fn d0021_float_non_numeric_argument() {
+    assert_diagnostic_matches_fixture("d0021_float_non_numeric_argument");
+}
+
+#[test]
 fn cli_spec_example() {
     assert_diagnostic_matches_fixture("cli_spec_example");
+}
+
+// PR-12 Task 12 (D-119): comprehensions, slicing, and the new
+// `.pop()`/`.get()`/`.add()` container methods mint zero new diagnostic
+// codes -- every rejection below reuses T0021/T0033/T0034/T0036/T0038 or
+// the existing C0001 capability catch-all. These fixtures pin the new
+// *rejection paths* through the public `pycc check` CLI, one per genuinely
+// new way to reach an already-registered code.
+
+#[test]
+fn d0033_slice_on_non_list() {
+    assert_diagnostic_matches_fixture("d0033_slice_on_non_list");
+}
+
+#[test]
+fn d0021_slice_bound_not_int() {
+    assert_diagnostic_matches_fixture("d0021_slice_bound_not_int");
+}
+
+#[test]
+fn d0033_pop_on_non_list() {
+    assert_diagnostic_matches_fixture("d0033_pop_on_non_list");
+}
+
+// `.pop()` with an argument is an arity mismatch caught during HIR
+// lowering, before `pycc_types` ever runs -- it reports through the
+// generic C0001 capability path, not T0033, exactly like `.append()`'s
+// own pre-existing arity check.
+#[test]
+fn c0001_list_pop_with_argument() {
+    assert_diagnostic_matches_fixture("c0001_list_pop_with_argument");
+}
+
+#[test]
+fn d0033_get_on_non_dict() {
+    assert_diagnostic_matches_fixture("d0033_get_on_non_dict");
+}
+
+#[test]
+fn d0021_dict_get_key_type_mismatch() {
+    assert_diagnostic_matches_fixture("d0021_dict_get_key_type_mismatch");
+}
+
+#[test]
+fn d0021_dict_get_default_type_mismatch() {
+    assert_diagnostic_matches_fixture("d0021_dict_get_default_type_mismatch");
+}
+
+// Same HIR-lowering-time arity shape as `.pop()` above -- C0001, not T0033.
+#[test]
+fn c0001_dict_get_wrong_argument_count() {
+    assert_diagnostic_matches_fixture("c0001_dict_get_wrong_argument_count");
+}
+
+#[test]
+fn d0033_add_on_non_set() {
+    assert_diagnostic_matches_fixture("d0033_add_on_non_set");
+}
+
+#[test]
+fn d0021_set_add_value_type_mismatch() {
+    assert_diagnostic_matches_fixture("d0021_set_add_value_type_mismatch");
+}
+
+#[test]
+fn c0001_comprehension_two_for_clauses() {
+    assert_diagnostic_matches_fixture("c0001_comprehension_two_for_clauses");
+}
+
+#[test]
+fn c0001_comprehension_two_if_filters() {
+    assert_diagnostic_matches_fixture("c0001_comprehension_two_if_filters");
+}
+
+// D-117: a comprehension outside the `Stmt::Assign`-RHS position it is
+// specially recognized in (here, a `print(...)` call argument) falls
+// through to `lower_expr`'s existing generic "expression kind not
+// supported yet" C0001 catch-all, not a new comprehension-specific error.
+#[test]
+fn c0001_comprehension_as_call_argument() {
+    assert_diagnostic_matches_fixture("c0001_comprehension_as_call_argument");
+}
+
+#[test]
+fn d0034_comprehension_list_str() {
+    assert_diagnostic_matches_fixture("d0034_comprehension_list_str");
+}
+
+#[test]
+fn d0036_comprehension_dict_str_str() {
+    assert_diagnostic_matches_fixture("d0036_comprehension_dict_str_str");
+}
+
+#[test]
+fn d0038_comprehension_set_str() {
+    assert_diagnostic_matches_fixture("d0038_comprehension_set_str");
+}
+
+// Real Python's dict-comprehension grammar has no `**`-unpacking form the
+// way a plain dict literal does, but the vendored parser accepts
+// `{**x for k in y}` anyway (silently dropping the `**`) rather than
+// rejecting it at parse time -- so this is real, parseable Python that
+// reaches a dedicated C0001 capability diagnostic, not an internal panic.
+#[test]
+fn c0001_dict_comprehension_unpacking() {
+    assert_diagnostic_matches_fixture("c0001_dict_comprehension_unpacking");
+}
+
+// PR-14 (D-136/D-137): an unrecognized stdlib/third-party module name
+// (`import cgi`, `os`, `typing`, ...) fails closed with the same generic
+// C0001 catch-all every other unimplemented statement shape uses -- not a
+// dedicated per-module message.
+#[test]
+fn c0001_import_unrecognized_module() {
+    assert_diagnostic_matches_fixture("c0001_import_unrecognized_module");
+}
+
+// PR-14 (D-136): a recognized module (`math`) with one unresolvable symbol
+// inside an otherwise-valid `from math import ...` list is C0002, distinct
+// from C0001, and fails the whole statement -- `sqrt` is not partially
+// bound even though it is itself registered.
+#[test]
+fn c0002_from_import_unregistered_symbol() {
+    assert_diagnostic_matches_fixture("c0002_from_import_unregistered_symbol");
 }

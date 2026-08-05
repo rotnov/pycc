@@ -27,7 +27,7 @@
     <meta property="og:site_name" content="pycc">
     <meta property="og:locale" content="en_US">
     <meta property="og:url" content="https://rotnov.github.io/pycc/">
-    <meta property="og:title" content="pycc — Typed Python in. Native binaries out.">
+    <meta property="og:title" content="pycc — Typed Python in. Autonomous artifacts out.">
     <meta
       property="og:description"
       content="A pre-alpha AOT compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM, created by AI and managed by a human."
@@ -36,7 +36,7 @@
     <meta property="og:image:alt" content="pycc — typed Python in, native binaries out">
 
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="pycc — Typed Python in. Native binaries out.">
+    <meta name="twitter:title" content="pycc — Typed Python in. Autonomous artifacts out.">
     <meta
       name="twitter:description"
       content="A pre-alpha AOT compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM, created by AI and managed by a human."
@@ -55,7 +55,7 @@
             "name": "pycc — AOT compiler for typed Python to native binaries",
             "description": "pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14 with an implemented native-binary path through Rust and LLVM; AI-created and human-managed.",
             "inLanguage": "en",
-            "dateModified": "2026-07-30",
+            "dateModified": "2026-08-02",
             "mainEntity": {
               "@id": "https://rotnov.github.io/pycc/#project"
             }
@@ -118,14 +118,16 @@
           </p>
           <h1 id="hero-title">
             Typed Python in.<br>
-            <span>Native binaries out.</span>
+            <span>Autonomous artifacts out.</span>
           </h1>
           <p class="hero-lede">
             pycc is an open-source ahead-of-time compiler project for standard
             Python 3.14. Its design contract is to check annotations at compile
-            time, then emit a fast, standalone executable—without inventing a
-            new language. AI agents create the entire project; a human only
-            manages direction, priorities, and constraints.
+            time, then emit a fast, autonomous deployment artifact—without
+            inventing a new language. Native and pure builds emit standalone
+            executables; planned permitted CPython interop emits a self-contained
+            bundle with its pinned runtime. AI agents create the entire project;
+            a human only manages direction, priorities, and constraints.
           </p>
           <div class="hero-actions">
             <a class="button button-primary" href="https://github.com/rotnov/pycc">
@@ -249,8 +251,9 @@
           </p>
           <p>
             pycc's design target combines hard type errors, standard Python
-            syntax, and a native executable in one compiler pipeline. Annotations
-            are the contract—not optional hints.
+            syntax, native execution, and autonomous permitted-interoperability
+            bundles in one compiler pipeline. Annotations are the contract—not
+            optional hints.
           </p>
         </div>
       </section>
@@ -339,7 +342,7 @@
             <span>04</span>
             <p class="step-input">LLVM</p>
             <h3>Compile</h3>
-            <p>Emit object code and link a standalone native binary.</p>
+            <p>Emit the native binary, or package the planned pinned CPython closure when permitted interop requires it.</p>
           </article>
         </div>
       </section>

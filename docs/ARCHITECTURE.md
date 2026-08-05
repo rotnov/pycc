@@ -23,10 +23,22 @@ THIR (fully typed)
 MIR (typed SSA, ownership-annotated)
    │  optimizations   — inlining, RC elision, devirtualization, monomorphization
    ▼
-LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pycc_rt + pycc_std)
+LLVM IR  ──►  object code  ──►  lld  ──►  native artifact (+ pycc_rt + pycc_std)
+                                                    └─ planned v0.7 only:
+                                                       pinned CPython/package
+                                                       closure when policy permits
 ```
 
 **Current state (through PR-5):** the diagram above is the v1.0 target. As of PR-5, `pycc_own` does not exist (deferred to v0.5, per DELIVERY_PLAN.md's crate scope), so there is no separate ownership-analysis stage and no THIR; `pycc_types` produces a checked HIR directly, and `pycc_mir`'s `MIR` is a typed *structural mirror* of HIR (D-057), not the ownership-annotated SSA form shown above -- LLVM codegen uses one `alloca` per local/parameter and relies on no optimization pass, matching this project's `--debug`-only v0.1 profile. The `optimizations` stage does not exist yet either. This is a deliberate, currently-accepted gap between the target architecture and today's implementation, not an unplanned deviation.
+
+**Current state update (PR-14, D-136):** `pycc_std` now exists, but not as the "compiled stdlib subset (typed Python + Rust intrinsics)" the crate table below describes, and it is not linked into the generated native artifact the way the pipeline diagram's `+ pycc_rt + pycc_std` above implies -- as shipped, `pycc_std` is a dependency-free, compile-time-only data crate (a static registry of hand-recognized symbol names/types, currently just `math.sqrt`/`math.pi`) consulted by `pycc_hir`/`pycc_types` while compiling the *user's* program; nothing from `pycc_std` itself is compiled into or linked with the output binary (`math.sqrt` lowers directly to a `pycc_codegen`-emitted libm `sqrt` declaration, not through any `pycc_std` runtime component). The v1.0-target design in the diagram above and the crate table's description remain the long-run direction; whether v0.2's registry approach evolves toward that target or stays a permanent compile-time-only design is an open question for a future milestone, not resolved by this PR.
+
+D-128's conditional CPython/package closure is likewise a planned v0.7
+component, not part of the current pipeline. Native imports continue through
+the static pycc pipeline. A CPython-backed import keeps ordinary Python source
+syntax but adds a generated typed bridge and a pinned, target-specific runtime
+closure to the deployment artifact under `auto` or `allowlist`; `deny` and
+`--pure` retain the native-only artifact path.
 
 ## Workspace crates (Rust 1.97+, edition 2024)
 
@@ -47,10 +59,91 @@ LLVM IR  ──►  object code  ──►  lld  ──►  native binary (+ pyc
 The implemented v0.1 frontend currently uses `ruff_python_parser` to produce
 the AST. `pycc_hir::lower_checked` preserves module statement order and lowers
 primitive literals and annotations, assignments, arithmetic, comparisons,
-calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. Function items
-carry their parameter and return types, while call expressions retain only the
-bare callee name plus ordered argument expressions; HIR does not yet assign
-binding identities or build and memoize a
+calls, returns, `if`/`while`/`for`+`range`, and basic f-strings. A first
+`list[int]` slice (D-105, PR-10) lowers list literals, read-only subscript
+indexing (`base[index]`), a dedicated `.append()` call form, and
+`for var in <bare-name-list>:` iteration through HIR (D-105's HIR-forms
+task), `pycc_types` type-checking including `len()`'s call-dispatch (D-105's
+type-checking task, `T0032`/`T0033`/`T0034`), `pycc_mir` lowering (D-105's
+MIR-lowering task), and `pycc_codegen` (D-105's codegen task) against
+`pycc_rt`'s `PyIntListObj` -- so `build`/`run` compiles and runs a
+`list[int]` program end to end, at module scope or inside a private helper
+(the two places D-105's first scope cut allows a `list[int]` value to live).
+Only `list[int]` reaches codegen: `T0034` rejects every other element type
+first. D-141 supersedes D-106's raw payload: `pycc_codegen` validates each
+int-compatible encoded element at ingress and stores it unchanged, preserving
+`False`/`True` identity markers across append/read/pop/iteration/slicing while
+keeping indices and lengths raw implementation counters. `list[T]` values are deliberately
+never refcounted in v0.2, so their allocations leak for the process's
+lifetime (D-107). Two *operations* on a `list[T]` still type-check and then
+stop codegen with a "not supported yet" panic rather than compiling, because
+v0.2 gives `list[T]` no `str(list)` or `bool(list)` meaning (D-107):
+converting one to `str`, and using one as an `if`/`while` condition. The
+string conversion is reachable from every context that needs one, which
+today means both `print(xs)` and f-string interpolation (`f"{xs}"`) -- they
+share a single conversion helper in `pycc_codegen`, so both fail identically.
+
+A second slice (D-121/D-122, PR-11a) extends this same pattern to
+`dict[str, int]` and `set[int]`: dict/set literals, `d[k]`/`d[k] = v`
+(dict only, insert-or-update), `len(...)`, and `for k in d:`/`for x in s:`
+iteration lower through the same HIR/type-checking/MIR/codegen path,
+against `pycc_rt`'s `PyDictObj`/`PyIntSetObj` respectively -- so `build`/`run`
+now also compiles and runs `dict[str, int]` and `set[int]` programs end to
+end, not just `list[int]`. Exactly one key/element combination reaches
+codegen per container (`T0036` for dict, `T0038` for set), mirroring
+`list[int]`'s own `T0034` gate; every other combination type-checks but is
+rejected before codegen. Both new containers stay leak-only in v0.2 (D-124),
+matching `list[int]` (D-107), and neither ships a `str(...)`/`bool(...)`
+conversion or (for `set`) a membership test -- `in` parses fine (the
+parser produces a valid `CmpOp::In` node like any other comparison
+operator), but `pycc_hir`'s lowering step rejects it with the same generic
+`C0001` capability diagnostic used for `is`/`is not`/chained comparisons,
+so it has no HIR/type-checker/codegen support anywhere in this compiler
+yet (D-123).
+
+A third slice (D-115/D-116, PR-11b) adds `tuple[...]`, structurally
+different from the first two: every v0.2-accepted element type
+(`int`/`bool`/`float`, any mix, any arity ≥ 1) is a fixed-width scalar with
+a compile-time-known count, so `pycc_codegen` represents a tuple as an LLVM
+struct held by value (an SSA aggregate, built with `insertvalue` and read
+with `extractvalue`) rather than a `pycc_rt` heap object -- no allocation,
+no pointer, no refcounting question, unlike `list[int]`/`dict[str, int]`/
+`set[int]`. `t[k]` type-checks only for a literal, non-negative, in-range
+integer index (`T0040`), stricter than `list[int]`'s runtime-checked index,
+since a heterogeneous tuple's element type at position `k` is only knowable
+when `k` is known at compile time; any other element type is rejected
+before codegen with `T0039`, mirroring `T0034`/`T0036`/`T0038`. Both
+module-global and function-local tuple storage work end to end. Like
+`list`/`dict`/`set` above, string conversion of a tuple (`print(t)`,
+f-string interpolation) and truthiness of a tuple (`if t:`/`while t:`)
+both type-check but stop codegen with a "not supported yet" panic in
+`to_str`/`truthy` respectively -- but unlike those three, whose own
+identical gap predates this whole PR-11 effort (`list`, PR-10) or was
+already in place before this slice started (`dict`/`set`, PR-11a), this
+reachability for `tuple[...]` is new as of this slice's own tuple-literal
+HIR lowering: before that change, any program containing a tuple literal
+failed to lower at all and got a clean `C0001` diagnostic instead of ever
+reaching codegen (`docs/ROADMAP.md` has the matching follow-up). Passing or
+returning a tuple value across a function boundary is implemented at the
+codegen layer (`build_call_to`, `MirStmt::Return`, and `emit_assign` all
+accept `Scalar::Tuple` with a plain pass-through) but is not yet reachable
+from real, unannotated Python source, for two independent reasons:
+`pycc_types`' private-helper signature-inference solver has no
+unification-friendly representation for any container literal
+(`list`/`dict`/`set`/`tuple` alike), so an entirely unannotated helper's
+parameter or return type can never be inferred as a container type from
+real source today -- a pre-existing limitation this slice surfaced but did
+not introduce (see `docs/DECISIONS.md`'s D-116 point 4 correction note);
+and, even if that solver gap closed, `pycc_codegen`'s own `emit_expr` has
+no dedicated `MirExpr::Call` result-dispatch arm for a container-typed
+return either -- it panics for `Ty::List`/`Ty::Dict`/`Ty::Set`/`Ty::Tuple`
+alike (D-116's own further correction note). `for x in t:` iteration,
+tuple-unpacking assignment (`a, b = t`), and a `tuple[...]` annotation
+syntax remain unimplemented, tracked as `docs/ROADMAP.md` follow-ups.
+
+Function items carry their parameter and return types, while call
+expressions retain only the bare callee name plus ordered argument
+expressions; HIR does not yet assign binding identities or build and memoize a
 call graph. Syntactically valid constructs outside that implemented HIR subset
 return a spanned `C0001` capability diagnostic, so `pycc check` never turns an
 unsupported statement or expression into an uncaught lowering panic.
@@ -118,7 +211,7 @@ Rules:
 
 - Runtime has **zero** platform-conditional behavior visible to user code (path/OS specifics live in `pycc_std` behind `os`/`pathlib` just like CPython).
 - Cross-compilation: `pycc build --target <triple>` is currently proven for same-OS/cross-arch only (e.g. macOS x86_64⟷arm64, CI-gated) — cross-OS targets are not yet supported (see D-026). Linking goes through each host's own toolchain driver (system `cc`, or a bundled `clang` on Windows/Linux when a target is given), not a universally bundled linker.
-- Static linking by default on Linux (musl optional), self-contained .exe on Windows, notarization-friendly binary on macOS.
+- Pure/native-only artifacts use static linking by default on Linux (musl optional), a self-contained `.exe` on Windows, and a notarization-friendly binary on macOS. Planned v0.7 interop artifacts instead form a self-contained application bundle containing their pinned CPython/package/native-library closure; they must not fall back to a target machine's Python installation (D-128).
 - CI matrix runs the full conformance suite on all Tier-1 targets; a PEP test only counts as passing when it passes everywhere.
 - Tier 2 (build, best-effort tests): `aarch64-pc-windows-msvc`, `x86_64-unknown-linux-musl`, `wasm32-wasi` (experiment).
 

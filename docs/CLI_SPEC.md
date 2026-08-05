@@ -6,7 +6,7 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 
 | Command | Does |
 |---|---|
-| `pycc build [PATH] -o OUT` | compile to native binary; debug by default, unless `--release` or a neighboring `pycc.toml`'s `opt = "release"` says otherwise (see `--release` below) |
+| `pycc build [PATH] -o OUT` | compile to a deployment artifact; debug by default, unless `--release` or a neighboring `pycc.toml`'s `opt = "release"` says otherwise (see `--release` below) |
 | `pycc run [PATH] [-- args]` | build + execute |
 | `pycc check PATH...` | frontend only: parse + HIR + types for every explicit file; no codegen |
 | `pycc test` | run project tests compiled (pytest-style discovery, subset) |
@@ -15,13 +15,19 @@ gcc-familiar, cargo-ergonomic. Same commands, flags, and output on Linux/macOS/W
 | `pycc clean` | drop `.pycc/` cache |
 | `pycc version --verbose` | compiler, LLVM, target list |
 
+The current compiler and every future native or `deny`/`--pure` build write a
+native binary at `OUT`. Planned v0.7 builds with a permitted CPython-backed
+import instead use `OUT` as the deployment-artifact destination for an
+autonomous application bundle. D-128 deliberately defers the bundle's exact
+file layout until the v0.7 resolver and packaging plan is accepted.
+
 `pycc init` inspects every scaffold destination before writing anything: an
 existing `pycc.toml`, a `src` that is not a directory, or an existing
 `src/main.py` is a refusal (exit 2) that leaves all existing paths
 byte-for-byte unchanged, and the scaffold writes `pycc.toml` last so a late
 failure in the `src` steps can never leave it behind (#237's regressions are
 pinned by `tests/slice0.rs`'s init suite and `src/project_config.rs`'s unit
-injections). An existing `src/` directory is not itself a conflict — only its entry type and `main.py`'s presence are checked. Both file writes use create-new semantics, so a dangling symlink at either destination fails cleanly instead of writing through it, and a write that fails after creating its file removes that partial file again — a genuine I/O failure leaves no scaffold residue behind for a retry to trip over.
+injections). An existing `src/` directory is not itself a conflict — only its entry type and `main.py`'s presence are checked. Both file writes use create-new semantics, so a dangling symlink at either destination fails cleanly instead of writing through it, and a write that fails after creating its file removes that partial file again — if that removal itself fails too, the cleanup failure is folded into the returned error rather than discarded, so a caller is never told only "the write failed" while a partial file silently remains on disk. If `pycc.toml`'s own write fails after `main.py` was already created by the same invocation, that `main.py` is rolled back too (and the `src/` directory it created, only when left empty), so a retry after fixing the underlying cause is not blocked by scaffold residue (#256) — pre-existing content is never touched, only entries this invocation itself created. A rollback that cannot remove a file it created reports that failure in the same error rather than silently claiming no residue remains.
 
 `pycc version` prints one summary line; `--verbose` appends the Tier-1 target
 list, in the exact set and order of ARCHITECTURE.md's "Cross-platform (hard
@@ -85,6 +91,11 @@ directory once project mode exists.
 --int hybrid|native|bigint    int repr override (default hybrid, D-001) — native = documented CPython deviation
 --lib               emit C-ABI library + header instead of executable
 --memstats          ownership/allocation report (see MEMORY_OWNERSHIP.md)
+--interop-policy auto|allowlist|deny
+                    planned v0.7 policy for CPython-backed imports (D-128);
+                    CLI value overrides `[interop].policy`
+--pure              planned v0.7 shorthand for `--interop-policy deny`;
+                    conflicts with an explicit `--interop-policy`
 --error-format human|json     json = stable schema for editors/CI
 --fix               apply machine-applicable suggestions (check only)
 -j N                parallelism (default: cores)
@@ -104,11 +115,37 @@ targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-window
 static = true
 
 [interop]
-allow = ["numpy", "requests"]   # modules permitted through the CPython escape hatch; empty = pure
+policy = "allowlist"      # planned v0.7: "auto" (default), "allowlist", or "deny"
+allow = ["numpy", "requests"]   # direct import roots; used only by "allowlist"
 
 [test]
 paths = ["tests/"]
 ```
+
+The `[interop]` table and both interop CLI flags are a **planned v0.7
+contract**, not current compiler behavior. The current v0.1 TOML parser accepts
+and ignores unmodeled future sections, and the current frontend rejects every
+`import` before policy evaluation. When v0.7 implements this schema:
+
+- omitting `[interop]` selects `policy = "auto"`, so a standard source import
+  such as `import numpy as np` automatically resolves, pins, and bundles the
+  compatible CPython runtime and package closure recorded in `pycc.lock`;
+- `policy = "allowlist"` permits only the direct CPython-backed import roots
+  named by `allow`; importing a submodule of an allowed root and loading its
+  locked transitive closure do not require separate entries, while another
+  direct root fails with `I0402`;
+- `policy = "deny"`, `--interop-policy deny`, and `--pure` reject every
+  CPython-backed dependency and guarantee that the produced artifact contains
+  no CPython/libpython runtime; and
+- the selected policy never changes native pycc-module imports. `allow` must
+  be absent or empty outside `allowlist`, so a stale list cannot look
+  authoritative while another policy silently ignores it.
+
+The same effective policy applies to `check`, `build`, `run`, and `test`; the
+eventual `pycc test` compilation path cannot bypass the project's dependency
+policy. A CLI `--interop-policy` overrides the project setting; `--pure` is
+rejected as an invalid invocation when combined with any explicit
+`--interop-policy` rather than relying on argument order.
 
 ## Exit codes
 

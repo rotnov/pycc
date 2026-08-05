@@ -14,6 +14,23 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 | 6. Corpus (OSS projects) | nightly CI | real code compiles and its own test suite passes |
 | 7. Benchmarks | `benches/` + pyperformance subset | compiler speed + generated-code speed |
 
+The focused D-094 release regression in `pycc_codegen` observes the same
+production codegen helper immediately before object emission. Debug codegen
+reports no applied pass pipeline and retains both a used and an unused runtime
+declaration; release codegen reports the exact `default<O3>` pipeline, retains
+the used declaration, and removes the unused one. This distinguishes a real
+pass-pipeline run from the aggressive target-machine setting alone; differing
+object bytes are not sufficient evidence that `Module::run_passes` executed.
+
+Issue #242's permanent regression source lives at
+`tests/regress/issue_242.py` and is executed through the public `pycc build`
+path by `tests/slice1_codegen_depth.rs`. Companion controls cover both
+function-local and module-global `None` assignment slots, the independent
+`set.add()` result route, and a module-global read before assignment that must
+trap rather than treating the canonical zero carrier as initialized. The
+existing D-072 should-panic unit test remains the negative control that
+`print()` itself is still rejected as a nested expression.
+
 ## Conformance harness (`pycc_testkit`)
 
 - Each test = single `.py` file, header comment: PEP, category, min pycc milestone.
@@ -28,7 +45,11 @@ Testing *is* the spec enforcement mechanism: [PYTHON_STANDARDS.md](./PYTHON_STAN
 - A PEP flips to ✅ in PYTHON_STANDARDS.md **only** when green on all Tier-1 targets in both profiles. The matrix file is updated by CI, not by hand.
 - **v0.1 exception:** `--release`/LTO doesn't exist until v0.2 (see ROADMAP.md), so the "both profiles" rule only binds from v0.2 on. Every v0.1 PEP/feature flips to ✅ on `--debug` alone; nothing in v0.1 is held to a `--release` bar that has nothing to build against (see DELIVERY_PLAN.md, "Debug/release conformance").
 
-**PR-9 status (2026-07-30):** the `pycc_testkit` crate above remains unbuilt — D-102 extended the existing flat `tests/conformance.rs` integration test in place instead (11 fixtures now: the 2 pre-existing plus 9 new PEP fixtures), judging that PR-9's own needs (compile both profiles, run, diff against CPython) were still fully covered by that file's existing helper and didn't justify a new workspace crate. The "matrix file is updated by CI, not by hand" policy above has no automation behind it yet (verified: nothing currently writes `PYTHON_STANDARDS.md`'s status column); D-102's accepted interim policy is to flip a row by hand only once its fixture is observed green on a real, already-completed CI run across all 5 Tier-1 targets in both profiles — never speculatively. Building the real `pycc_testkit` crate and CI-owned status automation both remain deferred to whenever the v1.0-scale, multi-language-level harness this section describes is actually needed.
+**PR-9 status (2026-07-30):** the `pycc_testkit` crate above remains unbuilt — D-102 extended the existing flat `tests/conformance.rs` integration test in place instead (11 fixtures at the time: the 2 pre-existing plus 9 new PEP fixtures), judging that PR-9's own needs (compile both profiles, run, diff against CPython) were still fully covered by that file's existing helper and didn't justify a new workspace crate. The "matrix file is updated by CI, not by hand" policy above has no automation behind it yet (verified: nothing currently writes `PYTHON_STANDARDS.md`'s status column); D-102's accepted interim policy is to flip a row by hand only once its fixture is observed green on a real, already-completed CI run across all 5 Tier-1 targets in both profiles — never speculatively. Building the real `pycc_testkit` crate and CI-owned status automation both remain deferred to whenever the v1.0-scale, multi-language-level harness this section describes is actually needed.
+
+**PR-10 status (2026-07-31):** one more fixture added the same way (12 total now) — `pep_0585_builtin_generics_matches_cpython_3_14_6_byte_for_byte`, exercising `list[int]`'s literal/`.append()`/indexing/`len()`/iteration slice through the same `run_conformance_fixture_with_profile` helper D-102 established; no change to this section's harness shape. This branch's CI ([run 30608030517](https://github.com/rotnov/pycc/actions/runs/30608030517)) has since observed the new fixture passing on all 5 Tier-1 targets, in both profiles — per the same D-102 policy `PYTHON_STANDARDS.md`'s PEP 585 row is flipped to `✅` on that evidence (see `ROADMAP.md`'s v0.2 section and `DELIVERY_PLAN.md`'s PR-10 row).
+
+**PR-13 Task 5 status (2026-08-04):** two more fixtures added the same way (19 dual-profile `*_matches_cpython_3_14_6_byte_for_byte` tests in `tests/conformance.rs` now) — `pep_0695_generics_matches_cpython_3_14_6_byte_for_byte` (a one-type-parameter generic function called at 3 sites across `int` and `str`, exercising call-site monomorphization) and `pep_0613_typealias_matches_cpython_3_14_6_byte_for_byte` (a legacy `X: TypeAlias = int` alias used as a parameter/return annotation). Both fixtures live flat at `tests/fixtures/` — the brief's literal `py312/`/`py310/` subdirectory paths do not exist anywhere in this repo and were not created; every existing PEP-numbered fixture is flat, and these two follow that real convention instead (see `docs/PYTHON_STANDARDS.md`'s PEP 695/613 rows, corrected in this same patch to the real flat paths). The `pep_0613_typealias.py` fixture deliberately omits `from typing import TypeAlias`: pycc has no `Stmt::Import`/`Stmt::ImportFrom` support at all (confirmed by compiling the import against this exact fixture — `error[C0001]: statement kind not supported yet`), and the pinned CPython 3.14.6 oracle defers annotation evaluation by default (PEP 649/749), so the bare `TypeAlias` name is never evaluated at runtime on either side; both fixtures were verified locally in both `--debug` and `--release` against the pinned oracle and pass byte-for-byte. Per D-102's "never speculatively" policy, `PYTHON_STANDARDS.md`'s PEP 695 and PEP 613 rows stay `☐` in this patch — flipping them to `✅` requires this branch's own CI run observed green on all 5 Tier-1 targets in both profiles, which does not exist yet; that flip (with the run-URL citation, matching PR-10's own row-flip format above) is deferred to this PR's final docs sweep once real CI evidence exists.
 
 The current frontend also keeps focused differential sources under
 `tests/diagnostics/` when CPython's runtime behavior defines why strict pycc
@@ -50,6 +71,46 @@ Tiers and gates in PYTHON_STANDARDS.md § Real-world corpus. Mechanics:
 - Per-project dashboard: % files compiled, % tests passed, RC-elision rate, binary size, speed vs CPython on the project's own benchmarks.
 - Regression vs previous release = release blocker.
 
+## Planned CPython interop matrix (v0.7)
+
+D-128's transparent interop contract is not implemented by the current
+compiler. The v0.7 implementation cannot mark its roadmap acceptance complete
+until all of the following run on every Tier-1 target:
+
+- unchanged source fixtures containing both `import numpy as np` and
+  `from numpy import array` build and run under the default `auto` policy
+  without a separately installed Python;
+- the produced `pycc.lock` and deployment bundle select the exact intended
+  CPython, package, and native-library artifacts and never consult ambient
+  `site-packages` at runtime;
+- `allowlist` accepts an allowed direct import root, covers its submodules and
+  pinned transitive closure, and emits `I0402` for an otherwise-resolvable
+  unlisted direct root;
+- CLI policy precedence covers every usable branch: explicit `auto` and
+  `deny` each override the other and a configured `allowlist`; explicit
+  `allowlist` with its configured roots accepts an allowed root and emits
+  `I0402` for an unlisted root. A CLI switch *to* `allowlist` from configured
+  `auto` or `deny` has no permitted stored roots because non-empty `allow` is
+  invalid under those policies, so it deterministically rejects every
+  CPython-backed direct root with `I0402` rather than borrowing a stale list;
+- `check`, `build`, `run`, and the eventual `test` compilation path apply the
+  same effective policy and select the same success or policy diagnostic for
+  an equivalent import graph;
+- invalid policy enum values, a non-empty `[interop].allow` outside
+  `allowlist`, and every `--pure` plus explicit `--interop-policy`
+  combination fail as bad invocations (exit 2) instead of depending on
+  argument order or silently ignoring stale configuration;
+- `deny` and its `--pure` shorthand both reject the same CPython-backed fixture,
+  while a native pycc import remains accepted and a successful pure artifact
+  has no CPython/libpython dependency; and
+- the boundary benchmark publishes copied scalar/container marshalling and
+  supported zero-copy buffer transfers separately, so compatibility does not
+  hide the cost model.
+
+Each negative case requires both human and versioned JSON diagnostic snapshots.
+The automatic and allowlist cases must also exercise target-specific native
+package artifacts rather than passing only with a pure-Python stand-in.
+
 ## The bot
 
 GitHub Action (`corpus-bot`):
@@ -63,6 +124,17 @@ GitHub Action (`corpus-bot`):
 
 - Compiler: `pycc check` LOC/s, cold + incremental build times; tracked per-commit (criterion + CI history), >2% regression fails PR.
 - Generated code: pyperformance subset + fib/nbody/spectral-norm vs CPython 3.14, Nuitka, Codon, mypyc; published table per release. Honesty rule: publish losses too.
+
+D-129 completes D-126's evidence phase with five observations from every Tier-1
+leg. Each of the five `--release` pycc launches and five pinned-CPython launches
+still records both elapsed wall-clock time and CPU time consumed by that exact
+child process. Unix obtains per-child usage from `wait4`; Windows reads the
+waited process handle through `GetProcessTimes`. CPU-time variance was not
+consistently better: it was effectively identical on the motivating Ubuntu
+x86_64 leg and 44.2% worse on Windows. The median wall-clock ratio therefore
+continues to enforce the existing 20x/12x/15x/18x target-specific floors, while
+the CPU-time ratio and all four medians remain non-gating telemetry written on
+both passes and failures.
 
 ## Roadmap acceptance evidence
 
@@ -309,10 +381,22 @@ blocking aggregate without result selection, closing #109 (2026-07-26): a
 changed-input `>2%` failure is a real, validated gate result, not
 presumptively known-noise.
 
+**Update (2026-08-03, D-114):** the `>2%` threshold described throughout
+this section's own history is no longer the live value — `frontend-perf-gate`
+now requires `>7.0%` before failing, raised via a corrected six-round D-103
+propose/activate sequence to accommodate v0.2 PR-10's real, one-time
+`Ty`-migration cost (D-109), not runner noise. Every historical `2%`
+reference above still accurately describes what that specific decision
+changed at the time; only the currently-active threshold has moved.
+`REVIEWED_PERF_CI_WORKFLOW_SHA256S` now coexists `[D100, D112, D114]`;
+`.github/workflows/ci.yml` matches D-114's shape. Issue #296 tracks
+lowering the threshold back toward 2.0% once this one-time cost is
+absorbed into every future baseline.
+
 The byte-exact activation retired the D-048 workflow digest and fixture. No
 administrative bootstrap is required because each run of the active workflow
-(D-112, formerly D-100) uses D-062's embedded contract to measure both sides
-of its own comparison. D-054's one-shot
+(D-114, formerly D-112, formerly D-100) uses D-062's embedded contract to
+measure both sides of its own comparison. D-054's one-shot
 staging recovery is historical audit
 evidence only; normal `audit` plus `ci-gate` protection was restored before this
 activation branch was created and is not encoded in repository configuration.
@@ -365,8 +449,10 @@ lock entries, the root-local non-git fallback, a configuration edit observed
 before its replacement, a generated script changed between snapshots, a vendor entry
 inserted between initial validation and removal, an ancestor relocated and replaced
 with a symlink after snapshots, and successful deepest-first removal of a nested vendor
-tree without touching an unrelated sibling. Windows-only junction and native 8.3
-short-path regressions cover reparse redirection and lexical aliasing. Platform-neutral
+tree without touching an unrelated sibling. The Windows-only junction regression
+proves that reparse redirection blocks both smoke execution and disable deletion
+before either can touch the external tree; the native 8.3 short-path regression
+covers lexical aliasing. Platform-neutral
 mount simulations prove that neither a
 mounted configuration ancestor nor a mounted generated-hook ancestor can redirect
 writes or deletion outside the worktree. The raw `--root` CLI argument itself is
@@ -602,6 +688,124 @@ check they had no way to satisfy. Removing either required check, disabling
 strict mode, accepting an `audit` context from another app, or dropping a
 job from `ci-gate`'s `needs:` list is a policy regression; all later policy
 changes are evaluated by the trusted checker from their base revision.
+
+## CI temporary-bypass lifecycle (D-125)
+
+`scripts/test_manage_ci_bypass.py` covers `scripts/manage_ci_bypass.py`'s
+`status`/`relax`/`restore`/`restore_to_baseline` lifecycle at 100% line
+coverage, run via `python3 -m coverage run -m pytest
+test_manage_ci_bypass.py` from `scripts/`. Every `CiBypassError`-raising
+branch has a dedicated test: a `gh` failure, an already-open `[ci-bypass]`
+incident (refuses to stack), a check that isn't currently failing or isn't
+a required check, a missing or unreadable `--evidence` file, an unparseable
+snapshot or Expiry timestamp, a `gh issue create` whose output has no
+parseable issue number, drift after `restore` or `restore_to_baseline`, and
+`restore`'s CLI wiring rejecting `--incident`/`--to-baseline` given together
+or neither given with no prior `state.json` to fall back to.
+
+`status()` compares the normalized full 7-field protection snapshot against
+`BASELINE_PROTECTION`, not just the required-checks list, so DRIFT tests
+cover both a `required_status_checks`-only mismatch and a mismatch confined
+to another field (e.g. `enforce_admins`). A realistic GitHub review-protection
+fixture includes the response-only `url` field and proves that metadata is
+absent from status, incident, and restore/readback snapshots, while one
+parameterized regression changes each of the four effective review-policy
+fields and proves every change still reports DRIFT. Additional regressions
+prove that an effective or unclassified extra field is preserved and reports
+DRIFT rather than being mistaken for metadata. A separate test preserves `None`
+when pull-request reviews are disabled, and legacy-incident regressions prove
+that snapshots already persisted with `url` still explain live drift and
+restore cleanly through the normalized readback. Separately, `status()` also
+detects a `[ci-bypass]` incident that is open past its own recorded expiry
+with no restore recorded -- DRIFT even when protection itself currently
+matches baseline -- and the combined case where both conditions hold at
+once; an incident whose body has no parseable Expiry line is skipped rather
+than crashing the check. `status()` also recognizes when the observed drift
+is fully explained by a currently open, unexpired incident's own recorded
+pre-relax snapshot and relaxed check (an in-progress relaxation, reported
+`ok`, not release-blocking DRIFT) -- with dedicated tests for the case where
+an open incident does *not* explain the observed drift (must still report
+DRIFT, never blanket-suppressed just because an incident happens to be
+open) and where the incident's body has no parseable snapshot or "Check
+relaxed" line (skipped, not crashed). Two more tests isolate the exact
+mutants an independent review found surviving an earlier version of this
+suite: one where `contexts` matches the incident's prediction exactly but
+`enforce_admins` also drifted (must still report DRIFT, proving the
+comparison is the full dict, not just `contexts`), and one where the
+incident names the wrong check (`ci-gate` named as relaxed while `audit`
+is the one actually missing -- must still report DRIFT, proving
+`check_name` itself is what's compared, not merely presence/absence of
+any context).
+
+Authenticating an incident's author matters differently depending on what
+trusting the wrong one would cause, and the tests are organized around
+that split. `status()`'s live-incident branch is the one place a forged
+issue's content could *suppress* a safety signal (blind the only automated
+DRIFT detector, indefinitely, using only `BASELINE_PROTECTION` -- a public
+literal in this file -- and a far-future Expiry), so it requires the
+issue's author to match `get_authenticated_login()` before an incident may
+suppress DRIFT; a dedicated regression test reproduces that exact exploit
+(same check, same snapshot, unexpired, but authored by `"attacker"`) and
+asserts DRIFT is still reported, plus a test that the lookup is cached
+(one `gh api user` call even across multiple open issues in the loop).
+`find_open_bypass_issue`'s and `restore_to_baseline`'s stacking guards are
+deliberately left unauthenticated -- a forged issue there only makes the
+tool refuse and escalate to a human, the correct fail-closed outcome, not
+a suppression risk.
+
+`relax()` refuses `ci-gate` before making any `gh` call at all -- it
+reflects the candidate's own build/test/coverage result, never external
+repository state, and the skill's documented exclusion is enforced here in
+code, not left to prose alone.
+
+`create_incident_issue()` refuses to create an issue whenever its fully
+assembled body contains this mechanism's own snapshot-marker text more
+than once -- `parse_snapshot_from_body` reads the *first* occurrence of
+the marker, and the function's own genuine marker is always last, so
+marker-shaped text in `--evidence` (influenced by CI failure text, which
+can itself be influenced by a PR's own content) or in `--reason` (which
+also lands directly in the issue title) would otherwise be parsed as
+authoritative on a later `restore`, even inside an issue that is correctly
+titled and authored. Checking the assembled body once catches both fields
+-- and any field added later -- rather than enumerating them individually;
+dedicated tests inject the marker through each field separately and prove
+`relax()` refuses before ever calling `gh issue create`.
+
+`restore()`'s `get_incident_body()` only trusts an incident's embedded
+snapshot when the issue's title starts with `[ci-bypass]` *and* its author
+matches the currently authenticated `gh` actor (`get_authenticated_login()`)
+-- closing the gap where a public issue forging both the title and the
+`<!-- ci-bypass-snapshot -->` marker, opened by anyone else, could otherwise
+have its snapshot applied to branch protection by a later `restore
+--incident`. Both rejections (title, author) have dedicated tests, including
+one proving the author check is never reached when the title check already
+failed, one proving no `PATCH`/comment/close call happens on an author
+mismatch, and one proving a `null` GitHub `author` (e.g. a deleted account)
+fails closed as `CiBypassError` rather than an uncaught `TypeError`.
+
+`restore()` itself adds two more predicates as defense in depth beyond that
+check, for a body that was edited after creation or an incident that
+predates it: the snapshot's `contexts` must equal `BASELINE_CONTEXTS`
+*exactly*, and `strict` must be `true`. An earlier version of the first
+predicate only required `NEVER_RELAXABLE_CHECKS` to be a subset of
+`contexts` -- which a snapshot dropping `audit` while keeping `ci-gate`
+present would still have passed, permanently un-requiring `audit` (the
+`pull_request_target` trust anchor `AGENTS.md` calls "never permanently
+remove or downgrade") while `restore` reported success. Three dedicated
+tests cover this predicate: dropping `ci-gate`, dropping `audit` while
+keeping `ci-gate` (the exact regression case above), and adding an extra
+context beyond baseline (which would permanently wedge every future PR on
+a check that can never report). A fourth test covers `strict != true`
+alone. Each proves no `PATCH`/comment/close call happens on rejection.
+
+`relax()`'s TOCTOU re-check -- `find_open_bypass_issue` called once before
+any work starts and again immediately before the mutating `PATCH`, narrowing
+(not eliminating) the window where a concurrent session's relax could stack
+underneath this one -- has its own test: the first call reports no open
+incident, the second reports a different one that appeared in between, and
+`relax()` must abort before the `PATCH` with the other incident's number and
+a manual-cleanup pointer to the incident it already created, without ever
+calling `patch_required_status_checks` or writing `state.json`.
 
 ## Code coverage (D-014)
 

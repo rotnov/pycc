@@ -1,7 +1,7 @@
 use pycc_ast::{CmpOp, ElifElseClause, Expr, ModModule, Number, Operator, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
     Int,
     Float,
@@ -9,17 +9,85 @@ pub enum Ty {
     Str,
     None,
     Infer,
+    /// A generic function's own type parameter (PEP 695, D-133), e.g. the `T`
+    /// in `def f[T](x: T) -> T`. Distinct from `Ty::Infer`: this is resolved by
+    /// call-site substitution (D-134), not by unification, and must never
+    /// reach `pycc_mir` unsubstituted (same invariant `Ty::Infer` already
+    /// holds, see the assertion near this enum's other pre-MIR checks).
+    /// Boxed as `Box<String>`, not `Box<str>`: `str` is unsized, so
+    /// `Box<str>` is itself a fat (16-byte, data-ptr + length) pointer,
+    /// which measured `size_of::<Ty>() == 24` here -- it broke the
+    /// niche-filling layout uniformity the other thin-pointer variants
+    /// rely on (see `Tuple`'s doc comment above for the same phenomenon
+    /// with `Box<[Ty]>` vs `Box<Vec<Ty>>`). `Box<String>` is a single
+    /// (8-byte) thin pointer to a further heap-indirected `String` --
+    /// confirmed by measurement to restore `size_of::<Ty>() == 16`,
+    /// matching `Tuple`'s `Box<Vec<Ty>>` shape. (D-133's ADR text says
+    /// `Box<str>`; this is a deliberate, measurement-driven deviation --
+    /// `Box<str>` does not in fact keep `Ty` at the D-109 ceiling.)
+    Param(Box<String>),
+    /// `list[T]`. Type-checking is planned to accept any scalar `T`; only
+    /// `T = Ty::Int` gets real codegen in v0.2 (D-105). Codegen rejecting
+    /// every other element type before it becomes an unhandled codegen
+    /// case is planned via a `pycc_types` diagnostic (`T0034`, per D-105 --
+    /// not yet implemented as of this commit; this variant only defines
+    /// the type representation).
+    List(Box<Ty>),
+    /// `dict[K, V]`. No v0.2 code path constructs this yet (PR-11's own
+    /// scope per `docs/DELIVERY_PLAN.md`) -- the variant exists now only
+    /// because D-089 decided `Ty`'s full recursive shape up front, so
+    /// every later PR's match arms are additive, not migratory again.
+    /// The key/value pair is boxed together as a single pointer (D-109):
+    /// this variant was not itself the dominant contributor to `Ty`'s
+    /// pre-fix 24-byte size (`Tuple(Vec<Ty>)` was), but once `Tuple`
+    /// shrinks to a single 8-byte pointer too, `Dict`'s original
+    /// two-separate-`Box<Ty>` shape (16 bytes) would become the new
+    /// ceiling -- boxing it avoids that, not because `dict[K,V]` needs
+    /// its own codegen yet.
+    Dict(Box<(Ty, Ty)>),
+    /// `set[T]`. Same status as `Dict` above -- PR-11's own scope.
+    Set(Box<Ty>),
+    /// `tuple[A, B, ...]`. Same status as `Dict` above -- PR-11's own
+    /// scope. Boxed (D-109) as `Box<Vec<Ty>>` -- a second indirection: a
+    /// thin (8-byte) pointer to a heap-allocated `Vec<Ty>` -- not as
+    /// `Box<[Ty]>` (a 16-byte fat pointer: data ptr + length), which was
+    /// tried first and measured `size_of::<Ty>() == 24`, no reduction at
+    /// all from the pre-fix size (confirmed independently in-crate and
+    /// via a standalone `rustc` reproduction). `Box<Vec<Ty>>` measured
+    /// `size_of::<Ty>() == 16` instead (`align_of::<Ty>()` stayed `8` in
+    /// every configuration measured). The most plausible explanation is
+    /// that rustc's niche-filling enum-layout optimization (the trick
+    /// behind `size_of::<Option<Box<T>>>() == size_of::<Box<T>>()`) needs
+    /// every dataful variant to share a uniform pointer shape to collapse
+    /// the discriminant for free -- `Box<[Ty]>`'s fat pointer broke that
+    /// uniformity against `List`/`Dict`/`Set`'s thin ones, `Box<Vec<Ty>>`
+    /// restores it -- but this project has not independently re-derived
+    /// rustc's exact layout algorithm against every configuration (in
+    /// particular, the pre-fix shape already had non-uniform dataful
+    /// variant sizes yet still measured 24, not the 32 bytes a naive
+    /// "tag plus largest payload" rule would predict). Treat the measured
+    /// numbers above as the authoritative facts and this paragraph's
+    /// mechanism as a plausible, not proven, explanation.
+    Tuple(Box<Vec<Ty>>),
 }
 
 impl Ty {
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
-            Ty::Int => "int",
-            Ty::Float => "float",
-            Ty::Bool => "bool",
-            Ty::Str => "str",
-            Ty::None => "None",
-            Ty::Infer => "<inferred>",
+            Ty::Int => "int".to_string(),
+            Ty::Float => "float".to_string(),
+            Ty::Bool => "bool".to_string(),
+            Ty::Str => "str".to_string(),
+            Ty::None => "None".to_string(),
+            Ty::Infer => "<inferred>".to_string(),
+            Ty::Param(name) => name.to_string(),
+            Ty::List(elem) => format!("list[{}]", elem.name()),
+            Ty::Dict(kv) => format!("dict[{}, {}]", kv.0.name(), kv.1.name()),
+            Ty::Set(elem) => format!("set[{}]", elem.name()),
+            Ty::Tuple(elems) => format!(
+                "tuple[{}]",
+                elems.iter().map(Ty::name).collect::<Vec<_>>().join(", ")
+            ),
         }
     }
 }
@@ -67,12 +135,184 @@ pub enum HirExpr {
         right: Box<HirExpr>,
     },
     FString(Vec<FStringPart>),
+    /// `[e1, e2, ...]`. Element homogeneity is `pycc_types`' job, not this
+    /// lowering step's -- HIR only records the syntactic shape (D-105).
+    ListLiteral(Vec<HirExpr>),
+    /// `base[index]`, a read (Load position). `Stmt::Assign`'s own target
+    /// handling below special-cases an `Expr::Subscript` target on a bare
+    /// name into a dedicated `HirStmt::DictSet` node instead of ever
+    /// constructing this variant for it (PR-11 Task 3, D-123 -- `list[int]`
+    /// itself is still read-only-indexed, D-105, but that is now
+    /// `pycc_types`' judgment on `HirStmt::DictSet`'s base type, not a
+    /// structural HIR-shape restriction), and every other assignment/for
+    /// target (`Stmt::AnnAssign`, `Stmt::For`) still rejects a non-bare-name
+    /// target before ever calling `lower_expr` on it. So a `Subscript` node
+    /// still reaches this arm only in a value (Load) position; no separate
+    /// `ExprContext` check is needed to enforce that here.
+    Subscript {
+        base: Box<HirExpr>,
+        index: Box<HirExpr>,
+    },
+    /// `base[start:stop:step]` (PR-12, D-118). Each bound is independently
+    /// optional, matching Python's own slice grammar (`xs[:3]`, `xs[2:]`,
+    /// `xs[:]`, `xs[::2]` all parse). Unlike `Subscript`'s `index` (a plain
+    /// `HirExpr`), each bound here is an `Option<Box<HirExpr>>` -- an
+    /// omitted bound has no source expression to lower at all, and
+    /// defaulting it to a literal `0`/some sentinel here would be
+    /// incorrect: `stop`'s default is `len(base)`, which needs `base`'s own
+    /// already-lowered value to compute, not a value knowable at this
+    /// lowering step in isolation. `pycc_types`/`pycc_mir`/`pycc_codegen`
+    /// each apply the actual default at the point they have enough context
+    /// to do so correctly.
+    ///
+    /// Like `Subscript` above, this variant is only ever constructed in
+    /// Load (value) position. A slice **assignment target**
+    /// (`xs[1:3] = value`) never reaches it: `Stmt::Assign`'s own
+    /// `Expr::Subscript` target arm (see that arm's own handling below)
+    /// calls `lower_expr(&sub.slice)` directly on the bare `Expr::Slice`
+    /// node, and `lower_expr`'s outer match has no top-level arm for
+    /// `Expr::Slice` (only the nested one inside this file's own
+    /// `Expr::Subscript` value-position arm) -- so it falls through to the
+    /// generic "expression kind not supported yet" `C0001` catch-all,
+    /// unchanged by this task. This is intentional, not an oversight: D-118
+    /// scopes this PR's slicing support to reads only.
+    Slice {
+        base: Box<HirExpr>,
+        start: Option<Box<HirExpr>>,
+        stop: Option<Box<HirExpr>>,
+        step: Option<Box<HirExpr>>,
+    },
+    /// `list.append(value)`, recognized as a single dedicated node rather
+    /// than through any general method-call mechanism (D-105). Unlike
+    /// `Subscript` above, this arm is *not* structurally restricted to any
+    /// particular position -- because `ListAppend` is an `HirExpr` (not a
+    /// statement-only form), it currently lowers successfully anywhere an
+    /// expression is accepted, e.g. `y = x.append(2)` or
+    /// `print(x.append(1))`, even though real Python's `list.append()`
+    /// always returns `None` there and a value-producing use is
+    /// meaningless. This lowering step deliberately does not judge that
+    /// (see `list_append_used_as_a_value_lowers_successfully_today` below,
+    /// which locks in today's actual behavior). `pycc_types` doesn't reject
+    /// it either -- it type-checks `y = x.append(2)` as binding `y: None`,
+    /// same as any other `None`-typed value. `print(x.append(1))` runs and
+    /// prints `None`, matching CPython. D-131 also gives
+    /// `y = x.append(2)` ordinary canonical `None` assignment storage, so
+    /// both the side effect and the stored unit value are preserved. D-072
+    /// remains narrower: it rejects using `print()` itself as a nested
+    /// expression, not materializable `None` results such as `.append()`.
+    ListAppend {
+        list: String,
+        value: Box<HirExpr>,
+    },
+    /// `{k1: v1, k2: v2, ...}`. Key/value homogeneity and the `dict[str,
+    /// int]`-only codegen gate are `pycc_types`' job, not this lowering
+    /// step's -- HIR only records the syntactic shape (mirrors
+    /// `ListLiteral`, PR-11 Task 3). A dict-unpacking entry (`{**other}`,
+    /// `DictItem.key == None` in the upstream grammar) is rejected as
+    /// unsupported at lowering time (see `lower_expr`'s `Expr::Dict` arm)
+    /// rather than represented here, since this variant has no shape for
+    /// it.
+    DictLiteral(Vec<(HirExpr, HirExpr)>),
+    /// `{e1, e2, ...}`. Element homogeneity and the `set[int]`-only codegen
+    /// gate are `pycc_types`' job, not this lowering step's -- HIR only
+    /// records the syntactic shape (mirrors `ListLiteral`/`DictLiteral`
+    /// exactly, PR-11 Task 7). Unlike `Expr::Dict`'s `DictItem`, upstream's
+    /// `ExprSet` has no unpacking hole in its `elts: Vec<Expr>` shape, so
+    /// there is no analogous rejection arm to write. Python also has no
+    /// empty-set literal syntax at all (`{}` always parses as `Expr::Dict`,
+    /// the grammar's own ambiguity resolution) -- so an empty
+    /// `SetLiteral` can only ever be constructed by hand-built HIR (e.g. a
+    /// `pycc_types` unit test), never by `lower_expr` itself.
+    SetLiteral(Vec<HirExpr>),
+    /// `(e1, e2, ...)`. Element *heterogeneity* is deliberately allowed at
+    /// this HIR layer -- unlike `ListLiteral`/`SetLiteral`, a tuple's whole
+    /// point is mixing element types (D-116). `pycc_types` still gates which
+    /// element *types* are accepted (int/bool/float only, T0039) and which
+    /// index forms are readable (literal in-range only, T0040); this
+    /// variant only records the syntactic shape.
+    ///
+    /// Only a parenthesized/bare tuple literal (`(1, 2)`, `1, 2`) lowers to
+    /// this form. Tuple-unpacking assignment (`a, b = t`) is a distinct,
+    /// deferred capability (D-116) with no HIR shape of its own yet.
+    TupleLiteral(Vec<HirExpr>),
+    /// `list.pop()` (PR-12, D-119): a hand-recognized special form, mirroring
+    /// `ListAppend`'s own shape exactly (no general method-call dispatch).
+    /// No-argument form only -- removes and returns the list's last element,
+    /// panicking at runtime if the list is empty (honest-panic convention,
+    /// D-119). Unlike `ListAppend`, whose value is always `None`, this
+    /// variant's own value is the list's element type -- `y = xs.pop()` is
+    /// its primary intended use, not merely a today's-actual-behavior
+    /// curiosity. A bare `xs.pop()` `ExprStmt` discarding the popped value is
+    /// also fine and matches CPython. `pycc_types` gates the base value's
+    /// type (`T0033`); MIR lowering and real runtime behavior are a later
+    /// task's job (D-119 point 2 of the delivery split).
+    ///
+    /// One pre-existing, tracked caveat this variant newly reaches (not
+    /// introduced or fixed by this task): `pycc_types`' constraint solver
+    /// gives this expression no unification term (`Ok(None)`, mirroring
+    /// every container-literal expression, per D-116's own correction), so
+    /// once any function in a module is unannotated, assigning `y =
+    /// xs.pop()` inside that solver-checked function's body never registers
+    /// a binding for `y` -- a later read of `y` in the same function then
+    /// fails with a misleading "not bound before this use" instead of the
+    /// expected type. This is not a novel gap: `HirExpr::Subscript`'s own
+    /// `collect_expr_constraints` arm (predates D-116/D-119, see commit
+    /// `0930903`) already returns `Ok(None)` the same way, so a scalar-typed
+    /// expression (`xs[0]`) already reached this exact gap long before this
+    /// task. `.pop()` is simply another instance of the same pre-existing
+    /// class, not a new or different failure mode.
+    ListPop {
+        list: String,
+    },
+    /// `dict.get(key, default)` (PR-12, D-119): exactly two arguments --
+    /// returns `default` if `key` is absent from the dict, else the stored
+    /// value. Mirrors `ListAppend`'s hand-recognized shape structurally, but
+    /// -- like `ListPop` above -- is value-producing (the dict's value
+    /// type), not `None`-producing. The zero/one-argument form CPython also
+    /// supports (returning `None` on a missing key) is deliberately not
+    /// shipped: this compiler has no `Optional[int]`/`None`-union
+    /// representation for a `dict[str, int]`'s value type, so requiring the
+    /// caller to always supply a same-typed default sidesteps that gap
+    /// entirely rather than half-solving it. Shares `ListPop`'s own
+    /// pre-existing D-116 solver-binding caveat above verbatim (also
+    /// `Ok(None)` in the solver, also scalar-valued).
+    DictGetOrDefault {
+        dict: String,
+        key: Box<HirExpr>,
+        default: Box<HirExpr>,
+    },
+    /// `set.add(value)` (PR-12, D-119): mirrors `ListAppend`'s shape and
+    /// `None`-producing behavior exactly. D-131 gives `y = s.add(1)` the
+    /// same canonical `None` assignment storage as `.append()`; D-072's
+    /// remaining nested-expression rejection is specific to `print()`'s
+    /// own result. Insertion deduplicates exactly like set-literal
+    /// construction already does (`pycc_rt_int_set_add`, already shipped by
+    /// PR-11a), from a second, user-facing call site added by a later task.
+    SetAdd {
+        set: String,
+        value: Box<HirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FStringPart {
     Literal(String),
     Interpolation(Box<HirExpr>),
+}
+
+/// A comprehension's iterable source (PR-12, D-117): reuses
+/// `HirStmt::ForList`'s own iterable polymorphism verbatim (a bare name is
+/// resolved to `Ty::List`/`Ty::Dict`/`Ty::Set` downstream by
+/// `pycc_types`/`pycc_mir`, exactly like a plain `for` loop) rather than
+/// inventing a narrower, comprehension-specific iterable gate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompIter {
+    Range {
+        start: HirExpr,
+        stop: HirExpr,
+        step: HirExpr,
+    },
+    Name(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +343,75 @@ pub enum HirStmt {
         step: HirExpr,
         body: Vec<HirStmt>,
     },
+    /// `for var in list:`, parallel to the existing `ForRange` -- desugars
+    /// to an index-counted loop starting in a later PR-10 task (D-105),
+    /// not here. Also reused, unconditionally, for `for k in <bare-name
+    /// dict>:` (PR-11 Task 3, D-123: iterates keys in insertion order) --
+    /// this lowering step has no type information to distinguish a
+    /// `list`-typed iterable from a `dict`-typed one, so `pycc_types`'
+    /// own `ForList` arms resolve `list`'s real type to `Ty::List`,
+    /// `Ty::Dict` (binding `var` as the key type), or reject it, not here.
+    ForList {
+        var: String,
+        list: String,
+        body: Vec<HirStmt>,
+    },
+    /// `<bare name>[key] = value`, PR-11 Task 3 (D-123 supersedes D-105's
+    /// "no subscript assignment target anywhere in this file" consequence
+    /// for `list[int]`; see `Stmt::Assign`'s own lowering arm below). `dict`
+    /// is carried as a plain variable name, exactly like `ForList`'s `list`
+    /// field and `ListAppend`'s `list` field -- this lowering step has no
+    /// type information, so a `list[int]` target also lowers to this node
+    /// today (`pycc_types` rejects it with `T0033`, mirroring how
+    /// `ForList`'s own `list` field is resolved to `Ty::List`, `Ty::Dict`,
+    /// or rejected downstream, not here).
+    DictSet {
+        dict: String,
+        key: HirExpr,
+        value: HirExpr,
+    },
+    /// `target = [elt for var in iter [if cond]]` (PR-12, D-117). Scoped to
+    /// exactly one `for` clause and at most one `if` filter; only lowered
+    /// when the comprehension is the direct RHS of a bare-name
+    /// `Stmt::Assign` (see that arm's own handling below) -- anywhere else
+    /// a comprehension expression appears, `lower_expr` has no arm for it
+    /// and it falls through to that function's existing generic
+    /// "expression kind not supported yet" catch-all. `var` is already the
+    /// D-117 synthesized internal name, not the source spelling -- every
+    /// occurrence of the source name inside `cond`/`elt` has already been
+    /// rewritten by `rename_name_in_expr` before this node is constructed,
+    /// so downstream crates never see the user's own loop-variable
+    /// spelling at all.
+    ListCompAssign {
+        target: String,
+        var: String,
+        iter: CompIter,
+        cond: Option<Box<HirExpr>>,
+        elt: Box<HirExpr>,
+    },
+    /// `target = {key: value for var in iter [if cond]}` (PR-12, D-117).
+    /// Mirrors `ListCompAssign` exactly except for the key/value split
+    /// (Python's dict-comprehension grammar has no direct list-comp analog
+    /// of a single `elt`).
+    DictCompAssign {
+        target: String,
+        var: String,
+        iter: CompIter,
+        cond: Option<Box<HirExpr>>,
+        key: Box<HirExpr>,
+        value: Box<HirExpr>,
+    },
+    /// `target = {elt for var in iter [if cond]}` (PR-12, D-117). Mirrors
+    /// `ListCompAssign` exactly -- a set comprehension's own shape is
+    /// identical to a list comprehension's, differing only in which
+    /// runtime constructor/insert pair `pycc_codegen` ends up calling.
+    SetCompAssign {
+        target: String,
+        var: String,
+        iter: CompIter,
+        cond: Option<Box<HirExpr>>,
+        elt: Box<HirExpr>,
+    },
     Return(Option<HirExpr>),
 }
 
@@ -117,27 +426,316 @@ pub enum HirItem {
     TopLevelStmt(HirStmt),
 }
 
+/// A compile-time-only import binding recorded by a module-level
+/// `import`/`from ... import ...` statement resolved against `pycc_std`'s
+/// registry (D-136/D-137). Mirrors `type_aliases`' side-table shape: an
+/// import has zero runtime footprint of its own (no `HirStmt`/`HirItem` is
+/// produced for it), it only makes a later name/attribute lookup resolve to
+/// a stdlib registry entry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportBinding {
+    /// `import math` -- binds `math` (or, for a dotted-but-single-segment
+    /// name, whatever `local_name` ends up being; D-137 rejects every
+    /// import shape other than a single bare recognized module name, so in
+    /// practice `local_name` always equals the resolved module's source
+    /// spelling) as a module namespace marker. `math` itself never carries
+    /// a `Ty` -- only `math.<attr>` attribute access on this bound name
+    /// resolves further, via `pycc_std::resolve_symbol`.
+    Module {
+        local_name: String,
+        module: pycc_std::StdModule,
+    },
+    /// `from math import sqrt` -- binds `sqrt` directly to the resolved
+    /// registry symbol, as if it were a fixed, non-inferred `Ty`/signature
+    /// (the alias table from PR-13 is the closest existing precedent).
+    Symbol {
+        local_name: String,
+        module: pycc_std::StdModule,
+        symbol: pycc_std::StdSymbol,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirModule {
     pub items: Vec<HirItem>,
+    /// Compile-time-only name-to-`Ty` bindings from a `type X = <expr>`
+    /// statement or a legacy `X: TypeAlias = <expr>` annotated assignment
+    /// (D-135). Populated in source order by `lower_checked` as it walks the
+    /// module body. Neither form lowers to any `HirItem`/`HirStmt` of its
+    /// own -- the alias has zero HIR/MIR/codegen/runtime footprint, and this
+    /// field exists purely so a later annotation naming the alias resolves
+    /// to the same `Ty` (see `annotation_to_ty`'s alias-table lookup).
+    pub type_aliases: Vec<(String, Ty)>,
+    /// Compile-time-only stdlib import bindings (D-136/D-137), populated in
+    /// source order by `lower_checked` exactly like `type_aliases`. Only a
+    /// module-level `import`/`from ... import ...` statement is recognized
+    /// here -- one nested inside a function body or any other block still
+    /// reaches plain `lower_stmt`, which has no arm for `Stmt::Import`/
+    /// `Stmt::ImportFrom` and falls through to the generic `C0001`
+    /// catch-all, exactly like every other statement kind this compiler
+    /// does not support inside a nested block.
+    pub imports: Vec<ImportBinding>,
 }
 
 /// Lowers a parsed module into the HIR subset implemented by this pycc
 /// version. Syntactically valid Python outside that subset returns `C0001`
 /// with the unsupported node's source span instead of panicking.
+///
+/// Type aliases (D-135) are resolved in a single left-to-right pass: a
+/// `type X = <expr>` or legacy `X: TypeAlias = <expr>` statement is
+/// evaluated and recorded into `aliases` as soon as it is reached, so it is
+/// visible to every later statement's annotations (including a later
+/// function's parameter/return annotations and later top-level
+/// `AnnAssign`s) but not to any earlier one -- matching this compiler's
+/// existing single-pass, source-order lowering model instead of
+/// introducing hoisting.
 pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
-    let items = module
-        .body
-        .iter()
-        .map(|stmt| match stmt {
-            Stmt::FunctionDef(def) => lower_function(def),
-            other => lower_stmt(other).map(HirItem::TopLevelStmt),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(HirModule { items })
+    let mut aliases: Vec<(String, Ty)> = Vec::new();
+    let mut imports: Vec<ImportBinding> = Vec::new();
+    let mut items = Vec::with_capacity(module.body.len());
+    for stmt in &module.body {
+        if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases)? {
+            aliases.push((name, ty));
+            continue;
+        }
+        if let Some((name, ty)) = lower_legacy_type_alias_ann_assign(stmt, &aliases)? {
+            aliases.push((name, ty));
+            continue;
+        }
+        if let Some(mut bound) = lower_import_stmt(stmt)? {
+            imports.append(&mut bound);
+            continue;
+        }
+        let item = match stmt {
+            Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
+            other => HirItem::TopLevelStmt(lower_stmt(other, &aliases)?),
+        };
+        items.push(item);
+    }
+    Ok(HirModule {
+        items,
+        type_aliases: aliases,
+        imports,
+    })
 }
 
-fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic> {
+/// Recognizes a module-level `Stmt::Import`/`Stmt::ImportFrom` and resolves
+/// it against `pycc_std`'s registry (D-136/D-137). Returns `Ok(None)` for
+/// any other statement kind, leaving it to the caller's own dispatch --
+/// mirroring `lower_type_alias_stmt`'s shape exactly.
+///
+/// D-137 is fail-closed: every recognized-but-out-of-scope shape (multiple
+/// names in one `import` statement, an `as` alias, a relative import, an
+/// unresolvable module) is `C0001`, the same generic "statement kind not
+/// supported yet" diagnostic this file already uses for every other
+/// unimplemented statement kind -- matching the plan's explicit instruction
+/// to reuse `C0001` rather than add a new code for "we recognize this is an
+/// import but don't support this particular shape." A recognized module
+/// with one unresolvable symbol inside an otherwise-valid `from math import
+/// ...` list is instead `C0002` (D-136's own decision text), distinguishing
+/// "we don't support this import shape at all" from "we support `math`,
+/// just not `math.<this-symbol>`" -- and it fails the whole statement, not
+/// a partial bind of the names that did resolve.
+fn lower_import_stmt(stmt: &Stmt) -> Result<Option<Vec<ImportBinding>>, Diagnostic> {
+    match stmt {
+        Stmt::Import(import) => {
+            let [alias] = import.names.as_slice() else {
+                return Err(unsupported(
+                    "only a single module per `import` statement is supported so far",
+                    import.range,
+                ));
+            };
+            if alias.asname.is_some() {
+                return Err(unsupported(
+                    "`import ... as ...` aliasing is not supported yet",
+                    import.range,
+                ));
+            }
+            let module_name = alias.name.as_str();
+            let Some(module) = pycc_std::resolve_module(module_name) else {
+                return Err(unsupported(
+                    format!("import of module `{module_name}` is not supported yet"),
+                    import.range,
+                ));
+            };
+            Ok(Some(vec![ImportBinding::Module {
+                local_name: module_name.to_string(),
+                module,
+            }]))
+        }
+        Stmt::ImportFrom(import) => {
+            if import.level != 0 {
+                return Err(unsupported(
+                    "a relative import (`from . import ...`) is not supported yet",
+                    import.range,
+                ));
+            }
+            // A `level == 0` `Stmt::ImportFrom` always carries a module name
+            // -- the only way to reach `module: None` is a relative import
+            // (`from . import x`, `from .. import x`, ...), which always
+            // has `level >= 1` and is already rejected above. Verified
+            // directly against the vendored parser: `from import x` (no
+            // dots, no module name) is a parse error (`L0001`, "Expected a
+            // module name"), so `lower_checked` never sees this shape at
+            // all, matching this file's existing precedent of verifying an
+            // "impossible" shape against the real parser rather than
+            // assuming it.
+            let module_name = import
+                .module
+                .as_ref()
+                .expect("a non-relative `from ... import ...` always names a module")
+                .as_str();
+            let Some(module) = pycc_std::resolve_module(module_name) else {
+                return Err(unsupported(
+                    format!("import of module `{module_name}` is not supported yet"),
+                    import.range,
+                ));
+            };
+            if import.names.is_empty()
+                || import.names.iter().any(|alias| alias.name.as_str() == "*")
+            {
+                return Err(unsupported(
+                    "`from ... import *` (wildcard import) is not supported yet",
+                    import.range,
+                ));
+            }
+            let mut bound = Vec::with_capacity(import.names.len());
+            for alias in &import.names {
+                if alias.asname.is_some() {
+                    return Err(unsupported(
+                        "`from ... import x as y` aliasing is not supported yet",
+                        import.range,
+                    ));
+                }
+                let symbol_name = alias.name.as_str();
+                let Some(symbol) = pycc_std::resolve_symbol(module, symbol_name) else {
+                    return Err(unresolved_symbol(
+                        format!(
+                            "module `{module_name}` has no importable symbol named `{symbol_name}`"
+                        ),
+                        import.range,
+                    ));
+                };
+                bound.push(ImportBinding::Symbol {
+                    local_name: symbol_name.to_string(),
+                    module,
+                    symbol,
+                });
+            }
+            Ok(Some(bound))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Recognizes a PEP 695 `type X = <expr>` statement and evaluates its RHS as
+/// a type expression, reusing `annotation_to_ty` (D-135) -- the same
+/// resolver used for parameter/return/variable annotations, since a type
+/// alias's RHS is syntactically just another type expression. Returns
+/// `Ok(None)` for any other statement kind, leaving it to the caller's own
+/// dispatch.
+///
+/// A generic alias (`type X[T] = ...`) is rejected with `T0042`, not the
+/// generic `unsupported`/`C0001` catch-all: D-134/D-135 explicitly scope a
+/// generic alias out of this PR, but -- unlike, say, `async def`, which is
+/// simply unrecognized syntax -- this shape *is* recognized and type-checked
+/// far enough to name precisely why it is rejected, the same reasoning
+/// `check_generic_function`'s own `T0042` diagnostics already use for a
+/// generic function's out-of-scope shapes.
+fn lower_type_alias_stmt(
+    stmt: &Stmt,
+    aliases: &[(String, Ty)],
+) -> Result<Option<(String, Ty)>, Diagnostic> {
+    let Stmt::TypeAlias(type_alias) = stmt else {
+        return Ok(None);
+    };
+    // `type_alias.type_params` being `Some(_)` at all is enough to reject:
+    // `ruff_python_parser`'s own `parse_type_params` reports a parse error
+    // (`EmptyTypeParams`, surfaced by this crate's own `pycc_parser::parse`
+    // as `L0001` before this function ever runs) for an empty `[]`, so a
+    // `Some(type_params)` reaching this point always has at least one entry
+    // -- there is no valid parsed input where an extra `.type_params.is_empty()`
+    // check here would ever be reached with a `false` result to skip on
+    // (confirmed against the pinned `ruff_python_parser = "0.0.6"` registry
+    // source, the same way this function's own name-target extraction below
+    // documents its own unreachable shape).
+    if type_alias.type_params.is_some() {
+        let range = std::ops::Range::<u32>::from(type_alias.range);
+        return Err(Diagnostic::error(
+            "T0042",
+            "a generic type alias (`type X[T] = ...`) is not supported yet".to_string(),
+            Span::new(range.start, range.end),
+        ));
+    }
+    // Unlike the legacy `AnnAssign` form's target (which can be an
+    // `Attribute`/`Subscript`, see `lower_legacy_type_alias_ann_assign`
+    // below), `ruff_python_parser`'s own `parse_type_alias_statement`
+    // unconditionally builds this field as `Expr::Name(self.parse_name(...))`
+    // -- there is no valid source text that parses a `type` statement with a
+    // non-name target, so there is no `unsupported`/unreachable fallback
+    // branch to write or cover here (confirmed against the pinned
+    // `ruff_python_parser = "0.0.6"` registry source). `.expect(...)`, not a
+    // hand-rolled panic arm, per this crate's own documented coverage
+    // convention (`pycc_ast::re_exported_grammar_types_resolve_and_have_the_expected_shape`'s
+    // comment): the panic path lives in libcore, invisible to instrumented
+    // regions, the same way `.unwrap()`'s does.
+    let name = type_alias
+        .name
+        .as_name_expr()
+        .expect("ruff always parses a `type` statement's name as Expr::Name");
+    let ty = annotation_to_ty(&type_alias.value, None, aliases)?;
+    Ok(Some((name.id.to_string(), ty)))
+}
+
+/// Recognizes the legacy `X: TypeAlias = <expr>` annotated-assignment form
+/// of a type alias (PEP 613). Real Python requires `from typing import
+/// TypeAlias` before this annotation is meaningful, but requiring that
+/// import here is not merely inconsistent with existing precedent -- it is
+/// currently infeasible: `pycc_hir` has no `Stmt::Import`/`Stmt::ImportFrom`
+/// handling anywhere in this crate, so `from typing import TypeAlias` would
+/// itself be unconditionally rejected with the generic `C0001` ("statement
+/// kind not supported yet") diagnostic if pycc tried to require it first.
+/// There is no accepted-bare-typing-name precedent to lean on either --
+/// `Any` is the only other typing-shaped bare name `annotation_to_ty`
+/// currently recognizes, and it is rejected with `T0002`, not accepted. So
+/// this function accepts the bare annotation name `TypeAlias`
+/// unconditionally, not by analogy to an existing precedent, but because
+/// real import verification cannot be expressed with this crate's current
+/// statement coverage (plan-deviation note, since the design doc leaves
+/// this specific question open; import support is PR-14's).
+///
+/// Returns `Ok(None)` for any statement that is not this exact shape --
+/// including an ordinary `X: TypeAlias` with no value, which is invalid as a
+/// type alias and instead falls through to the ordinary `AnnAssign` lowering
+/// path, where `annotation_to_ty` rejects the bare name `TypeAlias` with the
+/// same `C0001` catch-all as any other unrecognized annotation name.
+fn lower_legacy_type_alias_ann_assign(
+    stmt: &Stmt,
+    aliases: &[(String, Ty)],
+) -> Result<Option<(String, Ty)>, Diagnostic> {
+    let Stmt::AnnAssign(ann) = stmt else {
+        return Ok(None);
+    };
+    let Expr::Name(annotation_name) = ann.annotation.as_ref() else {
+        return Ok(None);
+    };
+    if annotation_name.id.as_str() != "TypeAlias" {
+        return Ok(None);
+    }
+    let Some(value) = ann.value.as_deref() else {
+        return Ok(None);
+    };
+    let Expr::Name(target) = ann.target.as_ref() else {
+        return Ok(None);
+    };
+    let ty = annotation_to_ty(value, None, aliases)?;
+    Ok(Some((target.id.to_string(), ty)))
+}
+
+fn lower_function(
+    def: &pycc_ast::StmtFunctionDef,
+    aliases: &[(String, Ty)],
+) -> Result<HirItem, Diagnostic> {
     if def.is_async {
         return Err(unsupported(
             "async functions are not supported yet",
@@ -150,16 +748,34 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
             def.range,
         ));
     }
-    if def.type_params.is_some() {
-        return Err(unsupported(
-            "generic function type parameters are not supported yet",
-            def.range,
-        ));
-    }
+    let type_param: Option<Box<str>> = match def.type_params.as_deref() {
+        None => None,
+        Some(type_params) => match type_params.type_params.as_slice() {
+            [single] => Some(type_param_name(single, def.range)?.into()),
+            _ => {
+                return Err(unsupported(
+                    "generic functions with more than one type parameter are not supported yet",
+                    def.range,
+                ));
+            }
+        },
+    };
     let is_public = !def.name.as_str().starts_with('_'); // D-038
-    let params = lower_params(&def.parameters, is_public, def.name.as_str())?;
-    let return_ty = lower_return_annotation(def.returns.as_deref(), is_public, def.name.as_str())?;
-    let body = lower_body(&def.body)?;
+    let params = lower_params(
+        &def.parameters,
+        is_public,
+        def.name.as_str(),
+        type_param.as_deref(),
+        aliases,
+    )?;
+    let return_ty = lower_return_annotation(
+        def.returns.as_deref(),
+        is_public,
+        def.name.as_str(),
+        type_param.as_deref(),
+        aliases,
+    )?;
+    let body = lower_body(&def.body, aliases)?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
         params,
@@ -168,10 +784,40 @@ fn lower_function(def: &pycc_ast::StmtFunctionDef) -> Result<HirItem, Diagnostic
     })
 }
 
+/// Extracts a PEP 695 `TypeVar`'s identifier -- e.g. the `T` in `def
+/// f[T](...)`. `Ty::Param` (D-133) is resolved by call-site substitution
+/// (D-134) into one concrete scalar type per call, which is only a coherent
+/// model for a plain `TypeVar`: `TypeVarTuple` (`def f[*Ts](...)`) stands for
+/// a variable-length sequence of types, and `ParamSpec` (`def f[**P](...)`)
+/// stands for a parameter list shape, neither of which `Ty::Param` can
+/// represent. `def_range` is the enclosing function's range, reused for the
+/// diagnostic span since `TypeParam`'s own range would require reaching past
+/// the `pycc_ast` facade for the `Ranged` trait for no benefit here (the
+/// arity-gate rejection just above already reports the same function-level
+/// span for the analogous "too many type parameters" case).
+fn type_param_name<R>(type_param: &pycc_ast::TypeParam, def_range: R) -> Result<&str, Diagnostic>
+where
+    std::ops::Range<u32>: From<R>,
+{
+    match type_param {
+        pycc_ast::TypeParam::TypeVar(tv) => Ok(tv.name.as_str()),
+        pycc_ast::TypeParam::TypeVarTuple(_) => Err(unsupported(
+            "a `TypeVarTuple` type parameter (`*Ts`) is not supported yet",
+            def_range,
+        )),
+        pycc_ast::TypeParam::ParamSpec(_) => Err(unsupported(
+            "a `ParamSpec` type parameter (`**P`) is not supported yet",
+            def_range,
+        )),
+    }
+}
+
 fn lower_params(
     parameters: &pycc_ast::Parameters,
     is_public: bool,
     fn_name: &str,
+    type_param: Option<&str>,
+    aliases: &[(String, Ty)],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     // Every parameter kind and default value below is silently absent from
     // `parameters.args`/`ParameterWithDefault::default` -- an earlier version
@@ -216,7 +862,7 @@ fn lower_params(
             }
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
-                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann)?)),
+                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann, type_param, aliases)?)),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
                     format!(
@@ -234,9 +880,11 @@ fn lower_return_annotation(
     returns: Option<&Expr>,
     is_public: bool,
     fn_name: &str,
+    type_param: Option<&str>,
+    aliases: &[(String, Ty)],
 ) -> Result<Ty, Diagnostic> {
     match returns {
-        Some(ann) => annotation_to_ty(ann),
+        Some(ann) => annotation_to_ty(ann, type_param, aliases),
         None if is_public => Err(Diagnostic::error(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
@@ -246,9 +894,22 @@ fn lower_return_annotation(
     }
 }
 
-fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
+/// Resolves an annotation expression to a `Ty`. `aliases` is the D-135 type
+/// alias table (`(name, Ty)` pairs recorded by `lower_checked` for every
+/// `type X = ...`/legacy `X: TypeAlias = ...` statement reached so far, in
+/// source order): checked as the last resort for a bare name before falling
+/// through to the `C0001` "not supported yet" catch-all, so an alias name
+/// resolves exactly like any other recognized bare-name annotation.
+fn annotation_to_ty(
+    annotation: &Expr,
+    type_param: Option<&str>,
+    aliases: &[(String, Ty)],
+) -> Result<Ty, Diagnostic> {
     match annotation {
         Expr::NoneLiteral(_) => Ok(Ty::None),
+        Expr::Name(name) if Some(name.id.as_str()) == type_param => {
+            Ok(Ty::Param(Box::new(name.id.to_string())))
+        }
         Expr::Name(name) => match name.id.as_str() {
             "int" => Ok(Ty::Int),
             "float" => Ok(Ty::Float),
@@ -260,10 +921,17 @@ fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
                     .to_string(),
                 Span::new(0, 0),
             )),
-            other => Err(unsupported(
-                format!("type annotation `{other}` is not supported yet"),
-                pycc_ast::expr_range(annotation),
-            )),
+            other => aliases
+                .iter()
+                .rev()
+                .find(|(alias_name, _)| alias_name == other)
+                .map(|(_, ty)| ty.clone())
+                .ok_or_else(|| {
+                    unsupported(
+                        format!("type annotation `{other}` is not supported yet"),
+                        pycc_ast::expr_range(annotation),
+                    )
+                }),
         },
         other => Err(unsupported(
             format!("only a bare name type annotation is supported so far: {other:?}"),
@@ -272,7 +940,7 @@ fn annotation_to_ty(annotation: &Expr) -> Result<Ty, Diagnostic> {
     }
 }
 
-fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
+fn lower_stmt(stmt: &Stmt, aliases: &[(String, Ty)]) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
         Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)?),
         Stmt::Assign(assign) => {
@@ -285,15 +953,56 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     assign.range,
                 ));
             };
-            let Expr::Name(name) = target else {
-                return Err(unsupported(
-                    format!("only assigning to a bare name is supported so far: {target:?}"),
-                    pycc_ast::expr_range(target),
-                ));
-            };
-            HirStmt::Assign {
-                target: name.id.as_str().to_string(),
-                value: lower_expr(&assign.value)?,
+            match target {
+                Expr::Name(name) => match assign.value.as_ref() {
+                    // Comprehension expressions are recognized only in this
+                    // one position: the direct RHS of a bare-name
+                    // `Stmt::Assign` (PR-12, D-117). Every other position
+                    // (function args, nested expressions, `return`,
+                    // `Expr::Subscript` assignment targets) still routes
+                    // through plain `lower_expr`, which has no arm for
+                    // `Expr::ListComp`/`SetComp`/`DictComp`/`GeneratorExp`
+                    // and falls through to that function's existing
+                    // generic "expression kind not supported yet"
+                    // catch-all.
+                    Expr::ListComp(comp) => lower_list_comp_assign(name.id.as_str(), comp)?,
+                    Expr::SetComp(comp) => lower_set_comp_assign(name.id.as_str(), comp)?,
+                    Expr::DictComp(comp) => lower_dict_comp_assign(name.id.as_str(), comp)?,
+                    _ => HirStmt::Assign {
+                        target: name.id.as_str().to_string(),
+                        value: lower_expr(&assign.value)?,
+                    },
+                },
+                // `<bare name>[key] = value`, PR-11 Task 3 (D-123): unlike
+                // `list[int]`'s own read-only-indexing consequence (D-105),
+                // `dict[str, int]` ships `d[k] = v`. This lowering step has
+                // no type information (mirroring `ForList`'s own bare-name
+                // iterable, which is resolved to `Ty::List`, `Ty::Dict`, or
+                // rejected downstream), so a `list[int]` subscript-assignment target
+                // also reaches `HirStmt::DictSet` here -- `pycc_types`
+                // rejects it with `T0033` once the base's real type is
+                // known, relocating (not removing) the invariant this file's
+                // own `subscript_assignment_target_is_unsupported` test used
+                // to enforce at the lowering level.
+                Expr::Subscript(sub) => {
+                    let Expr::Name(base_name) = sub.value.as_ref() else {
+                        return Err(unsupported(
+                            "only assigning to a bare-name subscript target (`name[key] = value`) is supported so far",
+                            pycc_ast::expr_range(target),
+                        ));
+                    };
+                    HirStmt::DictSet {
+                        dict: base_name.id.as_str().to_string(),
+                        key: lower_expr(&sub.slice)?,
+                        value: lower_expr(&assign.value)?,
+                    }
+                }
+                other => {
+                    return Err(unsupported(
+                        format!("only assigning to a bare name is supported so far: {other:?}"),
+                        pycc_ast::expr_range(other),
+                    ));
+                }
             }
         }
         Stmt::AnnAssign(ann) => {
@@ -322,7 +1031,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     pycc_ast::expr_range(&ann.target),
                 ));
             }
-            let annotation = annotation_to_ty(&ann.annotation)?;
+            let annotation = annotation_to_ty(&ann.annotation, None, aliases)?;
             let value = ann.value.as_deref().map(lower_expr).transpose()?;
             HirStmt::AnnAssign {
                 target: name.id.as_str().to_string(),
@@ -332,8 +1041,8 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
         }
         Stmt::If(if_stmt) => HirStmt::If {
             test: lower_expr(&if_stmt.test)?,
-            body: lower_body(&if_stmt.body)?,
-            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses)?,
+            body: lower_body(&if_stmt.body, aliases)?,
+            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses, aliases)?,
         },
         Stmt::While(while_stmt) => {
             if !while_stmt.orelse.is_empty() {
@@ -344,7 +1053,7 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
             }
             HirStmt::While {
                 test: lower_expr(&while_stmt.test)?,
-                body: lower_body(&while_stmt.body)?,
+                body: lower_body(&while_stmt.body, aliases)?,
             }
         }
         Stmt::For(for_stmt) => {
@@ -366,10 +1075,21 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     pycc_ast::expr_range(&for_stmt.target),
                 ));
             };
+            // A bare-name iterable is `for v in some_list:` (D-105) or
+            // `for k in some_dict:` (PR-11 Task 3, D-123) -- resolved to
+            // `Ty::List`, `Ty::Dict`, or rejected by pycc_types, not here;
+            // HIR only records the syntactic shape.
+            if let Expr::Name(list_name) = for_stmt.iter.as_ref() {
+                return Ok(HirStmt::ForList {
+                    var: var.id.to_string(),
+                    list: list_name.id.as_str().to_string(),
+                    body: lower_body(&for_stmt.body, aliases)?,
+                });
+            }
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
                 return Err(unsupported(
                     format!(
-                        "only `for x in range(...)` is supported so far: {:?}",
+                        "only `for x in range(...)` or `for x in <list>` is supported so far: {:?}",
                         for_stmt.iter
                     ),
                     pycc_ast::expr_range(&for_stmt.iter),
@@ -399,31 +1119,13 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
                     call.range,
                 ));
             }
-            let (start, stop, step) = match &*call.arguments.args {
-                [stop] => (
-                    HirExpr::IntLiteral(0),
-                    lower_expr(stop)?,
-                    HirExpr::IntLiteral(1),
-                ),
-                [start, stop] => (
-                    lower_expr(start)?,
-                    lower_expr(stop)?,
-                    HirExpr::IntLiteral(1),
-                ),
-                [start, stop, step] => (lower_expr(start)?, lower_expr(stop)?, lower_expr(step)?),
-                other => {
-                    return Err(unsupported(
-                        format!("range() with {} arguments is not supported", other.len()),
-                        call.range,
-                    ));
-                }
-            };
+            let (start, stop, step) = lower_range_call(call)?;
             HirStmt::ForRange {
                 var: var.id.to_string(),
                 start,
                 stop,
                 step,
-                body: lower_body(&for_stmt.body)?,
+                body: lower_body(&for_stmt.body, aliases)?,
             }
         }
         Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr).transpose()?),
@@ -437,26 +1139,29 @@ fn lower_stmt(stmt: &Stmt) -> Result<HirStmt, Diagnostic> {
     Ok(lowered)
 }
 
-fn lower_body(body: &[Stmt]) -> Result<Vec<HirStmt>, Diagnostic> {
-    body.iter().map(lower_stmt).collect()
+fn lower_body(body: &[Stmt], aliases: &[(String, Ty)]) -> Result<Vec<HirStmt>, Diagnostic> {
+    body.iter().map(|stmt| lower_stmt(stmt, aliases)).collect()
 }
 
-fn lower_elif_else_clauses(clauses: &[ElifElseClause]) -> Result<Vec<HirStmt>, Diagnostic> {
+fn lower_elif_else_clauses(
+    clauses: &[ElifElseClause],
+    aliases: &[(String, Ty)],
+) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
     };
     match &first.test {
         Some(test) => Ok(vec![HirStmt::If {
             test: lower_expr(test)?,
-            body: lower_body(&first.body)?,
-            orelse: lower_elif_else_clauses(rest)?,
+            body: lower_body(&first.body, aliases)?,
+            orelse: lower_elif_else_clauses(rest, aliases)?,
         }]),
         None => {
             assert!(
                 rest.is_empty(),
                 "pycc_hir: an else clause must be the last elif_else_clause"
             );
-            lower_body(&first.body)
+            lower_body(&first.body, aliases)
         }
     }
 }
@@ -482,10 +1187,204 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
             }
         },
         Expr::Name(name) => HirExpr::Name(name.id.as_str().to_string()),
+        Expr::List(list) => HirExpr::ListLiteral(
+            list.elts
+                .iter()
+                .map(lower_expr)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Expr::Dict(dict) => HirExpr::DictLiteral(
+            dict.items
+                .iter()
+                .map(|item| {
+                    let Some(key) = &item.key else {
+                        return Err(unsupported(
+                            "dict-unpacking (`**expr`) inside a dict literal is not supported yet",
+                            pycc_ast::expr_range(&item.value),
+                        ));
+                    };
+                    Ok((lower_expr(key)?, lower_expr(&item.value)?))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Expr::Set(set) => HirExpr::SetLiteral(
+            set.elts
+                .iter()
+                .map(lower_expr)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Expr::Tuple(tuple) => HirExpr::TupleLiteral(
+            tuple
+                .elts
+                .iter()
+                .map(lower_expr)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Expr::Subscript(sub) => match sub.slice.as_ref() {
+            // A colon-containing subscript (`xs[a:b:c]`) parses its `slice`
+            // field as `Expr::Slice`, distinct from the plain single-
+            // expression `slice` an ordinary index (`xs[0]`) produces
+            // (PR-12, D-118). Each bound is independently optional in real
+            // Python's own grammar, so each is lowered through
+            // `Option::map`/`.transpose()` rather than assumed present.
+            Expr::Slice(slice) => HirExpr::Slice {
+                base: Box::new(lower_expr(&sub.value)?),
+                start: slice
+                    .lower
+                    .as_deref()
+                    .map(lower_expr)
+                    .transpose()?
+                    .map(Box::new),
+                stop: slice
+                    .upper
+                    .as_deref()
+                    .map(lower_expr)
+                    .transpose()?
+                    .map(Box::new),
+                step: slice
+                    .step
+                    .as_deref()
+                    .map(lower_expr)
+                    .transpose()?
+                    .map(Box::new),
+            },
+            _ => HirExpr::Subscript {
+                base: Box::new(lower_expr(&sub.value)?),
+                index: Box::new(lower_expr(&sub.slice)?),
+            },
+        },
         Expr::Call(call) => {
             if !call.arguments.keywords.is_empty() {
                 return Err(unsupported(
                     "keyword call arguments are not supported yet",
+                    call.range,
+                ));
+            }
+            if let Expr::Attribute(attr) = call.func.as_ref() {
+                if attr.attr.as_str() == "append" {
+                    let Expr::Name(list_name) = attr.value.as_ref() else {
+                        return Err(unsupported(
+                            "`.append()` is only supported on a bare-name list so far",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    };
+                    let [value] = &*call.arguments.args else {
+                        return Err(unsupported(
+                            format!(
+                                "list.append() takes exactly one argument, got {}",
+                                call.arguments.args.len()
+                            ),
+                            call.range,
+                        ));
+                    };
+                    return Ok(HirExpr::ListAppend {
+                        list: list_name.id.as_str().to_string(),
+                        value: Box::new(lower_expr(value)?),
+                    });
+                }
+                if attr.attr.as_str() == "pop" {
+                    let Expr::Name(list_name) = attr.value.as_ref() else {
+                        return Err(unsupported(
+                            "`.pop()` is only supported on a bare-name list so far",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    };
+                    let [] = &*call.arguments.args else {
+                        return Err(unsupported(
+                            format!(
+                                "list.pop() takes no arguments, got {}",
+                                call.arguments.args.len()
+                            ),
+                            call.range,
+                        ));
+                    };
+                    return Ok(HirExpr::ListPop {
+                        list: list_name.id.as_str().to_string(),
+                    });
+                }
+                if attr.attr.as_str() == "get" {
+                    let Expr::Name(dict_name) = attr.value.as_ref() else {
+                        return Err(unsupported(
+                            "`.get()` is only supported on a bare-name dict so far",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    };
+                    let [key, default] = &*call.arguments.args else {
+                        return Err(unsupported(
+                            format!(
+                                "dict.get() takes exactly two arguments (key, default), got {}",
+                                call.arguments.args.len()
+                            ),
+                            call.range,
+                        ));
+                    };
+                    return Ok(HirExpr::DictGetOrDefault {
+                        dict: dict_name.id.as_str().to_string(),
+                        key: Box::new(lower_expr(key)?),
+                        default: Box::new(lower_expr(default)?),
+                    });
+                }
+                if attr.attr.as_str() == "add" {
+                    let Expr::Name(set_name) = attr.value.as_ref() else {
+                        return Err(unsupported(
+                            "`.add()` is only supported on a bare-name set so far",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    };
+                    let [value] = &*call.arguments.args else {
+                        return Err(unsupported(
+                            format!(
+                                "set.add() takes exactly one argument, got {}",
+                                call.arguments.args.len()
+                            ),
+                            call.range,
+                        ));
+                    };
+                    return Ok(HirExpr::SetAdd {
+                        set: set_name.id.as_str().to_string(),
+                        value: Box::new(lower_expr(value)?),
+                    });
+                }
+                // `math.sqrt(x)`-shaped stdlib intrinsic call (D-136/D-137).
+                // Resolved textually against `pycc_std`'s registry (receiver
+                // name, then attribute name), the same precedent this file
+                // already uses for `X: TypeAlias` (see
+                // `lower_legacy_type_alias_ann_assign`'s doc comment): real
+                // flow-sensitive "was `math` actually imported before this
+                // use" verification is not attempted here, because
+                // `lower_expr` has no access to the module-level import
+                // side-table `lower_checked` builds (threading it through
+                // every recursive `lower_expr` call site is a materially
+                // larger change than this thin v0.2 slice needs). `math` is
+                // not a valid bare Python identifier binding to anything
+                // else in this compiler's current name-resolution model
+                // (no ordinary variable/import can produce a receiver whose
+                // name doubles as a registered stdlib module and *isn't*
+                // that module), so this narrowing does not accept any
+                // program CPython itself would reject as a `NameError` in
+                // practice for the fixtures this PR ships -- but it is a
+                // real, deliberate scope trim from a fully import-gated
+                // design, recorded here rather than silently.
+                if let Expr::Name(receiver) = attr.value.as_ref()
+                    && let Some(module) = pycc_std::resolve_module(receiver.id.as_str())
+                    && let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str())
+                {
+                    let args = call
+                        .arguments
+                        .args
+                        .iter()
+                        .map(lower_expr)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(HirExpr::Call {
+                        callee: format!("{}.{}", receiver.id.as_str(), symbol.name),
+                        args,
+                    });
+                }
+                return Err(unsupported(
+                    format!(
+                        "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.{}(...)`",
+                        attr.attr
+                    ),
                     call.range,
                 ));
             }
@@ -589,6 +1488,41 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
                 right: Box::new(lower_expr(&cmp.comparators[0])?),
             }
         }
+        // `math.pi`-shaped bare stdlib constant reference (D-136/D-137),
+        // e.g. `print(math.pi)`. A call-shaped `math.sqrt(x)` is handled
+        // separately inside the `Expr::Call` arm above (it needs the call
+        // arguments, which this bare-attribute position never has). Resolved
+        // with the same textual, non-flow-sensitive precedent documented on
+        // that arm. Encoded as `HirExpr::Name("math.pi")`: real Python
+        // identifiers can never contain `.`, so this qualified spelling is
+        // an unambiguous marker `pycc_types`' ordinary name lookup can
+        // special-case without any risk of colliding with a real variable
+        // named `pi`.
+        Expr::Attribute(attr) => {
+            let Expr::Name(receiver) = attr.value.as_ref() else {
+                return Err(unsupported(
+                    "attribute access is only supported on a stdlib module name so far",
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            let Some(module) = pycc_std::resolve_module(receiver.id.as_str()) else {
+                return Err(unsupported(
+                    "attribute access is only supported on a stdlib module name so far",
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str()) else {
+                return Err(unsupported(
+                    format!(
+                        "module `{}` has no attribute `{}`",
+                        receiver.id.as_str(),
+                        attr.attr
+                    ),
+                    pycc_ast::expr_range(expr),
+                ));
+            };
+            HirExpr::Name(format!("{}.{}", receiver.id.as_str(), symbol.name))
+        }
         other => {
             return Err(unsupported(
                 "expression kind not supported yet",
@@ -599,12 +1533,358 @@ fn lower_expr(expr: &Expr) -> Result<HirExpr, Diagnostic> {
     Ok(lowered)
 }
 
+/// Rewrites every occurrence of the bare name `from` inside `expr` to `to`
+/// (PR-12, D-117) -- used to give a comprehension's own loop variable a
+/// synthesized, collision-proof internal name (see `synthesize_comp_var_name`
+/// below) without inventing real lexical scoping. Exhaustive over `HirExpr`
+/// on purpose: a future variant added to this enum must add its own arm here
+/// too, the same "let the compiler enumerate every site" discipline this
+/// project's own `Scalar::List` precedent (D-107) already established for
+/// `pycc_codegen`. Safe to apply blindly (no risk of renaming an unrelated
+/// same-named binding from some other nested scope) because v0.2's
+/// comprehension grammar has no nested comprehensions, no lambda, and no
+/// nested function defs inside a comprehension's own `elt`/`cond`/`key`/
+/// `value` -- none of those are expressible here at all yet.
+fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExpr {
+    let recurse = |e: HirExpr| rename_name_in_expr(e, from, to);
+    match expr {
+        HirExpr::Name(n) => HirExpr::Name(if n == from { to.to_string() } else { n }),
+        HirExpr::IntLiteral(_)
+        | HirExpr::FloatLiteral(_)
+        | HirExpr::BoolLiteral(_)
+        | HirExpr::StringLiteral(_) => expr,
+        // `callee` (a bare `String`, never an `HirExpr::Name`) is
+        // deliberately left untouched even if it equals `from`: this HIR
+        // subset has no first-class functions, so `callee` always names a
+        // module-level function definition, never a local variable this
+        // rename could plausibly shadow -- unlike `args`, which are
+        // recursed into normally.
+        HirExpr::Call { callee, args } => HirExpr::Call {
+            callee,
+            args: args.into_iter().map(recurse).collect(),
+        },
+        HirExpr::BinOp { op, left, right } => HirExpr::BinOp {
+            op,
+            left: Box::new(recurse(*left)),
+            right: Box::new(recurse(*right)),
+        },
+        HirExpr::Compare { op, left, right } => HirExpr::Compare {
+            op,
+            left: Box::new(recurse(*left)),
+            right: Box::new(recurse(*right)),
+        },
+        HirExpr::FString(parts) => HirExpr::FString(
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    FStringPart::Literal(s) => FStringPart::Literal(s),
+                    FStringPart::Interpolation(e) => {
+                        FStringPart::Interpolation(Box::new(recurse(*e)))
+                    }
+                })
+                .collect(),
+        ),
+        HirExpr::ListLiteral(es) => HirExpr::ListLiteral(es.into_iter().map(recurse).collect()),
+        HirExpr::Subscript { base, index } => HirExpr::Subscript {
+            base: Box::new(recurse(*base)),
+            index: Box::new(recurse(*index)),
+        },
+        HirExpr::Slice {
+            base,
+            start,
+            stop,
+            step,
+        } => HirExpr::Slice {
+            base: Box::new(recurse(*base)),
+            start: start.map(|s| Box::new(recurse(*s))),
+            stop: stop.map(|s| Box::new(recurse(*s))),
+            step: step.map(|s| Box::new(recurse(*s))),
+        },
+        HirExpr::ListAppend { list, value } => HirExpr::ListAppend {
+            list: if list == from { to.to_string() } else { list },
+            value: Box::new(recurse(*value)),
+        },
+        HirExpr::DictLiteral(pairs) => HirExpr::DictLiteral(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (recurse(k), recurse(v)))
+                .collect(),
+        ),
+        HirExpr::SetLiteral(es) => HirExpr::SetLiteral(es.into_iter().map(recurse).collect()),
+        HirExpr::TupleLiteral(es) => HirExpr::TupleLiteral(es.into_iter().map(recurse).collect()),
+        // `list`/`dict`/`set` base-name fields are plain `String`s, mirroring
+        // `ListAppend`'s own arm exactly: renamed only when they equal
+        // `from`, otherwise left untouched. This matters for a
+        // comprehension's own `elt`/`cond` referencing e.g. `xs.pop()` where
+        // `xs` is the loop variable being synthesized-renamed -- the common
+        // case (some other, non-loop-variable base) must not be touched.
+        HirExpr::ListPop { list } => HirExpr::ListPop {
+            list: if list == from { to.to_string() } else { list },
+        },
+        HirExpr::DictGetOrDefault { dict, key, default } => HirExpr::DictGetOrDefault {
+            dict: if dict == from { to.to_string() } else { dict },
+            key: Box::new(recurse(*key)),
+            default: Box::new(recurse(*default)),
+        },
+        HirExpr::SetAdd { set, value } => HirExpr::SetAdd {
+            set: if set == from { to.to_string() } else { set },
+            value: Box::new(recurse(*value)),
+        },
+    }
+}
+
+/// Synthesizes a collision-proof internal name for a comprehension's loop
+/// variable (D-117): a leading digit can never begin a valid Python
+/// identifier (confirmed against the vendored `ruff_python_parser`'s own
+/// tokenizer -- a `NAME` token cannot start with a decimal digit), so this
+/// string can never be produced by lowering real Python source, no matter
+/// what the user names their own variables -- no new lexical-scoping
+/// machinery is needed; this is just another ordinary entry in the existing
+/// flat, name-keyed slot model. Seeded by the loop target's own byte offset,
+/// not a mutable counter: two distinct comprehensions in one file can never
+/// share a target's start offset, so this needs no threaded lowering state
+/// and stays fully deterministic across repeated compiles of the same
+/// source.
+///
+/// Takes a plain `u32` byte offset (from `pycc_ast::expr_range`) rather than
+/// naming `ruff_text_size::TextSize` directly -- `pycc_hir` depends only on
+/// `pycc_ast`, never on `ruff_text_size` (Step 0's own re-export widening is
+/// this crate's one and only upstream-crate seam), and `pycc_ast`'s own
+/// `expr_range`/`stmt_range` exist specifically to keep that boundary from
+/// leaking (see their doc comments).
+fn synthesize_comp_var_name(target_start: u32, source_name: &str) -> String {
+    format!("0comp_{target_start}_{source_name}")
+}
+
+/// Parses `range(...)`'s argument list into `(start, stop, step)` `HirExpr`s,
+/// defaulting `start`/`step` per Python's own `range()` overloads. Shared by
+/// `Stmt::For`'s own lowering and `lower_comprehension_iter` below (PR-12) --
+/// factored out rather than duplicated a second time. Callers are
+/// responsible for checking the callee is actually `range` and carries no
+/// keyword arguments first (their own diagnostics differ in wording between
+/// a plain `for` loop and a comprehension's `for` clause), so this helper
+/// only ever inspects `call.arguments.args`.
+fn lower_range_call(call: &pycc_ast::ExprCall) -> Result<(HirExpr, HirExpr, HirExpr), Diagnostic> {
+    match &*call.arguments.args {
+        [stop] => Ok((
+            HirExpr::IntLiteral(0),
+            lower_expr(stop)?,
+            HirExpr::IntLiteral(1),
+        )),
+        [start, stop] => Ok((
+            lower_expr(start)?,
+            lower_expr(stop)?,
+            HirExpr::IntLiteral(1),
+        )),
+        [start, stop, step] => Ok((lower_expr(start)?, lower_expr(stop)?, lower_expr(step)?)),
+        other => Err(unsupported(
+            format!("range() with {} arguments is not supported", other.len()),
+            call.range,
+        )),
+    }
+}
+
+/// Resolves a comprehension's `for var in <iter>` clause into a `CompIter`,
+/// reusing `Stmt::For`'s own iterable-shape acceptance verbatim (D-117):
+/// `range(...)` or a bare name (resolved to `Ty::List`/`Ty::Dict`/`Ty::Set`
+/// downstream by `pycc_types`/`pycc_mir`, exactly like a plain `for` loop).
+/// Any other shape is rejected with the existing generic `C0001` path,
+/// mirroring `Stmt::For`'s own "only `for x in range(...)` or `for x in
+/// <list>` is supported so far" message.
+fn lower_comprehension_iter(iter_expr: &Expr) -> Result<CompIter, Diagnostic> {
+    if let Expr::Name(name) = iter_expr {
+        return Ok(CompIter::Name(name.id.as_str().to_string()));
+    }
+    let Expr::Call(call) = iter_expr else {
+        return Err(unsupported(
+            format!(
+                "only `range(...)` or a bare-name iterable is supported so far in a comprehension: {iter_expr:?}"
+            ),
+            pycc_ast::expr_range(iter_expr),
+        ));
+    };
+    let Expr::Name(callee) = call.func.as_ref() else {
+        return Err(unsupported(
+            "only calling `range(...)` is supported so far in a comprehension",
+            pycc_ast::expr_range(&call.func),
+        ));
+    };
+    if callee.id.as_str() != "range" {
+        return Err(unsupported(
+            format!(
+                "only iterating over `range(...)` is supported so far in a comprehension, got `{}`",
+                callee.id
+            ),
+            call.range,
+        ));
+    }
+    if !call.arguments.keywords.is_empty() {
+        return Err(unsupported(
+            "keyword arguments to range() are not supported yet",
+            call.range,
+        ));
+    }
+    let (start, stop, step) = lower_range_call(call)?;
+    Ok(CompIter::Range { start, stop, step })
+}
+
+/// Validates and lowers a comprehension's shared shape (D-117): exactly one
+/// generator clause, no `async for`, a bare-name loop target, at most one
+/// `if` filter. Returns the loop target's *source* name, its synthesized
+/// internal replacement, the resolved `CompIter`, and the (not-yet-renamed)
+/// lowered `if`-filter expression, if present -- renaming is the caller's
+/// job (`lower_list_comp_assign`/`lower_set_comp_assign`/
+/// `lower_dict_comp_assign` below), since `elt`/`key`/`value` also need the
+/// identical rename and this helper has no visibility into which of those
+/// the caller is building.
+///
+/// `iter` (the resolved `CompIter` returned above) is deliberately **never**
+/// passed through `rename_name_in_expr` -- neither here nor by any caller --
+/// unlike `cond`/`elt`/`key`/`value`, which all are. This is not an
+/// oversight: it matches real CPython scoping. A comprehension's outermost
+/// iterable expression evaluates in the *enclosing* scope, before the
+/// comprehension's own scope exists at all -- `[i for i in range(i)]`'s
+/// `range(i)` reads the *enclosing* `i`, not the comprehension's own loop
+/// variable (confirmed directly against CPython). Renaming `iter`'s
+/// occurrences of the source loop-variable name would therefore be actively
+/// wrong, not merely redundant: it would make `range(i)` read the
+/// comprehension's own (not-yet-bound) synthesized variable instead of
+/// whatever `i` means in the enclosing scope. See
+/// `a_comprehension_range_iterable_referencing_the_loop_variables_own_source_name_is_not_renamed`
+/// and
+/// `a_comprehension_bare_name_iterable_sharing_the_loop_variables_own_source_name_is_not_renamed`
+/// below, which pin this behavior directly -- without them, a future change
+/// that "fixed" this asymmetry by renaming `iter` too would silently break
+/// correct scoping with every existing test still green.
+fn lower_comprehension_header(
+    generators: &[pycc_ast::Comprehension],
+) -> Result<(String, String, CompIter, Option<HirExpr>), Diagnostic> {
+    // Named `generator`, not `gen` -- `gen` is a reserved keyword as of the
+    // 2024 edition (this workspace's own edition, reserved for a future
+    // generator-block feature), so the brief's own `gen` binding does not
+    // compile here.
+    let [generator] = generators else {
+        return Err(unsupported(
+            "a comprehension with more than one `for` clause is not supported yet",
+            generators.first().map(|g| g.range).unwrap_or_default(),
+        ));
+    };
+    if generator.is_async {
+        return Err(unsupported(
+            "async comprehensions are not supported yet",
+            generator.range,
+        ));
+    }
+    let Expr::Name(var) = &generator.target else {
+        return Err(unsupported(
+            "only a bare name comprehension target is supported so far",
+            pycc_ast::expr_range(&generator.target),
+        ));
+    };
+    let cond = match generator.ifs.as_slice() {
+        [] => None,
+        [single] => Some(lower_expr(single)?),
+        _ => {
+            return Err(unsupported(
+                "a comprehension with more than one `if` filter is not supported yet",
+                generator.range,
+            ));
+        }
+    };
+    let iter = lower_comprehension_iter(&generator.iter)?;
+    let source_name = var.id.as_str().to_string();
+    let synth_var =
+        synthesize_comp_var_name(pycc_ast::expr_range(&generator.target).start, &source_name);
+    Ok((source_name, synth_var, iter, cond))
+}
+
+fn lower_list_comp_assign(
+    target: &str,
+    comp: &pycc_ast::ExprListComp,
+) -> Result<HirStmt, Diagnostic> {
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let elt = rename_name_in_expr(lower_expr(&comp.elt)?, &source_name, &synth_var);
+    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
+    Ok(HirStmt::ListCompAssign {
+        target: target.to_string(),
+        var: synth_var,
+        iter,
+        cond: cond.map(Box::new),
+        elt: Box::new(elt),
+    })
+}
+
+fn lower_set_comp_assign(
+    target: &str,
+    comp: &pycc_ast::ExprSetComp,
+) -> Result<HirStmt, Diagnostic> {
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let elt = rename_name_in_expr(lower_expr(&comp.elt)?, &source_name, &synth_var);
+    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
+    Ok(HirStmt::SetCompAssign {
+        target: target.to_string(),
+        var: synth_var,
+        iter,
+        cond: cond.map(Box::new),
+        elt: Box::new(elt),
+    })
+}
+
+fn lower_dict_comp_assign(
+    target: &str,
+    comp: &pycc_ast::ExprDictComp,
+) -> Result<HirStmt, Diagnostic> {
+    // Real Python's dict-comprehension grammar (`{k: v for ...}`) has no
+    // `**`-unpacking form the way a plain `Expr::Dict` literal does -- but
+    // unlike that literal case, the parser does *not* reject
+    // `{**x for k in y}`-shaped source at parse time: confirmed directly
+    // against the vendored `ruff_python_parser` (0.0.6), which parses it
+    // successfully as `ExprDictComp { key: None, value: Name("x"), .. }`,
+    // silently dropping the `**` token rather than erroring. The brief this
+    // task followed assumed `key: None` was unreachable from real parsed
+    // source and modeled it with an `unreachable!()`/`.expect()` internal
+    // panic; that assumption is false, so this is a real (if unusual)
+    // C0001 capability diagnostic, mirroring `Expr::Dict`'s own analogous
+    // `**`-unpacking rejection, not an internal-error panic.
+    let Some(key_expr) = comp.key.as_deref() else {
+        return Err(unsupported(
+            "dict-unpacking (`**expr`) inside a dict comprehension is not supported yet",
+            pycc_ast::expr_range(&comp.value),
+        ));
+    };
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let key = rename_name_in_expr(lower_expr(key_expr)?, &source_name, &synth_var);
+    let value = rename_name_in_expr(lower_expr(&comp.value)?, &source_name, &synth_var);
+    let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
+    Ok(HirStmt::DictCompAssign {
+        target: target.to_string(),
+        var: synth_var,
+        iter,
+        cond: cond.map(Box::new),
+        key: Box::new(key),
+        value: Box::new(value),
+    })
+}
+
 fn unsupported<R>(message: impl Into<String>, range: R) -> Diagnostic
 where
     std::ops::Range<u32>: From<R>,
 {
     let range = std::ops::Range::<u32>::from(range);
     Diagnostic::error("C0001", message, Span::new(range.start, range.end))
+}
+
+/// `C0002`: "stdlib symbol not supported yet" (D-136) -- distinct from
+/// `C0001`. Used only when the *module* of a `from ... import ...`
+/// statement is recognized but a specific imported name inside it is not
+/// registered (e.g. `from math import isnan`), as opposed to `C0001`'s
+/// "we don't recognize this import shape/module at all."
+fn unresolved_symbol<R>(message: impl Into<String>, range: R) -> Diagnostic
+where
+    std::ops::Range<u32>: From<R>,
+{
+    let range = std::ops::Range::<u32>::from(range);
+    Diagnostic::error("C0002", message, Span::new(range.start, range.end))
 }
 
 #[cfg(test)]
@@ -630,13 +1910,85 @@ mod tests {
     }
 
     #[test]
-    fn ty_name_returns_the_python_spelling_of_every_variant() {
+    fn ty_name_returns_the_python_spelling_of_every_scalar_variant() {
+        // The four recursive container variants (List/Dict/Set/Tuple) are
+        // covered separately by `ty_name_describes_nested_container_types`
+        // below, since their expected `.name()` output depends on a nested
+        // `Ty` argument rather than being a fixed string per variant.
         assert_eq!(Ty::Int.name(), "int");
         assert_eq!(Ty::Float.name(), "float");
         assert_eq!(Ty::Bool.name(), "bool");
         assert_eq!(Ty::Str.name(), "str");
         assert_eq!(Ty::None.name(), "None");
         assert_eq!(Ty::Infer.name(), "<inferred>");
+    }
+
+    #[test]
+    fn ty_list_variant_is_structurally_comparable_and_not_copy() {
+        let a = Ty::List(Box::new(Ty::Int));
+        let b = Ty::List(Box::new(Ty::Int));
+        let c = Ty::List(Box::new(Ty::Str));
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        // `Ty` is `Clone` but deliberately not `Copy` (a `Box`/`Vec`-holding
+        // enum can't implement `Copy`), so producing a second owned value
+        // from `a` requires this explicit `.clone()` -- unlike the old flat
+        // scalar `Ty`, where an implicit copy would have made `.clone()`
+        // merely redundant rather than required. (`.clone()` alone can't
+        // prove Copy's absence at compile time -- it also compiles, just
+        // redundantly, for a `Copy` type -- so this comment documents the
+        // property rather than the assertions below enforcing it.)
+        let d = a.clone();
+        assert_eq!(a, d);
+    }
+
+    #[test]
+    fn ty_shrinks_after_boxing_dict_and_tuple_d109() {
+        // D-109: before this task, size_of::<Ty>() measured 24 bytes (Vec<Ty>'s
+        // ptr+len+cap dominates). This is a real regression guard, not a vibe --
+        // it must stay strictly smaller than 24 forever, catching any future
+        // change that re-inflates Ty back to its pre-fix size. PR-13 (D-133)
+        // later added Ty::Param, a new dataful variant -- see the more
+        // general `ty_size_stays_within_d109_ceiling` test below, which
+        // covers the ceiling for the current variant set including it.
+        assert_eq!(
+            std::mem::size_of::<Ty>(),
+            16,
+            "size_of::<Ty>() must stay 16 bytes (PR-10 Task 14, D-109) -- PR-11 adds \
+             no new Ty variants, so this must not move; if it does, something in this \
+             PR accidentally widened Ty's boxing, not the containers themselves",
+        );
+    }
+
+    #[test]
+    fn ty_size_stays_within_d109_ceiling() {
+        // D-133: `Ty::Param(Box<String>)` is a new dataful variant added
+        // after the D-109 boxing fix. `Box<String>` is a single (thin,
+        // 8-byte) pointer -- unlike `Box<str>`, which measured 24 bytes here
+        // because `str` is unsized (see the variant's own doc comment) --
+        // so it must not push `size_of::<Ty>()` back past the 16-byte
+        // ceiling that fix established.
+        assert!(
+            std::mem::size_of::<Ty>() <= 16,
+            "size_of::<Ty>() must stay within the D-109 16-byte ceiling; adding \
+             Ty::Param(Box<String>) (D-133) must not regress it, got {}",
+            std::mem::size_of::<Ty>(),
+        );
+    }
+
+    #[test]
+    fn ty_name_describes_nested_container_types() {
+        assert_eq!(Ty::Int.name(), "int");
+        assert_eq!(Ty::List(Box::new(Ty::Int)).name(), "list[int]");
+        assert_eq!(
+            Ty::Dict(Box::new((Ty::Str, Ty::Float))).name(),
+            "dict[str, float]"
+        );
+        assert_eq!(Ty::Set(Box::new(Ty::Bool)).name(), "set[bool]");
+        assert_eq!(
+            Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])).name(),
+            "tuple[int, str]"
+        );
     }
 
     #[test]
@@ -647,49 +1999,59 @@ mod tests {
             Span::new(13, 17),
         );
         assert_capability_error(
-            "x = [1]\n",
+            "x = lambda: 1\n",
             "expression kind not supported yet",
-            Span::new(4, 7),
+            Span::new(4, 13),
         );
     }
 
     #[test]
     fn capability_errors_propagate_through_every_supported_container() {
+        // `(1, 2)` was this table's "genuinely unhandled at every level"
+        // poison fixture -- a list literal used to fill this role (see
+        // `a_tuple_literal_expression_lowers_successfully`'s own comment)
+        // until Task 7 (D-105) added list-literal lowering, and a tuple
+        // literal took over in turn until this task (PR-11b Task 2, D-116)
+        // added tuple-literal lowering too. `lambda: 1` (parenthesized
+        // throughout, purely to dodge grammar ambiguity with the
+        // surrounding syntax -- not because any position here actually
+        // requires it) takes over now, since `lower_expr` still has no
+        // `Expr::Lambda` arm.
         let cases = [
             ("function body", "def _f():\n    pass\n"),
-            ("if test", "if []:\n    print(1)\n"),
+            ("if test", "if (lambda: 1):\n    print(1)\n"),
             ("if else body", "if True:\n    print(1)\nelse:\n    pass\n"),
-            ("while test", "while []:\n    print(1)\n"),
+            ("while test", "while (lambda: 1):\n    print(1)\n"),
             ("while body", "while True:\n    pass\n"),
             (
                 "one-argument range stop",
-                "for i in range([]):\n    print(i)\n",
+                "for i in range((lambda: 1)):\n    print(i)\n",
             ),
             (
                 "two-argument range start",
-                "for i in range([], 1):\n    print(i)\n",
+                "for i in range((lambda: 1), 1):\n    print(i)\n",
             ),
             (
                 "two-argument range stop",
-                "for i in range(0, []):\n    print(i)\n",
+                "for i in range(0, (lambda: 1)):\n    print(i)\n",
             ),
             (
                 "three-argument range start",
-                "for i in range([], 1, 1):\n    print(i)\n",
+                "for i in range((lambda: 1), 1, 1):\n    print(i)\n",
             ),
             (
                 "three-argument range stop",
-                "for i in range(0, [], 1):\n    print(i)\n",
+                "for i in range(0, (lambda: 1), 1):\n    print(i)\n",
             ),
             (
                 "three-argument range step",
-                "for i in range(0, 1, []):\n    print(i)\n",
+                "for i in range(0, 1, (lambda: 1)):\n    print(i)\n",
             ),
             ("for body", "for i in range(1):\n    pass\n"),
-            ("return value", "def _f():\n    return []\n"),
+            ("return value", "def _f():\n    return (lambda: 1)\n"),
             (
                 "elif test",
-                "if True:\n    print(1)\nelif []:\n    print(2)\n",
+                "if True:\n    print(1)\nelif (lambda: 1):\n    print(2)\n",
             ),
             (
                 "elif body",
@@ -699,11 +2061,11 @@ mod tests {
                 "nested else body",
                 "if True:\n    print(1)\nelif True:\n    print(2)\nelse:\n    pass\n",
             ),
-            ("binary left operand", "x = [] + 1\n"),
-            ("binary right operand", "x = 1 + []\n"),
-            ("f-string interpolation", "x = f\"{[]}\"\n"),
-            ("comparison left operand", "x = [] == 1\n"),
-            ("comparison right operand", "x = 1 == []\n"),
+            ("binary left operand", "x = (lambda: 1) + 1\n"),
+            ("binary right operand", "x = 1 + (lambda: 1)\n"),
+            ("f-string interpolation", "x = f\"{(lambda: 1)}\"\n"),
+            ("comparison left operand", "x = (lambda: 1) == 1\n"),
+            ("comparison right operand", "x = 1 == (lambda: 1)\n"),
         ];
 
         for (container, source) in cases {
@@ -912,6 +2274,54 @@ mod tests {
     }
 
     #[test]
+    fn subscript_assignment_to_a_bare_name_base_lowers_to_dict_set() {
+        // PR-11 Task 3 (D-123) supersedes D-105's "no subscript assignment
+        // target anywhere in this file" invariant this test used to lock in
+        // (`list[int]` alone stayed read-only-indexed; `dict[str, int]`
+        // ships `d[k] = v`). This lowering step has no type information (the
+        // same reason `ForList`'s own bare-name iterable isn't type-checked
+        // here either), so `x[0] = 1` lowers to `HirStmt::DictSet`
+        // regardless of whether `x` actually turns out to be a `list` or a
+        // `dict` -- `pycc_types` now owns rejecting a `list`-typed base with
+        // `T0033` (see that crate's own test module), relocating rather than
+        // removing the read-only-list invariant.
+        let module = pycc_parser_test_helper::parse("x[0] = 1\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::DictSet {
+                dict: "x".to_string(),
+                key: HirExpr::IntLiteral(0),
+                value: HirExpr::IntLiteral(1),
+            })]
+        );
+    }
+
+    #[test]
+    fn subscript_assignment_to_a_non_bare_name_base_is_unsupported() {
+        // `f()[0] = 1` has no plain variable name to record as `DictSet`'s
+        // own `dict` field -- rejected explicitly rather than guessed at.
+        assert_capability_error_message(
+            "f()[0] = 1\n",
+            "only assigning to a bare-name subscript target (`name[key] = value`) is supported so far",
+        );
+    }
+
+    #[test]
+    fn a_dict_set_target_with_an_unsupported_key_propagates_the_key_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("x[lambda: 1] = 1\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn a_dict_set_target_with_an_unsupported_value_propagates_the_value_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("x[0] = lambda: 1\n", "expression kind not supported yet");
+    }
+
+    #[test]
     fn matrix_multiplication_is_unsupported() {
         assert_capability_error_message("x = a @ b\n", "binary operator not supported yet");
     }
@@ -921,7 +2331,9 @@ mod tests {
         // `if` itself is supported (Task 8); `pass` inside it is not -- no
         // v0.1 grammar construct needs it (empty bodies aren't reachable
         // through anything pycc lowers) and it exercises the same catch-all
-        // as `a_list_literal_expression_is_unsupported` does for expressions.
+        // that `unsupported_statement_and_expression_return_spanned_capability_diagnostics`
+        // does for expressions (a tuple literal filled that role there
+        // until this task; a lambda does now, D-116).
         assert_capability_error_message("if True:\n    pass\n", "statement kind not supported yet");
     }
 
@@ -944,7 +2356,13 @@ mod tests {
 
     #[test]
     fn non_name_callee_is_unsupported() {
-        assert_capability_error_message("foo.bar()\n", "only calling a bare name");
+        // `foo.bar()` no longer reaches this message (Task 7, D-105): a
+        // `.` callee is now checked for the `.append()` shape first, and
+        // rejected with its own dedicated message when it isn't `.append`
+        // (see `calling_a_non_append_method_is_unsupported`). This fixture
+        // instead calls the *result* of a call -- neither a bare name nor
+        // an attribute access -- to keep exercising the fallback rejection.
+        assert_capability_error_message("foo()()\n", "only calling a bare name");
     }
 
     #[test]
@@ -1093,12 +2511,22 @@ mod tests {
     }
 
     #[test]
-    fn a_list_literal_expression_is_unsupported() {
-        // No v0.1 grammar node reaches this catch-all today (every kind
-        // handled so far -- numbers, names, calls, binops, bools,
-        // comparisons -- has its own dedicated arm); a list literal is
-        // genuinely unhandled at every level and exercises the final arm.
-        assert_capability_error_message("x = [1]\n", "expression kind not supported yet");
+    fn a_tuple_literal_expression_lowers_successfully() {
+        // Tuple literals were this file's own "genuinely unhandled at every
+        // level" fixture before this task (list/dict/set literals filled
+        // that role earlier and became supported in turn). Now that
+        // `Expr::Tuple` has a real arm, this asserts the actual shape
+        // rather than a lowering failure -- `pycc_types` (not this crate)
+        // now owns which element types/index forms are valid (D-116).
+        let module = pycc_parser_test_helper::parse("x = (1, 2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+            })
+        );
     }
 
     #[test]
@@ -1251,9 +2679,13 @@ mod tests {
 
     #[test]
     fn iterating_a_non_call_expression_is_not_supported_yet() {
+        // A list *literal* iterable is still rejected (Task 7/D-105 only
+        // added support for a bare-name iterable, i.e. `for v in some_list:`
+        // -- see `lowers_for_over_a_list_name_to_for_list`); the rejection
+        // message itself changed to mention that new bare-name-list form.
         assert_capability_error_message(
             "for i in [1, 2, 3]:\n    print(i)\n",
-            "only `for x in range(...)` is supported so far",
+            "only `for x in range(...)` or `for x in <list>` is supported so far",
         );
     }
 
@@ -1404,7 +2836,7 @@ mod tests {
                 hir.items,
                 vec![HirItem::Function {
                     name: "f".to_string(),
-                    params: vec![("x".to_string(), expected_ty)],
+                    params: vec![("x".to_string(), expected_ty.clone())],
                     return_ty: expected_ty,
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 }],
@@ -1490,10 +2922,57 @@ mod tests {
     }
 
     #[test]
-    fn a_generic_function_is_rejected_without_losing_its_type_parameters() {
+    fn a_generic_function_with_two_type_parameters_is_rejected() {
+        // D-133: exactly one type parameter is accepted (see
+        // `a_single_type_parameter_is_lowered_to_ty_param` below); two or
+        // more still hit the frontend arity gate, since the underlying
+        // representation and call-site substitution (D-134) are scoped to
+        // the single-type-parameter case only.
         assert_capability_error_message(
-            "def f[T]() -> None:\n    return\n",
-            "generic function type parameters are not supported yet",
+            "def f[T, U](x: T) -> U:\n    return x\n",
+            "generic functions with more than one type parameter are not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_single_type_parameter_is_lowered_to_ty_param() {
+        // D-133: `Ty::Param` is resolved by call-site substitution (D-134),
+        // not by unification -- this test only asserts the frontend lowers
+        // `T` consistently to `Ty::Param("T")` everywhere it appears in the
+        // signature, not that substitution happens yet.
+        let module = pycc_parser_test_helper::parse("def f[T](x: T) -> T:\n    return x\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+                return_ty: Ty::Param(Box::new("T".to_string())),
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+    }
+
+    #[test]
+    fn a_type_var_tuple_type_parameter_is_rejected() {
+        // D-133: `Ty::Param` models one `TypeVar` resolved to one concrete
+        // scalar via call-site substitution (D-134) -- `*Ts` stands for a
+        // variable-length sequence of types instead, which `Ty::Param`
+        // cannot represent, so this must be an explicit capability
+        // rejection rather than silently treated like a plain `TypeVar`.
+        assert_capability_error_message(
+            "def f[*Ts](x: int) -> None:\n    return\n",
+            "a `TypeVarTuple` type parameter (`*Ts`) is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_param_spec_type_parameter_is_rejected() {
+        // D-133: same reasoning as the `TypeVarTuple` case above -- `**P`
+        // stands for a parameter-list shape, not a single scalar type.
+        assert_capability_error_message(
+            "def f[**P](x: int) -> None:\n    return\n",
+            "a `ParamSpec` type parameter (`**P`) is not supported yet",
         );
     }
 
@@ -1655,7 +3134,1814 @@ mod tests {
     fn an_annotated_assignment_with_an_unsupported_value_returns_a_capability_error() {
         // Exercises the `lower_expr(...)?` early-return branch for
         // AnnAssign's value expression specifically.
-        assert_capability_error_message("x: int = []\n", "expression kind not supported yet");
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "x: int = lambda: 1\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    // -- Task 7 (D-105): list[int] frontend HIR forms --------------------
+
+    #[test]
+    fn lowers_a_list_literal() {
+        // Not a `let PATTERN = ... else { panic!(...) }` destructure -- this
+        // file's own coverage-gate lesson (see pycc_ast's documented
+        // `re_exported_grammar_types_resolve_and_have_the_expected_shape`
+        // finding) is that a hand-written panic arm is never taken on the
+        // happy path and shows up as a permanently uncovered region under
+        // D-014's 100%-regions gate. A direct `assert_eq!` against the whole
+        // expected `HirItem` avoids that without weakening the assertion.
+        let module = pycc_parser_test_helper::parse("x = [1, 2, 3]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::ListLiteral(vec![
+                    HirExpr::IntLiteral(1),
+                    HirExpr::IntLiteral(2),
+                    HirExpr::IntLiteral(3),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_read_subscript() {
+        let module = pycc_parser_test_helper::parse("x = [1, 2, 3]\ny = x[0]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Subscript {
+                    base: Box::new(HirExpr::Name("x".to_string())),
+                    index: Box::new(HirExpr::IntLiteral(0)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_append_as_a_dedicated_hir_node_not_a_generic_call() {
+        let module = pycc_parser_test_helper::parse("x = [1]\nx.append(2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListAppend {
+                list: "x".to_string(),
+                value: Box::new(HirExpr::IntLiteral(2)),
+            }))
+        );
+    }
+
+    #[test]
+    fn list_append_used_as_a_value_lowers_successfully_today() {
+        // Real Python's `list.append()` always returns `None`, so using its
+        // result as a value (as opposed to a bare `ExprStmt`) is meaningless
+        // -- but rejecting that is a type judgment, which is `pycc_types`'
+        // job (see `HirExpr::ListAppend`'s own doc comment), not this
+        // lowering step's. This test locks in today's actual behavior --
+        // `y = x.append(2)` lowers successfully -- so a future change to
+        // this arm doesn't silently start rejecting (or accepting some
+        // different shape of) value-position `.append()` without its own
+        // deliberate decision.
+        let module = pycc_parser_test_helper::parse("x = [1]\ny = x.append(2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::ListAppend {
+                    list: "x".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(2)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_for_over_a_list_name_to_for_list() {
+        let module = pycc_parser_test_helper::parse("x = [1, 2, 3]\nfor v in x:\n    print(v)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ForList {
+                var: "v".to_string(),
+                list: "x".to_string(),
+                body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("v".to_string())],
+                })],
+            })
+        );
+    }
+
+    // -- PR-11 Task 3 (D-123): dict[str, int] frontend HIR forms ---------
+
+    #[test]
+    fn lowers_a_dict_literal() {
+        let module = pycc_parser_test_helper::parse("x = {\"a\": 1, \"b\": 2}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::DictLiteral(vec![
+                    (
+                        HirExpr::StringLiteral("a".to_string()),
+                        HirExpr::IntLiteral(1),
+                    ),
+                    (
+                        HirExpr::StringLiteral("b".to_string()),
+                        HirExpr::IntLiteral(2),
+                    ),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_an_empty_dict_literal() {
+        // `{}` is an empty *dict* literal in Python grammar (an empty set has
+        // no literal spelling -- `set()` is a call) -- `pycc_types` rejects
+        // it (its element types can't be inferred), but lowering itself
+        // succeeds, mirroring `HirExpr::ListLiteral(vec![])`'s own split of
+        // responsibility.
+        let module = pycc_parser_test_helper::parse("x = {}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::DictLiteral(vec![]),
+            })]
+        );
+    }
+
+    #[test]
+    fn dict_unpacking_inside_a_literal_is_unsupported() {
+        assert_capability_error_message(
+            "x = {**y}\n",
+            "dict-unpacking (`**expr`) inside a dict literal is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_literal_with_an_unsupported_key_propagates_the_key_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "x = {(lambda: 1): 1}\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_literal_with_an_unsupported_value_propagates_the_value_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "x = {\"a\": (lambda: 1)}\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    // -- PR-11 Task 7 (D-123): set[int] frontend HIR forms ---------------
+
+    #[test]
+    fn lowers_a_set_literal() {
+        let module = pycc_parser_test_helper::parse("x = {1, 2, 3}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::SetLiteral(vec![
+                    HirExpr::IntLiteral(1),
+                    HirExpr::IntLiteral(2),
+                    HirExpr::IntLiteral(3),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn a_set_literal_with_an_unsupported_element_propagates_the_element_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("x = {(lambda: 1)}\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn subscripted_type_annotation_is_still_rejected_on_purpose() {
+        // D-105: v0.2 adds no annotation-syntax support for list[T]. This test
+        // locks in that `x: list[int] = []` keeps failing today's existing
+        // "only a bare name type annotation" capability error, so a future
+        // change to `annotation_to_ty` doesn't silently start accepting this
+        // without its own deliberate decision.
+        assert_capability_error_message(
+            "x: list[int] = []\n",
+            "only a bare name type annotation is supported so far",
+        );
+    }
+
+    #[test]
+    fn an_empty_list_literal_lowers_to_an_empty_vec() {
+        let module = pycc_parser_test_helper::parse("x = []\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::ListLiteral(vec![]),
+            })]
+        );
+    }
+
+    #[test]
+    fn appending_to_a_non_bare_name_base_is_unsupported() {
+        // `.append()` recognition is restricted to a bare-name list (D-105);
+        // `a.b.append(1)` has a non-name `attr.value` (itself an attribute
+        // access), so it must be rejected rather than silently accepted.
+        assert_capability_error_message(
+            "a.b.append(1)\n",
+            "`.append()` is only supported on a bare-name list so far",
+        );
+    }
+
+    #[test]
+    fn append_with_zero_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "x.append()\n",
+            "list.append() takes exactly one argument, got 0",
+        );
+    }
+
+    #[test]
+    fn append_with_two_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "x.append(1, 2)\n",
+            "list.append() takes exactly one argument, got 2",
+        );
+    }
+
+    #[test]
+    fn calling_an_unrecognized_method_is_unsupported() {
+        // Any other `.method()` call is rejected before ever falling through
+        // to the bare-name-callee check below it -- this project only
+        // special-cases `.append()`/`.pop()`/`.get()`/`.add()`, not general
+        // method dispatch (D-105, widened by D-119). `.remove()` is a
+        // deliberately chosen example: it is a real `list` method D-119
+        // explicitly did not ship (`list.pop()` is the one growable/lookup
+        // operation this PR ships for `list`), not a strawman.
+        assert_capability_error_message(
+            "foo.bar()\n",
+            "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.bar(...)`",
+        );
+        assert_capability_error_message(
+            "x.remove(1)\n",
+            "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.remove(...)`",
+        );
+    }
+
+    // The five tests below exercise each new arm's own `?`-propagation path
+    // specifically (an inner element/base/index/argument/body expression
+    // that itself fails to lower), as opposed to every test above, which
+    // only ever supplies inner expressions that lower successfully.
+
+    #[test]
+    fn a_list_literal_with_an_unsupported_element_propagates_the_element_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("x = [(lambda: 1)]\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn a_subscript_with_an_unsupported_base_propagates_the_base_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "y = (lambda: 1)[0]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_subscript_with_an_unsupported_index_propagates_the_index_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message("y = x[lambda: 1]\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn an_append_with_an_unsupported_argument_propagates_the_argument_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "x.append(lambda: 1)\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    // -- PR-12 Task 10 (D-119): remaining container methods depth --------
+    // `list.pop()`, `dict.get(key, default)`, `set.add(value)` -- each
+    // mirrors `.append()`'s own hand-recognized-special-form shape and test
+    // coverage exactly (bare-name-base gate, arity gate, value-position
+    // lowering, argument-propagation).
+
+    #[test]
+    fn lowers_pop_as_a_dedicated_hir_node_not_a_generic_call() {
+        let module = pycc_parser_test_helper::parse("x = [1]\nx.pop()\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::ListPop {
+                list: "x".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn list_pop_used_as_a_value_lowers_successfully() {
+        // Unlike `ListAppend`, `.pop()`'s value is the list's element type,
+        // not `None` -- `y = x.pop()` is the primary intended use, not a
+        // curiosity being merely tolerated.
+        let module = pycc_parser_test_helper::parse("x = [1]\ny = x.pop()\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::ListPop {
+                    list: "x".to_string(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn popping_from_a_non_bare_name_base_is_unsupported() {
+        assert_capability_error_message(
+            "a.b.pop()\n",
+            "`.pop()` is only supported on a bare-name list so far",
+        );
+    }
+
+    #[test]
+    fn pop_with_one_argument_is_unsupported() {
+        assert_capability_error_message("x.pop(0)\n", "list.pop() takes no arguments, got 1");
+    }
+
+    #[test]
+    fn lowers_get_as_a_dedicated_hir_node_not_a_generic_call() {
+        let module = pycc_parser_test_helper::parse("d = {\"a\": 1}\nd.get(\"a\", 0)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::DictGetOrDefault {
+                dict: "d".to_string(),
+                key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                default: Box::new(HirExpr::IntLiteral(0)),
+            }))
+        );
+    }
+
+    #[test]
+    fn dict_get_used_as_a_value_lowers_successfully() {
+        let module = pycc_parser_test_helper::parse("d = {\"a\": 1}\ny = d.get(\"a\", 0)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::DictGetOrDefault {
+                    dict: "d".to_string(),
+                    key: Box::new(HirExpr::StringLiteral("a".to_string())),
+                    default: Box::new(HirExpr::IntLiteral(0)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn getting_from_a_non_bare_name_base_is_unsupported() {
+        assert_capability_error_message(
+            "a.b.get(\"a\", 0)\n",
+            "`.get()` is only supported on a bare-name dict so far",
+        );
+    }
+
+    #[test]
+    fn get_with_one_argument_is_unsupported() {
+        assert_capability_error_message(
+            "d.get(\"a\")\n",
+            "dict.get() takes exactly two arguments (key, default), got 1",
+        );
+    }
+
+    #[test]
+    fn get_with_three_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "d.get(\"a\", 0, 1)\n",
+            "dict.get() takes exactly two arguments (key, default), got 3",
+        );
+    }
+
+    #[test]
+    fn a_get_call_with_an_unsupported_key_propagates_the_key_error() {
+        assert_capability_error_message(
+            "d.get(lambda: 1, 0)\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_get_call_with_an_unsupported_default_propagates_the_default_error() {
+        assert_capability_error_message(
+            "d.get(\"a\", lambda: 1)\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn lowers_add_as_a_dedicated_hir_node_not_a_generic_call() {
+        let module = pycc_parser_test_helper::parse("s = {1}\ns.add(2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::SetAdd {
+                set: "s".to_string(),
+                value: Box::new(HirExpr::IntLiteral(2)),
+            }))
+        );
+    }
+
+    #[test]
+    fn set_add_used_as_a_value_lowers_successfully_today() {
+        // Mirrors `ListAppend`'s own "today's actual behavior" test exactly
+        // -- `.add()`'s value is always `None`, and D-131 lets an assignment
+        // preserve that materialized unit value in ordinary storage.
+        let module = pycc_parser_test_helper::parse("s = {1}\ny = s.add(2)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::SetAdd {
+                    set: "s".to_string(),
+                    value: Box::new(HirExpr::IntLiteral(2)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn adding_to_a_non_bare_name_base_is_unsupported() {
+        assert_capability_error_message(
+            "a.b.add(1)\n",
+            "`.add()` is only supported on a bare-name set so far",
+        );
+    }
+
+    #[test]
+    fn add_with_zero_arguments_is_unsupported() {
+        assert_capability_error_message("s.add()\n", "set.add() takes exactly one argument, got 0");
+    }
+
+    #[test]
+    fn add_with_two_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "s.add(1, 2)\n",
+            "set.add() takes exactly one argument, got 2",
+        );
+    }
+
+    #[test]
+    fn an_add_with_an_unsupported_argument_propagates_the_argument_error() {
+        assert_capability_error_message("s.add(lambda: 1)\n", "expression kind not supported yet");
+    }
+
+    #[test]
+    fn a_for_list_body_with_an_unsupported_statement_propagates_the_body_error() {
+        // (1, 2) no longer fails to lower (this task) -- lambda is still
+        // unsupported and exercises the identical propagation path.
+        assert_capability_error_message(
+            "x = [1, 2, 3]\nfor v in x:\n    lambda: 1\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    // -- PR-11b Task 2 (D-116): tuple[...] frontend HIR forms -------------
+
+    #[test]
+    fn a_bare_unparenthesized_tuple_expression_lowers_the_same_as_parenthesized() {
+        // Python's tuple literal syntax does not require parentheses
+        // (`1, 2` and `(1, 2)` parse to the same `Expr::Tuple` node); this
+        // locks in that this crate's own lowering treats both identically,
+        // since `lower_expr` never inspects `ExprTuple::parenthesized`.
+        let module = pycc_parser_test_helper::parse("x = 1, 2\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]),
+            })
+        );
+    }
+
+    #[test]
+    fn a_heterogeneous_tuple_literal_lowers_with_mixed_element_kinds() {
+        // Unlike `ListLiteral`/`SetLiteral`, this crate does not reject
+        // mixed element kinds at the HIR layer -- D-116 makes heterogeneity
+        // tuple's own defining feature, judged (for element *type*, not
+        // syntactic kind) entirely by `pycc_types`, not here.
+        let module = pycc_parser_test_helper::parse("x = (1, True, 2.5)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[0],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::TupleLiteral(vec![
+                    HirExpr::IntLiteral(1),
+                    HirExpr::BoolLiteral(true),
+                    HirExpr::FloatLiteral(2.5),
+                ]),
+            })
+        );
+    }
+
+    #[test]
+    fn a_tuple_element_that_fails_to_lower_propagates_its_own_error() {
+        assert_capability_error_message(
+            "x = (1, lambda: 1)\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    // -- PR-12 Task 2 (D-117): comprehension frontend HIR forms ----------
+
+    #[test]
+    fn lowers_a_list_comprehension_over_range_to_list_comp_assign() {
+        let module = pycc_parser_test_helper::parse("y = [i for i in range(3)]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_list_comprehension_with_an_if_filter() {
+        let module = pycc_parser_test_helper::parse("y = [i for i in range(5) if i]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(5),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("0comp_11_i".to_string()))),
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_dict_comprehension_with_an_f_string_key_renaming_the_interpolation() {
+        // Confirms `FString`'s own `rename_name_in_expr` arm actually
+        // rewrites an interpolated loop-variable reference, not just a bare
+        // `Name` expression.
+        let module = pycc_parser_test_helper::parse("y = {f\"n{i}\": i for i in range(3)}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_20_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                key: Box::new(HirExpr::FString(vec![
+                    FStringPart::Literal("n".to_string()),
+                    FStringPart::Interpolation(Box::new(HirExpr::Name("0comp_20_i".to_string()))),
+                ])),
+                value: Box::new(HirExpr::Name("0comp_20_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_set_comprehension_to_set_comp_assign() {
+        let module = pycc_parser_test_helper::parse("y = {i for i in range(3)}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(3),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_set_comprehension_with_an_if_filter() {
+        // `SetCompAssign`'s own `cond` field needs a dedicated if-filter
+        // test distinct from the plain set-comprehension test above: the
+        // `cond.map(|c| rename_name_in_expr(...))` closure inside
+        // `lower_set_comp_assign` is only reached when `cond.is_some()`.
+        let module = pycc_parser_test_helper::parse("y = {i for i in range(5) if i}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::SetCompAssign {
+                target: "y".to_string(),
+                var: "0comp_11_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(5),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("0comp_11_i".to_string()))),
+                elt: Box::new(HirExpr::Name("0comp_11_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn lowers_a_dict_comprehension_with_an_if_filter() {
+        // Same reasoning as `lowers_a_set_comprehension_with_an_if_filter`
+        // above, for `lower_dict_comp_assign`'s own `cond.map(...)` closure.
+        let module = pycc_parser_test_helper::parse("y = {i: i for i in range(5) if i}\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::DictCompAssign {
+                target: "y".to_string(),
+                var: "0comp_14_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    stop: HirExpr::IntLiteral(5),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: Some(Box::new(HirExpr::Name("0comp_14_i".to_string()))),
+                key: Box::new(HirExpr::Name("0comp_14_i".to_string())),
+                value: Box::new(HirExpr::Name("0comp_14_i".to_string())),
+            })]
+        );
+    }
+
+    #[test]
+    fn a_comprehension_with_two_for_clauses_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in range(3) for j in range(3)]\n",
+            "a comprehension with more than one `for` clause is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_with_two_if_filters_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in range(5) if i if i]\n",
+            "a comprehension with more than one `if` filter is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_with_a_non_bare_name_target_is_unsupported() {
+        assert_capability_error_message(
+            "y = [a for (a, b) in xs]\n",
+            "only a bare name comprehension target is supported so far",
+        );
+    }
+
+    #[test]
+    fn an_async_for_comprehension_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i async for i in xs]\n",
+            "async comprehensions are not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_used_as_a_call_argument_is_not_specially_recognized() {
+        // Pins the "only `Stmt::Assign`-RHS position" restriction (D-117): a
+        // comprehension anywhere else still falls through to `lower_expr`'s
+        // existing generic catch-all, not a new comprehension-specific
+        // error path.
+        assert_capability_error_message(
+            "print([i for i in range(3)])\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iterating_a_bare_name_produces_comp_iter_name() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = [i for i in xs]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_26_i".to_string(),
+                iter: CompIter::Name("xs".to_string()),
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_26_i".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn a_comprehension_range_iterable_referencing_the_loop_variables_own_source_name_is_not_renamed()
+     {
+        // Pins `lower_comprehension_header`'s own documented asymmetry
+        // (D-117): `iter` is deliberately never passed through
+        // `rename_name_in_expr`, unlike `elt`/`cond`/`key`/`value` -- this
+        // is correct CPython scoping, since a comprehension's iterable
+        // expression evaluates in the *enclosing* scope, before the
+        // comprehension's own loop variable is ever bound.
+        // `[i for i in range(i)]`'s `range(i)` must read the *outer* `i`
+        // (here, the module-level `i = 5`), not the comprehension's own
+        // synthesized loop variable. Without this test, a future change
+        // that "fixed" this asymmetry by renaming `iter` too would silently
+        // break correct scoping with every other existing test (and 100%
+        // coverage) still green, since no other test uses an iterable
+        // expression that shares the loop variable's own source name.
+        let module = pycc_parser_test_helper::parse("i = 5\ny = [i for i in range(i)]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_17_i".to_string(),
+                iter: CompIter::Range {
+                    start: HirExpr::IntLiteral(0),
+                    // The un-renamed enclosing-scope `i`, not
+                    // `HirExpr::Name("0comp_17_i")`.
+                    stop: HirExpr::Name("i".to_string()),
+                    step: HirExpr::IntLiteral(1),
+                },
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_17_i".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn a_comprehension_bare_name_iterable_sharing_the_loop_variables_own_source_name_is_not_renamed()
+     {
+        // Same reasoning as the `range(i)` test above, for `CompIter::Name`
+        // instead of `CompIter::Range`: `[xs for xs in xs]`'s iterable `xs`
+        // must resolve to the un-renamed enclosing-scope name, not the
+        // comprehension's own synthesized loop variable, even though both
+        // are spelled identically in the source.
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = [xs for xs in xs]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::ListCompAssign {
+                target: "y".to_string(),
+                var: "0comp_27_xs".to_string(),
+                // The un-renamed enclosing-scope `xs`, not
+                // `CompIter::Name("0comp_27_xs".to_string())`.
+                iter: CompIter::Name("xs".to_string()),
+                cond: None,
+                elt: Box::new(HirExpr::Name("0comp_27_xs".to_string())),
+            })
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iterating_a_list_literal_is_unsupported() {
+        // Neither a bare name nor a call -- exercises
+        // `lower_comprehension_iter`'s own "not Name, not Call" branch,
+        // which is not shared with `Stmt::For`'s separate (textually
+        // similar but distinct) iterable-shape checks.
+        assert_capability_error_message(
+            "y = [i for i in [1, 2]]\n",
+            "only `range(...)` or a bare-name iterable is supported so far in a comprehension",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iterating_a_non_name_callee_call_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in f()()]\n",
+            "only calling `range(...)` is supported so far in a comprehension",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iterating_a_non_range_call_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in foo(3)]\n",
+            "only iterating over `range(...)` is supported so far in a comprehension, got `foo`",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_range_call_with_keyword_arguments_is_unsupported() {
+        assert_capability_error_message(
+            "y = [i for i in range(stop=3)]\n",
+            "keyword arguments to range() are not supported yet",
+        );
+    }
+
+    // The eight tests below each exercise one `?`-propagation region on its
+    // own `?` operator's specific call site (mirroring this file's existing
+    // "the five tests below exercise each new arm's own `?`-propagation
+    // path specifically" precedent above): `lower_set_comp_assign` and
+    // `lower_dict_comp_assign` are structurally near-identical to
+    // `lower_list_comp_assign`, but each function's own `?` is a distinct
+    // coverage region, so an error test against one function's call site
+    // does not also cover its sibling's.
+
+    #[test]
+    fn a_set_comprehension_with_an_unsupported_header_propagates_the_header_error() {
+        // Exercises both `Stmt::Assign`'s own `Expr::SetComp(comp) =>
+        // lower_set_comp_assign(...)?` call site and
+        // `lower_set_comp_assign`'s own internal
+        // `lower_comprehension_header(&comp.generators)?` call site in one
+        // test, since the header error propagates through both in the same
+        // nested call.
+        assert_capability_error_message(
+            "y = {i for i in range(3) for j in range(3)}\n",
+            "a comprehension with more than one `for` clause is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_iter_range_call_with_too_many_arguments_is_unsupported() {
+        // Exercises `lower_comprehension_iter`'s own
+        // `lower_range_call(call)?` call site specifically -- distinct from
+        // `Stmt::For`'s own separate call site to the same shared helper
+        // (already covered by `range_with_too_many_arguments_is_not_supported`
+        // above).
+        assert_capability_error_message(
+            "y = [i for i in range(1, 2, 3, 4)]\n",
+            "range() with 4 arguments is not supported",
+        );
+    }
+
+    #[test]
+    fn a_comprehension_if_filter_with_an_unsupported_expression_propagates_the_filter_error() {
+        assert_capability_error_message(
+            "y = [i for i in range(3) if (lambda: 1)]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_list_comprehension_element_that_fails_to_lower_propagates_the_element_error() {
+        assert_capability_error_message(
+            "y = [(lambda: 1) for i in range(3)]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_set_comprehension_element_that_fails_to_lower_propagates_the_element_error() {
+        assert_capability_error_message(
+            "y = {(lambda: 1) for i in range(3)}\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_comprehension_with_an_unsupported_header_propagates_the_header_error() {
+        assert_capability_error_message(
+            "y = {i: i for i in range(3) for j in range(3)}\n",
+            "a comprehension with more than one `for` clause is not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_comprehension_key_that_fails_to_lower_propagates_the_key_error() {
+        assert_capability_error_message(
+            "y = {(lambda: 1): i for i in range(3)}\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_dict_comprehension_value_that_fails_to_lower_propagates_the_value_error() {
+        assert_capability_error_message(
+            "y = {i: (lambda: 1) for i in range(3)}\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn dict_comp_key_unpacking_parses_successfully_and_is_rejected_at_lowering() {
+        // The task-2 brief this test suite followed assumed
+        // `{**x for k in y}`-shaped source could never actually parse (so
+        // `comp.key == None` would be unreachable, modeled with an internal
+        // panic). Verified false directly against the vendored
+        // `ruff_python_parser`: it parses this successfully as
+        // `ExprDictComp { key: None, value: Name("x"), .. }`, silently
+        // dropping the `**` rather than erroring -- so `pycc_parser::parse`
+        // itself succeeds here, and `lower_dict_comp_assign` is the one
+        // that must reject it, with an ordinary `C0001` capability
+        // diagnostic instead of a panic.
+        assert!(pycc_parser::parse("y = {**x for k in z}\n").is_ok());
+        assert_capability_error_message(
+            "y = {**x for k in z}\n",
+            "dict-unpacking (`**expr`) inside a dict comprehension is not supported yet",
+        );
+    }
+
+    #[test]
+    fn lower_comprehension_header_rejects_an_empty_generators_slice() {
+        // Real parsed source can never produce a comprehension with zero
+        // generators -- this is the only way to reach the `[generator] =
+        // generators else { ... }` arm's failure branch and its own
+        // `generators.first().map(|g| g.range).unwrap_or_default()`
+        // span-fallback expression at all (D-014's region coverage gate
+        // would otherwise flag that fallback as an uncoverable dead
+        // branch).
+        let err = lower_comprehension_header(&[]).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message
+                .contains("a comprehension with more than one `for` clause is not supported yet")
+        );
+        assert_eq!(err.span, Some(Span::new(0, 0)));
+    }
+
+    // -- Task 6 (D-118): list[int] slicing frontend HIR forms ------------
+
+    #[test]
+    fn lowers_a_slice_expression_with_both_bounds_present() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[1:3]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: Some(Box::new(HirExpr::IntLiteral(1))),
+                    stop: Some(Box::new(HirExpr::IntLiteral(3))),
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_with_only_the_stop_bound() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[:3]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: None,
+                    stop: Some(Box::new(HirExpr::IntLiteral(3))),
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_with_only_the_start_bound() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[2:]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: Some(Box::new(HirExpr::IntLiteral(2))),
+                    stop: None,
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_with_all_bounds_omitted() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[:]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: None,
+                    stop: None,
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_with_a_step() {
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[::2]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: None,
+                    stop: None,
+                    step: Some(Box::new(HirExpr::IntLiteral(2))),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn an_ordinary_single_expression_subscript_still_lowers_to_subscript_not_slice() {
+        // Regression pin for Step 2's new `match sub.slice.as_ref() { ... }`
+        // dispatch (D-118): a colon-free subscript must keep taking the `_`
+        // arm and producing the pre-existing `HirExpr::Subscript` shape,
+        // unaffected by the new `Expr::Slice` arm added alongside it.
+        // (Already exercised incidentally by `lowers_a_read_subscript`
+        // above; pinned again here, by name, as the dedicated regression
+        // test for this specific change.)
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[0]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Subscript {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    index: Box::new(HirExpr::IntLiteral(0)),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_expressions_base_and_bounds_are_recursively_lowered() {
+        // `f()`/`g()` stand in for "some already-lowerable non-literal
+        // shape" -- confirms `base`/`start`/`stop` are each passed through
+        // the real `lower_expr` recursively, not merely accepted as raw
+        // literals.
+        let module = pycc_parser_test_helper::parse("xs = [1, 2, 3]\ny = xs[f():g()]\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items[1],
+            HirItem::TopLevelStmt(HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("xs".to_string())),
+                    start: Some(Box::new(HirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                    })),
+                    stop: Some(Box::new(HirExpr::Call {
+                        callee: "g".to_string(),
+                        args: vec![],
+                    })),
+                    step: None,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_slice_with_an_unsupported_base_propagates_the_base_error() {
+        // Exercises the `Expr::Slice(slice) => ...` arm's own
+        // `lower_expr(&sub.value)?` call site specifically -- a distinct
+        // region from the `_` arm's identically-worded call site, already
+        // covered by `a_subscript_with_an_unsupported_base_propagates_the_base_error`.
+        assert_capability_error_message(
+            "y = (lambda: 1)[0:1]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_slice_with_an_unsupported_start_bound_propagates_the_start_error() {
+        assert_capability_error_message(
+            "xs = [1, 2, 3]\ny = xs[(lambda: 1):3]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_slice_with_an_unsupported_stop_bound_propagates_the_stop_error() {
+        assert_capability_error_message(
+            "xs = [1, 2, 3]\ny = xs[1:(lambda: 1)]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_slice_with_an_unsupported_step_propagates_the_step_error() {
+        assert_capability_error_message(
+            "xs = [1, 2, 3]\ny = xs[1:3:(lambda: 1)]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn a_slice_assignment_target_is_not_specially_recognized() {
+        // Pins `HirExpr::Slice`'s own documented "Load position only"
+        // restriction (D-118): unlike a plain-index assignment target
+        // (`xs[0] = 1`, which reaches `HirStmt::DictSet` via `Stmt::Assign`'s
+        // own `Expr::Subscript` target arm), a slice assignment target
+        // (`xs[1:3] = value`) calls `lower_expr` directly on the bare
+        // `Expr::Slice` node -- which has no top-level arm -- and falls
+        // through to the same generic catch-all as any other unsupported
+        // expression kind. This is intentional (slicing ships read-only in
+        // this PR), not a regression to fix later without revisiting D-118.
+        assert_capability_error_message(
+            "xs = [1, 2, 3]\nxs[1:3] = [4, 5]\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn rename_name_in_expr_rewrites_every_hir_expr_variant() {
+        // Exhaustiveness-pinning test for `rename_name_in_expr`'s own
+        // "let the compiler enumerate every site" discipline (D-117,
+        // mirroring D-107's `Scalar::List` precedent) -- every arm must be
+        // hit by at least one case, and every conditional inside an arm
+        // (name matches `from` vs. doesn't) must be hit on both sides.
+
+        // Name: renamed when it matches `from`, left alone otherwise.
+        assert_eq!(
+            rename_name_in_expr(HirExpr::Name("old".to_string()), "old", "new"),
+            HirExpr::Name("new".to_string())
+        );
+        assert_eq!(
+            rename_name_in_expr(HirExpr::Name("other".to_string()), "old", "new"),
+            HirExpr::Name("other".to_string())
+        );
+
+        // The four grouped literal variants are returned unchanged.
+        assert_eq!(
+            rename_name_in_expr(HirExpr::IntLiteral(1), "old", "new"),
+            HirExpr::IntLiteral(1)
+        );
+        assert_eq!(
+            rename_name_in_expr(HirExpr::FloatLiteral(1.5), "old", "new"),
+            HirExpr::FloatLiteral(1.5)
+        );
+        assert_eq!(
+            rename_name_in_expr(HirExpr::BoolLiteral(true), "old", "new"),
+            HirExpr::BoolLiteral(true)
+        );
+        assert_eq!(
+            rename_name_in_expr(HirExpr::StringLiteral("s".to_string()), "old", "new"),
+            HirExpr::StringLiteral("s".to_string())
+        );
+
+        // Call: renames every argument.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Name("old".to_string())],
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("new".to_string())],
+            }
+        );
+
+        // BinOp: renames both sides.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::BinOp {
+                    op: BinOpKind::Add,
+                    left: Box::new(HirExpr::Name("old".to_string())),
+                    right: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::BinOp {
+                op: BinOpKind::Add,
+                left: Box::new(HirExpr::Name("new".to_string())),
+                right: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // Compare: renames both sides.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::Compare {
+                    op: CmpOpKind::Eq,
+                    left: Box::new(HirExpr::Name("old".to_string())),
+                    right: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::Compare {
+                op: CmpOpKind::Eq,
+                left: Box::new(HirExpr::Name("new".to_string())),
+                right: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // FString: covers both a `Literal` part (passed through unchanged)
+        // and an `Interpolation` part (recursed into) in the same tree.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::FString(vec![
+                    FStringPart::Literal("text".to_string()),
+                    FStringPart::Interpolation(Box::new(HirExpr::Name("old".to_string()))),
+                ]),
+                "old",
+                "new",
+            ),
+            HirExpr::FString(vec![
+                FStringPart::Literal("text".to_string()),
+                FStringPart::Interpolation(Box::new(HirExpr::Name("new".to_string()))),
+            ])
+        );
+
+        // ListLiteral: renames every element.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListLiteral(vec![HirExpr::Name("old".to_string())]),
+                "old",
+                "new",
+            ),
+            HirExpr::ListLiteral(vec![HirExpr::Name("new".to_string())])
+        );
+
+        // Subscript: renames both base and index.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::Subscript {
+                    base: Box::new(HirExpr::Name("old".to_string())),
+                    index: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::Subscript {
+                base: Box::new(HirExpr::Name("new".to_string())),
+                index: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // Slice: renames `base` and every present bound. Only the `Some`
+        // side of each `Option::map` is exercised here -- the `None` side
+        // has no closure body of its own to cover (it is just the same
+        // `start`/`stop`/`step` value flowing through unchanged), and is
+        // separately pinned by `lowers_a_slice_expression_with_all_bounds_omitted`
+        // above at the `lower_expr` level.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::Slice {
+                    base: Box::new(HirExpr::Name("old".to_string())),
+                    start: Some(Box::new(HirExpr::Name("old".to_string()))),
+                    stop: Some(Box::new(HirExpr::Name("old".to_string()))),
+                    step: Some(Box::new(HirExpr::Name("old".to_string()))),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::Slice {
+                base: Box::new(HirExpr::Name("new".to_string())),
+                start: Some(Box::new(HirExpr::Name("new".to_string()))),
+                stop: Some(Box::new(HirExpr::Name("new".to_string()))),
+                step: Some(Box::new(HirExpr::Name("new".to_string()))),
+            }
+        );
+
+        // ListAppend: covers both the `list` field matching `from` and not
+        // matching it, plus renaming `value` in both cases.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListAppend {
+                    list: "old".to_string(),
+                    value: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::ListAppend {
+                list: "new".to_string(),
+                value: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListAppend {
+                    list: "other".to_string(),
+                    value: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::ListAppend {
+                list: "other".to_string(),
+                value: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // DictLiteral: renames both key and value of every pair.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::DictLiteral(vec![(
+                    HirExpr::Name("old".to_string()),
+                    HirExpr::Name("old".to_string()),
+                )]),
+                "old",
+                "new",
+            ),
+            HirExpr::DictLiteral(vec![(
+                HirExpr::Name("new".to_string()),
+                HirExpr::Name("new".to_string()),
+            )])
+        );
+
+        // SetLiteral: renames every element.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::SetLiteral(vec![HirExpr::Name("old".to_string())]),
+                "old",
+                "new",
+            ),
+            HirExpr::SetLiteral(vec![HirExpr::Name("new".to_string())])
+        );
+
+        // TupleLiteral: renames every element.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::TupleLiteral(vec![HirExpr::Name("old".to_string())]),
+                "old",
+                "new",
+            ),
+            HirExpr::TupleLiteral(vec![HirExpr::Name("new".to_string())])
+        );
+
+        // ListPop: covers both the `list` field matching `from` and not
+        // matching it (PR-12 Task 10, D-119; mirrors `ListAppend` above).
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListPop {
+                    list: "old".to_string(),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::ListPop {
+                list: "new".to_string(),
+            }
+        );
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::ListPop {
+                    list: "other".to_string(),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::ListPop {
+                list: "other".to_string(),
+            }
+        );
+
+        // DictGetOrDefault: covers both the `dict` field matching `from` and
+        // not matching it, plus renaming `key`/`default` in both cases.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::DictGetOrDefault {
+                    dict: "old".to_string(),
+                    key: Box::new(HirExpr::Name("old".to_string())),
+                    default: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::DictGetOrDefault {
+                dict: "new".to_string(),
+                key: Box::new(HirExpr::Name("new".to_string())),
+                default: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::DictGetOrDefault {
+                    dict: "other".to_string(),
+                    key: Box::new(HirExpr::Name("old".to_string())),
+                    default: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::DictGetOrDefault {
+                dict: "other".to_string(),
+                key: Box::new(HirExpr::Name("new".to_string())),
+                default: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+
+        // SetAdd: covers both the `set` field matching `from` and not
+        // matching it, plus renaming `value` in both cases.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::SetAdd {
+                    set: "old".to_string(),
+                    value: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::SetAdd {
+                set: "new".to_string(),
+                value: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::SetAdd {
+                    set: "other".to_string(),
+                    value: Box::new(HirExpr::Name("old".to_string())),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::SetAdd {
+                set: "other".to_string(),
+                value: Box::new(HirExpr::Name("new".to_string())),
+            }
+        );
+    }
+
+    // -- D-135: `type` statement and legacy `TypeAlias` -------------------
+
+    #[test]
+    fn a_type_statement_resolves_the_alias_in_a_later_parameter_annotation() {
+        let module = pycc_parser_test_helper::parse(
+            "type IntAlias = int\n\
+             def f(x: IntAlias) -> int:\n\
+             \x20   return x\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+
+        // Zero HIR footprint: the `type` statement itself contributes no
+        // `HirItem` -- the only item present is the function it fed, and its
+        // `x` parameter resolved to `Ty::Int` through the alias.
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+        assert_eq!(hir.type_aliases, vec![("IntAlias".to_string(), Ty::Int)]);
+    }
+
+    #[test]
+    fn a_legacy_type_alias_annotated_assignment_resolves_the_alias_the_same_way() {
+        let module = pycc_parser_test_helper::parse(
+            "IntAlias: TypeAlias = int\n\
+             def f(x: IntAlias) -> int:\n\
+             \x20   return x\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+
+        // Same zero-HIR-footprint contract as the `type` statement form:
+        // the legacy annotated assignment contributes no `HirItem` either.
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("x".to_string(), Ty::Int)],
+                return_ty: Ty::Int,
+                body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+            }]
+        );
+        assert_eq!(hir.type_aliases, vec![("IntAlias".to_string(), Ty::Int)]);
+    }
+
+    #[test]
+    fn a_generic_type_alias_is_rejected_with_t0042() {
+        let module = pycc_parser_test_helper::parse("type Alias[T] = list[T]\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "T0042");
+    }
+
+    #[test]
+    fn a_generic_type_alias_t0042_span_points_at_the_type_statement_not_byte_zero() {
+        // The `type` statement is deliberately not the first line, so a
+        // regression back to a hardcoded `Span::new(0, 0)` would be caught:
+        // byte 0 falls inside the preceding `def f() -> int:` line, not the
+        // `type Alias[T] = int` statement this diagnostic is actually about.
+        let source = "def f() -> int:\n    return 1\ntype Alias[T] = int\n";
+        let type_stmt_start = source.find("type Alias").unwrap() as u32;
+        let type_stmt_end = source.rfind('\n').unwrap() as u32;
+
+        let module = pycc_parser_test_helper::parse(source);
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "T0042");
+        assert_ne!(diagnostic.span, Some(Span::new(0, 0)));
+        assert_eq!(
+            diagnostic.span,
+            Some(Span::new(type_stmt_start, type_stmt_end))
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_type_alias_rhs_falls_through_to_the_existing_c0001_diagnostic() {
+        let module = pycc_parser_test_helper::parse("type Bad = NotARealType\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn an_unresolvable_legacy_type_alias_rhs_also_falls_through_to_c0001() {
+        let module = pycc_parser_test_helper::parse("Bad: TypeAlias = NotARealType\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_bare_type_alias_annotation_with_no_value_is_not_treated_as_an_alias() {
+        // `X: TypeAlias` with no assigned value can't define an alias (there
+        // is no RHS to resolve) -- it falls through to the ordinary
+        // `AnnAssign` lowering path, where `annotation_to_ty` rejects the
+        // bare name `TypeAlias` itself with the same `C0001` catch-all as
+        // any other unrecognized annotation name, and the alias table stays
+        // empty.
+        let module = pycc_parser_test_helper::parse("X: TypeAlias\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_legacy_type_alias_annotation_on_a_non_name_target_is_not_treated_as_an_alias() {
+        // Unlike a `type` statement's own target (always a bare name, see
+        // `lower_type_alias_stmt`'s doc comment), a legacy `AnnAssign`
+        // target can be an `Attribute`/`Subscript`, e.g. `obj.x: TypeAlias =
+        // int`. `lower_legacy_type_alias_ann_assign` recognizes the `X:
+        // TypeAlias = ...` shape only for a bare-name target and otherwise
+        // falls through to the ordinary `AnnAssign` lowering path, which
+        // rejects a non-name annotated-assignment target with the same
+        // `C0001` catch-all it already uses for every other non-name
+        // target -- the alias table stays empty either way.
+        let module = pycc_parser_test_helper::parse("obj.x: TypeAlias = int\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_math_binds_the_module_namespace() {
+        let module = pycc_parser_test_helper::parse("import math\n");
+        let hir = lower_checked(&module).expect("recognized stdlib import must lower");
+
+        assert_eq!(
+            hir.imports,
+            vec![ImportBinding::Module {
+                local_name: "math".to_string(),
+                module: pycc_std::StdModule::Math,
+            }]
+        );
+        assert!(hir.items.is_empty(), "a bare `import math` has no HirItem");
+    }
+
+    #[test]
+    fn import_cgi_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import cgi\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_sqrt_and_pi_binds_both_names() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt, pi\n");
+        let hir = lower_checked(&module).expect("both registered symbols must resolve");
+
+        let sqrt_symbol = pycc_std::resolve_symbol(pycc_std::StdModule::Math, "sqrt")
+            .expect("math.sqrt is registered");
+        let pi_symbol = pycc_std::resolve_symbol(pycc_std::StdModule::Math, "pi")
+            .expect("math.pi is registered");
+        assert_eq!(
+            hir.imports,
+            vec![
+                ImportBinding::Symbol {
+                    local_name: "sqrt".to_string(),
+                    module: pycc_std::StdModule::Math,
+                    symbol: sqrt_symbol,
+                },
+                ImportBinding::Symbol {
+                    local_name: "pi".to_string(),
+                    module: pycc_std::StdModule::Math,
+                    symbol: pi_symbol,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn from_math_import_sqrt_and_unregistered_tan_is_c0002_not_a_partial_bind() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt, tan\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        // Whole statement fails closed -- `sqrt` is not partially bound
+        // even though it is itself registered.
+        assert_eq!(diagnostic.code, "C0002");
+    }
+
+    #[test]
+    fn import_math_as_m_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import math as m\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_sqrt_as_s_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from math import sqrt as s\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_unregistered_module_import_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from os import path\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_dot_import_x_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from . import x\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn from_math_import_star_is_c0001() {
+        let module = pycc_parser_test_helper::parse("from math import *\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_two_modules_in_one_statement_is_c0001() {
+        let module = pycc_parser_test_helper::parse("import math, os\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_sqrt_call_lowers_to_a_qualified_callee() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.sqrt(2.0))\n");
+        let hir = lower_checked(&module).expect("math.sqrt(...) must lower");
+
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "math.sqrt".to_string(),
+                    args: vec![HirExpr::FloatLiteral(2.0)],
+                }],
+            }))]
+        );
+    }
+
+    #[test]
+    fn math_pi_bare_reference_lowers_to_a_qualified_name() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.pi)\n");
+        let hir = lower_checked(&module).expect("math.pi must lower");
+
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Name("math.pi".to_string())],
+            }))]
+        );
+    }
+
+    #[test]
+    fn math_tan_call_is_unsupported_since_it_is_not_registered() {
+        let module = pycc_parser_test_helper::parse("import math\nmath.tan(1.0)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_tan_bare_reference_is_unsupported_since_it_is_not_registered() {
+        let module = pycc_parser_test_helper::parse("import math\nprint(math.tan)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn os_path_bare_attribute_access_is_unsupported() {
+        // No `import os` here on purpose -- `os` isn't a registered
+        // `pycc_std` module at all, so this exercises the "receiver name
+        // does not resolve to a stdlib module" branch directly, distinct
+        // from `math_tan_bare_reference_is_unsupported_since_it_is_not_registered`
+        // above (recognized module, unregistered attribute).
+        let module = pycc_parser_test_helper::parse("print(os.path)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn attribute_access_on_a_non_name_receiver_is_unsupported() {
+        let module = pycc_parser_test_helper::parse("print([1, 2].sqrt)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn math_sqrt_call_propagates_an_unsupported_argument_expression() {
+        // Exercises the `?` inside the stdlib-call arm's own argument
+        // lowering (`call.arguments.args.iter().map(lower_expr).collect()`)
+        // taking its error path, as opposed to every other stdlib-call test
+        // above, which only exercises the success path.
+        let module = pycc_parser_test_helper::parse("import math\nmath.sqrt(1j)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn method_call_on_a_non_name_receiver_is_unsupported() {
+        // Exercises the call-position stdlib-intrinsic branch's own
+        // `Expr::Name(receiver)` guard failing (as opposed to the bare
+        // attribute-access arm's analogous guard above).
+        let module = pycc_parser_test_helper::parse("[1, 2].sqrt()\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn import_inside_a_function_body_is_c0001() {
+        // The module-level side-table is populated only by `lower_checked`'s
+        // top-level loop (mirroring `type_aliases`); a nested import still
+        // reaches plain `lower_stmt`, which has no arm for `Stmt::Import`.
+        let module = pycc_parser_test_helper::parse(
+            "def f() -> None:\n    import math\n    return None\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
     }
 }
 

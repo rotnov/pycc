@@ -133,7 +133,7 @@ For each newly observed upstream release:
 | [560](https://peps.python.org/pep-0560/) | `__class_getitem__` typing support | typing | `py37/pep_0560_class_getitem.py` | ☐ |
 | [562](https://peps.python.org/pep-0562/) | Module `__getattr__` | sem | `py37/pep_0562_mod_getattr.py` | ☐ |
 | [563](https://peps.python.org/pep-0563/) | `from __future__ import annotations` (superseded by 649) | typing | `py37/pep_0563_lazy_annotations.py` | ☐ |
-| — | `dict` insertion order guaranteed | sem | `py37/dict_order.py` | ☐ |
+| — | `dict` insertion order guaranteed (`dict[str, int]`, D-123) | sem | `dict_order.py` | ✅ |
 
 ## Python 3.8
 
@@ -152,7 +152,7 @@ For each newly observed upstream release:
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
 | [584](https://peps.python.org/pep-0584/) | `dict \| dict` union | sem | `py39/pep_0584_dict_union.py` | ☐ |
-| [585](https://peps.python.org/pep-0585/) | Builtin generics `list[int]` | typing | `py39/pep_0585_builtin_generics.py` | ☐ |
+| [585](https://peps.python.org/pep-0585/) | Builtin generics: `list[int]` (D-105), `dict[str, int]`/`set[int]` (D-121/D-122, PR-11a), and `tuple[...]` (D-115/D-116, PR-11b) all ship real codegen — this row's `✅` reflects all four fixtures' own CI-observed, all-5-Tier-1-target evidence ([PR #305](https://github.com/rotnov/pycc/pull/305)). `tuple[...]`'s own literal construction, `t[k]` literal-index reads, and both module-global and function-local storage are covered; passing or returning a tuple *value* across a function boundary from real, unannotated Python source does not work yet even though the codegen layer already supports it, for two independent reasons: `pycc_types`' signature-inference solver is scalar-only (D-116 point 4's correction note), and `pycc_codegen`'s `emit_expr` has no `MirExpr::Call` result-dispatch arm for a container-typed return either (D-116's own further correction note) — deferred alongside iteration, unpacking assignment, and an annotation syntax (see `docs/ROADMAP.md`) | typing | `pep_0585_builtin_generics.py`, `dict_order.py`, `pep_0585_set_int.py`, `tuple_heterogeneous.py` | ✅ |
 | [593](https://peps.python.org/pep-0593/) | `Annotated` | typing | `py39/pep_0593_annotated.py` | ☐ |
 | [614](https://peps.python.org/pep-0614/) | Relaxed decorator grammar | syntax | `py39/pep_0614_decorators.py` | ☐ |
 | [617](https://peps.python.org/pep-0617/) | PEG parser — **pycc's grammar reference** | syntax | (covered by whole suite) | ☐ |
@@ -163,7 +163,7 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [604](https://peps.python.org/pep-0604/) | Union syntax `int \| str` | typing | `py310/pep_0604_union.py` | ☐ |
 | [612](https://peps.python.org/pep-0612/) | `ParamSpec` | typing | `py310/pep_0612_paramspec.py` | ☐ |
-| [613](https://peps.python.org/pep-0613/) | `TypeAlias` | typing | `py310/pep_0613_typealias.py` | ☐ |
+| [613](https://peps.python.org/pep-0613/) | `TypeAlias` | typing | `pep_0613_typealias.py` | ✅ |
 | [626](https://peps.python.org/pep-0626/) | Precise line numbers (debug info) | rt | `py310/pep_0626_lineno.py` | ☐ |
 | [634](https://peps.python.org/pep-0634/)–636 | **Structural pattern matching** | syntax | `py310/pep_0634_match.py` | ☐ |
 | [647](https://peps.python.org/pep-0647/) | `TypeGuard` | typing | `py310/pep_0647_typeguard.py` | ☐ |
@@ -187,19 +187,21 @@ For each newly observed upstream release:
 |---|---|---|---|---|
 | [688](https://peps.python.org/pep-0688/) | `Buffer` type | typing | `py312/pep_0688_buffer.py` | ☐ |
 | [692](https://peps.python.org/pep-0692/) | `Unpack[TypedDict]` for `**kwargs` | typing | `py312/pep_0692_kwargs.py` | ☐ |
-| [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `py312/pep_0695_generics.py` | ☐ |
+| [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `pep_0695_generics.py` | ✅ |
 | [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (needs v0.3's class model) | typing | `py312/pep_0695_generic_classes.py` | ☐ |
 | [698](https://peps.python.org/pep-0698/) | `@override` | typing | `py312/pep_0698_override.py` | ☐ |
 | [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
-| [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics | sem | `py312/pep_0709_comp_inline.py` | ☐ |
+| [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics -- pycc has no bytecode/frame model to "inline" the way CPython's own PEP 709 change does; this row instead verifies the one CPython-observable, statically-testable guarantee PEP 709 depends on: a comprehension's own loop variable does not leak into an enclosing same-named binding (D-117/D-120) | sem | `pep_0709_comp_inline.py` | ✅ |
 
-*n/a: PEP 684 (per-interpreter GIL — pycc binaries have no GIL at all).*
+*n/a for native execution: PEP 684 configures CPython interpreter GILs, while
+pycc-native code has no GIL. A planned embedded CPython interop boundary keeps
+the pinned interpreter's own GIL only for CPython-backed operations (D-128).*
 
 ## Python 3.13
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [594](https://peps.python.org/pep-0594/) | "Dead batteries" stdlib removals | rt | `py313/pep_0594_removals.py` | ☐ |
+| [594](https://peps.python.org/pep-0594/) | "Dead batteries" stdlib removals | rt | `py313/pep_0594_dead_battery.py` + `py313/pep_0594_dead_battery_rejected.py` (D-138; both fixtures observed passing across all 5 Tier-1 targets on [PR #328](https://github.com/rotnov/pycc/pull/328)'s final green CI run) | ✅ |
 | [696](https://peps.python.org/pep-0696/) | TypeVar defaults | typing | `py313/pep_0696_typevar_defaults.py` | ☐ |
 | [702](https://peps.python.org/pep-0702/) | `@deprecated` | typing | `py313/pep_0702_deprecated.py` | ☐ |
 | [703](https://peps.python.org/pep-0703/) | Free-threading (experimental) | rt | superseded by 779 test | ☐ |
@@ -255,7 +257,7 @@ Each entry must produce the documented error code, tested in `tests/diagnostics/
 | `eval` / `exec` / `compile` | `E0100` | `d0100_eval.py` |
 | Monkey-patching (attribute assignment on foreign classes/modules) | `E0101` | `d0101_monkeypatch.py` |
 | Untyped public function signature | `T0001` | `d0001_missing_public_annotation.py` |
-| `Any` outside a declared interop boundary | `T0002` | `d0002_any_forbidden.py` |
+| `Any` outside a compiler-classified CPython interop boundary (planned v0.7; the current v0.1 snapshot retains its legacy “declared boundary” wording) | `T0002` | `d0002_any_forbidden.py` |
 | Dynamic attribute injection on non-`dict`-like objects | `E0102` | `d0102_dyn_attr.py` |
 | `type()` three-arg dynamic class creation | `E0103` | `d0103_dyn_class.py` |
 | Wildcard `import *` | `E0104` | `d0104_star_import.py` |

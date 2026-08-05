@@ -179,7 +179,11 @@ new payload.
 Delegated invocation is the one exception: when `/issue-implement` — exactly that skill, today's
 only qualifying delegate, whose own explicit invocation authorizes an enumerated set of public
 writes for the named issue — invokes this skill for that issue, its standing authorization
-substitutes for the per-payload approval and the plan is published without a further prompt.
+substitutes for the per-payload approval and the plan is published without a further prompt. Per
+`docs/DECISIONS.md`'s D-143, this exception also covers the case where the literal `Skill`-tool
+caller is a generic `Agent` that `issue-implement` dispatched and that is acting under
+`issue-implement`'s own delegated authorization for that same issue: the dispatched agent is not a
+new delegate in its own right, it is `issue-implement`'s own step 3 running in an isolated context.
 Everything else about this step, including the pre-publication re-fetch and reconciliation, is
 unchanged. A future second delegate requires editing this sentence and Non-negotiable #3 —
 adding one is a deliberate, reviewed change, not something a new skill grants itself by writing

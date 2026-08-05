@@ -21,12 +21,13 @@ fn pycc_bin() -> std::path::PathBuf {
 /// not observable program behavior. Two other tests carry those specific
 /// claims: `pycc_codegen`'s own `release_mode_actually_runs_llvm_
 /// optimization_passes` unit test proves LLVM's `"default<O3>"` pipeline
-/// measurably changes emitted code, at the object-file level where the
-/// effect is real and measurable (an earlier version of *this* test tried
-/// to prove that here too, comparing the final *linked* binary's size --
-/// see `docs/AGENT_RETROSPECTIVE.md`'s 2026-07-28 entry for why that proxy
-/// has no signal at this level: a statically-linked runtime and Mach-O
-/// segment-alignment padding absorb the relevant code-size delta).
+/// ran by observing that exact pipeline and its removal of an unused runtime
+/// declaration immediately before object emission, while retaining a used
+/// declaration (an earlier version of *this* test tried to prove that here
+/// too, comparing the final *linked* binary's size -- see
+/// `docs/AGENT_RETROSPECTIVE.md`'s 2026-07-28 entry for why that proxy has no
+/// signal at this level: a statically-linked runtime and Mach-O segment-
+/// alignment padding absorb the relevant code-size delta).
 /// `src/main.rs`'s own `release_flag_tests` prove `resolve_release_flag`
 /// correctly derives `true` from exactly this `pycc.toml` shape (and
 /// falls back to `false` for every other input, including a malformed
