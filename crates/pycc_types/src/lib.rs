@@ -5351,6 +5351,41 @@ mod tests {
     }
 
     #[test]
+    fn constraint_collection_does_not_carry_a_bool_int_heterogeneous_list_literal() {
+        // D-146 (#239): a heterogeneous `int`/`bool` list keeps the
+        // historical `Ok(None)` behavior -- exact `Ty` equality (not
+        // `merge_inferred_types`) determines homogeneity, so `bool` and
+        // `int` are not merged even though `merge_inferred_types` would
+        // widen `bool` to `int`.  This mirrors
+        // `infer_expr_in`'s own list homogeneity rule (D-105).
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::ListLiteral(vec![
+            HirExpr::IntLiteral(1),
+            HirExpr::BoolLiteral(true),
+        ]);
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+
+        assert!(term.is_none());
+    }
+
+    #[test]
     fn constraint_collection_does_not_carry_an_empty_list_literal() {
         // D-146 (#239): an empty list has no element type to carry -- keeps
         // the historical `Ok(None)` behavior.
