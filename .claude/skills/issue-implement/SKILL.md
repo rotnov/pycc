@@ -145,6 +145,26 @@ including its adversarial review loop, runs unchanged.
 
 ### 4. Implement
 
+Dispatch the actual implementation — reading and editing source, writing tests, running builds
+— to a freshly-spawned `Agent`, rather than doing it directly in this session's own context.
+This keeps the orchestrating session's own context bounded to the plan, the dispatched agent's
+compact report, and review-loop findings, instead of every file read, edit, and build/test
+invocation the implementation itself produces — the difference between a session that can carry
+`issue-select`'s loop through many issues in one sitting and one whose context grows unboundedly
+after the first. The dispatched agent works inside the same task branch and worktree this
+session already created in step 1's D-021 preflight, so its commits are this session's own
+committed work, not something foreign to it. Give it a self-contained brief: the plan's own
+published text (or its issue-comment URL), the exact task branch and worktree to work in, which
+of the D-080/D-103 staged-pattern branches below applies if any (this session, not the
+dispatched agent, makes that classification while reading the plan in step 3, since it decides
+how many pull requests this run opens), and the precise gate commands and thresholds below.
+Instruct it to return a compact report — files changed, gate results, any plan deviations — not
+a full transcript of its own work. An initial dispatch that fails to start, hangs, or returns no
+usable report is the same "plan refuted" stop condition below as any other implementation
+failure — re-dispatch once with the same brief before treating it as a per-issue stop, exactly
+as the retry discipline elsewhere in this workflow (step 8's rejected-merge retry) already
+applies once, not unboundedly.
+
 Follow the plan. Write tests for success, failure, and edge paths alongside the behavior —
 the coverage gate is a merge invariant, not a target. Update every affected document in the
 same commits as the code. Before entering review, run the full local gate set: the coverage
@@ -272,6 +292,13 @@ refuted by evidence gets its reasoning recorded, not a blind fix. Rerun the revi
 fixes whenever the previous findings may no longer describe the diff. The loop ends when a
 round reports no actionable findings. The same finding surviving two genuine fix attempts is
 a stop condition, not a reason for a third identical attempt.
+
+When a fix touches the implementation, resume step 4's own dispatched agent (`SendMessage` to
+its agent id, which resumes it with full context of the code it just wrote) rather than
+re-deriving the change in this session's own context or dispatching a stateless fresh one — a
+fresh dispatch is the fallback only once the original agent's run has already ended and cannot
+be resumed. This keeps the same context-isolation benefit through the fix loop, not just the
+first implementation pass.
 
 Fixes to review findings deserve the same suspicion as the original diff — often more. A fix
 made under review pressure is written against one counterexample and inherits none of the

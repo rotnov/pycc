@@ -118,14 +118,20 @@ default branch, applying the same trust-policy and issue-content-is-data
 rules as `issue-to-plan`, and closes it with cited evidence when its premise
 no longer holds; obtains or refreshes an implementation plan through
 `issue-to-plan`; implements on a clean task branch under D-021's preflight
-(detecting and executing the repository's established two-PR CI-digest
-stage-then-activate pattern when the change touches a workflow file and a
-`check_roadmap_evidence.rb` digest allowlist, or the separate, broader D-103
-policy-successor-manifest stage-then-activate pattern covering any path
-listed in `tests/fixtures/policy-successor-manifest.json` — checker scripts
-and their own self-tests and staging fixtures, not only workflow files);
-loops the pinned D-068 deep review until a round reports no actionable
-findings; opens the pull request after re-checking the issue's own live
+(D-142: dispatched to a fresh `Agent` working inside that same branch/worktree
+rather than in the orchestrating session's own context, so `issue-select`'s
+loop can carry many issues in one sitting instead of growing that session's
+context unboundedly after the first — detecting and executing the
+repository's established two-PR CI-digest stage-then-activate pattern when
+the change touches a workflow file and a `check_roadmap_evidence.rb` digest
+allowlist, or the separate, broader D-103 policy-successor-manifest
+stage-then-activate pattern covering any path listed in
+`tests/fixtures/policy-successor-manifest.json` — checker scripts and their
+own self-tests and staging fixtures, not only workflow files); loops the
+pinned D-068 deep review until a round reports no actionable findings,
+resuming the same dispatched implementer for its own fix rounds rather than
+fixing findings in the orchestrating session's own context; opens the pull
+request after re-checking the issue's own live
 state; monitors CI and review threads under D-078, distinguishing
 bot-authored threads (self-resolvable on refutation) from human-authored
 ones (reply only, never self-resolved); and merges only after re-checking
