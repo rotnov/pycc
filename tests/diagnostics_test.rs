@@ -207,6 +207,11 @@ fn d0040_tuple_index_not_a_literal() {
 }
 
 #[test]
+fn d0041_value_less_annotation_later_assignment_mismatch() {
+    assert_diagnostic_matches_fixture("d0041_value_less_annotation_later_assignment_mismatch");
+}
+
+#[test]
 fn d0021_float_wrong_arity() {
     assert_diagnostic_matches_fixture("d0021_float_wrong_arity");
 }

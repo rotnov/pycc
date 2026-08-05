@@ -58,6 +58,18 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
 - Python numeric semantics apply during inference: `bool` is an `int`
   subtype, mixed `int`/`float` arithmetic promotes to `float`, and true
   division `/` always returns `float` even for two integer operands.
+- A value-less annotation (`x: int` with no `= ...`) declares `x`'s static
+  type without binding a value: a premature read is still `T0021`, exactly as
+  an ordinary unannotated local would be. The declared type is retained and
+  becomes the sticky representation the first time a later plain or
+  annotated assignment reaches `x` — incompatible with that declared type is
+  `T0026`, distinct from `T0023`'s "previously inferred" wording, since
+  nothing was ever assigned, only declared. A repeated value-less
+  declaration for the same still-unassigned name is itself checked against
+  the first one (first-declaration-wins) and rejected with `T0026` on
+  mismatch (issue #245). This general-checker rule is independent of the
+  private-helper solver's own separate, still-open limitation described
+  above.
 
 ## Types and representations
 

@@ -30,6 +30,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0023` | error | incompatible assignment |
 | `T0024` | error | `return` outside a function |
 | `T0025` | error | annotated-assignment initializer incompatible with its declared annotation |
+| `T0026` | error | a later plain or annotated assignment is incompatible with an earlier value-less declaration (`x: int` with no `= ...`) |
 | `T0030` | error | non-exhaustive `match` (missing cases listed) |
 | `T0031` | error | `@override` without matching base method |
 | `T0032` | error | list literal elements must all share one type |

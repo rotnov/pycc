@@ -9,6 +9,16 @@ use std::sync::Arc;
 #[derive(Debug, Default, Clone)]
 pub struct Environment {
     bindings: HashMap<String, Ty>,
+    /// Names declared by a value-less `AnnAssign` (`x: int` with no `= ...`)
+    /// that have not yet been definitely assigned (issue #245). Distinct
+    /// from `bindings`: an entry here records a known static type with *no*
+    /// runtime value, matching CPython's own "declared, not yet assigned"
+    /// semantics -- a read of such a name must still raise the existing
+    /// `T0021` unbound-local diagnostic, which it does, because `lookup`
+    /// only ever consults `bindings`. An entry is consumed (removed) the
+    /// moment a real assignment establishes a definite binding; see
+    /// `check_assignment`'s declared-consult branch.
+    declared: HashMap<String, Ty>,
     functions: Arc<HashMap<String, (Vec<Ty>, Ty)>>,
     /// Names whose *net* source-order top-level binding is currently a
     /// `def` (D-110). Tracked separately from `bindings` on purpose: the
@@ -40,6 +50,46 @@ impl Environment {
 
     pub fn lookup(&self, name: &str) -> Option<Ty> {
         self.bindings.get(name).cloned()
+    }
+
+    /// Records `name` as declared with `ty` by a value-less `AnnAssign`
+    /// (issue #245), without binding it -- a subsequent read still raises
+    /// `T0021` via `lookup`, which never consults this map. First
+    /// declaration wins: a second, still-unbound declaration for the same
+    /// name is validated with `is_assignable(ty, existing)` (same direction
+    /// `check_assignment` uses for an ordinary reassignment) and rejected on
+    /// mismatch, but the earlier entry is what stays on success -- see
+    /// `check_assignment`'s comment for the worked `bool`/`int` example.
+    pub fn declare(&mut self, name: String, ty: Ty) -> Result<(), Diagnostic> {
+        // Already definitely assigned (e.g. `x = 1; x: int`): unchanged
+        // pre-existing behavior, out of scope for issue #245 -- leave
+        // `bindings` as the sole authority and never shadow it with a
+        // `declared` entry that `check_assignment` would never consult
+        // anyway (its declared-consult branch only fires when `lookup`
+        // already returned `None`).
+        if self.bindings.contains_key(&name) {
+            return Ok(());
+        }
+        if let Some(existing) = self.declared.get(&name) {
+            if !is_assignable(ty.clone(), existing.clone()) {
+                return Err(Diagnostic::error(
+                    "T0026",
+                    format!(
+                        "cannot declare `{name}: {}`, previously declared as `{name}: {}`",
+                        ty.name(),
+                        existing.name()
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+            return Ok(());
+        }
+        self.declared.insert(name, ty);
+        Ok(())
+    }
+
+    fn declared_ty(&self, name: &str) -> Option<Ty> {
+        self.declared.get(name).cloned()
     }
 
     pub fn bind(&mut self, name: String, ty: Ty) {
@@ -76,6 +126,7 @@ impl Environment {
         let mut child = self.clone();
         for name in local_names {
             child.bindings.remove(*name);
+            child.declared.remove(*name);
         }
         child
     }
@@ -1011,6 +1062,17 @@ fn collect_block_constraints(
                     env.bindings.insert(target.clone(), target_term);
                 }
             }
+            // Deliberately out of scope for issue #245: `ConstraintEnvironment`
+            // (unlike the checker's `Environment`) has no declared-but-unbound
+            // side-table, and every entry in its `env.bindings` is treated as
+            // resolved and readable. Registering the annotation here the same
+            // way the `Some(value)` arm above does would make the name
+            // readable in this solver, silently accepting `def _f():\n    x:
+            // int\n    return x` (should still raise T0021, unbound) instead
+            // of only `def _f():\n    x: int\n    x = 1\n    return x`. A
+            // parallel declared-side-table for `ConstraintEnvironment` is a
+            // separate, independently-testable follow-up if solver-scope
+            // coverage of this gap is wanted later.
             HirStmt::AnnAssign { value: None, .. } => {}
             HirStmt::ExprStmt(expr) => {
                 collect_expr_constraints(
@@ -1492,6 +1554,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
     }
     Some(Environment {
         bindings: HashMap::new(),
+        declared: HashMap::new(),
         functions: Arc::new(functions),
         def_rebound: HashSet::new(),
         generics: Arc::new(generics),
@@ -2523,6 +2586,35 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
         }
         return Ok(());
     }
+    // issue #245: a value-less `AnnAssign` (`x: int`) records a declared
+    // type without binding one. The first real assignment/valued
+    // redeclaration reaching this point is validated against that
+    // declaration, and -- on success -- the *declared* type becomes the
+    // sticky representation, not `ty` itself, exactly as an
+    // `AnnAssign{value: Some}` already makes its own annotation (not the
+    // initializer's inferred type) the sticky representation just above in
+    // `check_stmt`/`check_stmt_in_function`. Worked examples: `x: int; x =
+    // 1` binds `Int` (matches); `x: int; x: bool = True` binds `Int` (the
+    // *earlier* declaration wins, `bool` is merely assignable to it); `x:
+    // int; x = "hello"` rejects with `T0026`, distinct from `T0023`
+    // (nothing was "previously inferred" here -- it was declared, never
+    // assigned).
+    if let Some(declared) = env.declared_ty(target) {
+        if !is_assignable(ty.clone(), declared.clone()) {
+            return Err(Diagnostic::error(
+                "T0026",
+                format!(
+                    "cannot assign `{}` to `{target}`, previously declared as `{target}: {}`",
+                    ty.name(),
+                    declared.name()
+                ),
+                Span::new(0, 0),
+            ));
+        }
+        env.declared.remove(target);
+        env.bind(target.to_string(), declared);
+        return Ok(());
+    }
     env.bind(target.to_string(), ty);
     Ok(())
 }
@@ -2600,10 +2692,17 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                 // wrongly accept it) could diverge from what codegen actually
                 // stores.
                 check_assignment(env, target, annotation.clone())?;
+            } else {
+                // No initializer: register no *binding* (a premature read
+                // still raises the existing T0021 -- collect_local_names
+                // (Step 1) already marked `target` local, and `declare`
+                // never touches `bindings`), but do retain the declared
+                // type (issue #245) so a later plain or annotated
+                // assignment is checked against it instead of silently
+                // treating the first later assignment as the initial,
+                // unconstrained binding.
+                env.declare(target.clone(), annotation.clone())?;
             }
-            // No value: register no binding, matching CPython's own "declared, not yet
-            // assigned" semantics -- collect_local_names (Step 1) already marked
-            // `target` local, so a premature read still raises the existing T0021.
             Ok(())
         }
         HirStmt::ExprStmt(expr) => infer_expr(env, expr).map(|_| ()),
@@ -3136,6 +3235,12 @@ fn check_stmt_in_function(
                 // representation stays sticky, matching `pycc_mir`'s own
                 // `bind_variable` invariant.
                 check_assignment(env, target, annotation.clone())?;
+            } else {
+                // See the module-scope `check_stmt` arm's comment (issue
+                // #245): retain the declared type via `env.declare` without
+                // binding it, so a premature read still raises T0021 and a
+                // later assignment is checked against the declaration.
+                env.declare(target.clone(), annotation.clone())?;
             }
             Ok(())
         }
@@ -6807,6 +6912,354 @@ mod tests {
         )
         .unwrap();
         assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn value_less_declaration_then_matching_assignment_binds_the_declared_type() {
+        // x: int; x = 1 -- issue #245: the value-less declaration must be
+        // retained and honored by the later plain assignment.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn value_less_declaration_then_mismatched_assignment_is_t0026() {
+        // x: int; x = "hello" -- issue #245's primary reproduction: this must
+        // be rejected, and rejected with T0026 (not T0023 -- nothing was
+        // "previously inferred", it was declared, never assigned).
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::StringLiteral("hello".to_string()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0026");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn value_less_declaration_still_raises_t0021_on_a_premature_read_at_function_scope() {
+        // x: int; return x (no assignment in between) -- the declared type
+        // must never satisfy `lookup`, so this stays T0021, exactly as an
+        // ordinary local without any annotation would.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "f".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        HirStmt::AnnAssign {
+                            target: "x".to_string(),
+                            annotation: Ty::Int,
+                            value: None,
+                        },
+                        HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                    ],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![HirExpr::Call {
+                        callee: "f".to_string(),
+                        args: vec![],
+                    }],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert_eq!(err.message, "local name `x` is not bound before this use");
+    }
+
+    #[test]
+    fn repeated_compatible_value_less_declaration_then_assignment_is_accepted() {
+        // x: int; x: int; x = 1 -- a second declaration compatible with the
+        // first is accepted (first-declaration-wins), and the later plain
+        // assignment still binds the declared type.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn repeated_incompatible_value_less_declaration_is_t0026() {
+        // x: int; x: str -- flatly incompatible re-declarations are rejected
+        // at the second declaration, before any assignment is even seen.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Str,
+                value: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0026");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn valued_redeclaration_matching_an_earlier_value_less_declaration_keeps_the_declared_type() {
+        // x: int; x: bool = True -- the *earlier* declaration wins as the
+        // sticky representation (Int), since bool is merely assignable to
+        // int, not the later annotation (matches check_assignment's own
+        // worked bool/int example in its declared-consult branch).
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Bool,
+                value: Some(HirExpr::BoolLiteral(true)),
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn valued_redeclaration_disagreeing_with_an_earlier_value_less_declaration_is_t0026() {
+        // x: int; x: str = "hello" -- T0025 passes (the initializer matches
+        // its own `str` annotation), so this must be rejected by the
+        // declared-consult step with T0026, not silently accepted.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Str,
+                value: Some(HirExpr::StringLiteral("hello".to_string())),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0026");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn value_less_declaration_after_an_existing_binding_is_a_no_op() {
+        // x = 1; x: int -- re-declaring an already-bound name is unchanged,
+        // pre-existing, out-of-scope behavior: `declare` must not shadow the
+        // real binding with an inert `declared` entry.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn function_scope_value_less_declaration_then_matching_assignment_binds_the_declared_type() {
+        let mut env = Environment::new();
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+            Ty::None,
+        )
+        .unwrap();
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+            Ty::None,
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn function_scope_value_less_declaration_then_mismatched_assignment_is_t0026() {
+        let mut env = Environment::new();
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+            Ty::None,
+        )
+        .unwrap();
+        let err = check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::StringLiteral("hello".to_string()),
+            },
+            Ty::None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0026");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn function_scope_repeated_incompatible_value_less_declaration_is_t0026() {
+        let mut env = Environment::new();
+        check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+            Ty::None,
+        )
+        .unwrap();
+        let err = check_stmt_in_function(
+            &mut env,
+            &["x"],
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Str,
+                value: None,
+            },
+            Ty::None,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0026");
+        assert_eq!(env.lookup("x"), None);
+    }
+
+    #[test]
+    fn child_for_function_clears_a_declared_entry_for_a_shadowed_local_name() {
+        // A module-level value-less declaration for `x` must not leak into
+        // an unrelated function's own local `x` -- mirrors the existing
+        // `bindings`-clearing behavior `child_for_function` already provides.
+        let mut module_env = Environment::new();
+        check_stmt(
+            &mut module_env,
+            &HirStmt::AnnAssign {
+                target: "x".to_string(),
+                annotation: Ty::Int,
+                value: None,
+            },
+        )
+        .unwrap();
+        let mut fn_env = module_env.child_for_function(&["x"]);
+        // The function's own body assigns a `str` to its local `x` -- if the
+        // module-level `declared` entry leaked through, this would wrongly
+        // fail with T0026 against the stale `Int` declaration.
+        check_stmt_in_function(
+            &mut fn_env,
+            &["x"],
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::StringLiteral("hello".to_string()),
+            },
+            Ty::None,
+        )
+        .unwrap();
+        assert_eq!(fn_env.lookup("x"), Some(Ty::Str));
     }
 
     #[test]
