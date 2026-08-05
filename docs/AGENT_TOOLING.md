@@ -268,6 +268,24 @@ alpha workflows. The separate `Agent assets` job still installs the real
 pinned client CLIs and verifies discovery through both surfaces without model
 credentials.
 
+## Project-local non-alpha skills
+
+`process-error-postmortem` is a project-local skill committed under
+`.claude/skills/` with a thin `.agents/skills/` entrypoint, following the same
+cross-platform discovery convention as the alpha skills above. It is not alpha
+and is intentionally absent from `validate_agent_assets.py`'s
+`ALPHA_EVAL_RUNNERS` and `validate_alpha_skill_contracts` tuple, and from
+`run_alpha_skill_evals.py`'s `EXPECTED_RUNNERS`: its correctness is inherently
+model-judgment-based (diagnosing a process mistake's root cause has no
+deterministic boolean oracle the way `issue_select_higher_ranked` or
+`next_milestone_loop_continues` do), so forcing it into the alpha eval model
+would produce a vacuous eval that tests trivia, not diagnosis quality. It fires
+when the agent catches itself having made a process mistake or the user points
+one out, walks a structured diagnosis (trigger gap / content gap / absence gap /
+compliance gap), applies the fix directly for process-text edits or via a
+dedicated PR for new skills/ADRs, and records the entry in
+`docs/AGENT_RETROSPECTIVE.md`. See D-145 for the full design rationale.
+
 ## Optional Claude Code plugins
 
 `.claude/settings.json` also enables optional third-party capability plugins from the

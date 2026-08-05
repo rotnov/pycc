@@ -28,6 +28,49 @@ never a merge gate.
 
 ---
 
+## 2026-08-05 — Used `sleep 240` to wait on CI instead of `ci-watch.sh`; missed `autopilot-async-monitoring` skill at the CI-wait fork
+
+**What happened:** during the `issue-implement` run for #345 (PR #348), the session
+reached the CI-monitoring step and waited on the pull request's check suite using
+`sleep 240` followed by a manual `gh pr view` re-check — exactly the fixed-interval
+polling pattern the `autopilot-async-monitoring` skill (and its `scripts/ci-watch.sh`
+mechanism) exists to replace. The user pointed this out ("а чего ты не используешь
+скил autopilot-async-monitoring"). The skill was available and its description
+directly covered the situation ("deciding how to wait on async state such as a pull
+request, a CI run"), but the session did not re-scan the skill list at the CI-wait
+fork — it had applied skill-selection discipline once at session start (invoking
+`issue-implement`) and then stopped re-evaluating at each subsequent sub-step.
+
+**Root cause:** trigger gap. `issue-implement`'s step 7 (Monitor) already said
+"Before waiting on CI, query the pull request's current state" but did not
+cross-reference `autopilot-async-monitoring` or name `ci-watch.sh` as the mechanism
+for the wait itself. The skill that should have been invoked was discoverable but
+not pointed at from the skill the session was actively running — so the agent reached
+for the familiar `sleep` pattern instead. This is the same failure mode the
+`autopilot-async-monitoring` skill's own creation history documents (four
+`.ievo/evolution/project.md` entries with `Trigger: user-observed mistake during PR
+monitoring` → extracted into the skill), but the extraction did not close the loop
+back from `issue-implement` to the extracted skill.
+
+**What fixed it:** PR #349 added a cross-reference from `issue-implement` step 7 to
+`autopilot-async-monitoring` and `scripts/ci-watch.sh`, so a future session reaching
+that step picks up the right tooling directly from the skill text it is already
+following. This same session then used `ci-watch.sh` for the remaining CI waits
+(PR #348 merge, PR #349 CI, and PR #350 for this skill's own delivery) — all three
+reported terminal state within seconds of it happening, with no fixed-interval dead
+time.
+
+**Lesson:** skill selection is not a one-time event at session start — re-scan the
+skill list at each fork where a new kind of work begins (waiting on async state,
+writing tests, designing a module, reporting a bug). A skill that exists but is not
+pointed at from the skill currently running is invisible at exactly the moment it
+would have helped. When a user corrects a process choice, that is the strongest
+signal a trigger gap exists — diagnose which artifact failed to surface the right
+skill at the fork, do not just fix the one instance. This lesson is now encoded in
+the `process-error-postmortem` skill (PR #350), which fires at exactly this moment
+(self-caught or user-caught process mistake) and walks the diagnosis-to-fix loop
+explicitly.
+
 ## 2026-08-02 — Five plan-review rounds spent before a one-grep check would have killed the pick at selection
 
 **What happened:** issue #243 (add subprocess/CLI-boundary tests to
