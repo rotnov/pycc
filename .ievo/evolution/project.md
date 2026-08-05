@@ -95,3 +95,31 @@ discipline `autopilot-async-monitoring/SKILL.md` already covers for
 PR/CI/agent status, applied one step earlier: verify locally before
 creating the async wait in the first place, not just before consuming its
 result.
+
+## 2026-08-03 14:10 UTC — Verify live PR readiness before reporting
+**Trigger:** user-observed mistake during pull-request readiness assessment
+
+**Operational rule:** Before reporting a pull request as ready or waiting on
+CI, refresh and verify its live state, draft status, head commit, mergeability
+or conflicts, required checks, and unresolved review threads.
+
+**Verbatim user lesson (provenance only):**
+> PR с конфликатми и stale а ты не заметил
+
+## 2026-08-05 07:52 UTC — Pull the fresh default branch before starting a task
+**Trigger:** user-defined convention
+
+перед началом задачи подтягивать свежий дефолт
+
+**Context (provenance only):** this session worked an entire task
+(`issue-implement` for #245) inside a git worktree checked out on a stale
+local branch (`fix/d084-median-throughput`, from 2026-08-03) instead of a
+fresh checkout of the repository's current default branch. Consequences:
+the `autopilot-async-monitoring` skill and `next-milestone` skill were both
+missing from this worktree's `.claude/skills/` (added to `main` after this
+worktree was created) and so could not be dispatched via the `Skill` tool at
+all -- their content had to be read manually from a separate, more current
+checkout. The same staleness also caused `gh pr create` to pick up this
+worktree's stale checked-out branch as the PR head by mistake (a distinct,
+already-recorded lesson), compounding the cost of not having refreshed to
+the fresh default branch first.
