@@ -54,8 +54,14 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   still resolve to a module global. Call targets follow the same lookup before
   builtin or function-registry resolution: an unbound local target is `T0021`,
   while a bound local or parameter from the current primitive subset cannot be
-  called by falling through to a same-named function. Control-flow join state
-  remains the separate definite-assignment work tracked in #118.
+  called by falling through to a same-named function. Definite-assignment
+  tracking (issue #118 Part 1, D-147) extends this to control-flow joins: a
+  name assigned in only one branch of an `if`/`elif` (no `else`), or only in a
+  `while`/`for` body (which may execute zero times), is *maybe* bound after the
+  construct. Reading a maybe-bound name is `T0041` (possibly-unbound read),
+  distinct from `T0021` (never bound). An unconditional assignment on the
+  current path after the join upgrades a maybe-bound name back to definitely
+  bound, so `if c: x = 1` followed by `x = 2` makes `x` readable.
 - The first assignment fixes a local variable's inferred type. Later
   assignments must be compatible or produce `T0023`; assigning `bool` to an
   `int` binding preserves the static `int` representation and, per D-141, the

@@ -280,6 +280,21 @@ fn d0041_value_less_annotation_later_assignment_mismatch() {
 }
 
 #[test]
+fn t0041_maybe_bound_if_no_else() {
+    assert_diagnostic_matches_fixture("t0041_maybe_bound_if_no_else");
+}
+
+#[test]
+fn t0041_maybe_bound_while() {
+    assert_diagnostic_matches_fixture("t0041_maybe_bound_while");
+}
+
+#[test]
+fn t0041_maybe_bound_for_range() {
+    assert_diagnostic_matches_fixture("t0041_maybe_bound_for_range");
+}
+
+#[test]
 fn d0021_float_wrong_arity() {
     assert_diagnostic_matches_fixture("d0021_float_wrong_arity");
 }
