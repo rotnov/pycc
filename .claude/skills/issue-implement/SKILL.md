@@ -137,11 +137,32 @@ Look for an implementation plan in the issue's comments. Plans published by `/is
 record the baseline commit they were planned against: check whether the default branch has
 since moved in ways that matter — files the plan touches, gates it cites, open pull requests
 it reasons about. A plan whose relevant ground has shifted is refreshed by invoking
-`/issue-to-plan` again, not followed on faith.
+`/issue-to-plan` again, exactly as below, not followed on faith.
 
-If no plan exists, invoke `/issue-to-plan`. This skill's declared write authorization
-substitutes for that skill's per-payload publish approval; everything else about its workflow,
-including its adversarial review loop, runs unchanged.
+If no plan exists, or an existing one needs refreshing per above, invoke `/issue-to-plan` inside
+a freshly-dispatched `Agent` — the same
+context-isolation reasoning as step 4's dispatched implementation (see
+`docs/DECISIONS.md#d-142-issue-implements-step-4-implementation-runs-in-a-dispatched-agent-not-the-orchestrating-sessions-own-context`)
+applies equally here: `issue-to-plan`'s own steps 1-5 (baseline, refuting the issue's claims
+against the tree, establishing constraints, empirical verification including real
+builds/`cargo`/`pycc` runs, drafting) and step 6's adversarial review loop generate as much
+file-reading and tool-call volume as the implementation itself, and none of it needs to remain
+in this session's own context once the plan is published. Instruct the dispatched agent to
+invoke the `issue-to-plan` skill itself (via the `Skill` tool, passing the issue number) and run
+it to completion inside the same task branch/worktree this session already created in step 1 —
+read/build access for its own empirical verification, but no commits: `issue-to-plan`'s own Non-negotiable
+#4 (no repository mutation beyond the published comment) is unchanged by running inside a
+dispatched agent rather than directly. This skill's declared write authorization substitutes for
+`issue-to-plan`'s own per-payload publish approval exactly as before delegation moved inside a
+dispatched agent; everything else about its workflow, including the adversarial review loop
+(which the dispatched agent runs via its own further, nested `Agent` dispatch — confirmed
+directly to work in this environment, not assumed), runs unchanged. Expect back exactly what
+`issue-to-plan`'s own Output section already specifies: the published comment URL plus its short
+summary — nothing more is needed in this session's own context. A dispatch that fails to start,
+hangs, or returns no usable report is a failure of the dispatch mechanism itself, distinct from
+`issue-to-plan`'s own internal stop condition (its 5-round review loop without a clean round):
+re-dispatch once with the same instructions before treating it as a per-issue stop, mirroring step
+4's identical retry discipline for its own implementation dispatch.
 
 ### 4. Implement
 
@@ -409,6 +430,8 @@ the rest of the pool):
   session;
 - two consecutive merge rejections;
 - the delegated `/issue-to-plan` call is stopped by its own stop condition;
+- the step 3 dispatch of `/issue-to-plan` itself fails to start, hangs, or returns no usable
+  report twice in a row (the mechanical dispatch failure, distinct from the case above);
 - (when executing the staged CI-digest pattern) the digest computation is ambiguous;
 - (when executing the D-103 manifest-staging pattern) the staged successor's byte-content
   binding to its manifest entry is ambiguous.
