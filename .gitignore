@@ -40,3 +40,4 @@ Thumbs.db
 
 # CI temporary-bypass ephemeral state (scripts/manage_ci_bypass.py)
 .ci-bypass-state/
+.vscode/
