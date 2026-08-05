@@ -49,6 +49,15 @@ pub struct Environment {
     /// `helper = 1; def helper(): ...; helper = "leaked"` reach codegen with
     /// an `int`-allocated slot stored as `str`.
     def_rebound: HashSet<String>,
+    /// Issue #22: function names whose `def` has been encountered so far in
+    /// top-level source order. In top-level code, a call to a function not
+    /// yet in this set is a static error (matching CPython's `NameError` for
+    /// call-before-`def`). Function bodies see all module functions
+    /// regardless of order (Python's late binding: a function body is
+    /// evaluated at call time, by which point all module-level `def`s have
+    /// typically executed), so `child_for_function` seeds this set with
+    /// every function name.
+    defined_functions: HashSet<String>,
     /// PR-13 Task 3 (D-133/D-134): the subset of `functions` whose signature
     /// contains a `Ty::Param` (a PEP 695 generic function), keyed by its
     /// *original* (un-mangled) name and carrying the full `HirItem` its
@@ -162,7 +171,14 @@ impl Environment {
     }
 
     pub fn bind_function(&mut self, name: String, param_tys: Vec<Ty>, return_ty: Ty) {
-        Arc::make_mut(&mut self.functions).insert(name, (param_tys, return_ty));
+        Arc::make_mut(&mut self.functions).insert(name.clone(), (param_tys, return_ty));
+        // Issue #22: by default, binding a function also marks it as
+        // defined. This makes standalone `infer_expr` / `check_function`
+        // calls work without callers needing to separately track
+        // `defined_functions`. `check_with_environment` clears this set
+        // before its top-level source-order pass so call-before-`def` is
+        // caught there.
+        self.defined_functions.insert(name);
     }
 
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
@@ -202,6 +218,14 @@ impl Environment {
             child.bindings.remove(*name);
             child.declared.remove(*name);
         }
+        // Issue #22: a function body may call any module-level function
+        // regardless of source order -- Python's late binding evaluates a
+        // function body at call time, by which point all module-level
+        // `def`s have typically executed. Seed `defined_functions` with
+        // every known function name so the call-before-`def` check in
+        // `infer_expr_in`'s `HirExpr::Call` arm never fires inside a
+        // function body.
+        child.defined_functions.extend(child.functions.keys().cloned());
         child
     }
 }
@@ -1849,6 +1873,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         declared: HashMap::new(),
         functions: Arc::new(functions),
         def_rebound: HashSet::new(),
+        defined_functions: HashSet::new(),
         generics: Arc::new(generics),
         classes: Arc::new(hir.class_defs.iter().cloned().collect()),
     })
@@ -2313,6 +2338,23 @@ fn infer_expr_in(
                     Span::new(0, 0),
                 ));
             };
+            // Issue #22: in top-level code, a call to a function whose
+            // `def` has not been encountered yet in source order is a
+            // static error -- CPython raises `NameError` at runtime for
+            // the same case. Function bodies are exempt (all functions
+            // are marked defined in `child_for_function`) because Python
+            // evaluates a function body at call time, by which point all
+            // module-level `def`s have typically executed.
+            if !env.defined_functions.contains(callee.as_str()) {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!(
+                        "cannot call function `{callee}` before its definition \
+                         (NameError in CPython: name '{callee}' is not defined)"
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
             if arg_tys.len() != param_tys.len() {
                 return Err(Diagnostic::error(
                     "T0021",
@@ -5024,6 +5066,15 @@ fn check_with_environment(
     mut env: Environment,
     function_local_names: &[Vec<&str>],
 ) -> Result<(), Diagnostic> {
+    // Issue #22: clear `defined_functions` before the top-level source-order
+    // pass. `bind_function` (called by `check_with_signatures`'s pass 1 or
+    // `concrete_function_environment`) adds every function to this set, but
+    // for top-level checking we need to track which `def`s have actually
+    // been *executed* in source order -- a call before the `def`'s position
+    // is a NameError in CPython and must be rejected here. Function bodies
+    // (pass 3) get a fresh seed of all function names via
+    // `child_for_function`, so they're unaffected.
+    env.defined_functions.clear();
     // Pass 2: check every top-level statement in source order, growing
     // `env`'s bindings as module-level assignments are encountered --
     // ordinary top-level code is still checked top-to-bottom (a top-level
@@ -5042,6 +5093,12 @@ fn check_with_environment(
             HirItem::TopLevelStmt(stmt) => check_stmt(&mut env, stmt)?,
             HirItem::Function { name, .. } => {
                 env.def_rebound.insert(name.clone());
+                // Issue #22: a `def` at its source position makes the
+                // function name callable from this point forward in
+                // top-level code. Calls before this point (the name is
+                // not yet in `defined_functions`) are rejected by
+                // `infer_expr_in`'s `HirExpr::Call` arm.
+                env.defined_functions.insert(name.clone());
             }
         }
     }
