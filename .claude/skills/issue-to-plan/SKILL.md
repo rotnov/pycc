@@ -55,6 +55,14 @@ Record, before anything else:
   against that commit, and state it in the published plan.
 - Every open pull request: number, title, head commit, draft state, mergeability.
 
+If this skill is running inside a dispatched agent (D-143) that already created a task branch in
+`issue-implement`'s step 1, that branch may be behind the remote default branch — the baseline
+fetch above reads the remote tip but does not update the working tree. Before any empirical
+verification (builds, reproductions, `cargo`/`pycc` runs), update the task branch to match the
+remote default branch tip: `git rebase origin/<default>` (or `git merge origin/<default>` if the
+branch has its own commits that must be preserved). Empirical verification against a stale branch
+produces a plan whose claims do not match the code the implementer will actually work with.
+
 Open pull requests matter for two reasons that recur in this repository: they consume shared
 numbering space (decision-log entries, migration ordering), and they may already be changing the
 files the plan targets. Check both, and check them again immediately before publishing — an open
@@ -130,7 +138,38 @@ settle it, and mark the conclusion as derived rather than observed. Never presen
 conclusion as an observed one — and when both a derivation and a measurement are available,
 publish the measurement and keep the derivation as corroboration.
 
-### 5. Draft the plan
+### 5. Decompose if the issue spans multiple independent code seams
+
+After refuting the issue (step 2), establishing constraints (step 3), and verifying empirically
+(step 4), judge whether the issue's completion criteria span multiple **independent code seams** —
+distinct subsystems or data structures that can be changed and tested in isolation, with a
+dependency ordering between them. The bar is architectural seam count, not line count: a 500-line
+change inside one function is one plan; a change that introduces a new data structure, then
+applies it to a control-flow construct, then extends it to a separate analysis pass, is three
+plans even if each is small.
+
+When the issue decomposes, do not draft a single monolithic plan. Instead:
+
+1. Identify the seams and their dependency order. The first sub-issue is the one that introduces
+   the foundation (a new data structure, a new diagnostic, a new API) that the others depend on;
+   each subsequent sub-issue applies that foundation to one more subsystem.
+2. Open sub-issues in the same milestone as the parent, titled "Part N of #X: ...", with a body
+   that names the parent, states the subset of completion criteria this part covers, and notes
+   the dependency on any earlier part. The parent issue stays open until all sub-issues close.
+3. Draft and publish the plan for **Part 1 only** in this step — the subsequent parts are planned
+   in their own `issue-to-plan` invocations after the prior part has merged, so each plan is
+   verified against the tree as it actually stands, not as the first plan predicted it would
+   stand after later parts land.
+4. State the decomposition in the Part 1 plan's intro: name the sub-issues, their dependency
+   order, and which completion criteria each covers. The implementer of Part 1 needs to know
+   what is in scope (Part 1 only) and what is explicitly deferred to later parts.
+
+Do not decompose an issue whose seams are tightly coupled — if changing one requires changing
+the others in the same commit for the code to compile or tests to pass, it is one plan regardless
+of how many files it touches. Decomposition is for issues where each part can merge independently
+and the tree stays green between parts.
+
+### 6. Draft the plan
 
 Write it to a scratch file. Aim it at an agent who has this repository but not this conversation.
 Cover, in this order:
@@ -150,7 +189,7 @@ evidence bar for advancing. State the wall-clock cost of the split; a phase that
 merges to accumulate observations costs weeks, and the implementer needs that stated rather than
 inferred.
 
-### 6. Adversarial review loop
+### 7. Adversarial review loop
 
 Run the draft past an independent reviewer — the strongest available, in a context that has seen
 the work. Two or three rounds.
@@ -164,7 +203,7 @@ A round that produces neither means the loop is finished. "Clean" means a round 
 not that the ideas ran out. If the reviewer contradicts primary-source evidence already gathered,
 do not silently switch: surface the conflict and reconcile it against the source.
 
-### 7. Publish
+### 8. Publish
 
 Re-fetch the remote default branch and re-check the open pull requests. If either moved in a way
 the plan depends on, fix the plan first.
@@ -191,7 +230,7 @@ its own "authorized writes" section.
 
 ## Stop conditions
 
-5 rounds of the adversarial review loop (step 6) without a clean round — one producing neither
+5 rounds of the adversarial review loop (step 7) without a clean round — one producing neither
 a concrete edit nor an explicit "considered, no change, because X" — is a stop condition: do
 not start a 6th round. Report the open disagreements rather than continuing indefinitely.
 
