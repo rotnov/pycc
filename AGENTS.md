@@ -126,6 +126,10 @@
 - Regular CI must run `ruby scripts/check_ci_permissions.rb` for fast feedback. The read-only `Workflow policy` check (`audit`) is the trust anchor: it runs on every pull request from the base commit under `pull_request_target`, never checks out or executes pull-request code, and audits the head revision's workflow YAML plus roadmap acceptance evidence as data. Keep that check required before merging -- never permanently remove or downgrade it. The one narrow exception is D-125's session-driven temporary bypass, which may relax `audit` for exactly one publicly tracked, expiry-bound incident at a time and restores it immediately afterward; see `docs/REPOSITORY_GOVERNANCE.md`'s "Session-driven temporary bypass" section.
 - Whenever a workflow adds a `pull_request`, `pull_request_target`, or chained trigger, begins executing a repository script, transfers state between jobs, or changes job-level `permissions`, review every job's effective permissions and all artifact, cache, output, and reusable-workflow boundaries. Add a focused negative-event check for privileged behavior where practical; otherwise record the unautomated trust assumptions and verification evidence in the owning specification or workflow.
 
+## Keep source files decomposable
+
+- A Rust source file over ~1,000 lines is a maintainability and agent-context risk (several `lib.rs` files here already reach 15-18k lines, past what a single `Read` call covers). When a task's own work touches such a file, decompose the part it touches into cohesion-driven submodules as part of that same change — not as a separate dedicated refactor task, and not by rewriting unrelated code.
+
 ## Code Review Rules
 
 ### Solo-maintainer branch protection
