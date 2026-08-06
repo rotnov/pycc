@@ -3,7 +3,7 @@ mod project_config;
 mod source;
 
 use clap::Parser;
-use cli::{Cli, Command, ErrorFormat};
+use cli::{Cli, Command, ErrorFormat, OutputFormat};
 use pycc_diag::Diagnostic;
 use std::path::Path;
 use std::process::ExitCode;
@@ -89,8 +89,38 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::Test | Command::Explain { .. } | Command::Clean => {
+        Command::Explain { code, format } => explain(&code, format),
+        Command::Test | Command::Clean => {
             eprintln!("pycc: this subcommand is not yet implemented");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `pycc explain <code> [--format human|json]`: prints the code, severity,
+/// a one-line summary, and a longer explanation with a worked example for
+/// a recognized diagnostic code (D-151, `pycc_diag::explain`). Exits `0`
+/// for a recognized code in either format. Exits `2` for an unrecognized
+/// code, with a plain stderr message regardless of `--format` -- an
+/// unrecognized code is an out-of-band invocation failure, not a
+/// diagnostic occurrence, so it is never subject to `--format` the way
+/// `check`'s own out-of-band `FrontendFailure::Input` class ("could not
+/// read ...") is never subject to `--error-format` either.
+fn explain(code: &str, format: OutputFormat) -> ExitCode {
+    match pycc_diag::explain::find(code) {
+        Some(entry) => {
+            match format {
+                OutputFormat::Human => {
+                    print!("{}", pycc_diag::explain::render_explanation_human(entry));
+                }
+                OutputFormat::Json => {
+                    println!("{}", pycc_diag::explain::render_explanation_json(entry));
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("error: unknown diagnostic code `{code}`");
             ExitCode::from(2)
         }
     }

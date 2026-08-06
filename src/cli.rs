@@ -7,6 +7,17 @@ pub enum ErrorFormat {
     Json,
 }
 
+/// `pycc explain <code>`'s own output-format flag. Deliberately not
+/// `ErrorFormat`/`--error-format`: `explain`'s output documents a code, it
+/// never reports an occurred error, so reusing `check`'s error-flavored
+/// name and type would be actively misleading about what the command does
+/// (see D-151).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum OutputFormat {
+    Human,
+    Json,
+}
+
 #[derive(Parser)]
 #[command(name = "pycc")]
 pub struct Cli {
@@ -46,6 +57,10 @@ pub enum Command {
     Test,
     Explain {
         code: String,
+        /// `pycc explain`'s own output-format flag (see `OutputFormat`'s
+        /// doc comment for why this isn't `--error-format`).
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
     },
     Init {
         name: Option<String>,
@@ -59,7 +74,7 @@ pub enum Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, ErrorFormat};
+    use super::{Cli, Command, ErrorFormat, OutputFormat};
     use clap::Parser;
 
     #[cfg(unix)]
@@ -106,6 +121,32 @@ mod tests {
                 error_format: ErrorFormat::Json,
                 paths,
             } if paths.len() == 2
+        ));
+    }
+
+    #[test]
+    fn explain_accepts_json_format() {
+        assert!(matches!(
+            Cli::try_parse_from(["pycc", "explain", "T0001", "--format", "json"])
+                .unwrap()
+                .command,
+            Command::Explain {
+                code,
+                format: OutputFormat::Json,
+            } if code == "T0001"
+        ));
+    }
+
+    #[test]
+    fn explain_defaults_to_human_format() {
+        assert!(matches!(
+            Cli::try_parse_from(["pycc", "explain", "T0001"])
+                .unwrap()
+                .command,
+            Command::Explain {
+                format: OutputFormat::Human,
+                ..
+            }
         ));
     }
 
