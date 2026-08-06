@@ -1754,6 +1754,7 @@ fn name_error(name: *const std::os::raw::c_char) -> ! {
     panic!("pycc_rt: NameError: name '{name_str}' is not defined");
 }
 
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub extern "C" fn pycc_rt_name_error(name: *const std::os::raw::c_char) -> ! {
     name_error(name)

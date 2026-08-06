@@ -15275,6 +15275,29 @@ mod tests {
     }
 
     #[test]
+    fn infer_expr_in_rejects_call_before_def_in_top_level() {
+        // Directly exercises the call-before-def check in infer_expr_in's
+        // HirExpr::Call arm for top-level code (not inside a function body).
+        let mut env = Environment::new();
+        // Manually insert into functions without adding to defined_functions,
+        // simulating a function that exists but hasn't been "executed" yet
+        // in source order.
+        Arc::make_mut(&mut env.functions).insert(
+            "foo".to_string(),
+            (vec![], Ty::None),
+        );
+        // Do NOT insert "foo" into defined_functions -- simulates a call
+        // before the def's source-order position.
+        let expr = HirExpr::Call {
+            callee: "foo".to_string(),
+            args: vec![],
+        };
+        let err = infer_expr_in(&env, &[], &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot call function `foo` before its definition"));
+    }
+
+    #[test]
     fn a_local_first_assignment_does_not_inherit_the_globals_type() {
         let hir = HirModule {
             items: vec![
@@ -20602,6 +20625,40 @@ mod tests {
             type_aliases: Vec::new(), imports: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo` with a different signature"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_function_signatures_rejects_incompatible_redefinition() {
+        // Exercises the fast path in checked_function_signatures that calls
+        // check_incompatible_redefinitions before trying concrete or solver.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![
+                        ("x".to_string(), Ty::Int),
+                        ("y".to_string(), Ty::Int),
+                    ],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = checked_function_signatures(&hir, &local_names).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
             err.message.contains("cannot redefine function `foo` with a different signature"),

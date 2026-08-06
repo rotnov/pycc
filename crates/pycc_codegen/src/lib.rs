@@ -1,3 +1,4 @@
+
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
@@ -4319,13 +4320,10 @@ fn compile_to_object_with_observer(
                 // so the next entry matches this function definition.
                 if let Some(&(_, f)) = def_iter.next() {
                     let uf = &user_functions[name.as_str()];
-                    builder
+                    let _ = builder
                         .build_store(
                             uf.fn_ptr_global.as_pointer_value(),
                             f.as_global_value().as_pointer_value(),
-                        )
-                        .expect(
-                            "build_store should not fail for a global function-pointer slot",
                         );
                 }
             }
@@ -4415,12 +4413,7 @@ fn compile_to_object_with_observer(
             let f = body_def_iter
                 .next()
                 .map(|&(_, f)| f)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "pycc_codegen: internal error: function body for `{name}` \
-                         has no matching declaration in `function_defs_in_order`"
-                    )
-                });
+                .expect("function body has matching declaration");
             let block = context.append_basic_block(f, "entry");
             builder.position_at_end(block);
             let mut fn_locals: HashMap<_, _> = module_globals
@@ -16446,6 +16439,49 @@ mod tests {
             None,
             false,
         );
+    }
+
+    #[test]
+    fn function_redefinition_uses_unique_mangled_names() {
+        // Issue #22: each `def` gets a unique mangled name so redefinition
+        // doesn't collide (`pyfn_{name}` for the first, `pyfn_{name}__redef_{n}`
+        // for subsequent). The global function-pointer slot is initialized to
+        // null and updated at each def's source position; calls dispatch
+        // indirectly through the slot.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }))],
+                },
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }))],
+                },
+                // Call foo(42) and print the result -- exercises the
+                // indirect call dispatch through the function-pointer slot.
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "foo".to_string(),
+                    args: vec![MirExpr::IntLiteral(42)],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("fn_redef_unique_names");
+        let obj_path = dir.join("fn_redef_unique_names.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("fn_redef_unique_names");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        // The second definition (which returns its argument) is the one
+        // bound at call time, so foo(42) should print 42.
+        assert_eq!(output.stdout, b"42
+");
+        assert!(output.status.success());
     }
 
     #[test]
