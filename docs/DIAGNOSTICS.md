@@ -20,7 +20,7 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 |---|---|---|
 | `C0001` | error | valid Python construct is not implemented by this pycc version |
 | `C0002` | error | recognized stdlib module, but the specific imported symbol is not registered (D-136), e.g. `from math import isnan` |
-| `L0001` | error | syntax error (span + expected set) *(also reused, without an "expected set", for a post-parse statement-context violation caught during HIR lowering -- `break`/`continue` outside a loop, `async for` outside an async function -- since CPython classifies these as `SyntaxError` too; `T0024` ("`return` outside a function") is the closest existing precedent for this same "keyword valid only in a specific context" family but lives under `T0xxx` instead, an accepted, deliberately unfixed inconsistency -- see D-148)* |
+| `L0001` | error | syntax error (span + expected set) *(also reused, without an "expected set", for a post-parse context violation caught during HIR lowering -- `break`/`continue` outside a loop, `async for` outside an async function (D-148), and `yield`/`yield from` outside a function (D-149) -- since CPython classifies all of these as `SyntaxError` too; `T0024` ("`return` outside a function") is the closest existing precedent for this same "keyword valid only in a specific context" family but lives under `T0xxx` instead, an accepted, deliberately unfixed inconsistency -- see D-148)* |
 | `L0002` | error | Python version mismatch (feature needs 3.14 level) |
 | `T0001` | error | public function missing annotation |
 | `T0002` | error | `Any` outside interop boundary |

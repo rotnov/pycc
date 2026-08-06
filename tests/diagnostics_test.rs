@@ -117,6 +117,36 @@ fn c0001_continue_inside_loop() {
     assert_diagnostic_matches_fixture("c0001_continue_inside_loop");
 }
 
+// Issue #361 / D-149, the expression-lowering sequel to #141/D-148:
+// `yield`/`yield from` outside any function are misclassified as `C0001`
+// ("valid Python, not implemented yet") when CPython actually rejects both
+// as a `SyntaxError` -- a context-invalidity failure, not a capability gap --
+// unless a real enclosing function makes them genuinely
+// valid-but-unimplemented (generator codegen itself remains out of scope).
+#[test]
+fn l0001_yield_outside_function() {
+    assert_diagnostic_matches_fixture("l0001_yield_outside_function");
+}
+
+#[test]
+fn l0001_yield_from_outside_function() {
+    assert_diagnostic_matches_fixture("l0001_yield_from_outside_function");
+}
+
+/// Paired with the `l0001_*` fixtures above: a real enclosing function keeps
+/// `yield`/`yield from` on the existing valid-but-unimplemented `C0001` path
+/// -- this issue is scoped to classification, not to implementing generator
+/// codegen.
+#[test]
+fn c0001_yield_inside_function() {
+    assert_diagnostic_matches_fixture("c0001_yield_inside_function");
+}
+
+#[test]
+fn c0001_yield_from_inside_function() {
+    assert_diagnostic_matches_fixture("c0001_yield_from_inside_function");
+}
+
 #[test]
 fn d0001_missing_public_annotation() {
     assert_diagnostic_matches_fixture("d0001_missing_public_annotation");
