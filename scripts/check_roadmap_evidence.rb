@@ -206,7 +206,8 @@ D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+  "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -933,10 +934,10 @@ PAIRED_PERF_CI_GATE_JOB = {
   ]
 }.freeze
 COVERAGE_JOB = "build-test-coverage"
-COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
+COVERAGE_STEP = "Hard coverage gate — 100% lines + functions (D-014)"
 COVERAGE_COMMAND =
   "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
-  "--fail-under-lines 100 --fail-under-regions 100"
+  "--fail-under-lines 100 --fail-under-functions 100"
 COVERAGE_SCRIPT = <<~SHELL.strip
   set -euo pipefail
   LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -1538,7 +1539,7 @@ def validate_evidence(root, _evidence_ids)
   workflow_text = workflow.read
   unless coverage_gate_present?(workflow_text, workflow.to_s)
     raise RoadmapEvidenceError,
-          "#{workflow}: evidence does not provide the exact 100% line and region gate"
+          "#{workflow}: evidence does not provide the exact 100% line and functions gate"
   end
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
