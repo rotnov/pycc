@@ -11,7 +11,7 @@
 //! module -- every existing test reaches lowering exclusively through the
 //! public `lower_checked` entry point in `lib.rs`).
 //!
-//! `in_loop: bool` (D-148) is the module's only new piece of state: `true`
+//! `in_loop: bool` (D-148) is the module's own piece of state: `true`
 //! exactly when the statement being lowered is (transitively) inside a
 //! `while`/`for`/`for-range` loop body reached via one of *this* module's
 //! own `lower_body` calls -- entering a function body via `lower_function`
@@ -21,14 +21,27 @@
 //! context-invalid occurrence (no enclosing loop -- CPython raises
 //! `SyntaxError`, so this now reuses `L0001`) from a valid-but-unimplemented
 //! occurrence (a real enclosing loop -- still `C0001`, loop control-flow
-//! codegen remains out of scope). A future `yield`-outside-function
-//! follow-up threads its own, separate context flag through `lower_expr` in
-//! `lib.rs` rather than reusing or extending this one.
+//! codegen remains out of scope).
+//!
+//! `in_function: bool` (D-149, issue #361's own follow-up) is this module's
+//! second piece of threaded context, but purely as a pass-through: none of
+//! this module's own `in_loop`-driven logic reads it. `lower_stmt`/
+//! `lower_body`/`lower_elif_else_clauses` all gained it because they sit on
+//! the only route from the two places that decide it (`lower_checked`'s
+//! module-level dispatch and `lower_function`'s body dispatch, both in
+//! `lib.rs`) to `expr.rs`'s `lower_expr`, which every one of these three
+//! functions calls directly (test expressions, `Return` values, `AnnAssign`
+//! values, assignment/subscript values) -- D-148's own framing ("the two
+//! lowering passes stay independently parameterized") remains true in the
+//! sense that the two flags never share a variable or collapse into one
+//! enum, but is refined by D-149: this module is not left untouched by an
+//! `expr.rs`-side flag the way that framing might suggest.
 
-use crate::{
-    annotation_to_ty, context_invalid, lower_dict_comp_assign, lower_expr, lower_list_comp_assign,
-    lower_range_call, lower_set_comp_assign, unsupported, HirStmt, Ty,
+use crate::expr::{
+    lower_dict_comp_assign, lower_expr, lower_list_comp_assign, lower_range_call,
+    lower_set_comp_assign,
 };
+use crate::{HirStmt, Ty, annotation_to_ty, context_invalid, unsupported};
 use pycc_ast::{ElifElseClause, Expr, Stmt};
 use pycc_diag::Diagnostic;
 
@@ -36,9 +49,10 @@ pub(crate) fn lower_stmt(
     stmt: &Stmt,
     aliases: &[(String, Ty)],
     in_loop: bool,
+    in_function: bool,
 ) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
-        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value)?),
+        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value, in_function)?),
         Stmt::Assign(assign) => {
             let [target] = assign.targets.as_slice() else {
                 return Err(unsupported(
@@ -66,7 +80,7 @@ pub(crate) fn lower_stmt(
                     Expr::DictComp(comp) => lower_dict_comp_assign(name.id.as_str(), comp)?,
                     _ => HirStmt::Assign {
                         target: name.id.as_str().to_string(),
-                        value: lower_expr(&assign.value)?,
+                        value: lower_expr(&assign.value, in_function)?,
                     },
                 },
                 // `<bare name>[key] = value`, PR-11 Task 3 (D-123): unlike
@@ -89,8 +103,8 @@ pub(crate) fn lower_stmt(
                     };
                     HirStmt::DictSet {
                         dict: base_name.id.as_str().to_string(),
-                        key: lower_expr(&sub.slice)?,
-                        value: lower_expr(&assign.value)?,
+                        key: lower_expr(&sub.slice, in_function)?,
+                        value: lower_expr(&assign.value, in_function)?,
                     }
                 }
                 other => {
@@ -128,7 +142,11 @@ pub(crate) fn lower_stmt(
                 ));
             }
             let annotation = annotation_to_ty(&ann.annotation, None, aliases)?;
-            let value = ann.value.as_deref().map(lower_expr).transpose()?;
+            let value = ann
+                .value
+                .as_deref()
+                .map(|e| lower_expr(e, in_function))
+                .transpose()?;
             HirStmt::AnnAssign {
                 target: name.id.as_str().to_string(),
                 annotation,
@@ -136,9 +154,14 @@ pub(crate) fn lower_stmt(
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {
-            test: lower_expr(&if_stmt.test)?,
-            body: lower_body(&if_stmt.body, aliases, in_loop)?,
-            orelse: lower_elif_else_clauses(&if_stmt.elif_else_clauses, aliases, in_loop)?,
+            test: lower_expr(&if_stmt.test, in_function)?,
+            body: lower_body(&if_stmt.body, aliases, in_loop, in_function)?,
+            orelse: lower_elif_else_clauses(
+                &if_stmt.elif_else_clauses,
+                aliases,
+                in_loop,
+                in_function,
+            )?,
         },
         Stmt::While(while_stmt) => {
             if !while_stmt.orelse.is_empty() {
@@ -148,8 +171,8 @@ pub(crate) fn lower_stmt(
                 ));
             }
             HirStmt::While {
-                test: lower_expr(&while_stmt.test)?,
-                body: lower_body(&while_stmt.body, aliases, true)?,
+                test: lower_expr(&while_stmt.test, in_function)?,
+                body: lower_body(&while_stmt.body, aliases, true, in_function)?,
             }
         }
         Stmt::For(for_stmt) => {
@@ -192,7 +215,7 @@ pub(crate) fn lower_stmt(
                 return Ok(HirStmt::ForList {
                     var: var.id.to_string(),
                     list: list_name.id.as_str().to_string(),
-                    body: lower_body(&for_stmt.body, aliases, true)?,
+                    body: lower_body(&for_stmt.body, aliases, true, in_function)?,
                 });
             }
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
@@ -228,16 +251,21 @@ pub(crate) fn lower_stmt(
                     call.range,
                 ));
             }
-            let (start, stop, step) = lower_range_call(call)?;
+            let (start, stop, step) = lower_range_call(call, in_function)?;
             HirStmt::ForRange {
                 var: var.id.to_string(),
                 start,
                 stop,
                 step,
-                body: lower_body(&for_stmt.body, aliases, true)?,
+                body: lower_body(&for_stmt.body, aliases, true, in_function)?,
             }
         }
-        Stmt::Return(ret) => HirStmt::Return(ret.value.as_deref().map(lower_expr).transpose()?),
+        Stmt::Return(ret) => HirStmt::Return(
+            ret.value
+                .as_deref()
+                .map(|e| lower_expr(e, in_function))
+                .transpose()?,
+        ),
         Stmt::Break(_) => {
             return Err(if in_loop {
                 // A real enclosing loop -- valid Python, break/continue
@@ -273,9 +301,10 @@ pub(crate) fn lower_body(
     body: &[Stmt],
     aliases: &[(String, Ty)],
     in_loop: bool,
+    in_function: bool,
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     body.iter()
-        .map(|stmt| lower_stmt(stmt, aliases, in_loop))
+        .map(|stmt| lower_stmt(stmt, aliases, in_loop, in_function))
         .collect()
 }
 
@@ -283,22 +312,23 @@ pub(crate) fn lower_elif_else_clauses(
     clauses: &[ElifElseClause],
     aliases: &[(String, Ty)],
     in_loop: bool,
+    in_function: bool,
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
     };
     match &first.test {
         Some(test) => Ok(vec![HirStmt::If {
-            test: lower_expr(test)?,
-            body: lower_body(&first.body, aliases, in_loop)?,
-            orelse: lower_elif_else_clauses(rest, aliases, in_loop)?,
+            test: lower_expr(test, in_function)?,
+            body: lower_body(&first.body, aliases, in_loop, in_function)?,
+            orelse: lower_elif_else_clauses(rest, aliases, in_loop, in_function)?,
         }]),
         None => {
             assert!(
                 rest.is_empty(),
                 "pycc_hir: an else clause must be the last elif_else_clause"
             );
-            lower_body(&first.body, aliases, in_loop)
+            lower_body(&first.body, aliases, in_loop, in_function)
         }
     }
 }
