@@ -543,8 +543,8 @@ class Point:
     def __init__(self, x: int) -> None:
         self.x = x
 
-def f(p: Point) -> int:
-    return p.y  # `Point` has no attribute named `y`
+p = Point(1)
+p.y  # `Point` has no attribute named `y`
 ",
     },
     DiagnosticExplanation {

@@ -91,9 +91,10 @@ pub(crate) fn lower_stmt(
                 // rejected downstream), so a `list[int]` subscript-assignment target
                 // also reaches `HirStmt::DictSet` here -- `pycc_types`
                 // rejects it with `T0033` once the base's real type is
-                // known, relocating (not removing) the invariant this file's
-                // own `subscript_assignment_target_is_unsupported` test used
-                // to enforce at the lowering level.
+                // known, relocating (not removing) the invariant
+                // `subscript_assignment_to_a_non_bare_name_base_is_unsupported`
+                // (`crates/pycc_hir/src/lib.rs`) used to enforce at the
+                // lowering level.
                 Expr::Subscript(sub) => {
                     let Expr::Name(base_name) = sub.value.as_ref() else {
                         return Err(unsupported(
@@ -113,12 +114,15 @@ pub(crate) fn lower_stmt(
                 // available at this lowering step to narrow it to only
                 // `self` or only an instance-typed receiver -- `pycc_types`
                 // rejects a non-instance base or an undeclared attribute
-                // name). This supersedes the older, narrower invariant
-                // `assigning_to_a_non_name_target_is_unsupported` used to
-                // lock in ("only assigning to a bare name is supported so
-                // far") -- that test now documents a genuinely different,
-                // still-unsupported target shape instead (see its own
-                // updated body).
+                // name). This supersedes the older, narrower invariant that
+                // used to reject any non-bare-name `Stmt::Assign` target
+                // outright ("only assigning to a bare name is supported so
+                // far"). The remaining unsupported `Stmt::Assign` target
+                // shape -- multi-target tuple unpacking, e.g. `a, b = 1, 2`
+                // -- still reaches the `other => ..` catch-all just below
+                // and is covered by
+                // `assigning_to_a_tuple_unpacking_target_is_unsupported` in
+                // `crates/pycc_hir/src/lib.rs`.
                 Expr::Attribute(attr) => HirStmt::AttrSet {
                     base: lower_expr(&attr.value, in_function)?,
                     attr: attr.attr.to_string(),

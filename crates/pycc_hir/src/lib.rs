@@ -536,6 +536,18 @@ pub enum ImportBinding {
     },
 }
 
+/// The bound local name of an import, regardless of which `ImportBinding`
+/// variant it is -- used by `lower_checked`'s class-name-collision check
+/// (D-068 review finding on #385) so it does not need to duplicate the
+/// match on both variants at its own call site.
+fn import_local_name(binding: &ImportBinding) -> &str {
+    match binding {
+        ImportBinding::Module { local_name, .. } | ImportBinding::Symbol { local_name, .. } => {
+            local_name
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirModule {
     pub items: Vec<HirItem>,
@@ -587,14 +599,58 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let mut items = Vec::with_capacity(module.body.len());
     for stmt in &module.body {
         if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases)? {
+            // D-068 review finding on #385, second round: the class-vs-alias
+            // check below (at the `Stmt::ClassDef` arm) only ever catches a
+            // class defined *after* a same-named alias -- without this
+            // check, `class Foo: ...` followed by `type Foo = int` would
+            // silently establish a second, alias-shaped `Foo` binding with
+            // no diagnostic, the exact failure mode this finding exists to
+            // close, just in the untreated direction.
+            if class_defs.iter().any(|(class_name, _)| *class_name == name) {
+                return Err(unsupported(
+                    format!(
+                        "type alias `{name}` collides with a class of the same name \
+                         already defined in this module"
+                    ),
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             aliases.push((name, ty));
             continue;
         }
         if let Some((name, ty)) = lower_legacy_type_alias_ann_assign(stmt, &aliases)? {
+            // Same reverse-direction check as the `type X = ...` arm above,
+            // for the legacy `X: TypeAlias = <expr>` spelling.
+            if class_defs.iter().any(|(class_name, _)| *class_name == name) {
+                return Err(unsupported(
+                    format!(
+                        "type alias `{name}` collides with a class of the same name \
+                         already defined in this module"
+                    ),
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             aliases.push((name, ty));
             continue;
         }
         if let Some(mut bound) = lower_import_stmt(stmt)? {
+            // Same reverse-direction check as the two type-alias arms above,
+            // for `import ...`/`from ... import ...` (a single statement can
+            // bind more than one local name, e.g. `from math import sqrt,
+            // pi`, so every bound name is checked, not just the first).
+            if let Some(colliding) = bound
+                .iter()
+                .map(import_local_name)
+                .find(|local_name| class_defs.iter().any(|(class_name, _)| class_name == local_name))
+            {
+                return Err(unsupported(
+                    format!(
+                        "import `{colliding}` collides with a class of the same name \
+                         already defined in this module"
+                    ),
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             imports.append(&mut bound);
             continue;
         }
@@ -619,9 +675,76 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
                     def.range,
                 ));
             }
+            // D-068 review finding on #385: a class name colliding with an
+            // already-defined top-level function, type alias, or import
+            // name produced no diagnostic and silently, permanently
+            // shadowed the earlier binding -- `pycc_types::Environment`
+            // checks `env.lookup_class(callee)` before the ordinary
+            // function lookup at every call site (`crates/pycc_types/src/
+            // lib.rs`), on the (until now unenforced) assumption that a
+            // class name can never collide with a real function name in
+            // this compiler's flat, single-namespace model. Enforce that
+            // assumption here, at the same point the class-vs-class check
+            // above already fires, rather than leaving it merely asserted
+            // in a comment one crate over. Only a top-level function name
+            // is checked against `items` (a method's own mangled
+            // `<ClassName>.<method>` name can never collide with a bare
+            // class name -- a real Python `NAME` token can never contain a
+            // `.`, `pycc_hir::class`'s own doc comment).
+            if items
+                .iter()
+                .any(|item| matches!(item, HirItem::Function { name, .. } if *name == class_def.name))
+            {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` collides with a function of the same name already \
+                         defined in this module",
+                        class_def.name
+                    ),
+                    def.range,
+                ));
+            }
+            if aliases.iter().any(|(name, _)| name == &class_def.name) {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` collides with a type alias of the same name already \
+                         defined in this module",
+                        class_def.name
+                    ),
+                    def.range,
+                ));
+            }
+            if imports
+                .iter()
+                .any(|binding| import_local_name(binding) == class_def.name)
+            {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` collides with an import of the same name already \
+                         defined in this module",
+                        class_def.name
+                    ),
+                    def.range,
+                ));
+            }
             class_defs.push((class_def.name.clone(), class_def));
             items.append(&mut method_items);
             continue;
+        }
+        if let Stmt::FunctionDef(def) = stmt
+            && class_defs.iter().any(|(name, _)| name == def.name.as_str())
+        {
+            // The reverse direction of the check above: a top-level
+            // function defined *after* a same-named class must be rejected
+            // too, not only a class defined after a same-named function.
+            return Err(unsupported(
+                format!(
+                    "function `{}` collides with a class of the same name already \
+                     defined in this module",
+                    def.name
+                ),
+                def.range,
+            ));
         }
         let item = match stmt {
             Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
@@ -2534,9 +2657,11 @@ mod tests {
 
     #[test]
     fn rejects_an_annotated_assignment_to_a_non_name_target() {
-        // Matches Stmt::Assign's own existing restriction (only a bare name
-        // target is supported so far) -- e.g. `obj.attr: int = 1` has no
-        // attribute-access support anywhere else in the compiler either.
+        // Unlike `Stmt::Assign` (which now accepts an `Expr::Attribute`
+        // target -- `obj.attr = 1` -- as of D-154 Part 1 of #375, see
+        // `stmt.rs`'s own comment on that arm), `Stmt::AnnAssign` still only
+        // accepts a bare-name target: `obj.attr: int = 1` has no
+        // attribute-annotated-assignment support anywhere in the compiler.
         assert_capability_error_message(
             "obj.attr: int = 1\n",
             "only assigning to a bare name is supported so far",

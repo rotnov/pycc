@@ -51,6 +51,21 @@ use pycc_ast::{Expr, Number, Stmt};
 use pycc_diag::Diagnostic;
 use std::collections::HashSet;
 
+/// Method names that collide with `crates/pycc_hir/src/expr.rs`'s own
+/// hand-recognized container-method call syntax (`Expr::Call` over
+/// `Expr::Attribute`'s fast path for `.append()`/`.pop()`/`.get()`/
+/// `.add()`, checked *before* the generic instance-method-call fallback --
+/// see that file's own comment on that ordering). That fast path runs with
+/// no type information available -- it cannot tell a real `list`/`dict`/
+/// `set` receiver from a class instance whose own method just happens to
+/// share one of these four names -- so `some_instance.get(5)` would
+/// silently misroute into the dict-`get` fast path and fail with a
+/// confusing "dict.get() takes exactly two arguments" diagnostic instead of
+/// ever reaching the user's own method (D-068 review finding on #385).
+/// Rejecting the name here, at class-definition time, turns that confusing
+/// failure into a clear, immediate one.
+const CONTAINER_METHOD_NAMES: [&str; 4] = ["append", "pop", "get", "add"];
+
 /// A single class's declared shape (D-154): its attribute slots, in
 /// first-`__init__`-assignment source order, and its method table (method
 /// name -> the mangled `HirItem::Function` name in `HirModule::items` its
@@ -111,6 +126,15 @@ pub(crate) fn lower_class(
             ));
         };
         let method_name = method_def.name.as_str().to_string();
+        if CONTAINER_METHOD_NAMES.contains(&method_name.as_str()) {
+            return Err(unsupported(
+                format!(
+                    "method name `{method_name}` collides with the compiler's built-in \
+                     container-method syntax, not supported yet"
+                ),
+                method_def.range,
+            ));
+        }
         if !seen_method_names.insert(method_name.clone()) {
             return Err(unsupported(
                 format!(
@@ -509,8 +533,256 @@ mod tests {
     }
 
     #[test]
+    fn a_class_name_colliding_with_an_earlier_function_name_is_unsupported() {
+        // D-068 review finding on #385: without this check, `class Foo`
+        // below would silently, permanently shadow the earlier `def Foo()`
+        // at every call site -- `pycc_types::Environment` checks
+        // `env.lookup_class(callee)` before the ordinary function lookup
+        // (`crates/pycc_types/src/lib.rs`), so `Foo()` would always resolve
+        // to the class instantiation and the function would become
+        // unreachable, with no diagnostic ever produced.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "def Foo() -> None:\n    return\nclass Foo:\n    def __init__(self) -> None:\n        return\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("class `Foo` collides with a function of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_function_name_colliding_with_an_earlier_class_name_is_unsupported() {
+        // The reverse order of
+        // `a_class_name_colliding_with_an_earlier_function_name_is_unsupported`
+        // above: the class comes first, the function second.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "class Foo:\n    def __init__(self) -> None:\n        return\ndef Foo() -> None:\n    return\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("function `Foo` collides with a class of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_name_colliding_with_a_type_alias_is_unsupported() {
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "type Foo = int\nclass Foo:\n    def __init__(self) -> None:\n        return\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("class `Foo` collides with a type alias of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_name_colliding_with_a_module_import_is_unsupported() {
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "import math\nclass math:\n    def __init__(self) -> None:\n        return\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("class `math` collides with an import of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_class_name_colliding_with_a_symbol_import_is_unsupported() {
+        // Exercises `import_local_name`'s other `ImportBinding` variant
+        // (`Symbol`, from `from <module> import <name>`) -- the test above
+        // only ever reaches the `Module` variant (`import math`), leaving
+        // the `Symbol` arm of `import_local_name`'s own or-pattern
+        // structurally unreachable under D-014's 100%-region coverage gate.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "from math import sqrt\nclass sqrt:\n    def __init__(self) -> None:\n        return\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("class `sqrt` collides with an import of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_type_alias_colliding_with_an_earlier_class_name_is_unsupported() {
+        // The reverse order of
+        // `a_class_name_colliding_with_a_type_alias_is_unsupported` above:
+        // the class comes first, the `type X = ...` alias second -- D-068
+        // review finding on #385's second round: without this check, `type
+        // Foo = int` below would silently establish a second, alias-shaped
+        // `Foo` binding alongside the class, with no diagnostic.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "class Foo:\n    def __init__(self) -> None:\n        return\ntype Foo = int\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("type alias `Foo` collides with a class of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_legacy_type_alias_colliding_with_an_earlier_class_name_is_unsupported() {
+        // Same reverse-direction collision as
+        // `a_type_alias_colliding_with_an_earlier_class_name_is_unsupported`
+        // above, exercised through the legacy `X: TypeAlias = <expr>`
+        // spelling (`lower_legacy_type_alias_ann_assign`) instead of `type X
+        // = <expr>` (`lower_type_alias_stmt`) -- the two are lowered by
+        // independent functions in `lib.rs`, each needing its own check and
+        // its own regression test.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "class Foo:\n    def __init__(self) -> None:\n        return\nFoo: TypeAlias = int\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("type alias `Foo` collides with a class of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_module_import_colliding_with_an_earlier_class_name_is_unsupported() {
+        // The reverse order of
+        // `a_class_name_colliding_with_a_module_import_is_unsupported`
+        // above: the class comes first, `import math` second.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "class math:\n    def __init__(self) -> None:\n        return\nimport math\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("import `math` collides with a class of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_symbol_import_colliding_with_an_earlier_class_name_is_unsupported() {
+        // The reverse order of
+        // `a_class_name_colliding_with_a_symbol_import_is_unsupported`
+        // above: the class comes first, `from math import sqrt` second.
+        // Also exercises `bound.iter().map(import_local_name).find(..)`'s
+        // own multi-binding search (`from math import pi, sqrt` binds two
+        // names in one statement) finding the colliding name when it is not
+        // the first one bound.
+        let diagnostic = lower_checked(&crate::pycc_parser_test_helper::parse(
+            "class sqrt:\n    def __init__(self) -> None:\n        return\nfrom math import pi, sqrt\n",
+        ))
+        .unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("import `sqrt` collides with a class of the same name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
     fn a_class_without_init_is_unsupported() {
         assert_c0001("class C:\n    def foo(self) -> None:\n        return\n");
+    }
+
+    #[test]
+    fn a_method_named_get_collides_with_the_container_method_syntax() {
+        // D-068 review finding on #385: without `CONTAINER_METHOD_NAMES`'s
+        // own rejection, `buf.get(5)` below would hit `expr.rs`'s
+        // hand-recognized dict-`.get()` fast path first (no type
+        // information is available at that lowering step to know `buf` is
+        // actually a `Buf` instance) and fail with the confusing "dict.get()
+        // takes exactly two arguments (key, default), got 1" message
+        // instead of ever reaching `Buf`'s own `get` method. Asserting the
+        // *exact* message, not just the `C0001` code, is what actually
+        // distinguishes "rejected with the new, clear diagnostic" from
+        // "rejected with the old, confusing one" -- both are `C0001`.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class Buf:\n    def __init__(self) -> None:\n        return\n    def get(self, k: int) -> int:\n        return k\n\nbuf = Buf()\nbuf.get(5)\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("method name `get` collides with the compiler's built-in container-method syntax"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+        assert!(
+            !diagnostic.message.contains("dict.get() takes exactly two arguments"),
+            "the confusing container-method message must not resurface: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_method_named_append_pop_or_add_is_also_rejected() {
+        // Same collision as `a_method_named_get_collides_with_the_container_method_syntax`
+        // above, exercised for the remaining three names `CONTAINER_METHOD_NAMES`
+        // guards against -- each with its own deliberately-mismatched-arity
+        // call site (mirroring the `get` test's own `buf.get(5)`), so the
+        // old, confusing container-method message (asserted absent below)
+        // is actually reachable pre-fix, not merely untriggered.
+        let cases = [
+            ("append", "c.append()", "list.append() takes exactly one argument, got 0"),
+            ("pop", "c.pop(1)", "list.pop() takes no arguments, got 1"),
+            ("add", "c.add()", "set.add() takes exactly one argument, got 0"),
+        ];
+        for (name, call, old_message) in cases {
+            let source = format!(
+                "class C:\n    def __init__(self) -> None:\n        return\n    def {name}(self) -> None:\n        return\n\nc = C()\n{call}\n"
+            );
+            let module = crate::pycc_parser_test_helper::parse(&source);
+            let diagnostic = lower_checked(&module).unwrap_err();
+            assert_eq!(diagnostic.code, "C0001", "name: {name}");
+            assert!(
+                diagnostic.message.contains(&format!(
+                    "method name `{name}` collides with the compiler's built-in container-method syntax"
+                )),
+                "name: {name}, message: {}",
+                diagnostic.message
+            );
+            assert!(
+                !diagnostic.message.contains(old_message),
+                "the confusing container-method message must not resurface, name: {name}, message: {}",
+                diagnostic.message
+            );
+        }
     }
 
     // -- lower_method: method-shape checks ----------------------------------
