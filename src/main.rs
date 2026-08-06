@@ -268,7 +268,12 @@ fn resolve_release_flag(explicit_release: bool, source_path: &Path) -> bool {
 enum FrontendFailure {
     Input(String),
     Compile {
-        diagnostic: Diagnostic,
+        // Boxed (D-151): `Diagnostic` grew a `help: Option<String>` field,
+        // which pushed this variant's inline size past clippy's
+        // `result_large_err` threshold. Boxing keeps `Result<_,
+        // FrontendFailure>` small regardless of how large `Diagnostic`
+        // itself grows in the future.
+        diagnostic: Box<Diagnostic>,
         source: String,
     },
 }
@@ -279,13 +284,19 @@ fn lower_frontend(path: &Path) -> Result<(pycc_hir::HirModule, String), Frontend
     let module = match pycc_parser::parse(&source) {
         Ok(module) => module,
         Err(diagnostic) => {
-            return Err(FrontendFailure::Compile { diagnostic, source });
+            return Err(FrontendFailure::Compile {
+                diagnostic: Box::new(diagnostic),
+                source,
+            });
         }
     };
     let hir = match pycc_hir::lower_checked(&module) {
         Ok(hir) => hir,
         Err(diagnostic) => {
-            return Err(FrontendFailure::Compile { diagnostic, source });
+            return Err(FrontendFailure::Compile {
+                diagnostic: Box::new(diagnostic),
+                source,
+            });
         }
     };
     Ok((hir, source))
@@ -293,13 +304,18 @@ fn lower_frontend(path: &Path) -> Result<(pycc_hir::HirModule, String), Frontend
 
 fn check_frontend(path: &Path) -> Result<(), FrontendFailure> {
     let (hir, source) = lower_frontend(path)?;
-    pycc_types::check(&hir).map_err(|diagnostic| FrontendFailure::Compile { diagnostic, source })
+    pycc_types::check(&hir).map_err(|diagnostic| FrontendFailure::Compile {
+        diagnostic: Box::new(diagnostic),
+        source,
+    })
 }
 
 fn resolve_frontend(path: &Path) -> Result<pycc_hir::HirModule, FrontendFailure> {
     let (hir, source) = lower_frontend(path)?;
-    pycc_types::check_and_resolve(&hir)
-        .map_err(|diagnostic| FrontendFailure::Compile { diagnostic, source })
+    pycc_types::check_and_resolve(&hir).map_err(|diagnostic| FrontendFailure::Compile {
+        diagnostic: Box::new(diagnostic),
+        source,
+    })
 }
 
 fn report_check_failure(path: &Path, failure: FrontendFailure, error_format: ErrorFormat) -> u8 {

@@ -281,7 +281,7 @@ fn std_function_used_as_a_value(name: &str) -> Diagnostic {
         "T0021",
         format!("`{name}` is a stdlib function and must be called, e.g. `{name}(...)`"),
         Span::new(0, 0),
-    )
+    ).with_help(format!("call it: `{name}(...)`"))
 }
 
 /// A stdlib constant (e.g. `math.pi`) called like a function
@@ -776,7 +776,7 @@ fn collect_expr_constraints(
                         "T0033",
                         format!("`len` expects exactly 1 argument, got {}", arg_terms.len()),
                         Span::new(0, 0),
-                    ));
+                    ).with_help("pass exactly 1 argument"));
                 }
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
                     && !matches!(arg_ty, Ty::List(_) | Ty::Dict(_) | Ty::Set(_))
@@ -788,7 +788,7 @@ fn collect_expr_constraints(
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help("pass a `list[T]`, `dict[K, V]`, or `set[T]` value"));
                 }
                 return Ok(Some(Ok(Ty::Int)));
             }
@@ -816,7 +816,7 @@ fn collect_expr_constraints(
                             arg_terms.len()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("pass exactly {} argument(s)", expected_arg_tys.len())));
                 }
                 for (term, expected) in arg_terms.iter().zip(expected_arg_tys) {
                     if let Some(Ok(arg_ty)) = term
@@ -830,7 +830,7 @@ fn collect_expr_constraints(
                                 arg_ty.name()
                             ),
                             Span::new(0, 0),
-                        ));
+                        ).with_help(format!("pass a `{}` value", std_scalar_to_ty(*expected).name())));
                     }
                 }
                 return Ok(Some(Ok(std_scalar_to_ty(ret_ty))));
@@ -856,7 +856,7 @@ fn collect_expr_constraints(
                             arg_terms.len()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help("pass exactly 1 argument"));
                 }
                 if let Some(Ok(arg_ty)) = &arg_terms[0]
                     && !matches!(arg_ty, Ty::Int | Ty::Float | Ty::Bool)
@@ -868,7 +868,7 @@ fn collect_expr_constraints(
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help("pass an `int`, `float`, or `bool` value"));
                 }
                 return Ok(Some(Ok(Ty::Float)));
             }
@@ -913,7 +913,7 @@ fn collect_expr_constraints(
                                 index + 1
                             ),
                             Span::new(0, 0),
-                        ));
+                        ).with_help("add an explicit type annotation"));
                     }
                     unify_terms(
                         parameter.clone(),
@@ -1908,7 +1908,7 @@ fn infer_function_signatures_with_solver(
                             "cannot infer type of parameter `{param_name}` in private helper `{name}`; add an annotation"
                         ),
                         Span::new(0, 0),
-                    )
+                    ).with_help(format!("add a type annotation to parameter `{param_name}`"))
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -1923,7 +1923,7 @@ fn infer_function_signatures_with_solver(
                 "T0021",
                 format!("cannot infer return type of private helper `{name}`; add an annotation"),
                 Span::new(0, 0),
-            )
+            ).with_help(format!("add a return type annotation to `{name}`"))
         })?;
         resolved.insert(name.clone(), (param_tys, return_ty));
     }
@@ -2101,7 +2101,7 @@ fn infer_expr_in(
                         "T0033",
                         format!("`len` expects exactly 1 argument, got {}", arg_tys.len()),
                         Span::new(0, 0),
-                    ));
+                    ).with_help("pass exactly 1 argument"));
                 }
                 if !matches!(arg_tys[0], Ty::List(_) | Ty::Dict(_) | Ty::Set(_)) {
                     return Err(Diagnostic::error(
@@ -2111,7 +2111,7 @@ fn infer_expr_in(
                             arg_tys[0].name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help("pass a `list[T]`, `dict[K, V]`, or `set[T]` value"));
                 }
                 return Ok(Ty::Int);
             }
@@ -2139,7 +2139,7 @@ fn infer_expr_in(
                             arg_tys.len()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("pass exactly {} argument(s)", expected_arg_tys.len())));
                 }
                 for (arg_ty, expected) in arg_tys.iter().zip(expected_arg_tys) {
                     if *arg_ty != std_scalar_to_ty(*expected) {
@@ -2151,7 +2151,7 @@ fn infer_expr_in(
                                 arg_ty.name()
                             ),
                             Span::new(0, 0),
-                        ));
+                        ).with_help(format!("pass a `{}` value", std_scalar_to_ty(*expected).name())));
                     }
                 }
                 return Ok(std_scalar_to_ty(ret_ty));
@@ -2178,7 +2178,7 @@ fn infer_expr_in(
                         "T0021",
                         format!("`float` expects exactly 1 argument, got {}", arg_tys.len()),
                         Span::new(0, 0),
-                    ));
+                    ).with_help("pass exactly 1 argument"));
                 }
                 if !matches!(arg_tys[0], Ty::Int | Ty::Float | Ty::Bool) {
                     return Err(Diagnostic::error(
@@ -2188,7 +2188,7 @@ fn infer_expr_in(
                             arg_tys[0].name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help("pass an `int`, `float`, or `bool` value"));
                 }
                 return Ok(Ty::Float);
             }
@@ -2220,7 +2220,7 @@ fn infer_expr_in(
                         arg_tys.len()
                     ),
                     Span::new(0, 0),
-                ));
+                ).with_help(format!("pass exactly {} argument(s)", param_tys.len())));
             }
             for (i, (arg_ty, param_ty)) in arg_tys.iter().zip(param_tys.iter()).enumerate() {
                 if !is_assignable(arg_ty.clone(), param_ty.clone()) {
@@ -2233,7 +2233,7 @@ fn infer_expr_in(
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("pass a `{}` value", param_ty.name())));
                 }
             }
             Ok(return_ty.clone())
@@ -2272,7 +2272,7 @@ fn infer_expr_in(
                                 this_ty.name()
                             ),
                             Span::new(0, 0),
-                        ));
+                        ).with_help(format!("use a `{}` value here", expected.name())));
                     }
                 }
             }
@@ -2327,7 +2327,7 @@ fn infer_expr_in(
                             this_val_ty.name(),
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("use a `{}` key and `{}` value here", key_ty.name(), val_ty.name())));
                 }
             }
             let dict_ty = Ty::Dict(Box::new((key_ty, val_ty)));
@@ -2376,7 +2376,7 @@ fn infer_expr_in(
                             this_ty.name(),
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("use a `{}` value here", elem_ty.name())));
                 }
             }
             let set_ty = Ty::Set(Box::new(elem_ty));
@@ -2448,7 +2448,7 @@ fn infer_expr_in(
                             "T0021",
                             format!("list index must be `int`, found `{}`", index_ty.name()),
                             Span::new(0, 0),
-                        ));
+                        ).with_help("use an `int` value"));
                     }
                     Ok(*elem_ty)
                 }
@@ -2471,7 +2471,7 @@ fn infer_expr_in(
                                 index_ty.name()
                             ),
                             Span::new(0, 0),
-                        ));
+                        ).with_help(format!("use a `{}` value here", key_ty.name())));
                     }
                     Ok(val_ty)
                 }
@@ -2488,7 +2488,7 @@ fn infer_expr_in(
                             "tuple index must be a non-negative literal integer within range"
                                 .to_string(),
                             Span::new(0, 0),
-                        ));
+                        ).with_help("use a literal, non-negative integer index within range"));
                     };
                     let Ok(literal_index) = usize::try_from(*literal_index) else {
                         return Err(Diagnostic::error(
@@ -2496,7 +2496,7 @@ fn infer_expr_in(
                             "tuple index must be a non-negative literal integer within range"
                                 .to_string(),
                             Span::new(0, 0),
-                        ));
+                        ).with_help("use a literal, non-negative integer index within range"));
                     };
                     let Some(elem_ty) = elems.get(literal_index) else {
                         return Err(Diagnostic::error(
@@ -2504,7 +2504,7 @@ fn infer_expr_in(
                             "tuple index must be a non-negative literal integer within range"
                                 .to_string(),
                             Span::new(0, 0),
-                        ));
+                        ).with_help("use a literal, non-negative integer index within range"));
                     };
                     Ok(elem_ty.clone())
                 }
@@ -2582,7 +2582,7 @@ fn infer_expr_in(
                             "T0021",
                             format!("slice {label} must be `int`, got `{}`", bound_ty.name()),
                             Span::new(0, 0),
-                        ));
+                        ).with_help("use an `int` value"));
                     }
                 }
             }
@@ -2621,7 +2621,7 @@ fn infer_expr_in(
                         elem_ty.name()
                     ),
                     Span::new(0, 0),
-                ));
+                ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", elem_ty.name(), value_ty.name())));
             }
             Ok(Ty::None)
         }
@@ -2669,7 +2669,7 @@ fn infer_expr_in(
                         kv.0.name()
                     ),
                     Span::new(0, 0),
-                ));
+                ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", kv.0.name(), key_ty.name())));
             }
             let default_ty = infer_expr_in(env, local_names, default)?;
             if !is_assignable(default_ty.clone(), kv.1.clone()) {
@@ -2681,7 +2681,7 @@ fn infer_expr_in(
                         kv.1.name()
                     ),
                     Span::new(0, 0),
-                ));
+                ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", kv.1.name(), default_ty.name())));
             }
             Ok(kv.1.clone())
         }
@@ -2707,7 +2707,7 @@ fn infer_expr_in(
                         elem_ty.name()
                     ),
                     Span::new(0, 0),
-                ));
+                ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", elem_ty.name(), value_ty.name())));
             }
             Ok(Ty::None)
         }
@@ -2778,7 +2778,7 @@ fn check_range_operand_in(
             "T0021",
             format!("range {position} expects `int`, got `{}`", actual.name()),
             Span::new(0, 0),
-        ))
+        ).with_help("pass an `int` value"))
     }
 }
 
@@ -2810,7 +2810,7 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
                     previous.name()
                 ),
                 Span::new(0, 0),
-            ));
+            ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", previous.name(), ty.name())));
         }
         // Issue #118 Part 1: a compatible reassignment on the current path
         // upgrades a `Maybe` binding to `Definitely` (the name is now
@@ -2847,7 +2847,7 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
                     declared.name()
                 ),
                 Span::new(0, 0),
-            ));
+            ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", declared.name(), ty.name())));
         }
         env.declared.remove(target);
         env.bind(target.to_string(), declared);
@@ -2933,7 +2933,7 @@ fn join_if_branches(
                             bt.name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", bt.name(), ot.name())));
                 }
                 // First-assignment-wins: keep the body's type (matching
                 // check_assignment's representation stickiness).
@@ -3021,7 +3021,7 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                             annotation.name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name())));
                 }
                 // Route through `check_assignment` (not a raw `env.bind`) so a
                 // name's first-established representation stays sticky across
@@ -3313,7 +3313,7 @@ fn check_dict_set(
                 key_expr_ty.name()
             ),
             Span::new(0, 0),
-        ));
+        ).with_help(format!("use a `{}` value here", key_ty.name())));
     }
     let value_ty = infer_expr_in(env, local_names, value)?;
     if !is_assignable(value_ty.clone(), val_ty.clone()) {
@@ -3325,7 +3325,7 @@ fn check_dict_set(
                 val_ty.name()
             ),
             Span::new(0, 0),
-        ));
+        ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", val_ty.name(), value_ty.name())));
     }
     Ok(())
 }
@@ -3396,7 +3396,7 @@ fn check_function_in(
                 resolved_return.name()
             ),
             Span::new(0, 0),
-        ));
+        ).with_help(format!("return a `{}` value", resolved_return.name())));
     }
     Ok(())
 }
@@ -3440,7 +3440,7 @@ fn check_stmt_in_function(
                         return_ty.name()
                     ),
                     Span::new(0, 0),
-                ));
+                ).with_help(format!("return a `{}` value", return_ty.name())));
             }
             Ok(())
         }
@@ -3455,7 +3455,7 @@ fn check_stmt_in_function(
                         actual.name()
                     ),
                     Span::new(0, 0),
-                ));
+                ).with_help(format!("return a `{}` value", return_ty.name())));
             }
             Ok(())
         }
@@ -3668,7 +3668,7 @@ fn check_stmt_in_function(
                             annotation.name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("change the value to `{}` (the expected/declared type), or the declaration/annotation to `{}` (the actual type)", annotation.name(), inferred.name())));
                 }
                 // See the module-scope `check_stmt` arm's comment: route
                 // through `check_assignment` so a name's first-established
@@ -4179,7 +4179,7 @@ pub fn instantiate_generic_call(
                 arg_tys.len()
             ),
             Span::new(0, 0),
-        ));
+        ).with_help(format!("pass exactly {} argument(s)", params.len())));
     }
     let mut resolved: Option<Ty> = None;
     for ((param_name, param_ty), arg_ty) in params.iter().zip(arg_tys) {
@@ -4204,7 +4204,7 @@ pub fn instantiate_generic_call(
                             arg_ty.name()
                         ),
                         Span::new(0, 0),
-                    ));
+                    ).with_help(format!("pass a `{}` value", other.name())));
                 }
             }
         }

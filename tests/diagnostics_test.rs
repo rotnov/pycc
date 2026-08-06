@@ -160,6 +160,7 @@ fn d0002_any_forbidden() {
 #[test]
 fn d0021_range_argument_type() {
     assert_diagnostic_matches_fixture("d0021_range_argument_type");
+    assert_json_diagnostic_matches_fixture("d0021_range_argument_type");
 }
 
 #[test]
