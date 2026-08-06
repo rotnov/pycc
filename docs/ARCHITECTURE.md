@@ -167,7 +167,7 @@ representation fixes needed to preserve it). See
 still-open gaps (unary operators, bigint-operand arithmetic beyond
 overflow, etc.), not a broad "backend is narrower" statement.
 
-Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [docs/decisions/README.md](./decisions/README.md) D-003).
+Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [D-003](./decisions/D-003-parser-vendor-ruff-python-parser-for-v0-1-0-5.md)).
 
 ## Performance requirements (compiler itself)
 
