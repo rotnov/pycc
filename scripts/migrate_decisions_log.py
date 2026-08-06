@@ -11,11 +11,17 @@ import sys
 from pathlib import Path
 
 ENTRY_HEADING_RE = re.compile(r"^## (D-\d+): (.+)$")
+# Group 3 is deliberately just the bare status word: real index rows carry
+# trailing detail after *any* status word, not only "superseded" (e.g. D-022:
+# "accepted (privacy clause superseded by D-087)"; D-046: "superseded by
+# D-048"). Anchoring the alternation right after "| " and capturing only the
+# matched word -- with any trailing detail absorbed by the uncaptured
+# `[^|]*` that follows -- normalizes to the first word directly at parse
+# time, which is all the generated frontmatter needs.
 INDEX_ROW_RE = re.compile(
-    r"^\| (D-\d+) \| (.+) \| (accepted|proposed|superseded[^|]*|rejected|deprecated) \|$"
+    r"^\| (D-\d+) \| (.+) \| (accepted|proposed|superseded|rejected|deprecated)[^|]* \|$"
 )
 FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
-STATUS_LINE_RE = re.compile(r"^- Status: (\S+)", re.MULTILINE)
 
 
 def split_entries(text):
@@ -58,18 +64,6 @@ def parse_index_table(text):
     return rows
 
 
-def extract_status(body):
-    """First word of the entry's own '- Status: ...' line -- the
-    authoritative status source for a long-form entry: it can carry
-    narrowing detail the index table cannot, and the index table has
-    already proven it can simply be wrong (this migration's own discovery
-    of D-136..D-139/D-148 missing their rows entirely)."""
-    m = STATUS_LINE_RE.search(body)
-    if not m:
-        raise ValueError("entry body has no '- Status: ...' line")
-    return m.group(1).rstrip(",").split("(")[0]
-
-
 def slugify(text, max_len=50):
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     if len(slug) <= max_len:
@@ -99,14 +93,28 @@ def render_stub_file(id_, decision_text, status):
 
 def build_files(text):
     """Return {filename: content} -- one file per long-form entry, plus a
-    stub for every index row with no matching heading."""
+    stub for every index row with no matching heading. A long-form entry's
+    frontmatter `status` is sourced from its index-table row, never from its
+    own prose '- Status: ...' line: the design is explicit that the index
+    table is authoritative and the prose is only "occasionally more
+    nuanced" -- real data shows they can disagree outright (D-046/D-047/
+    D-106 all read "accepted" in the body's own Status line after a later
+    decision superseded them, with only the index row updated)."""
     entries = split_entries(text)
     index_rows = parse_index_table(text)
     entry_ids = {id_ for id_, _, _ in entries}
+    index_status = {id_: status for id_, _, status in index_rows}
+
+    missing = sorted(id_ for id_, _, _ in entries if id_ not in index_status)
+    if missing:
+        raise ValueError(
+            f"long-form entries with no matching index-table row: {missing} "
+            "-- add their rows before calling build_files"
+        )
 
     files = {}
     for id_, title, body in entries:
-        status = extract_status(body)
+        status = index_status[id_]
         slug = slugify(title)
         files[f"{id_}-{slug}.md"] = render_entry_file(id_, title, status, body)
 

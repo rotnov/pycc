@@ -18,7 +18,7 @@ Format: one entry per irreversible-ish call.
 ## Template
 
 ```
-## D-0XX: Title
+## D-999: Should not be split -- this heading is inside a fence
 - Status: proposed
 ```
 
@@ -73,22 +73,26 @@ class ParseIndexTableTests(unittest.TestCase):
             ],
         )
 
-
-class ExtractStatusTests(unittest.TestCase):
-    def test_plain_status(self):
-        self.assertEqual(
-            migrate.extract_status("- Status: accepted\n- Context: x"), "accepted"
+    def test_captures_trailing_detail_after_any_status_word(self):
+        # Real docs/DECISIONS.md rows carry parenthetical or narrowing detail
+        # after every status word, not just "superseded" (e.g. D-022:
+        # "accepted (privacy clause superseded by D-087)"; D-046: "superseded
+        # by D-048"). The row must still parse, and the returned status must
+        # normalize to the first word only.
+        text = FIXTURE.replace(
+            "| D-002 | Second decision | accepted |",
+            "| D-002 | Second decision | accepted (narrowed by D-999) |",
         )
+        rows = migrate.parse_index_table(text)
+        self.assertIn(("D-002", "Second decision", "accepted"), rows)
 
-    def test_status_with_parenthetical_detail(self):
-        self.assertEqual(
-            migrate.extract_status("- Status: accepted (closes #7)\n- Context: x"),
-            "accepted",
+    def test_normalizes_superseded_by_detail_to_first_word(self):
+        text = FIXTURE.replace(
+            "| D-002 | Second decision | accepted |",
+            "| D-002 | Second decision | superseded by D-999 |",
         )
-
-    def test_missing_status_raises(self):
-        with self.assertRaises(ValueError):
-            migrate.extract_status("- Context: no status line here")
+        rows = migrate.parse_index_table(text)
+        self.assertIn(("D-002", "Second decision", "superseded"), rows)
 
 
 class SlugifyTests(unittest.TestCase):
@@ -131,15 +135,39 @@ class BuildFilesTests(unittest.TestCase):
         self.assertIn("status: proposed", content)
         self.assertIn("Index-only: no long-form entry recorded yet.", content)
 
-    def test_status_comes_from_body_not_index_row_when_they_disagree(self):
+    def test_status_comes_from_index_row_not_body_when_they_disagree(self):
+        # Real docs/DECISIONS.md shape (D-046/D-047/D-106): the long-form
+        # body's own "- Status: accepted ..." line is left narrating the
+        # decision as it stood when written, while the index table row was
+        # updated to "superseded by D-xxx" once a later decision superseded
+        # it. The index table is the authoritative source for the generated
+        # frontmatter -- the design doc is explicit that status is "sourced
+        # from the current index table row ... not re-derived from the
+        # prose".
         drifted = FIXTURE.replace(
             "| D-002 | Second decision | accepted |",
-            "| D-002 | Second decision | proposed |",
+            "| D-002 | Second decision | superseded by D-999 |",
         )
         files = migrate.build_files(drifted)
         content = files["D-002-second-decision.md"]
-        self.assertIn("status: accepted", content)
-        self.assertNotIn("status: proposed", content)
+        self.assertIn("status: superseded", content)
+        self.assertNotIn("status: accepted", content)
+
+    def test_raises_when_a_long_form_entry_has_no_index_row(self):
+        # build_files is a lower-level building block than the CLI's `write`
+        # subcommand (which always calls verify_round_trip first and refuses
+        # to proceed on the same condition) -- calling it directly on text
+        # with an orphan heading must still fail loudly, naming the missing
+        # ID, rather than raising an opaque KeyError or silently defaulting.
+        orphan = FIXTURE.replace(
+            "## D-003: Third decision, has a nested code block",
+            "## D-999: Orphan heading with no index row\n\n"
+            "- Status: accepted\n\n"
+            "## D-003: Third decision, has a nested code block",
+        )
+        with self.assertRaises(ValueError) as cm:
+            migrate.build_files(orphan)
+        self.assertIn("D-999", str(cm.exception))
 
 
 class VerifyRoundTripTests(unittest.TestCase):
