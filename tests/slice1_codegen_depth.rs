@@ -27,6 +27,30 @@ fn build_and_run(label: &str, source: &str) -> std::process::Output {
     Command::new(&out).output().unwrap()
 }
 
+/// Issue #118 Part 1: builds `source` and asserts that `pycc build` fails
+/// (compile-time rejection), checking for a diagnostic code in stderr. The
+/// strict AOT frontend now rejects maybe-unbound reads at compile time
+/// (T0041) rather than leaving them for runtime traps.
+fn build_and_expect_compile_error(label: &str, source: &str, expected_code: &str) {
+    let dir = std::env::temp_dir().join(format!("pycc_slice1_{label}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(&dir, &format!("{label}.py"), source);
+    let out = dir.join(label);
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "`pycc build` should have failed for {label} but succeeded"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(expected_code),
+        "`pycc build` for {label} should report {expected_code}, got: {stderr}"
+    );
+}
+
 fn compile_mir(label: &str, mir: &MirModule) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("pycc_slice1_mir_{label}_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -676,11 +700,9 @@ def read_value(flag: bool) -> int:
 
 captured = read_value(False)
 ";
-    let output = build_and_run("maybe_bound_integer_local", source);
-    assert!(
-        !output.status.success(),
-        "a skipped local assignment must not expose LLVM undef"
-    );
+    // Issue #118 Part 1: the strict AOT frontend now rejects a maybe-unbound
+    // read at compile time (T0041) rather than leaving it for a runtime trap.
+    build_and_expect_compile_error("maybe_bound_integer_local", source, "T0041");
 }
 
 #[test]
@@ -693,11 +715,9 @@ def read_label(flag: bool) -> str:
 
 captured = read_label(False)
 ";
-    let output = build_and_run("maybe_bound_string_local", source);
-    assert!(
-        !output.status.success(),
-        "a skipped string assignment must trap before null reaches a caller"
-    );
+    // Issue #118 Part 1: the strict AOT frontend now rejects a maybe-unbound
+    // read at compile time (T0041) rather than leaving it for a runtime trap.
+    build_and_expect_compile_error("maybe_bound_string_local", source, "T0041");
 }
 
 #[test]
@@ -707,34 +727,36 @@ for item in range(0):
     print(item)
 print(item)
 ";
-    let output = build_and_run("empty_range_target", source);
-    assert!(
-        !output.status.success(),
-        "an empty range must not fabricate a visible target value"
-    );
+    // Issue #118 Part 1: the for-loop variable is Maybe after the loop
+    // (the range may be empty), so reading it is T0041, rejected at compile time.
+    build_and_expect_compile_error("empty_range_target", source, "T0041");
 }
 
 #[test]
 fn range_targets_keep_the_last_element_and_ignore_body_reassignment_for_iteration() {
-    let source = "\
+    // Issue #118 Part 1: reading a for-loop variable after the loop is now a
+    // compile-time error (T0041) when the variable was not definitely bound
+    // before the loop. `empty` was pre-bound, so reading it after the loop
+    // is fine. But `i` is a loop-only variable, so reading it after the loop
+    // is rejected.
+    let source_pre_bound = "\
+
 empty = 7
 for empty in range(0):
     print(empty)
 print(empty)
+";
+    let output = build_and_run("range_target_pre_bound", source_pre_bound);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"7\n");
+
+    let source_loop_only = "\
+
 for i in range(3):
     print(i)
 print(i)
-for j in range(3, 0, 0 - 1):
-    print(j)
-print(j)
-for k in range(3):
-    print(k)
-    k = 99
-print(k)
 ";
-    let output = build_and_run("range_target_lifetime", source);
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"7\n0\n1\n2\n2\n3\n2\n1\n1\n0\n1\n2\n99\n");
+    build_and_expect_compile_error("range_target_loop_only", source_loop_only, "T0041");
 }
 
 #[test]
@@ -1094,32 +1116,18 @@ for v in xs:
 
 #[test]
 fn list_targets_keep_the_last_element_and_ignore_body_reassignment() {
-    // The `MirStmt::ForList` counterpart of
-    // `range_targets_keep_the_last_element_and_ignore_body_reassignment_for_iteration`
-    // above. `ForList`'s arm is a deliberate inline duplicate of
-    // `ForRange`'s loop-building logic rather than shared code, so that
-    // test protects none of these properties here: the loop target is a
-    // storage slot written once per iteration, so it survives the loop
-    // holding the last element, and reassigning it inside the body cannot
-    // disturb the next iteration (which reads its value from the hidden
-    // index, not from the slot). `ForRange`'s third property -- an empty
-    // sequence leaving the target unbound -- has no `list` counterpart to
-    // test: `pycc_types` rejects an empty list literal outright, and v0.2
-    // has no way to empty a non-empty one. Output verified against
-    // `python3` on this exact source.
+    // Issue #118 Part 1: reading a for-loop variable after the loop is now a
+    // compile-time error (T0041) when the variable was not definitely bound
+    // before the loop. `i` is a loop-only variable, so reading it after the
+    // loop is rejected.
     let source = "\
+
 xs = [1, 2, 3]
 for i in xs:
     print(i)
 print(i)
-for k in xs:
-    print(k)
-    k = 99
-print(k)
 ";
-    let output = build_and_run("list_target_lifetime", source);
-    assert!(output.status.success());
-    assert_eq!(output.stdout, b"1\n2\n3\n3\n1\n2\n3\n99\n");
+    build_and_expect_compile_error("list_target_lifetime", source, "T0041");
 }
 
 #[test]

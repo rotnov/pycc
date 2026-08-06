@@ -6,9 +6,25 @@ use pycc_hir::{BinOpKind, CompIter, FStringPart, HirExpr, HirItem, HirModule, Hi
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// Issue #118 Part 1: tracks whether a name is *definitely* assigned on
+/// every path reaching this point, or only *maybe* assigned (bound on some
+/// paths but not all). A `Definitely` binding is readable; a `Maybe` binding
+/// is not -- reading it raises `T0041` (possibly-unbound read), matching
+/// CPython's own `NameError`/`UnboundLocalError` for the same control-flow
+/// shapes. The join lattice is: `Definitely` > `Maybe` > unbound. An `if`
+/// with both branches binding the same name compatibly joins to `Definitely`;
+/// one branch only (or a no-else `if`) joins to `Maybe`. A `while`/`for` body
+/// may execute zero times, so every body-only binding joins back as `Maybe`,
+/// and a `for` loop's own target variable is `Maybe` after the loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BindingState {
+    Definitely(Ty),
+    Maybe(Ty),
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Environment {
-    bindings: HashMap<String, Ty>,
+    bindings: HashMap<String, BindingState>,
     /// Names declared by a value-less `AnnAssign` (`x: int` with no `= ...`)
     /// that have not yet been definitely assigned (issue #245). Distinct
     /// from `bindings`: an entry here records a known static type with *no*
@@ -49,7 +65,33 @@ impl Environment {
     }
 
     pub fn lookup(&self, name: &str) -> Option<Ty> {
-        self.bindings.get(name).cloned()
+        match self.bindings.get(name) {
+            Some(BindingState::Definitely(ty)) => Some(ty.clone()),
+            // A `Maybe` binding is not readable -- `lookup` returns `None` so
+            // the caller's existing unbound-local / not-defined logic fires,
+            // and `infer_expr_in`'s `Name` arm can distinguish it from a
+            // truly-unbound name via `binding_state` (issue #118 Part 1).
+            _ => None,
+        }
+    }
+
+    /// Returns the type of `name` regardless of whether it is `Definitely` or
+    /// `Maybe` bound (issue #118 Part 1). Used by `check_assignment`'s
+    /// first-assignment-wins rule: a maybe-bound name being reassigned on the
+    /// current path becomes definite, but the representation (type) from the
+    /// maybe-binding must be retained.
+    pub fn lookup_any(&self, name: &str) -> Option<Ty> {
+        self.bindings.get(name).map(|state| match state {
+            BindingState::Definitely(ty) | BindingState::Maybe(ty) => ty.clone(),
+        })
+    }
+
+    /// Returns the `BindingState` of `name` (issue #118 Part 1). Used by
+    /// `infer_expr_in`'s `Name` arm and `lookup_bound_name` to distinguish
+    /// three states: `Some(Definitely(ty))` -> readable, `Some(Maybe(ty))` ->
+    /// `T0041` possibly-unbound read, `None` -> `T0021` unbound.
+    fn binding_state(&self, name: &str) -> Option<&BindingState> {
+        self.bindings.get(name)
     }
 
     /// Records `name` as declared with `ty` by a value-less `AnnAssign`
@@ -96,7 +138,15 @@ impl Environment {
         // A value assignment makes the name's net binding a value again,
         // whatever `def`s came before it (D-110).
         self.def_rebound.remove(name.as_str());
-        self.bindings.insert(name, ty);
+        self.bindings.insert(name, BindingState::Definitely(ty));
+    }
+
+    /// Records `name` as *maybe* bound to `ty` (issue #118 Part 1) -- the name
+    /// was assigned on some but not all paths reaching this point. A
+    /// subsequent definite assignment on the current path upgrades it to
+    /// `Definitely` (via `bind`); a read before that raises `T0041`.
+    pub fn bind_maybe(&mut self, name: String, ty: Ty) {
+        self.bindings.insert(name, BindingState::Maybe(ty));
     }
 
     pub fn bind_function(&mut self, name: String, param_tys: Vec<Ty>, return_ty: Ty) {
@@ -136,6 +186,19 @@ fn unbound_local(name: &str) -> Diagnostic {
     Diagnostic::error(
         "T0021",
         format!("local name `{name}` is not bound before this use"),
+        Span::new(0, 0),
+    )
+}
+
+/// Issue #118 Part 1: a name that is *maybe* bound (assigned on some but not
+/// all paths reaching this use) is not safely readable. CPython raises
+/// `NameError`/`UnboundLocalError` for the same control-flow shapes; the
+/// strict AOT frontend rejects the read with `T0041` instead, distinguishing
+/// "possibly unbound" from "never bound" (`T0021`) for actionable diagnostics.
+fn possibly_unbound(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "T0041",
+        format!("local name `{name}` may not be bound on every path reaching this use"),
         Span::new(0, 0),
     )
 }
@@ -245,17 +308,23 @@ fn lookup_bound_name(
     local_names: &[&str],
     name: &str,
 ) -> Result<Ty, Diagnostic> {
-    env.lookup(name).ok_or_else(|| {
-        if is_local(local_names, name) {
-            unbound_local(name)
-        } else {
-            Diagnostic::error(
-                "T0021",
-                format!("name `{name}` is not defined"),
-                Span::new(0, 0),
-            )
+    // Issue #118 Part 1: three-way distinction -- definitely bound -> ok, maybe
+    // bound -> T0041, unbound -> T0021 (local) or "not defined" (global).
+    match env.binding_state(name) {
+        Some(BindingState::Definitely(ty)) => Ok(ty.clone()),
+        Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
+        None => {
+            if is_local(local_names, name) {
+                Err(unbound_local(name))
+            } else {
+                Err(Diagnostic::error(
+                    "T0021",
+                    format!("name `{name}` is not defined"),
+                    Span::new(0, 0),
+                ))
+            }
         }
-    })
+    }
 }
 
 /// True when `ty` contains a `Ty::Param` anywhere in its structure,
@@ -1563,6 +1632,75 @@ fn contains_return(body: &[HirStmt]) -> bool {
     })
 }
 
+/// Issue #118 Part 1: returns true if any statement in `body` introduces
+/// a new binding (assignment, annotated assignment, comprehension assignment,
+/// or dict/set item assignment, including nested inside if/while/for). Used
+/// to skip the expensive `env.clone()` + `join_if_branches` path when neither
+/// branch of an `if` assigns anything -- the common case for guard-only ifs.
+fn introduces_bindings(body: &[HirStmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        HirStmt::Assign { .. }
+        | HirStmt::AnnAssign { .. }
+        | HirStmt::DictSet { .. }
+        | HirStmt::ListCompAssign { .. }
+        | HirStmt::SetCompAssign { .. }
+        | HirStmt::DictCompAssign { .. } => true,
+        HirStmt::If { body, orelse, .. } => {
+            introduces_bindings(body) || introduces_bindings(orelse)
+        }
+        HirStmt::While { body, .. } => introduces_bindings(body),
+        HirStmt::ForRange { body, .. } => introduces_bindings(body),
+        HirStmt::ForList { body, .. } => introduces_bindings(body),
+        HirStmt::Return(_) | HirStmt::ExprStmt(_) => false,
+    })
+}
+
+/// Issue #118 Part 1: fast-path helper for module-scope `if` statements
+/// where neither branch introduces new bindings. Checks both branches
+/// in-place without cloning env, matching the pre-#118 behavior.
+fn check_if_branches_in_place(
+    env: &mut Environment,
+    body: &[HirStmt],
+    orelse: &[HirStmt],
+) -> Result<(), Diagnostic> {
+    body.iter().try_for_each(|stmt| check_stmt(env, stmt))?;
+    orelse.iter().try_for_each(|stmt| check_stmt(env, stmt))
+}
+
+/// Issue #118 Part 1: fast-path helper for module-scope `while` loops
+/// where the body introduces no new bindings. Checks the body in-place
+/// without cloning env.
+fn check_while_body_in_place(
+    env: &mut Environment,
+    body: &[HirStmt],
+) -> Result<(), Diagnostic> {
+    body.iter().try_for_each(|stmt| check_stmt(env, stmt))
+}
+
+/// Issue #118 Part 1: fast-path helper for function-scope `if` statements
+/// where neither branch introduces new bindings.
+fn check_if_branches_in_place_in_function(
+    env: &mut Environment,
+    local_names: &[&str],
+    body: &[HirStmt],
+    orelse: &[HirStmt],
+    return_ty: Ty,
+) -> Result<(), Diagnostic> {
+    body.iter().try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))?;
+    orelse.iter().try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
+}
+
+/// Issue #118 Part 1: fast-path helper for function-scope `while` loops
+/// where the body introduces no new bindings.
+fn check_while_body_in_place_in_function(
+    env: &mut Environment,
+    local_names: &[&str],
+    body: &[HirStmt],
+    return_ty: Ty,
+) -> Result<(), Diagnostic> {
+    body.iter().try_for_each(|s| check_stmt_in_function(env, local_names, s, return_ty.clone()))
+}
+
 fn concrete_function_signatures(hir: &HirModule) -> Option<HashMap<String, (Vec<Ty>, Ty)>> {
     let mut signatures = HashMap::new();
     for item in &hir.items {
@@ -1850,17 +1988,25 @@ fn infer_expr_in(
                     }
                 };
             }
-            env.lookup(name).ok_or_else(|| {
-                if is_local(local_names, name) {
-                    unbound_local(name)
-                } else {
-                    Diagnostic::error(
-                        "T0021",
-                        format!("name `{name}` is not defined"),
-                        Span::new(0, 0), // real span threading through HIR is out of scope for this task -- see Task 15's follow-up note
-                    )
+            // Issue #118 Part 1: three-way distinction -- definitely bound ->
+            // ok, maybe bound -> T0041, unbound -> T0021 (local) or "not
+            // defined" (global). The stdlib-qualified check above already
+            // handled `math.sqrt`-style names.
+            match env.binding_state(name) {
+                Some(BindingState::Definitely(ty)) => Ok(ty.clone()),
+                Some(BindingState::Maybe(_)) => Err(possibly_unbound(name)),
+                None => {
+                    if is_local(local_names, name) {
+                        Err(unbound_local(name))
+                    } else {
+                        Err(Diagnostic::error(
+                            "T0021",
+                            format!("name `{name}` is not defined"),
+                            Span::new(0, 0), // real span threading through HIR is out of scope for this task -- see Task 15's follow-up note
+                        ))
+                    }
                 }
-            })
+            }
         }
         HirExpr::BinOp { op, left, right } => {
             let left_ty = infer_expr_in(env, local_names, left)?;
@@ -1903,6 +2049,13 @@ fn infer_expr_in(
             // visibility questions stay #22's scope.
             if env.lookup(callee).is_some() && !env.def_rebound.contains(callee) {
                 return Err(non_callable_binding(callee));
+            }
+            // Issue #118 Part 1: a maybe-bound callee is not callable -- it
+            // may not be bound on every path reaching this call. Reject with
+            // T0041 before the `is_local` unbound check below, since a
+            // maybe-bound local is "possibly unbound," not "never bound."
+            if matches!(env.binding_state(callee), Some(BindingState::Maybe(_))) {
+                return Err(possibly_unbound(callee));
             }
             if is_local(local_names, callee) {
                 return Err(unbound_local(callee));
@@ -2642,7 +2795,12 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
     // `child_for_function` clones, so a body-local assignment clears only
     // that body's view, never the module-level fact.
     env.def_rebound.remove(target);
-    if let Some(previous) = env.lookup(target) {
+    // Issue #118 Part 1: use `lookup_any` (not `lookup`) so a maybe-bound name
+    // being reassigned on the current path becomes definite, while the
+    // first-assignment-wins representation (type) from the maybe-binding is
+    // retained -- `lookup` would return `None` for a `Maybe` binding, wrongly
+    // treating the reassignment as a fresh first binding.
+    if let Some(previous) = env.lookup_any(target) {
         if !is_assignable(ty.clone(), previous.clone()) {
             return Err(Diagnostic::error(
                 "T0023",
@@ -2653,6 +2811,16 @@ fn check_assignment(env: &mut Environment, target: &str, ty: Ty) -> Result<(), D
                 ),
                 Span::new(0, 0),
             ));
+        }
+        // Issue #118 Part 1: a compatible reassignment on the current path
+        // upgrades a `Maybe` binding to `Definitely` (the name is now
+        // definitely assigned on this path). The first-assignment-wins
+        // representation (type) is retained -- `bind` with the *existing*
+        // type, not `ty`, would be wrong here because `bind` takes the
+        // passed type; instead, directly insert `Definitely(previous)` to
+        // keep the sticky representation while upgrading the binding state.
+        if matches!(env.binding_state(target), Some(BindingState::Maybe(_))) {
+            env.bind(target.to_string(), previous);
         }
         return Ok(());
     }
@@ -2726,6 +2894,111 @@ fn resolve_comp_iter(
     }
 }
 
+/// Issue #118 Part 1: joins two branch environments into `env` after an `if`
+/// statement. The join lattice is: `Definitely` > `Maybe` > unbound.
+///
+/// - A name bound `Definitely` in **both** branches (with compatible types)
+///   joins to `Definitely`.
+/// - A name bound in only one branch (or `Maybe` in either) joins to `Maybe`.
+/// - A name bound `Definitely` in one branch and `Maybe` in the other joins to
+///   `Maybe`.
+/// - A name unbound in one branch and bound in the other joins to `Maybe`.
+/// - A name unbound in both branches stays unbound.
+///
+/// Types from both branches must be compatible (via `is_assignable`); a
+/// mismatch produces `T0023`. The first-established representation (type)
+/// wins, matching `check_assignment`'s first-assignment-wins rule.
+fn join_if_branches(
+    env: &mut Environment,
+    body_env: &Environment,
+    orelse_env: &Environment,
+) -> Result<(), Diagnostic> {
+    let mut joined: HashMap<String, BindingState> = HashMap::new();
+    // Pass 1: process every name bound in the body branch. For each, look
+    // up the orelse branch's state (if any) and join. This pass covers all
+    // names in `body_env`; the `(None, None)` case never arises because we
+    // iterate `body_env.bindings` directly (each entry is `Some` on the body
+    // side by construction).
+    for (name, body_state) in &body_env.bindings {
+        let orelse_state = orelse_env.bindings.get(name);
+        match (body_state, orelse_state) {
+            // Both branches bind the name.
+            (BindingState::Definitely(bt), Some(BindingState::Definitely(ot))) => {
+                if bt != ot && !is_assignable(bt.clone(), ot.clone()) {
+                    return Err(Diagnostic::error(
+                        "T0023",
+                        format!(
+                            "cannot assign `{}` to `{name}`, previously inferred as `{}`",
+                            ot.name(),
+                            bt.name()
+                        ),
+                        Span::new(0, 0),
+                    ));
+                }
+                // First-assignment-wins: keep the body's type (matching
+                // check_assignment's representation stickiness).
+                joined.insert(name.clone(), BindingState::Definitely(bt.clone()));
+            }
+            // One or both branches have Maybe, or only one branch binds it.
+            (BindingState::Definitely(ty), Some(BindingState::Maybe(_)))
+            | (BindingState::Maybe(_), Some(BindingState::Definitely(ty)))
+            | (BindingState::Maybe(ty), Some(BindingState::Maybe(_))) => {
+                // Join of Definitely and Maybe = Maybe; Maybe and Maybe = Maybe.
+                // Keep the type from whichever is available (first wins).
+                joined.insert(name.clone(), BindingState::Maybe(ty.clone()));
+            }
+            // Body binds it, orelse does not -> Maybe.
+            (BindingState::Definitely(ty), None)
+            | (BindingState::Maybe(ty), None) => {
+                joined.insert(name.clone(), BindingState::Maybe(ty.clone()));
+            }
+        }
+    }
+    // Pass 2: process names bound only in the orelse branch (not in body).
+    // Each such name is Maybe (the body branch might have been the taken one).
+    for (name, orelse_state) in &orelse_env.bindings {
+        if body_env.bindings.contains_key(name) {
+            continue; // already handled in pass 1
+        }
+        match orelse_state {
+            BindingState::Definitely(ty) | BindingState::Maybe(ty) => {
+                joined.insert(name.clone(), BindingState::Maybe(ty.clone()));
+            }
+        }
+    }
+    env.bindings = joined;
+    Ok(())
+}
+
+/// Issue #118 Part 1: joins a loop body environment back into `env` after a
+/// `while` or `for` loop. The loop body may execute zero times, so every
+/// body-only binding joins back as `Maybe`. A name that was `Definitely`
+/// bound before the loop stays `Definitely` (it was bound regardless of
+/// whether the loop ran). A name that was `Maybe` before the loop and is also
+/// bound in the body stays `Maybe`.
+fn join_loop_body(env: &mut Environment, body_env: &Environment) {
+    // For each name bound in the body but not already Definitely bound in env,
+    // downgrade to Maybe. Names already Definitely bound in env are unchanged.
+    for (name, state) in &body_env.bindings {
+        match env.bindings.get(name) {
+            Some(BindingState::Definitely(_)) => {
+                // Already definite before the loop -- stays definite. But if
+                // the body assigned a different (incompatible) type,
+                // check_assignment already caught that inside the body check.
+                // Keep the existing definite binding.
+            }
+            _ => {
+                // Not bound in env, or maybe-bound: the body may or may not
+                // have run, so this is Maybe.
+                let ty = match state {
+                    BindingState::Definitely(ty) | BindingState::Maybe(ty) => ty.clone(),
+                };
+                env.bindings.insert(name.clone(), BindingState::Maybe(ty));
+            }
+        }
+    }
+}
+
 pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnostic> {
     match stmt {
         HirStmt::Assign { target, value } => {
@@ -2778,20 +3051,42 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
         HirStmt::ExprStmt(expr) => infer_expr(env, expr).map(|_| ()),
         HirStmt::If { test, body, orelse } => {
             infer_expr(env, test)?; // any type is accepted as truthy for v0.1 -- Python's own truthiness has no static type restriction
-            for stmt in body {
-                check_stmt(env, stmt)?;
+            // Issue #118 Part 1: check each branch in an independent clone of
+            // env, then join the results. A no-else `if` makes all body-only
+            // bindings `Maybe` (the orelse clone is empty, so every body
+            // binding is "one branch only" -> Maybe).
+            // Fast path: if neither branch introduces any new bindings, skip
+            // the clone+join and check both branches in-place (matching the
+            // pre-#118 behavior for guard-only ifs).
+            if !introduces_bindings(body) && !introduces_bindings(orelse) {
+                check_if_branches_in_place(env, body, orelse)
+            } else {
+                let mut body_env = env.clone();
+                for stmt in body {
+                    check_stmt(&mut body_env, stmt)?;
+                }
+                let mut orelse_env = env.clone();
+                for stmt in orelse {
+                    check_stmt(&mut orelse_env, stmt)?;
+                }
+                join_if_branches(env, &body_env, &orelse_env)
             }
-            for stmt in orelse {
-                check_stmt(env, stmt)?;
-            }
-            Ok(())
         }
         HirStmt::While { test, body } => {
             infer_expr(env, test)?;
-            for stmt in body {
-                check_stmt(env, stmt)?;
+            // Issue #118 Part 1: the loop body may execute zero times, so
+            // every body-only binding joins back as `Maybe`.
+            // Fast path: if the body introduces no bindings, check in-place.
+            if !introduces_bindings(body) {
+                check_while_body_in_place(env, body)
+            } else {
+                let mut body_env = env.clone();
+                for stmt in body {
+                    check_stmt(&mut body_env, stmt)?;
+                }
+                join_loop_body(env, &body_env);
+                Ok(())
             }
-            Ok(())
         }
         HirStmt::ForRange {
             var,
@@ -2803,9 +3098,25 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
             check_range_operand(env, "start", start)?;
             check_range_operand(env, "stop", stop)?;
             check_range_operand(env, "step", step)?;
+            // Issue #118 Part 1: track whether the loop variable was already
+            // definitely bound before the loop. If so, it stays definite
+            // after the loop (the variable was bound regardless of whether
+            // the loop ran). If not, it is `Maybe` after the loop (the loop
+            // may execute zero times).
+            let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, Ty::Int)?;
+            let mut body_env = env.clone();
             for stmt in body {
-                check_stmt(env, stmt)?;
+                check_stmt(&mut body_env, stmt)?;
+            }
+            join_loop_body(env, &body_env);
+            // Issue #118 Part 1: if the loop variable was not definitely bound
+            // before the loop, downgrade it to Maybe (the loop may execute
+            // zero times). A pre-bound variable stays Definitely bound.
+            if !was_definite
+                && let Some(ty) = env.lookup_any(var)
+            {
+                env.bind_maybe(var.to_string(), ty);
             }
             Ok(())
         }
@@ -2843,9 +3154,22 @@ pub fn check_stmt(env: &mut Environment, stmt: &HirStmt) -> Result<(), Diagnosti
                     ));
                 }
             };
+            // Issue #118 Part 1: track whether the loop variable was already
+            // definitely bound before the loop (see ForRange above).
+            let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, var_ty)?;
+            let mut body_env = env.clone();
             for stmt in body {
-                check_stmt(env, stmt)?;
+                check_stmt(&mut body_env, stmt)?;
+            }
+            join_loop_body(env, &body_env);
+            // Issue #118 Part 1: if the loop variable was not definitely bound
+            // before the loop, downgrade it to Maybe (the loop may execute
+            // zero times). A pre-bound variable stays Definitely bound.
+            if !was_definite
+                && let Some(ty) = env.lookup_any(var)
+            {
+                env.bind_maybe(var.to_string(), ty);
             }
             Ok(())
         }
@@ -3137,20 +3461,40 @@ fn check_stmt_in_function(
         }
         HirStmt::If { test, body, orelse } => {
             infer_expr_in(env, local_names, test)?;
-            for s in body {
-                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
+            // Issue #118 Part 1: check each branch in an independent clone of
+            // env, then join the results. A no-else `if` makes all body-only
+            // bindings `Maybe`.
+            // Fast path: if neither branch introduces any new bindings, skip
+            // the clone+join and check both branches in-place.
+            if !introduces_bindings(body) && !introduces_bindings(orelse) {
+                check_if_branches_in_place_in_function(env, local_names, body, orelse, return_ty.clone())
+            } else {
+                let mut body_env = env.clone();
+                for s in body {
+                    check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
+                }
+                let mut orelse_env = env.clone();
+                for s in orelse {
+                    check_stmt_in_function(&mut orelse_env, local_names, s, return_ty.clone())?;
+                }
+                join_if_branches(env, &body_env, &orelse_env)
             }
-            for s in orelse {
-                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
-            }
-            Ok(())
         }
         HirStmt::While { test, body } => {
             infer_expr_in(env, local_names, test)?;
-            for s in body {
-                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
+            // Issue #118 Part 1: the loop body may execute zero times, so
+            // every body-only binding joins back as `Maybe`.
+            // Fast path: if the body introduces no bindings, check in-place.
+            if !introduces_bindings(body) {
+                check_while_body_in_place_in_function(env, local_names, body, return_ty.clone())
+            } else {
+                let mut body_env = env.clone();
+                for s in body {
+                    check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
+                }
+                join_loop_body(env, &body_env);
+                Ok(())
             }
-            Ok(())
         }
         HirStmt::ForRange {
             var,
@@ -3162,9 +3506,22 @@ fn check_stmt_in_function(
             check_range_operand_in(env, local_names, "start", start)?;
             check_range_operand_in(env, local_names, "stop", stop)?;
             check_range_operand_in(env, local_names, "step", step)?;
+            // Issue #118 Part 1: track whether the loop variable was already
+            // definitely bound before the loop (see check_stmt's ForRange).
+            let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, Ty::Int)?;
+            let mut body_env = env.clone();
             for s in body {
-                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
+                check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
+            }
+            join_loop_body(env, &body_env);
+            // Issue #118 Part 1: if the loop variable was not definitely bound
+            // before the loop, downgrade it to Maybe (the loop may execute
+            // zero times). A pre-bound variable stays Definitely bound.
+            if !was_definite
+                && let Some(ty) = env.lookup_any(var)
+            {
+                env.bind_maybe(var.to_string(), ty);
             }
             Ok(())
         }
@@ -3188,9 +3545,22 @@ fn check_stmt_in_function(
                     ));
                 }
             };
+            // Issue #118 Part 1: track whether the loop variable was already
+            // definitely bound before the loop (see check_stmt's ForList).
+            let was_definite = matches!(env.binding_state(var), Some(BindingState::Definitely(_)));
             check_assignment(env, var, var_ty)?;
+            let mut body_env = env.clone();
             for s in body {
-                check_stmt_in_function(env, local_names, s, return_ty.clone())?;
+                check_stmt_in_function(&mut body_env, local_names, s, return_ty.clone())?;
+            }
+            join_loop_body(env, &body_env);
+            // Issue #118 Part 1: if the loop variable was not definitely bound
+            // before the loop, downgrade it to Maybe (the loop may execute
+            // zero times). A pre-bound variable stays Definitely bound.
+            if !was_definite
+                && let Some(ty) = env.lookup_any(var)
+            {
+                env.bind_maybe(var.to_string(), ty);
             }
             Ok(())
         }
@@ -4080,7 +4450,11 @@ fn rewrite_generic_calls_in_stmt(
             Ok(())
         }
         HirStmt::ForList { var, list, body } => {
-            let var_ty = match env.lookup(list) {
+            // Issue #118 Part 1: use `lookup_any` (not `lookup`) since this
+            // pass runs post-validation and needs the type regardless of
+            // binding state -- the validation pass already rejected any
+            // maybe-bound iterable read.
+            let var_ty = match env.lookup_any(list) {
                 Some(Ty::List(elem)) => *elem,
                 Some(Ty::Dict(kv)) => kv.0,
                 Some(Ty::Set(elem)) => *elem,
@@ -4190,7 +4564,7 @@ fn rewrite_comp_iter(
             }
             Ok(Ty::Int)
         }
-        CompIter::Name(name) => match env.lookup(name) {
+        CompIter::Name(name) => match env.lookup_any(name) {
             Some(Ty::List(elem)) => Ok(*elem),
             Some(Ty::Dict(kv)) => Ok(kv.0),
             Some(Ty::Set(elem)) => Ok(*elem),
@@ -8200,11 +8574,345 @@ mod tests {
             }],
         };
         check_stmt(&mut env, &stmt).unwrap();
-        // Both branches ran in the same (single, unscoped-per-branch)
-        // environment for v0.1's simplified model -- neither branch's
-        // bindings are undone; real flow-sensitive narrowing is out of scope.
+        // Issue #118 Part 1: each branch is checked in an independent clone
+        // of env, then joined. `x` is bound only in the body, `y` only in
+        // orelse -- both are `Maybe` after the join, so `lookup` (which
+        // returns `Some` only for `Definitely`) returns `None` for both.
+        // Use `lookup_any` to verify the types are retained.
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup("y"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+        assert_eq!(env.lookup_any("y"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_if_with_both_branches_binding_the_same_name_joins_to_definitely() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        // Both branches bind `x` as `int` -> join is `Definitely`.
         assert_eq!(env.lookup("x"), Some(Ty::Int));
-        assert_eq!(env.lookup("y"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_no_else_if_makes_body_bindings_maybe() {
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        // No else -> body-only binding is `Maybe`.
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_nested_no_else_if_makes_bindings_maybe() {
+        // `if a: if b: x = 1` -- x is Maybe after the outer if (no else on
+        // either if).
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+                orelse: vec![],
+            }],
+            orelse: vec![],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_if_else_with_nested_if_in_orelse_joins_to_maybe() {
+        // `if a: x = 1 else: if b: x = 2` -- x is Maybe (orelse's if has no
+        // else, so x is maybe in orelse; join of definite and maybe = maybe).
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }],
+                orelse: vec![],
+            }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_if_with_maybe_in_body_and_definite_in_orelse_joins_to_maybe() {
+        // `if a: if b: x = 1 else: x = 2` -- x is Maybe (body's inner if has
+        // no else, so x is maybe in body; join of maybe and definite = maybe).
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+                orelse: vec![],
+            }],
+            orelse: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_if_with_maybe_in_both_branches_joins_to_maybe() {
+        // `if a: if b: x = 1 else: if c: x = 2` -- x is Maybe in both
+        // branches (each branch's inner if has no else, so x is Maybe in
+        // each). The join of Maybe and Maybe is Maybe. Exercises the
+        // (BindingState::Maybe(_), Some(BindingState::Maybe(_))) arm.
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+                orelse: vec![],
+            }],
+            orelse: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }],
+                orelse: vec![],
+            }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_if_with_maybe_in_orelse_only_joins_to_maybe() {
+        // `if a: pass else: if b: x = 1` -- x is Maybe (orelse's inner if
+        // has no else, so x is maybe in orelse; body doesn't bind x at all).
+        // This exercises join_if_branches' pass 2 with a Maybe binding.
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![],
+            orelse: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+                orelse: vec![],
+            }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_if_with_a_while_inside_that_assigns_takes_the_clone_path() {
+        // `if a: while b: x = 1` -- the while inside the if body introduces
+        // bindings, so the fast path is NOT taken and the clone+join path
+        // runs. Exercises introduces_bindings' While arm.
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+            }],
+            orelse: vec![],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_if_with_a_for_list_inside_that_assigns_takes_the_clone_path() {
+        // `if a: for x in items: y = 1` -- the for-list inside the if body
+        // introduces bindings, so the fast path is NOT taken. Exercises
+        // introduces_bindings' ForList arm.
+        let mut env = Environment::new();
+        env.bind("items".to_string(), Ty::List(Box::new(Ty::Int)));
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::ForList {
+                var: "x".to_string(),
+                list: "items".to_string(),
+                body: vec![HirStmt::Assign {
+                    target: "y".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+            }],
+            orelse: vec![],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+    }
+
+    #[test]
+    fn an_elif_chain_without_else_joins_to_maybe() {
+        // `if a: x = 1 elif b: x = 2` (lowered to nested If in orelse) --
+        // x is Maybe (inner if has no else).
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }],
+                orelse: vec![],
+            }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn an_elif_chain_with_else_joins_to_definitely() {
+        // `if a: x = 1 elif b: x = 2 else: x = 3` -- all paths bind x.
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }],
+                orelse: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(3),
+                }],
+            }],
+        };
+        check_stmt(&mut env, &stmt).unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_pre_bound_name_in_if_stays_definitely() {
+        // `x = 1; if cond: x = 2` -- x was definite before, stays definite.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }],
+                orelse: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_type_mismatch_at_if_join_is_t0023() {
+        // `if cond: x = 1 else: x = "hello"` -- incompatible types at join.
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::StringLiteral("hello".to_string()),
+            }],
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0023");
+    }
+
+    #[test]
+    fn a_maybe_bound_callee_is_t0041() {
+        // `if cond: f = 1` then `f()` -- f is maybe-bound, not callable.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "f".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+                orelse: vec![],
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::ExprStmt(HirExpr::Call {
+                callee: "f".to_string(),
+                args: vec![],
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0041");
     }
 
     #[test]
@@ -8241,6 +8949,56 @@ mod tests {
     }
 
     #[test]
+    fn an_if_with_assignments_whose_body_has_an_error_propagates_via_clone_path() {
+        // Body has an assignment (so fast path is NOT taken) AND an error.
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![
+                HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                },
+                HirStmt::ExprStmt(HirExpr::Name("undefined".to_string())),
+            ],
+            orelse: vec![],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn an_if_with_assignments_whose_orelse_has_an_error_propagates_via_clone_path() {
+        // Body has an assignment (so fast path is NOT taken), orelse has error.
+        let mut env = Environment::new();
+        let stmt = HirStmt::If {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_while_with_assignments_whose_body_has_an_error_propagates_via_clone_path() {
+        // Body has an assignment (so fast path is NOT taken) AND an error.
+        let mut env = Environment::new();
+        let stmt = HirStmt::While {
+            test: HirExpr::BoolLiteral(true),
+            body: vec![
+                HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                },
+                HirStmt::ExprStmt(HirExpr::Name("undefined".to_string())),
+            ],
+        };
+        assert_eq!(check_stmt(&mut env, &stmt).unwrap_err().code, "T0021");
+    }
+
+    #[test]
     fn a_while_loop_s_test_and_body_are_checked() {
         let mut env = Environment::new();
         let stmt = HirStmt::While {
@@ -8251,7 +9009,138 @@ mod tests {
             }],
         };
         check_stmt(&mut env, &stmt).unwrap();
+        // Issue #118 Part 1: the loop body may execute zero times, so
+        // body-only binding `x` is `Maybe` after the loop.
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_while_loop_body_then_read_is_t0041() {
+        // `while True: x = 1` then `x` read -- T0041 (the loop body may
+        // execute zero times, so `x` is maybe-bound).
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::ExprStmt(HirExpr::Name("x".to_string())),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
+    #[test]
+    fn a_pre_bound_variable_survives_a_while_loop_as_definite() {
+        // `x = 1; while True: x = 2` -- `x` was definitely bound before the
+        // loop, so it stays `Definitely` after the loop.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(2),
+                }],
+            },
+        )
+        .unwrap();
         assert_eq!(env.lookup("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_while_loop_with_nested_if_body_joins_to_maybe() {
+        // `while True: if True: x = 1` -- x is Maybe after the loop (the
+        // inner if has no else, so x is Maybe in the body; join_loop_body
+        // downgrades it to Maybe). Exercises the Maybe alternative in
+        // join_loop_body's inner match.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::If {
+                    test: HirExpr::BoolLiteral(true),
+                    body: vec![HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    }],
+                    orelse: vec![],
+                }],
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_for_range_var_read_after_loop_is_t0041() {
+        // `for i in range(3): pass` then `i` read -- T0041 (the loop variable
+        // is maybe-bound after the loop).
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+                body: vec![],
+            },
+        )
+        .unwrap();
+        let err = check_stmt(
+            &mut env,
+            &HirStmt::ExprStmt(HirExpr::Name("i".to_string())),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
+    #[test]
+    fn a_pre_bound_for_range_var_survives_as_definite() {
+        // `i = 0; for i in range(3): pass` then `i` read -- succeeds because
+        // `i` was definitely bound before the loop.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "i".to_string(),
+                value: HirExpr::IntLiteral(0),
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+                body: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("i"), Some(Ty::Int));
     }
 
     #[test]
@@ -8288,8 +9177,40 @@ mod tests {
             }],
         };
         check_stmt(&mut env, &stmt).unwrap();
-        assert_eq!(env.lookup("i"), Some(Ty::Int));
+        // Issue #118 Part 1: the loop may execute zero times, so both the
+        // loop variable `i` and body-only binding `x` are `Maybe`.
+        assert_eq!(env.lookup("i"), None);
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("i"), Some(Ty::Int));
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_pre_bound_name_survives_a_for_range_loop_as_definitely() {
+        // `x = 1; for i in range(3): pass` -- x stays Definitely, i is Maybe.
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            },
+        )
+        .unwrap();
+        check_stmt(
+            &mut env,
+            &HirStmt::ForRange {
+                var: "i".to_string(),
+                start: HirExpr::IntLiteral(0),
+                stop: HirExpr::IntLiteral(3),
+                step: HirExpr::IntLiteral(1),
+                body: vec![],
+            },
+        )
+        .unwrap();
         assert_eq!(env.lookup("x"), Some(Ty::Int));
+        assert_eq!(env.lookup("i"), None);
+        assert_eq!(env.lookup_any("i"), Some(Ty::Int));
     }
 
     #[test]
@@ -8371,7 +9292,9 @@ mod tests {
             body: vec![],
         };
         check_stmt(&mut env, &stmt).unwrap();
-        assert_eq!(env.lookup("i"), Some(Ty::Int));
+        // Issue #118 Part 1: loop variable is Maybe after the loop.
+        assert_eq!(env.lookup("i"), None);
+        assert_eq!(env.lookup_any("i"), Some(Ty::Int));
     }
 
     #[test]
@@ -8394,8 +9317,12 @@ mod tests {
             }],
         };
         check_stmt(&mut env, &stmt).unwrap();
-        assert_eq!(env.lookup("i"), Some(Ty::Int));
-        assert_eq!(env.lookup("y"), Some(Ty::Int));
+        // Issue #118 Part 1: the loop may execute zero times, so both the
+        // loop variable `i` and body-only binding `y` are `Maybe`.
+        assert_eq!(env.lookup("i"), None);
+        assert_eq!(env.lookup("y"), None);
+        assert_eq!(env.lookup_any("i"), Some(Ty::Int));
+        assert_eq!(env.lookup_any("y"), Some(Ty::Int));
     }
 
     #[test]
@@ -8415,7 +9342,9 @@ mod tests {
             body: vec![],
         };
         check_stmt(&mut env, &stmt).unwrap();
-        assert_eq!(env.lookup("i"), Some(Ty::Str));
+        // Issue #118 Part 1: loop variable is Maybe after the loop.
+        assert_eq!(env.lookup("i"), None);
+        assert_eq!(env.lookup_any("i"), Some(Ty::Str));
     }
 
     #[test]
@@ -8430,7 +9359,9 @@ mod tests {
             body: vec![],
         };
         check_stmt(&mut env, &stmt).unwrap();
-        assert_eq!(env.lookup("k"), Some(Ty::Str));
+        // Issue #118 Part 1: loop variable is Maybe after the loop.
+        assert_eq!(env.lookup("k"), None);
+        assert_eq!(env.lookup_any("k"), Some(Ty::Str));
     }
 
     #[test]
@@ -8446,7 +9377,36 @@ mod tests {
             body: vec![],
         };
         check_stmt(&mut env, &stmt).unwrap();
-        assert_eq!(env.lookup("x"), Some(Ty::Int));
+        // Issue #118 Part 1: loop variable is Maybe after the loop.
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_pre_bound_for_list_var_survives_as_definite() {
+        // `i = 0; xs = [1, 2, 3]; for i in xs: pass` then `i` read --
+        // succeeds because `i` was definitely bound before the loop
+        // (issue #118 Part 1).
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::Assign {
+                target: "i".to_string(),
+                value: HirExpr::IntLiteral(0),
+            },
+        )
+        .unwrap();
+        env.bind("xs".to_string(), Ty::List(Box::new(Ty::Int)));
+        check_stmt(
+            &mut env,
+            &HirStmt::ForList {
+                var: "i".to_string(),
+                list: "xs".to_string(),
+                body: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(env.lookup("i"), Some(Ty::Int));
     }
 
     #[test]
@@ -8842,6 +9802,39 @@ mod tests {
         assert_eq!(err.code, "T0021");
         assert!(err.message.contains("not defined"));
     }
+    #[test]
+    fn a_comprehension_over_a_maybe_bound_iterable_is_t0041() {
+        // `if cond: xs = [1, 2, 3]` then `[x for x in xs]` -- xs is Maybe
+        // after the if (no else), so `lookup_bound_name` raises T0041
+        // (issue #118 Part 1).
+        let mut env = Environment::new();
+        check_stmt(
+            &mut env,
+            &HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "xs".to_string(),
+                    value: HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2),
+                        HirExpr::IntLiteral(3),
+                    ]),
+                }],
+                orelse: vec![],
+            },
+        )
+        .unwrap();
+        let stmt = HirStmt::ListCompAssign {
+            target: "y".to_string(),
+            var: "0comp_11_i".to_string(),
+            iter: CompIter::Name("xs".to_string()),
+            cond: None,
+            elt: Box::new(HirExpr::IntLiteral(1)),
+        };
+        let err = check_stmt(&mut env, &stmt).unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
 
     #[test]
     fn an_entirely_unannotated_private_helper_containing_a_comprehension_fails_with_t0021() {
@@ -14491,6 +15484,65 @@ mod tests {
     }
 
     #[test]
+    fn an_if_with_assignments_in_a_function_whose_body_has_an_error_propagates_via_clone_path() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                    HirStmt::ExprStmt(HirExpr::Name("undefined".to_string())),
+                ],
+                orelse: vec![],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn an_if_with_assignments_in_a_function_whose_orelse_has_an_error_propagates_via_clone_path() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::If {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+                orelse: vec![HirStmt::ExprStmt(HirExpr::Name("undefined".to_string()))],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn a_while_with_assignments_in_a_function_whose_body_has_an_error_propagates_via_clone_path() {
+        let function = HirItem::Function {
+            name: "f".to_string(),
+            params: vec![],
+            return_ty: Ty::None,
+            body: vec![HirStmt::While {
+                test: HirExpr::BoolLiteral(true),
+                body: vec![
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    },
+                    HirStmt::ExprStmt(HirExpr::Name("undefined".to_string())),
+                ],
+            }],
+        };
+        assert_eq!(check_function(&function).unwrap_err().code, "T0021");
+    }
+
+    #[test]
     fn a_while_s_test_undefined_in_a_function_body_propagates_the_error() {
         let function = HirItem::Function {
             name: "f".to_string(),
@@ -14575,8 +15627,11 @@ mod tests {
             }],
         };
         check_stmt_in_function(&mut env, &["xs", "i", "y"], &stmt, Ty::None).unwrap();
-        assert_eq!(env.lookup("i"), Some(Ty::Int));
-        assert_eq!(env.lookup("y"), Some(Ty::Int));
+        // Issue #118 Part 1: loop variable and body-only binding are Maybe.
+        assert_eq!(env.lookup("i"), None);
+        assert_eq!(env.lookup("y"), None);
+        assert_eq!(env.lookup_any("i"), Some(Ty::Int));
+        assert_eq!(env.lookup_any("y"), Some(Ty::Int));
     }
 
     #[test]
@@ -14594,8 +15649,11 @@ mod tests {
             }],
         };
         check_stmt_in_function(&mut env, &["d", "k", "y"], &stmt, Ty::None).unwrap();
-        assert_eq!(env.lookup("k"), Some(Ty::Str));
-        assert_eq!(env.lookup("y"), Some(Ty::Str));
+        // Issue #118 Part 1: loop variable and body-only binding are Maybe.
+        assert_eq!(env.lookup("k"), None);
+        assert_eq!(env.lookup("y"), None);
+        assert_eq!(env.lookup_any("k"), Some(Ty::Str));
+        assert_eq!(env.lookup_any("y"), Some(Ty::Str));
     }
 
     #[test]
@@ -14613,8 +15671,260 @@ mod tests {
             }],
         };
         check_stmt_in_function(&mut env, &["s", "x", "y"], &stmt, Ty::None).unwrap();
-        assert_eq!(env.lookup("x"), Some(Ty::Int));
-        assert_eq!(env.lookup("y"), Some(Ty::Int));
+        // Issue #118 Part 1: loop variable and body-only binding are Maybe.
+        assert_eq!(env.lookup("x"), None);
+        assert_eq!(env.lookup("y"), None);
+        assert_eq!(env.lookup_any("x"), Some(Ty::Int));
+        assert_eq!(env.lookup_any("y"), Some(Ty::Int));
+    }
+
+    #[test]
+    fn a_function_local_if_with_no_else_then_read_is_t0041() {
+        // `def f(): if cond: x = 1; return x` -- T0041 (possibly-unbound
+        // read in function body).
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("cond".to_string(), Ty::Bool)],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::If {
+                        test: HirExpr::Name("cond".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                        orelse: vec![],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
+    #[test]
+    fn a_function_local_while_then_read_is_t0041() {
+        // `def f(): while cond: x = 1; return x` -- T0041.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("cond".to_string(), Ty::Bool)],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::While {
+                        test: HirExpr::Name("cond".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
+    #[test]
+    fn a_function_local_both_branches_if_then_read_succeeds() {
+        // `def f(): if cond: x = 1 else: x = 2; return x` -- succeeds.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("cond".to_string(), Ty::Bool)],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::If {
+                        test: HirExpr::Name("cond".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                        orelse: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(2),
+                        }],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_local_for_range_then_read_is_t0041() {
+        // `def f(): for i in range(3): x = i; return x` -- T0041 (the loop
+        // body may execute zero times, so `x` is maybe-bound).
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::ForRange {
+                        var: "i".to_string(),
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(3),
+                        step: HirExpr::IntLiteral(1),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::Name("i".to_string()),
+                        }],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
+    #[test]
+    fn a_function_local_for_range_var_then_read_is_t0041() {
+        // `def f(): for i in range(3): pass; return i` -- T0041 (the loop
+        // variable is maybe-bound after the loop).
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::ForRange {
+                        var: "i".to_string(),
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(3),
+                        step: HirExpr::IntLiteral(1),
+                        body: vec![],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("i".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
+    #[test]
+    fn a_function_local_pre_bound_then_for_range_var_read_succeeds() {
+        // `def f(): i = 0; for i in range(3): pass; return i` -- succeeds
+        // because `i` was definitely bound before the loop.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::Assign {
+                        target: "i".to_string(),
+                        value: HirExpr::IntLiteral(0),
+                    },
+                    HirStmt::ForRange {
+                        var: "i".to_string(),
+                        start: HirExpr::IntLiteral(0),
+                        stop: HirExpr::IntLiteral(3),
+                        step: HirExpr::IntLiteral(1),
+                        body: vec![],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("i".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_local_for_list_then_read_is_t0041() {
+        // `def f(xs: list[int]): for i in xs: x = i; return x` -- T0041.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::ForList {
+                        var: "i".to_string(),
+                        list: "xs".to_string(),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::Name("i".to_string()),
+                        }],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
+    #[test]
+    fn a_function_local_pre_bound_for_list_var_survives_as_definite() {
+        // `def f(xs: list[int]): i = 0; for i in xs: pass; return i` --
+        // succeeds because `i` was definitely bound before the loop
+        // (issue #118 Part 1).
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("xs".to_string(), Ty::List(Box::new(Ty::Int)))],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::Assign {
+                        target: "i".to_string(),
+                        value: HirExpr::IntLiteral(0),
+                    },
+                    HirStmt::ForList {
+                        var: "i".to_string(),
+                        list: "xs".to_string(),
+                        body: vec![],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("i".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn a_function_local_maybe_then_definite_upgrade_succeeds() {
+        // `def f(c: bool): if c: x = 1; x = 2; return x` -- the maybe-bound
+        // `x` from the if-body is upgraded to definite by the unconditional
+        // `x = 2`, so the return read succeeds.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![("c".to_string(), Ty::Bool)],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::If {
+                        test: HirExpr::Name("c".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                        orelse: vec![],
+                    },
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::IntLiteral(2),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(),
+        };
+        assert!(check(&hir).is_ok());
     }
 
     #[test]
