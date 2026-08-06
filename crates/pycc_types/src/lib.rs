@@ -3461,7 +3461,8 @@ fn check_dict_set(
 /// `check_and_resolve` always build their `Environment` from a real
 /// `HirModule` (via `class::bind_classes`), so this isolation only affects
 /// a caller that deliberately checks one function outside any module
-/// context (this crate's own unit tests today).
+/// context -- this crate's own unit tests, and the workspace's own
+/// direct-API integration tests (e.g. `tests/slice0.rs`), today.
 pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
     let local_names = match function {
         HirItem::Function { params, body, .. } => function_local_names(params, body),

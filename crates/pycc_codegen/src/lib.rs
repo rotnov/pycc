@@ -3534,6 +3534,16 @@ fn decref_str_slot_before_store<'ctx>(
 /// no-op (`pycc_rt_str_decref`'s own null check) -- exactly like a local's
 /// null-initialized string slot -- so the same call is correct for both
 /// `__init__`'s first assignment and any later reassignment.
+///
+/// Unlike `decref_str_slot_before_store`, this function has no runtime
+/// assertion that the target slot's own declared type is actually
+/// `Ty::Str` -- its one caller (`MirStmt::AttrSet`'s own codegen) only
+/// invokes it when `value`'s type is `Ty::Str`, and `pycc_types::class::
+/// check_attr_set`'s `is_assignable(value_ty, attr_ty)` gate (`T0021`)
+/// already rejects a `str` value targeting a non-`str` attribute before
+/// codegen ever runs -- so this slot's declared type is `Ty::Str` too on
+/// every reachable call, by construction, not merely by convention left
+/// unchecked (D-068 review finding, PR #385).
 fn decref_str_attr_slot_before_store<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
