@@ -964,12 +964,13 @@ where
     Diagnostic::error("C0002", message, Span::new(range.start, range.end))
 }
 
-/// `L0001`: reused (not a new code, D-148) for a post-parse
-/// statement-context violation caught during HIR lowering -- a construct
+/// `L0001`: reused (not a new code, D-148) for a post-parse statement- or
+/// expression-context violation caught during HIR lowering -- a construct
 /// that is syntactically well-formed but only valid Python in a context the
-/// enclosing statement isn't in (`break`/`continue` outside a loop, `async
-/// for` outside an async function). CPython itself raises `SyntaxError` for
-/// all of these, the same failure class `L0001` already covers for the
+/// enclosing statement or expression isn't in (`break`/`continue` outside a
+/// loop, `async for` outside an async function -- D-148; `yield`/`yield
+/// from` outside a function -- D-149). CPython itself raises `SyntaxError`
+/// for all of these, the same failure class `L0001` already covers for the
 /// parser's own grammar violations; unlike a genuine parser `L0001`, one
 /// emitted from here carries no "expected set" in its message.
 fn context_invalid<R>(message: impl Into<String>, range: R) -> Diagnostic
