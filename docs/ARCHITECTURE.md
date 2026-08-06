@@ -133,7 +133,7 @@ unification-friendly representation for any container literal
 (`list`/`dict`/`set`/`tuple` alike), so an entirely unannotated helper's
 parameter or return type can never be inferred as a container type from
 real source today -- a pre-existing limitation this slice surfaced but did
-not introduce (see `docs/DECISIONS.md`'s D-116 point 4 correction note);
+not introduce (see `docs/decisions/D-116-tuple-v0-2-scope-int-bool-float-elements-only.md`'s point 4 correction note);
 and, even if that solver gap closed, `pycc_codegen`'s own `emit_expr` has
 no dedicated `MirExpr::Call` result-dispatch arm for a container-typed
 return either -- it panics for `Ty::List`/`Ty::Dict`/`Ty::Set`/`Ty::Tuple`
@@ -167,7 +167,7 @@ representation fixes needed to preserve it). See
 still-open gaps (unary operators, bigint-operand arithmetic beyond
 overflow, etc.), not a broad "backend is narrower" statement.
 
-Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [DECISIONS.md](./DECISIONS.md) D-003).
+Bootstrap note: v0.1 may vendor `ruff_python_parser` to move fast; replaced by own parser before v0.6 (tracked in [D-003](./decisions/D-003-parser-vendor-ruff-python-parser-for-v0-1-0-5.md)).
 
 ## Performance requirements (compiler itself)
 

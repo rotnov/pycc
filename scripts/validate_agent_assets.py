@@ -100,8 +100,8 @@ INSTRUCTION_FILES = {"AGENTS.md", "CLAUDE.md"}
 CLAUDE_INSTRUCTION_IMPORT = "@AGENTS.md\n"
 LIVE_MONITORING_HEADING = (
     "## Monitor only live repository events "
-    "([D-078](docs/DECISIONS.md#d-078-external-repository-monitoring-is-"
-    "checkpointed-and-event-driven))"
+    "([D-078](docs/decisions/D-078-external-repository-monitoring-is-"
+    "checkpointed.md))"
 )
 REQUIRED_LIVE_MONITORING_BULLETS = (
     "Establish an explicit monitoring checkpoint from the refreshed remote "
@@ -3354,10 +3354,10 @@ def validate_skill_documents(failures: list[str]) -> None:
 
     grill_path = SKILLS_ROOT / "grill-with-docs" / "SKILL.md"
     grill = grill_path.read_text(encoding="utf-8")
-    if "docs/DECISIONS.md" not in grill:
+    if "docs/decisions/" not in grill:
         failures.append(
             ".claude/skills/grill-with-docs/SKILL.md: project-wide decisions "
-            "must route to docs/DECISIONS.md"
+            "must route to docs/decisions/"
         )
     if "never replaces it" not in grill:
         failures.append(

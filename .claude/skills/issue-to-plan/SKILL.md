@@ -91,7 +91,7 @@ Read what governs the change, not what merely mentions it. In this repository th
 means:
 
 - `docs/SPEC.md` as the map, then the specification that owns the affected area.
-- `docs/DECISIONS.md` for accepted decisions the change touches. An accepted decision is never
+- `docs/decisions/README.md` for accepted decisions the change touches. An accepted decision is never
   edited; a change that supersedes one adds a new entry. Resolve the next free entry number at
   pull-request-open time, not at planning time, because open pull requests may claim numbers
   first.
@@ -219,7 +219,7 @@ Delegated invocation is the one exception: when `/issue-implement` — exactly t
 only qualifying delegate, whose own explicit invocation authorizes an enumerated set of public
 writes for the named issue — invokes this skill for that issue, its standing authorization
 substitutes for the per-payload approval and the plan is published without a further prompt. Per
-`docs/DECISIONS.md`'s D-143, this exception also covers the case where the literal `Skill`-tool
+`docs/decisions/D-143-issue-implement-s-delegated-issue-to-plan.md`, this exception also covers the case where the literal `Skill`-tool
 caller is a generic `Agent` that `issue-implement` dispatched and that is acting under
 `issue-implement`'s own delegated authorization for that same issue: the dispatched agent is not a
 new delegate in its own right, it is `issue-implement`'s own step 3 running in an isolated context.

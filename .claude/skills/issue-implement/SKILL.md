@@ -44,9 +44,9 @@ evidence-gated closure authority extends to any other issue that screen identifi
 stale in the same pass — not just the named target issue.
 
 When the issue's own fix requires this repository's established two-PR CI-digest
-stage-then-activate pattern (see `docs/DECISIONS.md`'s D-080 Staging note), or its separate
+stage-then-activate pattern (see `docs/decisions/D-080-the-conformance-oracle-s-ci-setup-runs-after-the.md`'s Staging note), or its separate
 D-103 policy-successor-manifest stage-then-activate pattern
-(see `docs/DECISIONS.md#d-103-keep-search-policy-successors-base-owned-through-a-complete-two-merge-manifest`),
+(see `docs/decisions/D-103-keep-search-policy-successors-base-owned-through.md`),
 a second, stage-only pull request that does not itself carry `Fixes #N` is also authorized — see
 step 4's detection branches.
 
@@ -142,7 +142,7 @@ it reasons about. A plan whose relevant ground has shifted is refreshed by invok
 If no plan exists, or an existing one needs refreshing per above, invoke `/issue-to-plan` inside
 a freshly-dispatched `Agent` — the same
 context-isolation reasoning as step 4's dispatched implementation (see
-`docs/DECISIONS.md#d-142-issue-implements-step-4-implementation-runs-in-a-dispatched-agent-not-the-orchestrating-sessions-own-context`)
+`docs/decisions/D-142-issue-implement-s-step-4-implementation-runs-in-a.md`)
 applies equally here: `issue-to-plan`'s own steps 1-6 (baseline, refuting the issue's claims
 against the tree, establishing constraints, empirical verification including real
 builds/`cargo`/`pycc` runs, decomposition when needed, drafting) and step 7's adversarial review loop generate as much

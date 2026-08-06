@@ -1,6 +1,6 @@
 ---
 name: process-error-postmortem
-description: Use when the agent catches itself having made a process mistake (wasted meaningful time, produced a wrong intermediate result, violated a convention, used the wrong tool for the job) or the user points one out. Diagnose the root cause, identify which existing artifact (a skill's SKILL.md, AGENTS.md, an ADR, or the absence of one) failed to prevent it, and either patch that artifact directly or propose the patch — then record the entry in docs/AGENT_RETROSPECTIVE.md and, if the lesson is durable, promote it into the owning artifact per the existing AGENTS.md rule. Do not use for code bugs (those belong in issues and tests), ambiguous design calls (those belong in docs/DECISIONS.md), or routine debugging that self-corrected within the same turn with no lasting effect.
+description: Use when the agent catches itself having made a process mistake (wasted meaningful time, produced a wrong intermediate result, violated a convention, used the wrong tool for the job) or the user points one out. Diagnose the root cause, identify which existing artifact (a skill's SKILL.md, AGENTS.md, an ADR, or the absence of one) failed to prevent it, and either patch that artifact directly or propose the patch — then record the entry in docs/AGENT_RETROSPECTIVE.md and, if the lesson is durable, promote it into the owning artifact per the existing AGENTS.md rule. Do not use for code bugs (those belong in issues and tests), ambiguous design calls (those belong in docs/decisions/ as a new decision entry), or routine debugging that self-corrected within the same turn with no lasting effect.
 ---
 
 <!-- ievo:start -->
@@ -15,7 +15,7 @@ the agent used the wrong tool when a better one existed and was discoverable, wa
 inefficiently when a cheaper mechanism was available, skipped a preflight step, violated
 a documented convention, or followed a skill's instructions into a dead end the skill's
 own text should have prevented. Code bugs belong in issues, tests, and fixes — not here.
-Ambiguous design calls belong in `docs/DECISIONS.md` as decisions with alternatives, not
+Ambiguous design calls belong in `docs/decisions/` as decisions with alternatives, not
 here as mistakes. Routine debugging that self-corrected within the same turn with no
 lasting effect is not a process mistake. The bar is the same one
 `docs/AGENT_RETROSPECTIVE.md` already sets: the mistake cost meaningful time or produced
@@ -44,8 +44,8 @@ Before running the full postmortem, confirm the event meets the bar. Ask:
 - Is it about *how the work was done*, not *what the code does*? (If it is a code bug,
   route to an issue or test, not this skill.)
 - Is it a genuine mistake, not a disagreement about an ambiguous design call? (If
-  reasonable agents could disagree on the approach, it belongs in `docs/DECISIONS.md`,
-  not here.)
+  reasonable agents could disagree on the approach, it belongs in `docs/decisions/` as a new
+  decision entry, not here.)
 
 If any check fails, do not run the rest of this workflow. A false postmortem wastes as
 much time as the mistake it claims to analyze.
@@ -99,8 +99,9 @@ The fix path depends on which artifact needs to change:
   another PR.
 
 - **New ADR** (absence gap, and the lesson is an irreversible or project-wide design
-  choice): add the entry to `docs/DECISIONS.md` per the existing convention, update
-  `docs/SPEC.md`'s DECISIONS.md range, and open a dedicated PR.
+  choice): create `docs/decisions/D-1NN-<slug>.md` per `docs/decisions/TEMPLATE.md`,
+  regenerate the index (`scripts/generate_decisions_index.py docs/decisions
+  docs/decisions/README.md`), and open a dedicated PR.
 
 - **New AGENTS.md rule** (absence gap, and the lesson is a binding process rule, not a
   full skill or ADR): add the rule to the relevant section of `AGENTS.md` and ship it in
@@ -127,7 +128,7 @@ future behavior.
 ### 5. Promote if the lesson is durable
 
 Per the existing AGENTS.md rule: "Promote any rule discovered there into `AGENTS.md`,
-`docs/DECISIONS.md`, or the owning specification before relying on it as policy." A
+`docs/decisions/`, or the owning specification before relying on it as policy." A
 retrospective entry alone is informational, not binding. If the lesson should govern
 future sessions, step 3's fix is the promotion — the artifact edit, ADR, or AGENTS.md
 rule *is* the binding version, and the retrospective entry records how it was discovered.
@@ -143,8 +144,8 @@ completely — the entry's value is the discovery narrative, not restating the r
   it), the postmortem addresses the skipped step, not the bug itself.
 
 - It does not resolve design disagreements. If the user and the agent reasonably
-  disagree on which approach to take, that is a design call — record it in
-  `docs/DECISIONS.md` with alternatives, not in the retrospective as a mistake.
+  disagree on which approach to take, that is a design call — record it as a new file in
+  `docs/decisions/` with alternatives, not in the retrospective as a mistake.
 
 - It does not run on every minor course-correction. A wrong turn caught and fixed
   within the same turn, with no lasting effect and no lesson a future session would

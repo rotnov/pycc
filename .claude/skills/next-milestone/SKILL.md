@@ -24,7 +24,7 @@ do not use it to plan or implement anything itself (issue-to-plan / issue-implem
 
 ### 1. Baseline
 
-Fetch and record the default-branch tip, per [D-021](../../../docs/DECISIONS.md#d-021-agent-task-preflight-and-documentation-refresh).
+Fetch and record the default-branch tip, per [D-021](../../../docs/decisions/D-021-agent-task-preflight-and-documentation-refresh.md).
 
 ### 2. Determine the next milestone
 
@@ -53,7 +53,7 @@ their turn comes.
 
 Report the determined milestone and its Accept criteria, then proceed exactly as if the user had
 typed `/goal release <name>` for it — per
-[D-127](../../../docs/DECISIONS.md#d-127-autonomous-agent-operation-model), do not pause to ask for
+[D-127](../../../docs/decisions/D-127-autonomous-agent-operation-model.md), do not pause to ask for
 confirmation before proceeding. If the milestone was ambiguous (two adjacent sections both plausibly
 "not yet met," e.g. a partially-shipped one with an open dispute in its own prose), resolve it via
 the `advisor` tool rather than asking the user.
@@ -62,7 +62,7 @@ the `advisor` tool rather than asking the user.
 
 Invoke `.claude/skills/issue-select/SKILL.md`'s loop with this milestone as the active scope: its
 own step 2 milestone-triage housekeeping, its blocker screen's roadmap-fit check, and
-[D-021](../../../docs/DECISIONS.md#d-021-agent-task-preflight-and-documentation-refresh) step 10's
+[D-021](../../../docs/decisions/D-021-agent-task-preflight-and-documentation-refresh.md) step 10's
 issue-to-plan gate all already understand milestone-scoped work — this skill does not duplicate any
 of that, it only establishes which milestone they're operating against.
 

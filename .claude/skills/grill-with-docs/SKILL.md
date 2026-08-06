@@ -17,7 +17,7 @@ keeping the repository's durable documentation current.
 ## Workflow
 
 1. Read the relevant repository documentation, `CONTEXT.md` when present, the
-   canonical project decision log at `docs/DECISIONS.md`, and any supporting records
+   canonical project decision log at `docs/decisions/README.md`, and any supporting records
    under `docs/adr/`.
 2. State the decision currently being tested, its known constraints, and the largest
    unresolved risk.
@@ -29,8 +29,10 @@ keeping the repository's durable documentation current.
 5. Maintain the domain glossary directly in repository-root `CONTEXT.md`. Create it
    lazily when a new durable term, relationship, or invariant first needs recording.
 6. When a load-bearing choice becomes stable and is project-wide or difficult to
-   reverse, record it as the next `D-NNN` entry in the canonical
-   `docs/DECISIONS.md` log. Use the
+   reverse, record it as the next `docs/decisions/D-NNN-<slug>.md` file (per
+   `docs/decisions/TEMPLATE.md`) and regenerate the generated index
+   (`scripts/generate_decisions_index.py docs/decisions docs/decisions/README.md`).
+   Use the
    [ADR creation workflow](../create-architectural-decision-record/SKILL.md) only
    when a longer supporting analysis is useful, and link that ADR from the canonical
    decision entry. The ADR supplements the decision log; it never replaces it.

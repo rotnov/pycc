@@ -1,0 +1,14 @@
+---
+id: D-045
+title: "Private helpers use explicit, monomorphic inference variables"
+status: accepted
+---
+
+## D-045: Private helpers use explicit, monomorphic inference variables
+
+- Status: accepted (PR-4 review correction; completes D-038's promised v0.1 inference behavior)
+- Context: D-038 makes underscore-prefixed functions eligible for the local inference required by TYPE_SYSTEM.md, but the initial implementation lowered every missing private parameter and return annotation to `Ty::None`. That made an unannotated identity helper behave as though it accepted and returned only `None`: `def _identity(value): return value` followed by `_identity(1)` failed with `T0021`. The placeholder also erased the semantic distinction between an explicit `-> None` annotation and an unknown type, so no later checker pass could recover the intended signature.
+- Decision: add the internal HIR marker `Ty::Infer` for missing private-helper annotations and resolve every such marker before ordinary type checking. A module-local union-style solver links inference variables through call arguments, local bindings, returns, `range` operands, and forward/reverse binary-expression constraints. The resulting signature is monomorphic for the module's v0.1 primitive subset; `bool`/`int` constraints merge to `int`, while incompatible parameter constraints produce `T0021` and incompatible returns produce `T0022`. A helper with no value return infers `None`; any other unconstrained variable fails with an annotation-requesting `T0021`. `pycc_types::check_and_resolve` returns a cloned HIR with those concrete signatures materialized, and the driver gives only that resolved module to MIR.
+- Alternatives: keep `Ty::None` as the placeholder and special-case it in calls (rejected because explicit `None` becomes indistinguishable from unknown and the workaround cannot express identity relationships); merely document private inference as deferred (rejected because PR-4's delivery contract explicitly includes real local inference); implement fully polymorphic Hindley-Milner generalization in v0.1 (rejected because the current HIR and backend expose only a small concrete primitive set and no generic representation or monomorphization pipeline yet).
+- Consequences: unannotated private identity, arithmetic, `range`, recursive, and implicit-`None` helpers can be checked from real constraints without admitting `Any`. An annotated result can constrain an otherwise-unresolved binary operand (for example, `_inc(x) -> int` infers `x: int`). A single private helper cannot silently acquire unrelated concrete signatures at different call sites; code that needs polymorphism must use the later generic surface or explicit annotations once supported. `Ty::Infer` exists only in the unresolved lowering result; the typed driver path materializes concrete HIR before MIR/codegen.
+

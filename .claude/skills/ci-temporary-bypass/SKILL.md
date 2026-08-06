@@ -9,7 +9,7 @@ Temporarily relax exactly one required CI check that is provably stuck due
 to external repository state, then restore it -- publicly, narrowly, and
 verifiably. This supersedes D-024's "not delegated to routine tasks" and
 D-054's "grants no reusable permission" for this one mechanism only, per a
-decision recorded in `docs/DECISIONS.md`; every other principle in those
+decision recorded in `docs/decisions/D-125-session-driven-temporary-ci-check-relaxation.md`; every other principle in those
 decisions (public incident, minimal scope, an expiry-labeled auditable
 incident rather than a hard time bound, immediately restored, fully
 auditable) still applies without exception.
@@ -32,7 +32,7 @@ A required check qualifies **only** when all three hold, verified fresh,
 never assumed:
 
 1. Its exact failure text matches an **already-documented** failure class
-   in `docs/DECISIONS.md` or `docs/AGENT_RETROSPECTIVE.md`. A failure class
+   in `docs/decisions/README.md` or `docs/AGENT_RETROSPECTIVE.md`. A failure class
    seen for the first time can never go through this skill -- understand
    and document it in a separate session first, then this skill can be used
    for a later recurrence.

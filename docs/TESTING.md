@@ -261,7 +261,8 @@ reviewed pins.
 The active `.github/workflows/ci.yml` is byte-identical to
 `tests/fixtures/d112-ubuntu-frontend-perf-ci.yml` (D-112: `frontend-perf-measure`/
 `frontend-perf-gate` moved from `macos-14` to `ubuntu-latest`, confirmed by
-five real shadow-measurement runs before activation -- see `docs/DECISIONS.md`).
+five real shadow-measurement runs before activation -- see
+`docs/decisions/D-112-move-frontend-perf-measure-frontend-perf-gate.md`).
 Its performance jobs keep D-062's comparator logic and five-replicate/`>2%`
 contract unchanged, but their runner and LLVM install step differ from the
 D-062 fixture, so job content is no longer byte-identical to it. The checker
