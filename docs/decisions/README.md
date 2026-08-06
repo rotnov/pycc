@@ -157,3 +157,4 @@ current.
 | [D-149](./D-149-reuse-l0001-for-context-invalid-yield-yield-from.md) | Reuse `L0001` for context-invalid `yield`/`yield from`, not a new code (#361) | accepted |
 | [D-150](./D-150-hand-authored-explanations-const-slice-as-pycc.md) | Hand-authored `EXPLANATIONS` const slice as `pycc explain`'s content source, not a runtime `docs/DIAGNOSTICS.md` parser (#366, Part 1 of #338) | accepted |
 | [D-151](./D-151-decompose-the-decisions-log-into-per-decision-files.md) | Decompose docs/DECISIONS.md into docs/decisions/, one file per decision, generated index | accepted |
+| [D-152](./D-152-populate-diagnostic-help-for-arity-type.md) | Populate `Diagnostic.help` for arity/type-mismatch, missing-annotation, and literal-index-constraint call sites (#367, Part 2 of #338) | accepted |
