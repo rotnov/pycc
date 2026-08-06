@@ -167,7 +167,7 @@ Functions, `int`/`float`/`str`/`bool`, arithmetic, comparisons, `if`/`while`/`fo
 
 Classes, inheritance+C3, `@property`, dataclasses, enums, protocols, `match` (634) with exhaustiveness, exceptions (`try/except/finally`, chains).
 
-**Accept:** conformance ≥ 45 PEPs; diagnostics registry fully implemented for shipped features; `pycc explain` live.
+**Accept:** conformance ≥ 37 `PYTHON_STANDARDS.md` matrix rows green, encompassing 39 distinct PEP numbers ([D-153](./decisions/D-153-correct-v0-3-s-conformance-target-before-any-v0.md) — revised down from the original "≥ 45 PEPs" with itemized justification, mirroring [D-088](./decisions/D-088-correct-v0-2-s-acceptance-criteria-before-any-v0.md)'s precedent for v0.2); diagnostics registry fully implemented for shipped features (only `T0030`/`T0031` are genuine v0.3-shipped-feature diagnostics — see the design doc); `pycc explain` live.
 
 **Pre-implementation issue triage (2026-08-04):** a review of every open GitHub issue against v0.3's own scope (class model, `match` exhaustiveness/binding, exception control flow) found no open issue that blocks *starting* v0.3, but four open P1 correctness gaps sit directly in this milestone's blast radius and should be resolved early in v0.3 rather than deferred to its end, since class-body evaluation order, attribute-annotation checking, and `match` arm binding/exhaustiveness all build on the same control-flow/definite-assignment/constraint-collection machinery these issues describe:
 - [#118](https://github.com/rotnov/pycc/issues/118) — definite assignment is not tracked across control-flow joins; every `match` arm is a join, so this directly affects exhaustiveness and post-match binding correctness.

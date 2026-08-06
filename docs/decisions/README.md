@@ -158,3 +158,4 @@ current.
 | [D-150](./D-150-hand-authored-explanations-const-slice-as-pycc.md) | Hand-authored `EXPLANATIONS` const slice as `pycc explain`'s content source, not a runtime `docs/DIAGNOSTICS.md` parser (#366, Part 1 of #338) | accepted |
 | [D-151](./D-151-decompose-the-decisions-log-into-per-decision-files.md) | Decompose docs/DECISIONS.md into docs/decisions/, one file per decision, generated index | accepted |
 | [D-152](./D-152-populate-diagnostic-help-for-arity-type.md) | Populate `Diagnostic.help` for arity/type-mismatch, missing-annotation, and literal-index-constraint call sites (#367, Part 2 of #338) | accepted |
+| [D-153](./D-153-correct-v0-3-s-conformance-target-before-any-v0.md) | Correct v0.3's conformance target before any v0.3 PR starts | accepted |
