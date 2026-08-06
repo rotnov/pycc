@@ -65,7 +65,7 @@ Note on `O0201`: legal Python never observes moves (see MEMORY_OWNERSHIP.md — 
 
 Adding a new code here requires a matching `EXPLANATIONS` entry in
 [`crates/pycc_diag/src/explain.rs`](../crates/pycc_diag/src/explain.rs)
-(D-151) — that file's own test suite enforces the two stay in sync, so a
+(D-150) — that file's own test suite enforces the two stay in sync, so a
 registry row added here without a matching entry fails CI immediately.
 
 `C0001` is a versioned capability diagnostic, not a rejected-by-design

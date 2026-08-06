@@ -11,7 +11,7 @@ pub enum ErrorFormat {
 /// `ErrorFormat`/`--error-format`: `explain`'s output documents a code, it
 /// never reports an occurred error, so reusing `check`'s error-flavored
 /// name and type would be actively misleading about what the command does
-/// (see D-151).
+/// (see D-150).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum OutputFormat {
     Human,

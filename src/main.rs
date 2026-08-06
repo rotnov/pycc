@@ -99,7 +99,7 @@ fn main() -> ExitCode {
 
 /// `pycc explain <code> [--format human|json]`: prints the code, severity,
 /// a one-line summary, and a longer explanation with a worked example for
-/// a recognized diagnostic code (D-151, `pycc_diag::explain`). Exits `0`
+/// a recognized diagnostic code (D-150, `pycc_diag::explain`). Exits `0`
 /// for a recognized code in either format. Exits `2` for an unrecognized
 /// code, with a plain stderr message regardless of `--format` -- an
 /// unrecognized code is an out-of-band invocation failure, not a

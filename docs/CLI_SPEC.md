@@ -97,7 +97,7 @@ directory once project mode exists.
 --pure              planned v0.7 shorthand for `--interop-policy deny`;
                     conflicts with an explicit `--interop-policy`
 --error-format human|json     json = stable schema for editors/CI (check only)
---format human|json           json = stable schema for editors/CI (explain only; deliberately not --error-format -- explain's output is never an error, see D-151)
+--format human|json           json = stable schema for editors/CI (explain only; deliberately not --error-format -- explain's output is never an error, see D-150)
 --fix               apply machine-applicable suggestions (check only)
 -j N                parallelism (default: cores)
 ```
@@ -211,7 +211,7 @@ column. Full Unicode terminal-width conformance remains future work.
 
 `pycc explain CODE [--format human|json]` prints long-form documentation for
 a diagnostic code registered in [DIAGNOSTICS.md](./DIAGNOSTICS.md)'s
-"Initial registry" table (D-151, `crates/pycc_diag/src/explain.rs`). This is
+"Initial registry" table (D-150, `crates/pycc_diag/src/explain.rs`). This is
 a **different, unrelated JSON shape** from the "Diagnostics output contract"
 section above: that section documents an *occurred* diagnostic (a real
 compile error/warning against a specific file and span); this section

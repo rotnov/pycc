@@ -1,9 +1,9 @@
-//! `pycc explain <code>`'s content source (D-151): a hand-authored `const`
+//! `pycc explain <code>`'s content source (D-150): a hand-authored `const`
 //! slice of every code registered in `docs/DIAGNOSTICS.md`'s "Initial
 //! registry" table, linear-scanned by [`find`] -- the same shape
 //! `pycc_std::REGISTRY`/`resolve_symbol` already established for a
 //! structurally identical "small hand-authored table, looked up by exact
-//! string match" problem (D-136). See D-151 for why this is a `const`
+//! string match" problem (D-136). See D-150 for why this is a `const`
 //! slice rather than a runtime `docs/DIAGNOSTICS.md` parser, and for the
 //! completeness test's drift-guard mechanism (`tests` module below).
 //!
@@ -21,7 +21,7 @@ use crate::Severity;
 /// restatement of the registry table's own "Message (short form)" column;
 /// `explanation` is free-form prose describing the real trigger condition
 /// (grounded in the code's actual emission site(s), not just the registry
-/// table's terse summary -- see D-151); `example` is a minimal Python
+/// table's terse summary -- see D-150); `example` is a minimal Python
 /// snippet showing the shape of code the rule is about.
 #[derive(Debug, Clone, Copy)]
 pub struct DiagnosticExplanation {
@@ -32,7 +32,7 @@ pub struct DiagnosticExplanation {
     pub example: &'static str,
 }
 
-/// The full set of documented diagnostic codes (D-151). Kept in
+/// The full set of documented diagnostic codes (D-150). Kept in
 /// `docs/DIAGNOSTICS.md`'s own table order for easy side-by-side review,
 /// not that order has any runtime significance -- [`find`] does a plain
 /// linear scan regardless of position.
@@ -463,6 +463,29 @@ def f() -> int:
 ",
     },
     DiagnosticExplanation {
+        code: "T0041",
+        severity: Severity::Error,
+        summary: "local name may not be bound on every path reaching this use",
+        explanation: "\
+T0041 fires when a local name is assigned on only some of the control-flow \
+paths that can reach a later read of it -- e.g. inside an `if` with no \
+`else`, or inside a `while`/`for` body that might run zero times -- rather \
+than on every path (issue #118 Part 1). This is pycc's strict AOT \
+equivalent of CPython's `UnboundLocalError`, but caught at compile time via \
+a three-state binding model (definitely bound / maybe bound / unbound) \
+tracked across `if`/`while`/`for` control-flow joins, instead of at \
+runtime. T0041 is distinct from `T0021`'s \"local name `<name>` is not \
+bound before this use\" message: T0021 covers a name never assigned on any \
+path reaching the read, while T0041 covers a name assigned on some but not \
+all paths.",
+        example: "\
+def read_value(flag: bool) -> int:
+    if flag:
+        x = 1
+    return x
+",
+    },
+    DiagnosticExplanation {
         code: "T0042",
         severity: Severity::Error,
         summary: "generic-function shape or call-site instantiation rejected beyond the v0.2 thin slice",
@@ -887,7 +910,7 @@ mod tests {
         assert!(parsed["example"].as_str().unwrap().contains("__del__"));
     }
 
-    /// Drift guard (D-151): parses `docs/DIAGNOSTICS.md`'s "Initial
+    /// Drift guard (D-150): parses `docs/DIAGNOSTICS.md`'s "Initial
     /// registry" table at test time (never at runtime -- see this module's
     /// own doc comment) and asserts, both directions, that `EXPLANATIONS`'s
     /// code set exactly matches the documented registry's code set, and

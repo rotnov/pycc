@@ -1065,7 +1065,7 @@ fn check_subcommand_rejects_an_unknown_error_format() {
     assert!(stderr.contains("[possible values: human, json]"));
 }
 
-// `pycc explain` (#366, D-151): one domain-representative code per
+// `pycc explain` (#366, D-150): one domain-representative code per
 // `docs/DIAGNOSTICS.md` code range, chosen because each is the first code
 // in its domain in the registry table and is a real, non-`(planned)`,
 // non-internal-assertion-only code except where the domain has none
