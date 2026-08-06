@@ -1,10 +1,10 @@
 ---
 id: D-152
-title: "Populate `Diagnostic.help` for arity/type-mismatch and missing-annotation call sites (#367, Part 2 of #338)"
+title: "Populate `Diagnostic.help` for arity/type-mismatch, missing-annotation, and literal-index-constraint call sites (#367, Part 2 of #338)"
 status: accepted
 ---
 
-## D-152: Populate `Diagnostic.help` for arity/type-mismatch and missing-annotation call sites (#367, Part 2 of #338)
+## D-152: Populate `Diagnostic.help` for arity/type-mismatch, missing-annotation, and literal-index-constraint call sites (#367, Part 2 of #338)
 
 - Status: accepted
 - Context: `docs/CLI_SPEC.md` has documented a `help[]` array in the diagnostic-occurrence JSON schema since PR-4 (D-036/D-043), and `render_json` (`crates/pycc_diag/src/lib.rs`) has emitted `"help": []` unconditionally, for every diagnostic, ever since — D-043 named "`help:` suggestions are never populated" as one of three explicitly tracked, accepted, non-blocking follow-ups from that PR. `docs/DIAGNOSTICS.md`'s quality bar ("help with a suggestion when one is safe") has been normative text since PR-4 too, just unenforced for `help` until now. This issue is D-043's second gap, narrowed but not closed. It is not "add a new JSON field" — the field and its documentation already existed; the work is populating it conditionally, and only where a safe suggestion is textually determinate from the diagnostic's own message.
