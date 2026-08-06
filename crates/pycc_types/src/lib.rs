@@ -2488,7 +2488,7 @@ fn infer_expr_in(
                             "tuple index must be a non-negative literal integer within range"
                                 .to_string(),
                             Span::new(0, 0),
-                        ).with_help("use a literal, non-negative integer index within the tuple's length"));
+                        ).with_help("use a literal, non-negative integer index within range"));
                     };
                     let Ok(literal_index) = usize::try_from(*literal_index) else {
                         return Err(Diagnostic::error(
@@ -2496,7 +2496,7 @@ fn infer_expr_in(
                             "tuple index must be a non-negative literal integer within range"
                                 .to_string(),
                             Span::new(0, 0),
-                        ).with_help("use a literal, non-negative integer index within the tuple's length"));
+                        ).with_help("use a literal, non-negative integer index within range"));
                     };
                     let Some(elem_ty) = elems.get(literal_index) else {
                         return Err(Diagnostic::error(
@@ -2504,7 +2504,7 @@ fn infer_expr_in(
                             "tuple index must be a non-negative literal integer within range"
                                 .to_string(),
                             Span::new(0, 0),
-                        ).with_help("use a literal, non-negative integer index within the tuple's length"));
+                        ).with_help("use a literal, non-negative integer index within range"));
                     };
                     Ok(elem_ty.clone())
                 }
