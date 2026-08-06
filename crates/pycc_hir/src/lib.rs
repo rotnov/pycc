@@ -872,7 +872,7 @@ fn lower_params(
                         "parameter `{name}` of public function `{fn_name}` needs a type annotation"
                     ),
                     Span::new(0, 0),
-                )),
+                ).with_help(format!("add a type annotation to parameter `{name}`"))),
                 None => Ok((name.to_string(), Ty::Infer)),
             }
         })
@@ -892,7 +892,7 @@ fn lower_return_annotation(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
             Span::new(0, 0),
-        )),
+        ).with_help(format!("add a return type annotation to `{fn_name}`"))),
         None => Ok(Ty::Infer),
     }
 }
