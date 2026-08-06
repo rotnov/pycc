@@ -27,6 +27,7 @@ pub struct Diagnostic {
     pub message: String,
     pub span: Option<Span>,
     pub label: Option<String>,
+    pub help: Option<String>,
 }
 
 impl Diagnostic {
@@ -38,6 +39,7 @@ impl Diagnostic {
             label: Some(message.clone()),
             message,
             span: Some(span),
+            help: None,
         }
     }
 
@@ -48,7 +50,18 @@ impl Diagnostic {
             message: message.into(),
             span: None,
             label: None,
+            help: None,
         }
+    }
+
+    /// Attaches a structured `help` suggestion -- a determinate, safe fix
+    /// derived from the diagnostic's own message (see D-151). Rendered as a
+    /// single-element JSON `help[]` array by `render_json`; `render_human`
+    /// has no `help:` line codepath yet (D-083, D-043's still-open gap).
+    #[must_use]
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
     }
 }
 
@@ -139,8 +152,11 @@ pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String 
 
 /// CLI_SPEC.md's versioned JSON diagnostic format: `format_version: 1`,
 /// `spans[{file,line,col,len,label}]`. Columns are 1-indexed Unicode scalar
-/// positions and lengths count Unicode scalar values. `help` is currently
-/// always an empty array -- see `render_human`'s doc comment and D-043.
+/// positions and lengths count Unicode scalar values. `help` is a
+/// single-element array holding `Diagnostic.help` when it carries a
+/// determinate, safe suggestion (D-151), and an empty array otherwise --
+/// `render_human` still has no equivalent `help:` line (see its own doc
+/// comment and D-043).
 pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
     let severity_word = match diag.severity {
         Severity::Error => "error",
@@ -162,13 +178,17 @@ pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
     } else {
         serde_json::json!([])
     };
+    let help = diag
+        .help
+        .as_ref()
+        .map_or_else(Vec::new, |h| vec![h.as_str()]);
     let value = serde_json::json!({
         "format_version": 1,
         "code": diag.code,
         "severity": severity_word,
         "message": diag.message,
         "spans": spans,
-        "help": [],
+        "help": help,
     });
     value.to_string()
 }
@@ -350,6 +370,23 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_help_defaults_to_none_and_with_help_sets_it() {
+        let without_help = Diagnostic::error("T0021", "expects `int`, got `str`", Span::new(0, 1));
+        assert_eq!(without_help.help, None);
+
+        let with_help = Diagnostic::error("T0021", "expects `int`, got `str`", Span::new(0, 1))
+            .with_help("pass an `int` value");
+        assert_eq!(with_help.help.as_deref(), Some("pass an `int` value"));
+
+        let warning_with_help =
+            Diagnostic::warning("W1001", "unreachable code").with_help("remove the dead code");
+        assert_eq!(
+            warning_with_help.help.as_deref(),
+            Some("remove the dead code")
+        );
+    }
+
+    #[test]
     fn byte_offset_to_line_col_finds_first_line_first_column() {
         assert_eq!(
             byte_offset_to_line_col("print(42)\n", 0),
@@ -436,6 +473,7 @@ error[T0001]: multi-line span
             message: "unreachable code".to_string(),
             span: Some(Span::new(0, 1)),
             label: None,
+            help: None,
         };
         let rendered = render_human(&diag, "src/main.py", "x = 1\n");
         let expected = "\
@@ -463,6 +501,20 @@ warning[W1001]: unreachable code
         assert_eq!(parsed["spans"][0]["col"], 1);
         assert_eq!(parsed["spans"][0]["len"], 5);
         assert_eq!(parsed["spans"][0]["label"], "missing annotation");
+    }
+
+    #[test]
+    fn render_json_populates_help_when_the_diagnostic_carries_one() {
+        let source = "for item in range(\"three\"):\n    print(item)\n";
+        let diag = Diagnostic::error(
+            "T0021",
+            "range stop expects `int`, got `str`".to_string(),
+            Span::new(0, 5),
+        )
+        .with_help("pass an `int` value");
+        let rendered = render_json(&diag, "src/main.py", source);
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(parsed["help"], serde_json::json!(["pass an `int` value"]));
     }
 
     #[test]
