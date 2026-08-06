@@ -509,6 +509,45 @@ def use() -> None:
 ",
     },
     DiagnosticExplanation {
+        code: "T0043",
+        severity: Severity::Error,
+        summary: "attribute access, attribute assignment, or method call on a non-instance value",
+        explanation: "\
+T0043 fires when `base.attr`, `base.attr = value`, or `base.method(...)` is \
+used against a `base` whose type is not a class instance (D-154, Part 1 of \
+#375) -- e.g. an `int`, a `list[int]`, or any other non-`Ty::Instance` \
+value. pycc's v0.3 class model resolves attribute and method access \
+entirely at compile time against the base's declared class shape, so the \
+base must be known, structurally, to actually be an instance of some class \
+before an attribute or method name on it can mean anything.",
+        example: "\
+def f(x: int) -> int:
+    return x.value  # `int` is not a class instance
+",
+    },
+    DiagnosticExplanation {
+        code: "T0044",
+        severity: Severity::Error,
+        summary: "class has no attribute or method with the given name",
+        explanation: "\
+T0044 fires when `base.attr`, `base.attr = value`, or `base.method(...)` \
+names an attribute or method that the base's own class does not declare \
+(D-154, Part 1 of #375) -- an instance attribute is only ever established \
+by a first assignment inside `__init__`, and a method is only ever one of \
+the class body's own `def`s, so any other name is unknown at compile time. \
+A mismatched argument count or type at an instantiation or method call site \
+is a separate condition and reuses `T0021` instead, exactly like an \
+ordinary function call.",
+        example: "\
+class Point:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+def f(p: Point) -> int:
+    return p.y  # `Point` has no attribute named `y`
+",
+    },
+    DiagnosticExplanation {
         code: "O0201",
         severity: Severity::Error,
         summary: "value used after move across scope boundary",

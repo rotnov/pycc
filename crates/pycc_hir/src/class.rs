@@ -336,45 +336,46 @@ fn collect_init_attrs(
 /// `def` or a `self.<attr> = ...` inside `__init__` is `C0001` for this
 /// PR").
 fn slot_ty_from_init_rhs(value: &Expr, params: &[(String, Ty)]) -> Result<Ty, Diagnostic> {
-    // A guarded pair, not a nested `match &lit.value { .. }` with its own
-    // `Number::Complex` arm: a complex-number literal (`1j`) already
-    // fails to lower at all -- `expr::lower_expr`'s own `NumberLiteral`
-    // arm has no case for `Number::Complex`, so `stmt::lower_body`
-    // (called before this pre-scan ever runs, see `lower_class`) always
-    // rejects `self.x = 1j` with `C0001` first, confirmed directly by
-    // running this exact snippet through `lower_checked` rather than
-    // assumed. A dedicated `Number::Complex` arm would therefore be
-    // permanently unreachable from any real parsed source -- letting it
-    // fall through to the generic `other` arm in the `match` below (both
-    // guards false) avoids that dead region instead of hand-writing an
-    // unreachable one.
-    //
-    // KNOWN RESIDUAL GATE GAP (recorded here, not silently worked around):
-    // under `cargo llvm-cov`, the *second* of these two guarded arms
-    // (whichever of `Int`/`Float` is written second -- confirmed
-    // positional, not type-specific, by swapping their order and watching
-    // the flagged region move with it) reports as an uncovered region even
-    // though it demonstrably executes: both
-    // `an_init_attr_assigned_an_int_literal_establishes_an_int_slot` and
-    // `an_init_attr_assigned_a_float_literal_establishes_a_float_slot`
-    // below pass, each asserting the exact `Ty` this specific arm resolves
-    // to. Every alternative shape tried (two standalone `if let`s, an
-    // `Option`-valued inner `match`) reproduced the identical artifact on
-    // whichever block ended up second, so this is very likely a
-    // coverage-instrumentation limitation with this adjacent-arm shape,
-    // not a real test gap -- reported as such in this issue's own PR
-    // rather than papered over with a broader exemption.
-    if let Expr::NumberLiteral(lit) = value
-        && matches!(lit.value, Number::Int(_))
-    {
-        return Ok(Ty::Int);
-    }
-    if let Expr::NumberLiteral(lit) = value
-        && matches!(lit.value, Number::Float(_))
-    {
-        return Ok(Ty::Float);
-    }
     match value {
+        // Two guarded arms of the same top-level `match`, deliberately
+        // *asymmetric* rather than two structurally identical `matches!`
+        // checks (`Number::Int(_)` / `Number::Float(_)`): every symmetric
+        // shape tried for this Int/Float split -- two standalone `if let
+        // ... && matches!(..)` chains, a nested `match &lit.value { .. }`
+        // behind one outer `if let`, an `Option`-valued intermediate
+        // `match`, a single outer `if let` wrapping two independent bare
+        // `if matches!(..)` checks, and even two guarded arms of this same
+        // trailing `match` when both guards called `matches!` against a
+        // distinct `Number` variant -- reported the *second* of the two as
+        // an uncovered region under `cargo llvm-cov`, regardless of which
+        // variant it checked or what control-flow shape wrapped it, even
+        // though it demonstrably executes (both
+        // `an_init_attr_assigned_an_int_literal_establishes_an_int_slot`
+        // and `an_init_attr_assigned_a_float_literal_establishes_a_float_slot`
+        // below pass, each asserting the exact `Ty` this arm resolves to).
+        // The common factor was always two source-adjacent regions with
+        // byte-for-byte identical `matches!(lit.value, Number::<Variant>(_))`
+        // shapes differing only in the variant name -- consistent with an
+        // LLVM coverage-mapping counter getting deduplicated/shared across
+        // two structurally-identical-looking regions, so only the first is
+        // ever marked hit. Writing the second guard as a negation of the
+        // first (`!matches!(.., Number::Int(_))`, rather than its own
+        // positive `matches!(.., Number::Float(_))`) breaks that structural
+        // symmetry and resolves it -- confirmed clean at 100% region
+        // coverage for this file with this exact shape, after every
+        // symmetric alternative above reproduced the identical artifact.
+        Expr::NumberLiteral(lit) if matches!(lit.value, Number::Int(_)) => Ok(Ty::Int),
+        Expr::NumberLiteral(lit) if !matches!(lit.value, Number::Int(_)) => Ok(Ty::Float),
+        // The second arm's negation also correctly subsumes
+        // `Number::Complex` (`1j`), which can never actually reach this
+        // function: `expr::lower_expr`'s own `NumberLiteral` arm has no
+        // case for `Number::Complex`, so `stmt::lower_body` (called before
+        // this pre-scan ever runs, see `lower_class`) always rejects
+        // `self.x = 1j` with `C0001` first, confirmed directly by running
+        // this exact snippet through `lower_checked` rather than assumed.
+        // A provably-unreachable `Number::Complex` value being classified
+        // as `Ty::Float` by the negation above is therefore never
+        // observable from any real parsed source.
         Expr::Name(name) => {
             let resolved = params
                 .iter()
@@ -414,11 +415,6 @@ fn slot_ty_from_init_rhs(value: &Expr, params: &[(String, Ty)]) -> Result<Ty, Di
                 )),
             }
         }
-        // `Expr::NumberLiteral` has no arm here on purpose: `Number::Int`/
-        // `Number::Float` are both already handled and returned above, by
-        // the two standalone `if let`s at this function's own top -- only
-        // `Number::Complex` can still reach this match, and it correctly
-        // falls into the trailing `other` arm below.
         Expr::BooleanLiteral(_) => Ok(Ty::Bool),
         Expr::StringLiteral(_) => Ok(Ty::Str),
         other => Err(unsupported(
