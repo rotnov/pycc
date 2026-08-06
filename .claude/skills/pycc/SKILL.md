@@ -26,10 +26,12 @@ parser, checked HIR lowering, and strict type-checker subset for every
 supplied file, reports one current frontend diagnostic for each failing input,
 and can render human or JSON diagnostics. `build` and `run` lower the
 implemented v0.1 language subset through MIR, LLVM, the host linker, and the
-native runtime, subject to the explicit gaps in `docs/ROADMAP.md`. `test`,
-`explain`, `init`, and `clean` return an explicit not-implemented error, and
-`check --fix` is not parsed yet. Re-verify these statements against source
-whenever using the skill; do not let this snapshot override newer code.
+native runtime, subject to the explicit gaps in `docs/ROADMAP.md`. `test` and
+`clean` return an explicit not-implemented error, and `check --fix` is not
+parsed yet. `init` scaffolds a starter project, and `explain CODE` prints a
+long-form human or JSON explanation for a known diagnostic code. Re-verify
+these statements against source whenever using the skill; do not let this
+snapshot override newer code.
 
 ## Build and run
 
@@ -71,6 +73,15 @@ cargo run --bin pycc -- check path/to/program.py --error-format json
 Treat a diagnostic as stdout with exit `1`; treat a missing file or invalid
 invocation as stderr with exit `2`. Do not claim support for `--fix`: the CLI
 specification plans it, but the current parser rejects it.
+
+Look up a diagnostic code's own long-form documentation with `pycc explain`
+(exit `0` for a recognized code, `2` for an unrecognized one, on stderr,
+regardless of `--format`):
+
+```sh
+cargo run --bin pycc -- explain T0021
+cargo run --bin pycc -- explain T0021 --format json
+```
 
 Record the exact command, exit code, stdout, and stderr. For the compiler
 driver before a program starts, treat exit `0` as success, `1` as a compile or

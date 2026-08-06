@@ -124,30 +124,27 @@ mod tests {
         ));
     }
 
+    fn parsed_explain(command: Command) -> Option<(String, OutputFormat)> {
+        match command {
+            Command::Explain { code, format } => Some((code, format)),
+            _ => None,
+        }
+    }
+
     #[test]
     fn explain_accepts_json_format() {
-        assert!(matches!(
-            Cli::try_parse_from(["pycc", "explain", "T0001", "--format", "json"])
-                .unwrap()
-                .command,
-            Command::Explain {
-                code,
-                format: OutputFormat::Json,
-            } if code == "T0001"
-        ));
+        let cli = Cli::try_parse_from(["pycc", "explain", "T0001", "--format", "json"]).unwrap();
+        let (code, format) = parsed_explain(cli.command).unwrap();
+        assert_eq!(code, "T0001");
+        assert_eq!(format, OutputFormat::Json);
+        assert!(parsed_explain(Command::Clean).is_none());
     }
 
     #[test]
     fn explain_defaults_to_human_format() {
-        assert!(matches!(
-            Cli::try_parse_from(["pycc", "explain", "T0001"])
-                .unwrap()
-                .command,
-            Command::Explain {
-                format: OutputFormat::Human,
-                ..
-            }
-        ));
+        let cli = Cli::try_parse_from(["pycc", "explain", "T0001"]).unwrap();
+        let (_, format) = parsed_explain(cli.command).unwrap();
+        assert_eq!(format, OutputFormat::Human);
     }
 
     fn parsed_build_release(command: Command) -> Option<bool> {

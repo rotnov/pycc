@@ -96,7 +96,8 @@ directory once project mode exists.
                     CLI value overrides `[interop].policy`
 --pure              planned v0.7 shorthand for `--interop-policy deny`;
                     conflicts with an explicit `--interop-policy`
---error-format human|json     json = stable schema for editors/CI
+--error-format human|json     json = stable schema for editors/CI (check only)
+--format human|json           json = stable schema for editors/CI (explain only; deliberately not --error-format -- explain's output is never an error, see D-151)
 --fix               apply machine-applicable suggestions (check only)
 -j N                parallelism (default: cores)
 ```
@@ -149,10 +150,13 @@ rejected as an invalid invocation when combined with any explicit
 
 ## Exit codes
 
-`0` ok · `1` compile errors (including `C0001` version-capability gaps) · `2`
-bad invocation, unreadable input, or a toolchain/environment failure such as a
-host linker driver that cannot be started (reported as an actionable
-`error:` diagnostic, never a panic) · `101` compiled program panicked/uncaught
+`0` ok (including `pycc explain` on a recognized code, in either
+`--format`) · `1` compile errors (including `C0001` version-capability gaps)
+· `2` bad invocation, unreadable input, a toolchain/environment failure such
+as a host linker driver that cannot be started (reported as an actionable
+`error:` diagnostic, never a panic), or an unrecognized `pycc explain` code
+(always a plain stderr message, regardless of `--format` -- see below)
+· `101` compiled program panicked/uncaught
 exception, or `build`/`run` hit one of `pycc_codegen`'s own explicit,
 named "not supported yet" boundaries for a construct `pycc check` accepts but
 codegen doesn't yet implement (D-072; the older D-035 `pycc_mir` boundary
@@ -202,3 +206,55 @@ Human-format caret padding handles the current wide-character and common
 combining-mark blocks, emoji modifiers, and well-formed zero-width-joiner
 emoji sequences as terminal sequences rather than summing every scalar as one
 column. Full Unicode terminal-width conformance remains future work.
+
+## `pycc explain` output contract
+
+`pycc explain CODE [--format human|json]` prints long-form documentation for
+a diagnostic code registered in [DIAGNOSTICS.md](./DIAGNOSTICS.md)'s
+"Initial registry" table (D-151, `crates/pycc_diag/src/explain.rs`). This is
+a **different, unrelated JSON shape** from the "Diagnostics output contract"
+section above: that section documents an *occurred* diagnostic (a real
+compile error/warning against a specific file and span); this section
+documents a *code in the abstract*, with no file or span involved at all.
+Both happen to start with `"format_version": 1`, which is why `explain`'s
+JSON output carries an additional `"kind": "diagnostic_explanation"` field
+the diagnostic-occurrence schema does not have (and must not gain here --
+that schema's codes and JSON structure are intentionally stable, per its own
+quality bar in DIAGNOSTICS.md) -- a consumer holding a bare JSON blob with no
+side channel can always tell the two apart by checking for that field.
+
+Human format:
+
+```
+T0001 (error): public function missing annotation
+
+<long-form explanation of the real trigger condition>
+
+Example:
+    def add(a: int, b: int) -> int:
+        return a + b
+```
+
+JSON format (`--format json`), one object, distinct from `check`'s own
+diagnostic-occurrence JSON:
+
+```json
+{
+  "format_version": 1,
+  "kind": "diagnostic_explanation",
+  "code": "T0001",
+  "severity": "error",
+  "summary": "public function missing annotation",
+  "explanation": "<long-form explanation of the real trigger condition>",
+  "example": "def add(a: int, b: int) -> int:\n    return a + b\n"
+}
+```
+
+An unrecognized code exits `2` with a plain stderr message
+(`error: unknown diagnostic code \`CODE\``) in either `--format` -- an
+unrecognized code is an out-of-band invocation failure, not a diagnostic
+occurrence, so it is never itself subject to `--format`, matching how
+`check`'s own out-of-band `FrontendFailure::Input` class ("could not
+read ...") is never subject to `--error-format` either. Code lookup is an
+exact, case-sensitive string match; every registered code is always
+uppercase, so no case normalization is performed.

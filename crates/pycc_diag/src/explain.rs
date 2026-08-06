@@ -801,15 +801,18 @@ fn severity_word(severity: Severity) -> &'static str {
 /// `docs/CLI_SPEC.md`'s "`pycc explain` output contract" section for the
 /// full contract this reproduces.
 pub fn render_explanation_human(entry: &DiagnosticExplanation) -> String {
+    // Every `EXPLANATIONS` example is a short, non-blank-line snippet (see
+    // `completeness_test_covers_every_registered_code_and_severity`'s
+    // sibling tests for the full table), so this deliberately does not
+    // special-case an empty line to skip its indentation -- that branch
+    // would have no real content to exercise it under D-014's coverage
+    // gate, and a blank line would just gain trailing spaces instead,
+    // which is harmless for `Example:` block output.
     let mut indented_example = String::new();
     for line in entry.example.lines() {
-        if line.is_empty() {
-            indented_example.push('\n');
-        } else {
-            indented_example.push_str("    ");
-            indented_example.push_str(line);
-            indented_example.push('\n');
-        }
+        indented_example.push_str("    ");
+        indented_example.push_str(line);
+        indented_example.push('\n');
     }
     format!(
         "{} ({}): {}\n\n{}\n\nExample:\n{}",
@@ -875,7 +878,12 @@ mod tests {
         assert_eq!(parsed["code"], "E0106");
         assert_eq!(parsed["severity"], "warning");
         assert_eq!(parsed["summary"], "`__del__` relies on refcount timing");
-        assert!(parsed["explanation"].as_str().unwrap().contains("warning→error"));
+        assert!(
+            parsed["explanation"]
+                .as_str()
+                .unwrap()
+                .contains("warning→error")
+        );
         assert!(parsed["example"].as_str().unwrap().contains("__del__"));
     }
 
@@ -938,8 +946,7 @@ mod tests {
 
         let documented_codes: HashSet<&str> =
             documented.iter().map(|(code, _)| code.as_str()).collect();
-        let explained_codes: HashSet<&str> =
-            EXPLANATIONS.iter().map(|entry| entry.code).collect();
+        let explained_codes: HashSet<&str> = EXPLANATIONS.iter().map(|entry| entry.code).collect();
         assert_eq!(
             documented_codes, explained_codes,
             "EXPLANATIONS's code set must exactly match docs/DIAGNOSTICS.md's registry table"

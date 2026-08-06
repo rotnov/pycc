@@ -1119,6 +1119,19 @@ fn explain_subcommand_supports_json_format_for_every_domain_representative_code(
 }
 
 #[test]
+fn explain_subcommand_rejects_an_unknown_format() {
+    let output = Command::new(pycc_bin())
+        .args(["explain", "T0001", "--format", "xml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value 'xml'"));
+    assert!(stderr.contains("[possible values: human, json]"));
+}
+
+#[test]
 fn explain_subcommand_rejects_an_unrecognized_code() {
     let output = Command::new(pycc_bin())
         .args(["explain", "X9999"])
