@@ -3445,10 +3445,24 @@ fn emit_assign<'ctx>(
 /// one, whatever `Scalar` variant it happens to produce. Behavior-identical
 /// either way for every reachable case: `incref_if_str_duplicate` only ever
 /// consults this function *after* confirming `scalar` is `Scalar::Str`.
+///
+/// `MirExpr::AttrGet { ty: Ty::Str, .. }` (D-154, Part 1 of #375) is a
+/// duplicate reference for exactly the same reason a bare `Name` is: the
+/// instance's own slot keeps its copy of the pointer after this read
+/// returns one too, so both `to_str`'s pass-through and every ordinary
+/// store site (`Assign`, a call argument, a dict key/value, ...) would
+/// otherwise treat this read's result as freshly-owned and eventually
+/// decref it once too many, underflowing the refcount and freeing the
+/// `PyStrObj` while the instance's own slot still points at it -- a
+/// reliably reproducible use-after-free caught in review, not merely a
+/// theoretical gap (D-154 Part 1's own post-merge finding).
 fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
     matches!(
         expr,
         MirExpr::Name {
+            ty: pycc_mir::Ty::Str,
+            ..
+        } | MirExpr::AttrGet {
             ty: pycc_mir::Ty::Str,
             ..
         }
@@ -3506,6 +3520,46 @@ fn decref_str_slot_before_store<'ctx>(
         .into_pointer_value();
     builder
         .build_call(rt.str_decref, &[old.into()], "str_decref_old")
+        .expect("build_call should not fail for a well-formed decref");
+}
+
+/// Mirror of [`decref_str_slot_before_store`] for an instance attribute slot
+/// rather than a local's own alloca (D-154, Part 1 of #375): only
+/// meaningful for a `Ty::Str` attribute -- reads the slot's *current* raw
+/// word through the same opaque `pycc_rt_instance_get_slot` accessor
+/// `MirExpr::AttrGet` itself uses, reinterprets it as a `str` pointer, and
+/// decrefs it before the new value overwrites the slot. A freshly allocated
+/// instance's slots start zero-initialized (`pycc_rt::instance::new_instance`),
+/// which decodes to a null pointer whose runtime decref is a documented
+/// no-op (`pycc_rt_str_decref`'s own null check) -- exactly like a local's
+/// null-initialized string slot -- so the same call is correct for both
+/// `__init__`'s first assignment and any later reassignment.
+fn decref_str_attr_slot_before_store<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    base_ptr: PointerValue<'ctx>,
+    slot_index: IntValue<'ctx>,
+) {
+    let raw = builder
+        .build_call(
+            rt.instance_get_slot,
+            &[base_ptr.into(), slot_index.into()],
+            "instance_get_slot_old",
+        )
+        .expect("build_call should not fail for a well-formed attribute read")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_instance_get_slot returns a non-void i64")
+        .into_int_value();
+    let old = builder
+        .build_int_to_ptr(
+            raw,
+            context.ptr_type(inkwell::AddressSpace::default()),
+            "attr_str_inttoptr_old",
+        )
+        .expect("build_int_to_ptr should not fail reinterpreting an i64 as a pointer");
+    builder
+        .build_call(rt.str_decref, &[old.into()], "str_decref_old_attr")
         .expect("build_call should not fail for a well-formed decref");
 }
 
@@ -5026,13 +5080,30 @@ fn emit_stmt<'ctx>(
         // mirror image of `MirExpr::AttrGet`'s read, using
         // `scalar_to_slot_word` for the identical encoding
         // `slot_word_to_scalar` decodes.
+        //
+        // For a `Ty::Str` attribute, mirrors `MirStmt::Assign`'s own two
+        // refcount obligations exactly (D-154 Part 1's own post-merge
+        // review finding -- the first version of this arm had neither):
+        // `incref_if_str_duplicate` before storing, since a bare-`Name`/
+        // `AttrGet` source value is a *duplicate* reference whose original
+        // binding/slot keeps its own copy; and
+        // `decref_str_attr_slot_before_store` before overwriting, to
+        // release whatever the slot held previously (a no-op on a fresh
+        // instance's zero-initialized slot, exactly like a local's
+        // null-initialized string slot). Without both, a `str` attribute
+        // read twice, or reassigned, use-after-frees the first `PyStrObj`.
         MirStmt::AttrSet { base, slot, value } => {
             let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
             let base_ptr = expect_instance_pointer(base_scalar, "attribute assignment base");
+            let value_ty = value.ty();
             let value_scalar =
                 emit_expr(context, builder, module, rt, user_functions, locals, value);
-            let word = scalar_to_slot_word(context, builder, value_scalar);
+            let value_scalar = incref_if_str_duplicate(builder, rt, value, value_scalar);
             let slot_index = context.i64_type().const_int(*slot as u64, false);
+            if value_ty == pycc_mir::Ty::Str {
+                decref_str_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);
+            }
+            let word = scalar_to_slot_word(context, builder, value_scalar);
             builder
                 .build_call(
                     rt.instance_set_slot,
@@ -10479,6 +10550,145 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"True\n2.5\nhi\n");
+    }
+
+    #[test]
+    fn a_str_attribute_read_twice_and_then_reassigned_does_not_use_after_free() {
+        // D-154 Part 1's own post-merge review finding: the first version
+        // of `MirStmt::AttrSet`'s codegen neither incref'd a `str` value
+        // read out of an instance attribute (`str_value_is_a_duplicate_
+        // reference` had no `MirExpr::AttrGet` arm) nor decref'd a slot's
+        // previous `str` occupant before overwriting it. Reading a `str`
+        // attribute a second time reliably observed freed memory (the
+        // first `print` already decrefs the read pointer to 0, freeing it,
+        // since the read was wrongly treated as a fresh, unshared value),
+        // and `bool_float_and_str_typed_attribute_slots_round_trip_
+        // correctly` above cannot catch this: it reads `w.label` exactly
+        // once, which structurally cannot observe a premature free.
+        //
+        //     class Widget:
+        //         def __init__(self, label: str) -> None:
+        //             self.label = label
+        //         def relabel(self, new_label: str) -> None:
+        //             self.label = new_label
+        //
+        //     w = Widget("hi")
+        //     print(w.label)
+        //     print(w.label)
+        //     w.relabel("bye")
+        //     print(w.label)
+        //
+        // Exercises both halves of the fix in one program: the two
+        // `print(w.label)` calls before `relabel` exercise
+        // `incref_if_str_duplicate`'s new `AttrGet` arm (without it, the
+        // second `print` reads freed memory); `relabel`'s own
+        // `self.label = new_label` exercises
+        // `decref_str_attr_slot_before_store` (without it, `"hi"`'s
+        // `PyStrObj` leaks rather than being released when overwritten --
+        // not itself a crash this test can observe, but exercised by the
+        // same code path the crash-causing half shares).
+        let self_ty = instance_ty("Widget");
+        let init = MirItem::Function {
+            name: "Widget.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("label".to_string(), Ty::Str),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::Name {
+                        name: "label".to_string(),
+                        ty: Ty::Str,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let relabel = MirItem::Function {
+            name: "Widget.relabel".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("new_label".to_string(), Ty::Str),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::Name {
+                        name: "new_label".to_string(),
+                        ty: Ty::Str,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let mir = MirModule {
+            items: vec![
+                init,
+                relabel,
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "w".to_string(),
+                    value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
+                        ctor: "Widget.__init__".to_string(),
+                        attr_count: 1,
+                        args: vec![MirExpr::StringLiteral("hi".to_string())],
+                        ty: self_ty.clone(),
+                    })),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty.clone(),
+                    }),
+                    slot: 0,
+                    ty: Ty::Str,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty.clone(),
+                    }),
+                    slot: 0,
+                    ty: Ty::Str,
+                })),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "Widget.relabel".to_string(),
+                    args: vec![
+                        MirExpr::Name {
+                            name: "w".to_string(),
+                            ty: self_ty.clone(),
+                        },
+                        MirExpr::StringLiteral("bye".to_string()),
+                    ],
+                    ty: Ty::None,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty,
+                    }),
+                    slot: 0,
+                    ty: Ty::Str,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("str_attribute_read_twice_and_reassigned");
+        let obj_path = dir.join("str_attribute_read_twice_and_reassigned.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("str_attribute_read_twice_and_reassigned");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"hi\nhi\nbye\n");
     }
 
     #[test]

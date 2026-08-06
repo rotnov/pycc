@@ -495,6 +495,20 @@ mod tests {
     }
 
     #[test]
+    fn redefining_a_class_name_at_module_scope_is_unsupported() {
+        // D-154 Part 1's own post-merge review finding: two module-level
+        // classes sharing a name would each lower their own `__init__` to
+        // the identical mangled `<Name>.__init__` function name, colliding
+        // silently in `pycc_types`'/`pycc_mir`'s own `HashMap`-collected
+        // class tables downstream rather than producing a clean diagnostic.
+        // Mirrors `redefining_a_method_in_one_class_body_is_unsupported`
+        // above, one level up (module scope rather than one class body).
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\nclass C:\n    def __init__(self) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
     fn a_class_without_init_is_unsupported() {
         assert_c0001("class C:\n    def foo(self) -> None:\n        return\n");
     }

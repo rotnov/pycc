@@ -600,6 +600,25 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         }
         if let Stmt::ClassDef(def) = stmt {
             let (class_def, mut method_items) = class::lower_class(def, &aliases)?;
+            // D-154 Part 1's own post-merge review finding: two module-level
+            // classes sharing a name would each lower their own `__init__`
+            // (and any other same-named method) to the identical mangled
+            // `<Name>.<method>` function name, silently colliding in
+            // `HirModule::items`/`class_defs`'s `HashMap`-collected class
+            // table downstream (`pycc_types::Environment::classes`,
+            // `pycc_mir`'s own `classes` map) rather than producing a clean
+            // diagnostic -- reject it here, at the same point `lower_class`'s
+            // own duplicate-method check (`crates/pycc_hir/src/class.rs`)
+            // fires for the identical shape one level down.
+            if class_defs.iter().any(|(name, _)| name == &class_def.name) {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` is defined more than once in this module",
+                        class_def.name
+                    ),
+                    def.range,
+                ));
+            }
             class_defs.push((class_def.name.clone(), class_def));
             items.append(&mut method_items);
             continue;

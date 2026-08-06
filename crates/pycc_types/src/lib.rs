@@ -3449,6 +3449,19 @@ fn check_dict_set(
     Ok(())
 }
 
+/// Checks `function` in complete isolation from any module -- no sibling
+/// function signatures, no module-level globals, and (D-154, Part 1 of
+/// #375) no class table either, since this entry point takes a bare
+/// `&HirItem` with no enclosing `&HirModule` to source `class_defs` from.
+/// A body that calls a sibling function or reads a module global already
+/// couldn't check here before D-154 existed; a body that instantiates a
+/// class, or reads/writes/calls a method on an instance, is the same kind
+/// of gap, not a new one -- `Environment::classes` is simply empty.
+/// Production compilation never reaches this function: `check`/
+/// `check_and_resolve` always build their `Environment` from a real
+/// `HirModule` (via `class::bind_classes`), so this isolation only affects
+/// a caller that deliberately checks one function outside any module
+/// context (this crate's own unit tests today).
 pub fn check_function(function: &HirItem) -> Result<(), Diagnostic> {
     let local_names = match function {
         HirItem::Function { params, body, .. } => function_local_names(params, body),
@@ -3910,6 +3923,11 @@ fn generic_type_param_name(
 /// distinct type-parameter name or any container-position occurrence
 /// (`T0042`, defense in depth per `generic_type_param_name`'s doc comment)
 /// before the body is checked at all.
+///
+/// Same module-isolation caveat as `check_function` (D-154, Part 1 of
+/// #375): this entry point's own `Environment` has no class table either,
+/// for the identical reason -- no `&HirModule` is available here to source
+/// `class_defs` from.
 pub fn check_generic_function(func: &HirItem) -> Result<(), Diagnostic> {
     let local_names = match func {
         HirItem::Function { params, body, .. } => function_local_names(params, body),
