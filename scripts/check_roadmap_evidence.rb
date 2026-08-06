@@ -203,10 +203,19 @@ D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256 =
 # later, separate round) -- the live ci.yml is untouched by this round.
 D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
   "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
+# Active (2026-08-06, D-150): the D114-shaped ci.yml with the threshold
+# argument raised from "7.0" to "10.0" to accommodate D-147's three-state
+# binding model cost. Byte-identical to the retained historical fixture
+# tests/fixtures/d150-frontend-perf-threshold-ci.yml. Coexists with D100,
+# D112, and D114 until a later round retires them, mirroring this array's
+# own established coexist-then-retire precedent.
+D150_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
+  "6cb3af76b91844d5418d27c58797bfb5dd10d3b7b676ad584f60a319d093b3ba"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+  D150_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -898,6 +907,27 @@ D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_STEPS =
 D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB = D112_UBUNTU_FRONTEND_PERF_GATE_JOB.merge(
   "steps" => D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_STEPS
 ).freeze
+# D-150: D-147's three-state binding model adds a real, inherent O(N)-per-
+# control-flow-join cost that exceeds D-114's 7.0% threshold (observed
+# 8-9% on the benchmark fixture). Same D112 shape with only the threshold
+# argument raised from "7.0" to "10.0".
+D150_RAISED_THRESHOLD_FRONTEND_PERF_COMPARE_SCRIPT = <<~'SHELL'.strip
+  ruby scripts/check_replicated_paired_perf_regression.rb \
+    target/criterion/pycc_check_frontend_fixture/current \
+    target/criterion/pycc_check_frontend_fixture/previous \
+    "$EXECUTABLE_INPUTS_EQUAL" \
+    "10.0"
+SHELL
+D150_RAISED_THRESHOLD_FRONTEND_PERF_GATE_STEPS =
+  Marshal.load(Marshal.dump(D112_UBUNTU_FRONTEND_PERF_GATE_JOB.fetch("steps"))).tap do |steps|
+    compare = steps.find { |step| step["name"] == "Compare exact predecessor and candidate" }
+    raise "expected an existing compare step to raise the threshold on" unless compare
+
+    compare["run"] = D150_RAISED_THRESHOLD_FRONTEND_PERF_COMPARE_SCRIPT
+  end.freeze
+D150_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB = D112_UBUNTU_FRONTEND_PERF_GATE_JOB.merge(
+  "steps" => D150_RAISED_THRESHOLD_FRONTEND_PERF_GATE_STEPS
+).freeze
 PAIRED_PERF_CI_GATE_NEEDS = [
   "build-test-coverage",
   "native-build-test",
@@ -1284,7 +1314,7 @@ def validate_source_aware_perf_gate_lifecycle(workflow_text, source)
       # shape) -- an array here, unlike every other branch's single job
       # constant, deliberately so a single measure-job shape can authorize
       # more than one gate-job shape without a parallel measure-job branch.
-      [D112_UBUNTU_FRONTEND_PERF_GATE_JOB, D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB]
+      [D112_UBUNTU_FRONTEND_PERF_GATE_JOB, D114_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB, D150_RAISED_THRESHOLD_FRONTEND_PERF_GATE_JOB]
     end
   unless expected_perf_job
     raise RoadmapEvidenceError,

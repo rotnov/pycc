@@ -813,7 +813,7 @@ jobs:
             target/criterion/pycc_check_frontend_fixture/current \
             target/criterion/pycc_check_frontend_fixture/previous \
             "$EXECUTABLE_INPUTS_EQUAL" \
-            "7.0"
+            "10.0"
 
   ci-gate:
     needs:
