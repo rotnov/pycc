@@ -1065,6 +1065,101 @@ fn check_subcommand_rejects_an_unknown_error_format() {
     assert!(stderr.contains("[possible values: human, json]"));
 }
 
+// `pycc explain` (#366, D-150): one domain-representative code per
+// `docs/DIAGNOSTICS.md` code range, chosen because each is the first code
+// in its domain in the registry table and is a real, non-`(planned)`,
+// non-internal-assertion-only code except where the domain has none
+// (`O0201` is documented internal-only, which is fine for `explain` since
+// it only documents the code, not whether it fires on legal Python).
+const EXPLAIN_DOMAIN_REPRESENTATIVE_CODES: [&str; 7] =
+    ["C0001", "L0001", "T0001", "O0201", "E0100", "I0401", "W1001"];
+
+#[test]
+fn explain_subcommand_prints_a_human_explanation_for_a_known_code() {
+    for code in EXPLAIN_DOMAIN_REPRESENTATIVE_CODES {
+        let output = Command::new(pycc_bin())
+            .args(["explain", code])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "code {code}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(code), "stdout for {code} should contain its own code: {stdout}");
+    }
+}
+
+#[test]
+fn explain_subcommand_human_output_contains_the_explanation_text() {
+    let output = Command::new(pycc_bin())
+        .args(["explain", "T0001"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("T0001 (error): public function missing annotation"));
+    assert!(stdout.contains("Example:"));
+    assert!(stdout.contains("def add(a: int, b: int) -> int:"));
+}
+
+#[test]
+fn explain_subcommand_supports_json_format_for_every_domain_representative_code() {
+    for code in EXPLAIN_DOMAIN_REPRESENTATIVE_CODES {
+        let output = Command::new(pycc_bin())
+            .args(["explain", code, "--format", "json"])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "code {code}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("code {code} produced invalid JSON: {e}\n{stdout}"));
+        assert_eq!(parsed["format_version"], 1, "code {code}");
+        assert_eq!(parsed["kind"], "diagnostic_explanation", "code {code}");
+        assert_eq!(parsed["code"], code, "code {code}");
+        assert!(parsed["severity"].is_string(), "code {code}");
+    }
+}
+
+#[test]
+fn explain_subcommand_rejects_an_unknown_format() {
+    let output = Command::new(pycc_bin())
+        .args(["explain", "T0001", "--format", "xml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value 'xml'"));
+    assert!(stderr.contains("[possible values: human, json]"));
+}
+
+#[test]
+fn explain_subcommand_rejects_an_unrecognized_code() {
+    let output = Command::new(pycc_bin())
+        .args(["explain", "X9999"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown diagnostic code"));
+}
+
+#[test]
+fn explain_subcommand_rejects_an_unrecognized_code_with_plain_stderr_even_in_json_format() {
+    // Deliberate: an unrecognized code is an out-of-band invocation
+    // failure, not a diagnostic occurrence, so it is never subject to
+    // `--format` -- the stderr message stays plain text, not a JSON error
+    // object, regardless of `--format json`.
+    let output = Command::new(pycc_bin())
+        .args(["explain", "X9999", "--format", "json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown diagnostic code"));
+    assert!(serde_json::from_str::<serde_json::Value>(stderr.trim()).is_err());
+}
+
 #[test]
 fn direct_type_api_rejects_a_for_target_representation_change() {
     let function = pycc_hir::HirItem::Function {

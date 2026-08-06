@@ -63,6 +63,11 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 
 Note on `O0201`: legal Python never observes moves (see MEMORY_OWNERSHIP.md — optimization is semantics-preserving). The code exists for internal assertions and `--emit mir` tooling; if it ever fires on user code, that's a pycc bug, auto-reported.
 
+Adding a new code here requires a matching `EXPLANATIONS` entry in
+[`crates/pycc_diag/src/explain.rs`](../crates/pycc_diag/src/explain.rs)
+(D-150) — that file's own test suite enforces the two stay in sync, so a
+registry row added here without a matching entry fails CI immediately.
+
 `C0001` is a versioned capability diagnostic, not a rejected-by-design
 language rule. A construct stops producing it when the corresponding roadmap
 slice is implemented; the code remains reserved so older compiler output keeps
