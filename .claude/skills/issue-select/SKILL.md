@@ -96,7 +96,7 @@ section names this the run's systemic condition).
 List every open issue — paginate past client truncation limits; the oldest issues are the best
 staleness candidates and the likeliest to hide behind a cut-off list. Note age, theme clusters,
 and comment counts. This repository has no priority labels — the marker is the issue title's
-leading `P1:`/`P2:`/`P3:` prefix (see `docs/DECISIONS.md`); an issue without that prefix is
+leading `P1:`/`P2:`/`P3:` prefix (see `docs/decisions/README.md`); an issue without that prefix is
 unmarked.
 
 **Milestone triage as a housekeeping side effect.** This pass already reads every open issue
@@ -106,7 +106,7 @@ is the one place in the whole autopilot loop that walks the complete open-issue 
 iteration. For each issue with no milestone assigned, judge it against the active and
 immediately-next milestone's scope (`docs/ROADMAP.md`'s per-milestone sections): assign
 (`gh issue edit <n> --milestone <name>`) the moment fit is clear, per
-[D-127](../../../docs/DECISIONS.md#d-127-autonomous-agent-operation-model) judgment — do not ask
+[D-127](../../../docs/decisions/D-127-autonomous-agent-operation-model.md) judgment — do not ask
 the user. Leave genuinely unclear ones unassigned rather than guessing; the next iteration's
 fresh inventory re-examines them. This is a low-risk metadata write (unlike the staleness
 screen's closures), so it applies regardless of whether a standing autopilot directive is in
@@ -163,7 +163,7 @@ Drop or defer, with a recorded reason each:
   scripts, their self-tests, and staging fixtures are listed too, and a candidate PR that edits
   any listed path directly, without a pre-staged successor, fails the required `audit` CI check.
   This is not a hard exclusion — the two-merge stage-then-activate process
-  (`docs/DECISIONS.md#d-103-keep-search-policy-successors-base-owned-through-a-complete-two-merge-manifest`)
+  (`docs/decisions/D-103-keep-search-policy-successors-base-owned-through.md`)
   is a legitimate way to land the fix — but it is real, multi-PR work that a single-PR autopilot
   pass cannot absorb silently, so treat a hit here as the same deprioritized category as the
   staged CI-workflow digest process above.

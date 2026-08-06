@@ -1,0 +1,14 @@
+---
+id: D-039
+title: "Function signatures are pre-registered into the module `Environment` before body checks run"
+status: accepted
+---
+
+## D-039: Function signatures are pre-registered into the module `Environment` before body checks run
+
+- Status: accepted (PR-4 Task 9, `pycc_types`)
+- Context: Task 9's own plan snippet for `check()` calls `check_function(item)` for each `HirItem::Function`, and `check_function` binds the function's own signature into a brand-new, isolated `Environment` (needed so a function's parameters don't leak into sibling scopes, and so recursive self-calls resolve). That isolated environment is discarded once `check_function` returns -- it's never merged back into `check()`'s own module-level `env`. Implementing the plan exactly as written and then running the full workspace test suite surfaced a real regression: `tests/slice0.rs`'s `build_and_run_explicit_call_to_main` (`def main() -> None: ...\n\nmain()\n`) started failing with `T0021: call to undefined function `main``, because the top-level `main()` call is checked via `check_stmt(&mut env, stmt)`, using the module `env` that Task 9's `check_function` never populated.
+- Decision: `check()` does a first pass over every `HirItem` in the module, registering each `HirItem::Function`'s signature into its own module-level `Environment` via `bind_function`, *before* the second pass that actually checks each item's statements/body. This matches ordinary Python semantics (a function can be called from code that runs after its own `def`, and forward references at module scope work once the module has finished executing top to bottom) for the one case current tests exercise: top-level code calling a previously-defined function.
+- Alternatives: thread the module `env`'s function registry into `check_function` so sibling functions can also call each other (rejected for now -- no existing fixture or test exercises non-recursive function-to-function calls; adding it would be speculative surface area beyond what Task 9's own scope or test suite calls for, YAGNI); leave `check_function` fully isolated and only fix the specific failing test by special-casing top-level calls (rejected -- doesn't generalize, and the two-pass registration is the more honest fix for the actual gap: signatures need to exist before anything can reference them).
+- Consequences: any top-level statement can call any module-level function regardless of where in the file that function is defined. A function body still cannot call a *sibling* function it doesn't already know about via its own self-registration (only recursion is proven to work, per the existing `recursion_is_supported_since_the_function_s_own_signature_is_in_scope` test) -- revisit if/when a fixture needs one function to call another, non-recursively.
+

@@ -1,8 +1,8 @@
 # Agent session log
 
 Per-session handoff snapshots for autonomous agent sessions working on this
-project (see [D-066](../DECISIONS.md#d-066-maintain-an-agent-retrospective-log-and-a-session-handoff-log),
-narrowed by [D-130](../DECISIONS.md#d-130-decompose-the-session-handoff-log-into-per-session-files)).
+project (see [D-066](../decisions/D-066-maintain-an-agent-retrospective-log-and-a-session.md),
+narrowed by [D-130](../decisions/D-130-decompose-the-session-handoff-log-into-per.md)).
 Distinct from `docs/AGENT_RETROSPECTIVE.md`: this directory is "what state
 is the work in and what's next," not "what went wrong."
 
