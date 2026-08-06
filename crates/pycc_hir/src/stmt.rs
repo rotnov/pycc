@@ -107,6 +107,23 @@ pub(crate) fn lower_stmt(
                         value: lower_expr(&assign.value, in_function)?,
                     }
                 }
+                // `base.attr = value` (D-154, Part 1 of #375): structurally
+                // recognized for any base expression, exactly like
+                // `HirExpr::AttrGet`'s own `base` (no type information is
+                // available at this lowering step to narrow it to only
+                // `self` or only an instance-typed receiver -- `pycc_types`
+                // rejects a non-instance base or an undeclared attribute
+                // name). This supersedes the older, narrower invariant
+                // `assigning_to_a_non_name_target_is_unsupported` used to
+                // lock in ("only assigning to a bare name is supported so
+                // far") -- that test now documents a genuinely different,
+                // still-unsupported target shape instead (see its own
+                // updated body).
+                Expr::Attribute(attr) => HirStmt::AttrSet {
+                    base: lower_expr(&attr.value, in_function)?,
+                    attr: attr.attr.to_string(),
+                    value: lower_expr(&assign.value, in_function)?,
+                },
                 other => {
                     return Err(unsupported(
                         format!("only assigning to a bare name is supported so far: {other:?}"),
