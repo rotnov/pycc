@@ -144,6 +144,26 @@ enum Scalar<'ctx> {
     /// including a bool-identity marker. A tuple still crosses no runtime
     /// boundary and needs no ingress validation call.
     Tuple(inkwell::values::StructValue<'ctx>),
+    /// A pointer to a heap-allocated `pycc_rt::PyInstanceObj` (D-154, Part 1
+    /// of #375) -- like `List`/`Dict`/`Set`, opaque to this crate, which
+    /// only ever stores it, passes it to a `pycc_rt_instance_*` call, or
+    /// marshals it across a function boundary. Never `GEP`'d into directly
+    /// (the class-instance-layout ADR's own opaque-accessor decision):
+    /// every attribute read/write goes through
+    /// `pycc_rt_instance_get_slot`/`_set_slot` with a compile-time-resolved
+    /// slot index, exactly like `List`'s own `pycc_rt_int_list_*` calls.
+    ///
+    /// Its own variant rather than a reuse of `List`'s/`Dict`'s/`Set`'s
+    /// (D-107/D-124's exact reasoning, extended identically): `PyInstanceObj`
+    /// has its own layout, and every exhaustive `Scalar` match (`truthy`/
+    /// `to_str`/`to_numeric_encoded_int`/`to_float`/`emit_assign`/argument
+    /// marshalling) would otherwise hand an instance pointer straight to a
+    /// `pycc_rt_int_list_*`/`pycc_rt_dict_*`/`pycc_rt_str_*` function.
+    ///
+    /// Refcounting is deliberately not wired for this variant either (see
+    /// `pycc_rt::instance`'s own doc comment): leak-only, identically to
+    /// `List`/`Dict`/`Set`.
+    Instance(PointerValue<'ctx>),
 }
 
 struct UserFunction<'ctx> {
@@ -261,6 +281,15 @@ struct RtFns<'ctx> {
     /// `set.add()` made this reachable.
     int_set_check_not_resized: FunctionValue<'ctx>,
     trap: FunctionValue<'ctx>,
+    /// D-154 (Part 1 of #375): `pycc_rt::instance`'s own three-function
+    /// cluster -- `instance_new` (allocates a fresh, zero-initialized
+    /// instance with the class's own declared slot count), and
+    /// `instance_get_slot`/`instance_set_slot` (the class-instance-layout
+    /// ADR's opaque accessor pair; codegen never `GEP`s into a
+    /// `PyInstanceObj` directly).
+    instance_new: FunctionValue<'ctx>,
+    instance_get_slot: FunctionValue<'ctx>,
+    instance_set_slot: FunctionValue<'ctx>,
 }
 
 fn declare_rt_functions<'ctx>(
@@ -475,6 +504,18 @@ fn declare_rt_functions<'ctx>(
             void_type.fn_type(&[i64_type.into(), i64_type.into()], false),
         ),
         trap: module.add_function("llvm.trap", void_type.fn_type(&[], false), None),
+        instance_new: declare(
+            "pycc_rt_instance_new",
+            ptr_type.fn_type(&[i64_type.into()], false),
+        ),
+        instance_get_slot: declare(
+            "pycc_rt_instance_get_slot",
+            i64_type.fn_type(&[ptr_type.into(), i64_type.into()], false),
+        ),
+        instance_set_slot: declare(
+            "pycc_rt_instance_set_slot",
+            void_type.fn_type(&[ptr_type.into(), i64_type.into(), i64_type.into()], false),
+        ),
     }
 }
 
@@ -537,6 +578,14 @@ fn ty_to_basic_type(context: &Context, ty: pycc_mir::Ty) -> inkwell::types::Basi
         // element type, matching `List(_)`/`Dict(_)`'s own
         // element/key/value-agnostic shape.
         pycc_mir::Ty::Set(_) => context.ptr_type(inkwell::AddressSpace::default()).into(),
+        // A class instance's runtime object (`pycc_rt::instance::PyInstanceObj`,
+        // D-154, Part 1 of #375) is heap-allocated and always referenced by
+        // pointer -- exactly the same storage/parameter representation
+        // `List(_)`/`Dict(_)`/`Set(_)` get above, for the identical reason
+        // (the class's own declared shape only affects what this crate's
+        // `pycc_rt_instance_*` calls do with the pointee, never this
+        // representation choice).
+        pycc_mir::Ty::Instance(_) => context.ptr_type(inkwell::AddressSpace::default()).into(),
         // `tuple[...]`'s v0.2 representation (D-115), and the one place
         // this function departs from every container arm above: a real
         // LLVM `struct` built positionally from each element's own
@@ -643,6 +692,16 @@ fn to_numeric_encoded_int<'ctx>(
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: internal error: expected an int-or-bool operand, got tuple")
         }
+        // Defensive for the identical `numeric_result_type` reason as the
+        // `List`/`Dict`/`Set`/`Tuple` arms above, extended to a class
+        // instance (D-154, Part 1 of #375, mirroring D-107/D-124's
+        // reasoning): `pycc_types` rejects arithmetic on `Ty::Instance` as
+        // `T0021` before codegen runs (see `numeric_result_type`'s own
+        // `as_numeric` closure), so this is never reached by real,
+        // type-checked source.
+        Scalar::Instance(_) => {
+            panic!("pycc_codegen: internal error: expected an int-or-bool operand, got instance")
+        }
     }
 }
 
@@ -727,6 +786,104 @@ fn expect_list_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'
         )
     };
     ptr
+}
+
+/// D-154 (Part 1 of #375): mirrors `expect_list_pointer` exactly, for
+/// `MirExpr::AttrGet`/`MirStmt::AttrSet`'s own base -- `pycc_types::check`
+/// (`T0043`) already rejects a non-instance `AttrGet`/`AttrSet`/`MethodCall`
+/// base before codegen runs, so a mismatch here can only mean malformed MIR.
+fn expect_instance_pointer<'ctx>(scalar: Scalar<'ctx>, what: &str) -> PointerValue<'ctx> {
+    let Scalar::Instance(ptr) = scalar else {
+        panic!(
+            "pycc_codegen: internal error: {what} did not evaluate to a class instance -- \
+             pycc_types::check (T0043) should have rejected this before codegen"
+        )
+    };
+    ptr
+}
+
+/// Reinterprets a raw `i64` slot word read from `pycc_rt_instance_get_slot`
+/// as the `Scalar` its declared attribute `ty` names (D-154, Part 1 of
+/// #375; see `pycc_rt::instance`'s own doc comment for the slot
+/// representation this mirrors exactly): `int` passes through unchanged;
+/// `bool` truncates to `pycc_codegen`'s own `i8` `Scalar::Bool` carrier;
+/// `float` bit-reinterprets the same 8 bytes as `f64` (never a numeric
+/// conversion -- the word *is* a float's bit pattern, written by
+/// `scalar_to_slot_word`'s own mirror-image `float` arm); `str` reinterprets
+/// the word as a `*mut PyStrObj` pointer. Only these four `Ty`s can ever
+/// reach here: `pycc_hir::class::slot_ty_from_init_rhs` structurally
+/// restricts every attribute slot to a scalar (int/float/bool/str)
+/// parameter or literal at `__init__`'s own first-assignment pre-scan, so a
+/// `List`/`Dict`/`Set`/`Tuple`/`Instance`/`Param`/`Infer`-typed attribute
+/// can never be constructed from real, type-checked source.
+fn slot_word_to_scalar<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    raw: IntValue<'ctx>,
+    ty: &pycc_mir::Ty,
+) -> Scalar<'ctx> {
+    match ty {
+        pycc_mir::Ty::Int => Scalar::Int(raw),
+        pycc_mir::Ty::Bool => Scalar::Bool(
+            builder
+                .build_int_truncate(raw, context.i8_type(), "attr_bool_trunc")
+                .expect("build_int_truncate should not fail truncating i64 to i8"),
+        ),
+        pycc_mir::Ty::Float => Scalar::Float(
+            builder
+                .build_bit_cast(raw, context.f64_type(), "attr_float_bitcast")
+                .expect("build_bit_cast should not fail reinterpreting i64 bits as f64")
+                .into_float_value(),
+        ),
+        pycc_mir::Ty::Str => Scalar::Str(
+            builder
+                .build_int_to_ptr(
+                    raw,
+                    context.ptr_type(inkwell::AddressSpace::default()),
+                    "attr_str_inttoptr",
+                )
+                .expect("build_int_to_ptr should not fail reinterpreting an i64 as a pointer"),
+        ),
+        other => panic!(
+            "pycc_codegen: internal error: an instance attribute of type `{}` is not \
+             supported yet -- pycc_hir::class::slot_ty_from_init_rhs should have rejected \
+             this before codegen",
+            other.name()
+        ),
+    }
+}
+
+/// Mirror image of [`slot_word_to_scalar`]: encodes a `Scalar` as the raw
+/// `i64` word `pycc_rt_instance_set_slot` stores. See that function's own
+/// doc comment for why only `Int`/`Bool`/`Float`/`Str` are ever reachable
+/// here.
+fn scalar_to_slot_word<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    scalar: Scalar<'ctx>,
+) -> IntValue<'ctx> {
+    match scalar {
+        Scalar::Int(v) => v,
+        Scalar::Bool(v) => builder
+            .build_int_z_extend(v, context.i64_type(), "attr_bool_zext")
+            .expect("build_int_z_extend should not fail widening i8 to i64"),
+        Scalar::Float(v) => builder
+            .build_bit_cast(v, context.i64_type(), "attr_float_bitcast")
+            .expect("build_bit_cast should not fail reinterpreting f64 bits as i64")
+            .into_int_value(),
+        Scalar::Str(v) => builder
+            .build_ptr_to_int(v, context.i64_type(), "attr_str_ptrtoint")
+            .expect("build_ptr_to_int should not fail reinterpreting a pointer as i64"),
+        Scalar::List(_)
+        | Scalar::Dict(_)
+        | Scalar::Set(_)
+        | Scalar::Tuple(_)
+        | Scalar::Instance(_) => panic!(
+            "pycc_codegen: internal error: cannot store this value into an instance \
+             attribute slot -- pycc_hir::class::slot_ty_from_init_rhs should have rejected \
+             this before codegen"
+        ),
+    }
 }
 
 /// Calls D-141's runtime-owned classifier/decoder. Container-value ingress
@@ -1083,7 +1240,11 @@ fn range_operand_to_tagged_int<'ctx>(
         | Scalar::List(_)
         | Scalar::Dict(_)
         | Scalar::Set(_)
-        | Scalar::Tuple(_) => {
+        | Scalar::Tuple(_)
+        // D-154 (Part 1 of #375): a class instance joins this same
+        // or-pattern for the identical reason `List`/`Dict`/`Set`/`Tuple`
+        // already do -- no new instrumented region.
+        | Scalar::Instance(_) => {
             panic!("pycc_codegen: internal error: range() {position} did not evaluate to int")
         }
     }
@@ -1137,6 +1298,12 @@ fn to_float<'ctx>(
         // reasoning, per D-116).
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: internal error: expected a numeric operand, got tuple")
+        }
+        // Defensive for the identical `numeric_result_type` reason as the
+        // `List`/`Dict`/`Set`/`Tuple` arms above, extended to a class
+        // instance (D-154, Part 1 of #375).
+        Scalar::Instance(_) => {
+            panic!("pycc_codegen: internal error: expected a numeric operand, got instance")
         }
     }
 }
@@ -1267,6 +1434,19 @@ fn to_str<'ctx>(
         // this new-as-of-PR-11b reachability.
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: string conversion of a tuple[...] value is not supported yet")
+        }
+        // A real, reachable feature gap, identical in kind to the
+        // `List`/`Dict`/`Set`/`Tuple` arms above (D-154, Part 1 of #375):
+        // `pycc_types` places no type restriction on `print`'s argument or
+        // an f-string interpolation, so `print(p)`/`f"{p}"` for a class
+        // instance type-checks today and lands here. This PR ships no
+        // `__str__`/`__repr__` support (out of scope, see the plan's own
+        // "Explicitly out of scope" list), so there is no
+        // `pycc_rt_instance_to_str` to call -- panics honestly instead of
+        // handing a `PyInstanceObj` pointer to a `pycc_rt_*_to_str`
+        // function that would read it as a `PyStrObj`.
+        Scalar::Instance(_) => {
+            panic!("pycc_codegen: string conversion of a class instance is not supported yet")
         }
     };
     builder
@@ -1571,6 +1751,28 @@ fn emit_expr<'ctx>(
                             "build_load should not fail for a slot this function itself allocated",
                         );
                     Scalar::Tuple(loaded.into_struct_value())
+                }
+                // Same pointer-slot read as `Ty::List(_)`/`Ty::Dict(_)`/
+                // `Ty::Set(_)` above (D-154, Part 1 of #375) --
+                // `ty_to_basic_type`'s own `Instance(_)` arm already
+                // allocated this slot as a pointer, so reading it back is
+                // identical regardless of the class. Every real read of a
+                // class-instance local -- `p.x`, `p.bump()`, passing `p` as
+                // an argument -- goes through this arm, so without it every
+                // one of those would fall through to the catch-all below
+                // and panic on a real, type-checked program instead of
+                // reading the value.
+                Ty::Instance(_) => {
+                    let loaded = builder
+                        .build_load(
+                            context.ptr_type(inkwell::AddressSpace::default()),
+                            slot.ptr,
+                            "load",
+                        )
+                        .expect(
+                            "build_load should not fail for a slot this function itself allocated",
+                        );
+                    Scalar::Instance(loaded.into_pointer_value())
                 }
                 other => {
                     panic!(
@@ -1993,6 +2195,24 @@ fn emit_expr<'ctx>(
                     // distinct from a real `False` value.
                     Scalar::Bool(context.i8_type().const_int(0, false))
                 }
+                // A class instance is not reachable as a real function
+                // return type from this PR's own frontend (`pycc_types`
+                // never resolves a return annotation to `Ty::Instance` --
+                // class-typed annotations are out of scope, see the plan's
+                // own "Explicitly out of scope" list), but the codegen
+                // itself needs no defensive deferral the way `List`/`Dict`/
+                // `Set`/`Tuple` below still do: `ty_to_basic_type` already
+                // gives an `Instance`-returning function's LLVM signature
+                // the same pointer return type a `str`-returning one gets,
+                // so extracting the call result is identical to `Str`
+                // above -- a future PR that does support `-> Self`/
+                // `-> ClassName` needs no further codegen work here.
+                Ty::Instance(_) => Scalar::Instance(
+                    call_site
+                        .try_as_basic_value()
+                        .expect_basic("this function is declared to return an instance")
+                        .into_pointer_value(),
+                ),
                 // No dedicated arm for `List`/`Dict`/`Set`/`Tuple`: a
                 // container-typed call result gets the same treatment as
                 // every other still-unhandled `Ty` here (currently only
@@ -2633,6 +2853,71 @@ fn emit_expr<'ctx>(
             build_int_set_add(builder, rt, set_ptr, encoded);
             Scalar::Bool(context.i8_type().const_int(0, false))
         }
+        // `ClassName(args)` (D-154, Part 1 of #375): allocate a fresh,
+        // zero-initialized instance (`pycc_rt_instance_new`, given the
+        // class's own already-resolved `attr_count`), then call the
+        // mangled `__init__` with that pointer as `self`, followed by
+        // `args` -- see `MirExpr::Instantiate`'s own doc comment for why
+        // this needs `build_call_to_with_leading_args` rather than the
+        // ordinary `build_call_to` every ordinary/method call above uses.
+        MirExpr::Instantiate(inst) => {
+            let pycc_mir::InstantiateExpr {
+                ctor,
+                attr_count,
+                args,
+                ..
+            } = inst.as_ref();
+            let count = context
+                .i64_type()
+                .const_int(*attr_count as u64, false);
+            let instance_ptr = builder
+                .build_call(rt.instance_new, &[count.into()], "instance_new")
+                .expect("build_call should not fail for a well-formed instance allocation")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_instance_new returns a non-void pointer")
+                .into_pointer_value();
+            let ctor_function = user_functions.get(ctor.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "pycc_codegen: internal error: constructor `{ctor}` should have been \
+                     registered as an ordinary user function -- pycc_hir::class::lower_class \
+                     mangles every method, including `__init__`, into HirModule::items"
+                )
+            });
+            build_call_to_with_leading_args(
+                context,
+                builder,
+                module,
+                rt,
+                user_functions,
+                locals,
+                ctor_function,
+                &[instance_ptr.into()],
+                args,
+            );
+            Scalar::Instance(instance_ptr)
+        }
+        // `base.attr` (D-154, Part 1 of #375): read the raw slot word via
+        // the opaque `pycc_rt_instance_get_slot` accessor (never a direct
+        // `GEP`, per the class-instance-layout ADR), then reinterpret it as
+        // the attribute's own declared `Ty` -- see `slot_word_to_scalar`'s
+        // own doc comment for the conversion and its own reachable-`Ty`
+        // scope.
+        MirExpr::AttrGet { base, slot, ty } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let base_ptr = expect_instance_pointer(base_scalar, "attribute access base");
+            let slot_index = context.i64_type().const_int(*slot as u64, false);
+            let raw = builder
+                .build_call(
+                    rt.instance_get_slot,
+                    &[base_ptr.into(), slot_index.into()],
+                    "instance_get_slot",
+                )
+                .expect("build_call should not fail for a well-formed attribute read")
+                .try_as_basic_value()
+                .expect_basic("pycc_rt_instance_get_slot returns a non-void i64")
+                .into_int_value();
+            slot_word_to_scalar(context, builder, raw, ty)
+        }
     }
 }
 
@@ -2792,9 +3077,47 @@ fn build_call_to<'ctx>(
     user_function: &UserFunction<'ctx>,
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
-    let arg_values: Vec<inkwell::values::BasicMetadataValueEnum> = args
+    build_call_to_with_leading_args(
+        context,
+        builder,
+        module,
+        rt,
+        user_functions,
+        locals,
+        user_function,
+        &[],
+        args,
+    )
+}
+
+/// Generalizes [`build_call_to`] with a `leading_args` prefix -- values
+/// already computed by the caller (never marshalled through `emit_expr`,
+/// since they have no `MirExpr` of their own) that go first in the emitted
+/// `call`'s argument list, before `args`' own marshalled values. Used by
+/// `MirExpr::Instantiate`'s codegen (D-154, Part 1 of #375) to pass the
+/// freshly allocated instance pointer as `__init__`'s own `self` argument --
+/// `build_call_to`'s ordinary path has no `MirExpr` to build that pointer
+/// from, since it is a codegen-only value with no HIR/MIR node of its own.
+/// `leading_args` is skipped when zipping `args` against
+/// `user_function.param_tys`, so `args[0]` still lines up with the *first
+/// non-leading* declared parameter type, exactly like `build_call_to`'s own
+/// contract for every ordinary call (`leading_args` empty).
+#[allow(clippy::too_many_arguments)]
+fn build_call_to_with_leading_args<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    rt: &RtFns<'ctx>,
+    user_functions: &HashMap<&str, UserFunction<'ctx>>,
+    locals: &HashMap<String, StorageSlot<'ctx>>,
+    user_function: &UserFunction<'ctx>,
+    leading_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
+    args: &[MirExpr],
+) -> inkwell::values::CallSiteValue<'ctx> {
+    let mut arg_values: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = leading_args.to_vec();
+    let marshalled_args: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> = args
         .iter()
-        .zip(&user_function.param_tys)
+        .zip(&user_function.param_tys[leading_args.len()..])
         .map(|(a, param_ty)| {
             let scalar = emit_expr(context, builder, module, rt, user_functions, locals, a);
             let scalar = incref_if_str_duplicate(builder, rt, a, scalar);
@@ -2833,9 +3156,16 @@ fn build_call_to<'ctx>(
                 // by-value aggregate handling is LLVM's job, not this
                 // crate's.
                 Scalar::Tuple(v) => v.into(),
+                // Pass-through, identical to `List`'s/`Dict`'s/`Set`'s arms
+                // above: a class-instance parameter (D-154, Part 1 of #375
+                // -- `self`, or any other class-typed parameter a future PR
+                // might add) is an opaque pointer at the ABI level exactly
+                // like a `str`/`list[T]`/`dict[K, V]`/`set[T]` one.
+                Scalar::Instance(v) => v.into(),
             }
         })
         .collect();
+    arg_values.extend(marshalled_args);
     builder
         .build_call(user_function.value, &arg_values, "call_user_fn")
         .expect("build_call should not fail for a well-formed user function call")
@@ -2941,6 +3271,15 @@ fn truthy<'ctx>(
         Scalar::Tuple(_) => {
             panic!("pycc_codegen: truthiness of a tuple[...] value is not supported yet")
         }
+        // Unlike every container arm above, a class instance's truthiness
+        // (D-154, Part 1 of #375) needs no runtime call and no honest-panic
+        // deferral: this PR ships no `__bool__`/`__len__` (both explicitly
+        // out of scope), so CPython's own default-object rule applies
+        // unconditionally -- `bool(x)` is `True` for any instance with
+        // neither, with no data to inspect and no way for it to ever be
+        // `False`. A plain constant `1` correctly implements that rule
+        // rather than deferring it.
+        Scalar::Instance(_) => context.i8_type().const_int(1, false),
     };
     builder
         .build_int_compare(
@@ -3064,6 +3403,13 @@ fn emit_assign<'ctx>(
         // `Set`'s leak-only policy: a tuple owns no allocation at all, so
         // overwriting this slot frees nothing and leaks nothing.
         Scalar::Tuple(v) => v.into(),
+        // Pass-through, identical to `List`'s/`Dict`'s/`Set`'s arms above
+        // (D-154, Part 1 of #375): storing a class-instance value is
+        // storing one opaque pointer into a slot `ty_to_basic_type`
+        // already allocated as a pointer. No refcount traffic accompanies
+        // it -- `pycc_rt::instance` is leak-only, mirroring `List`/`Dict`/
+        // `Set` (see that module's own doc comment).
+        Scalar::Instance(v) => v.into(),
     };
     builder
         .build_store(slot.ptr, basic_value)
@@ -3099,10 +3445,24 @@ fn emit_assign<'ctx>(
 /// one, whatever `Scalar` variant it happens to produce. Behavior-identical
 /// either way for every reachable case: `incref_if_str_duplicate` only ever
 /// consults this function *after* confirming `scalar` is `Scalar::Str`.
+///
+/// `MirExpr::AttrGet { ty: Ty::Str, .. }` (D-154, Part 1 of #375) is a
+/// duplicate reference for exactly the same reason a bare `Name` is: the
+/// instance's own slot keeps its copy of the pointer after this read
+/// returns one too, so both `to_str`'s pass-through and every ordinary
+/// store site (`Assign`, a call argument, a dict key/value, ...) would
+/// otherwise treat this read's result as freshly-owned and eventually
+/// decref it once too many, underflowing the refcount and freeing the
+/// `PyStrObj` while the instance's own slot still points at it -- a
+/// reliably reproducible use-after-free caught in review, not merely a
+/// theoretical gap (D-154 Part 1's own post-merge finding).
 fn str_value_is_a_duplicate_reference(expr: &MirExpr) -> bool {
     matches!(
         expr,
         MirExpr::Name {
+            ty: pycc_mir::Ty::Str,
+            ..
+        } | MirExpr::AttrGet {
             ty: pycc_mir::Ty::Str,
             ..
         }
@@ -3160,6 +3520,56 @@ fn decref_str_slot_before_store<'ctx>(
         .into_pointer_value();
     builder
         .build_call(rt.str_decref, &[old.into()], "str_decref_old")
+        .expect("build_call should not fail for a well-formed decref");
+}
+
+/// Mirror of [`decref_str_slot_before_store`] for an instance attribute slot
+/// rather than a local's own alloca (D-154, Part 1 of #375): only
+/// meaningful for a `Ty::Str` attribute -- reads the slot's *current* raw
+/// word through the same opaque `pycc_rt_instance_get_slot` accessor
+/// `MirExpr::AttrGet` itself uses, reinterprets it as a `str` pointer, and
+/// decrefs it before the new value overwrites the slot. A freshly allocated
+/// instance's slots start zero-initialized (`pycc_rt::instance::new_instance`),
+/// which decodes to a null pointer whose runtime decref is a documented
+/// no-op (`pycc_rt_str_decref`'s own null check) -- exactly like a local's
+/// null-initialized string slot -- so the same call is correct for both
+/// `__init__`'s first assignment and any later reassignment.
+///
+/// Unlike `decref_str_slot_before_store`, this function has no runtime
+/// assertion that the target slot's own declared type is actually
+/// `Ty::Str` -- its one caller (`MirStmt::AttrSet`'s own codegen) only
+/// invokes it when `value`'s type is `Ty::Str`, and `pycc_types::class::
+/// check_attr_set`'s `is_assignable(value_ty, attr_ty)` gate (`T0021`)
+/// already rejects a `str` value targeting a non-`str` attribute before
+/// codegen ever runs -- so this slot's declared type is `Ty::Str` too on
+/// every reachable call, by construction, not merely by convention left
+/// unchecked (D-068 review finding, PR #385).
+fn decref_str_attr_slot_before_store<'ctx>(
+    context: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    base_ptr: PointerValue<'ctx>,
+    slot_index: IntValue<'ctx>,
+) {
+    let raw = builder
+        .build_call(
+            rt.instance_get_slot,
+            &[base_ptr.into(), slot_index.into()],
+            "instance_get_slot_old",
+        )
+        .expect("build_call should not fail for a well-formed attribute read")
+        .try_as_basic_value()
+        .expect_basic("pycc_rt_instance_get_slot returns a non-void i64")
+        .into_int_value();
+    let old = builder
+        .build_int_to_ptr(
+            raw,
+            context.ptr_type(inkwell::AddressSpace::default()),
+            "attr_str_inttoptr_old",
+        )
+        .expect("build_int_to_ptr should not fail reinterpreting an i64 as a pointer");
+    builder
+        .build_call(rt.str_decref, &[old.into()], "str_decref_old_attr")
         .expect("build_call should not fail for a well-formed decref");
 }
 
@@ -3290,6 +3700,10 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
                     | pycc_mir::Ty::Dict(_)
                     | pycc_mir::Ty::Set(_)
                     | pycc_mir::Ty::Tuple(_)
+                    // D-154 (Part 1 of #375): `p = Point(1, 2)` needs its
+                    // own predeclared storage slot exactly like every other
+                    // heap-object-typed binding above.
+                    | pycc_mir::Ty::Instance(_)
             ) {
                 bindings.entry(target.clone()).or_insert(ty);
             }
@@ -3345,6 +3759,10 @@ fn collect_stmt_bindings(stmt: &MirStmt, bindings: &mut BTreeMap<String, pycc_mi
         // a temporary stub: no future codegen task ever needs `d[k] = v` to
         // introduce a new binding, since it structurally cannot.
         MirStmt::DictSet { .. } => {}
+        // `base.attr = value` (D-154, Part 1 of #375) reassigns an
+        // existing instance's attribute slot, not a name -- same reasoning
+        // as `DictSet` immediately above.
+        MirStmt::AttrSet { .. } => {}
         // `MirStmt::ForDict`, produced when a `for k in d:` HIR loop's
         // base resolves to a dict-typed binding (mirrors `MirStmt::ForList`
         // above, which is produced for the list-typed case). `Ty::Str` for
@@ -3605,6 +4023,25 @@ fn declare_module_globals<'ctx>(
                     let struct_ty = ty_to_basic_type(context, ty.clone()).into_struct_type();
                     (struct_ty.into(), struct_ty.const_zero().into())
                 }
+                // Identical storage and reasoning to `Ty::List(_)`/
+                // `Ty::Dict(_)`/`Ty::Set(_)` above (D-154, Part 1 of #375):
+                // an opaque pointer, null until the first assignment (an
+                // instantiation, or a call/attribute-read returning an
+                // instance) stores a real `PyInstanceObj` into it, with the
+                // separate `initialized` flag below trapping any read that
+                // reaches it first. `p = Point(1, 2)` at module scope is
+                // exactly the shape Task 8's own conformance fixture uses --
+                // omitting this arm would turn that supported form into an
+                // internal compiler panic. No exit-time decref accompanies
+                // it: `pycc_rt::instance` is leak-only, mirroring `List`/
+                // `Dict`/`Set`.
+                pycc_mir::Ty::Instance(_) => (
+                    context.ptr_type(inkwell::AddressSpace::default()).into(),
+                    context
+                        .ptr_type(inkwell::AddressSpace::default())
+                        .const_null()
+                        .into(),
+                ),
                 other => panic!(
                     "pycc_codegen: a `{}`-typed module binding is not supported yet",
                     other.name()
@@ -4594,6 +5031,14 @@ fn emit_stmt<'ctx>(
                         // the `ret` is well-typed with no tuple-specific
                         // code here.
                         Scalar::Tuple(v) => v.into(),
+                        // Pass-through, identical to `List`'s/`Dict`'s/
+                        // `Set`'s arms above (D-154, Part 1 of #375):
+                        // returning a class instance returns one opaque
+                        // pointer, and `ty_to_basic_type` already gave the
+                        // function's LLVM signature the same pointer return
+                        // type it gives a `str`/`list[T]`/`dict[K, V]`/
+                        // `set[T]`-returning one.
+                        Scalar::Instance(v) => v.into(),
                     };
                     builder
                         .build_return(Some(&basic_value))
@@ -4638,6 +5083,44 @@ fn emit_stmt<'ctx>(
             let encoded = to_encoded_int(context, builder, value_scalar);
             let _ = build_untag_checked(builder, rt, encoded, "dict_validate_set_value");
             build_dict_set(builder, rt, dict_ptr, key_ptr, encoded);
+            Ok(())
+        }
+        // `base.attr = value` (D-154, Part 1 of #375): writes the raw slot
+        // word via the opaque `pycc_rt_instance_set_slot` accessor -- the
+        // mirror image of `MirExpr::AttrGet`'s read, using
+        // `scalar_to_slot_word` for the identical encoding
+        // `slot_word_to_scalar` decodes.
+        //
+        // For a `Ty::Str` attribute, mirrors `MirStmt::Assign`'s own two
+        // refcount obligations exactly (D-154 Part 1's own post-merge
+        // review finding -- the first version of this arm had neither):
+        // `incref_if_str_duplicate` before storing, since a bare-`Name`/
+        // `AttrGet` source value is a *duplicate* reference whose original
+        // binding/slot keeps its own copy; and
+        // `decref_str_attr_slot_before_store` before overwriting, to
+        // release whatever the slot held previously (a no-op on a fresh
+        // instance's zero-initialized slot, exactly like a local's
+        // null-initialized string slot). Without both, a `str` attribute
+        // read twice, or reassigned, use-after-frees the first `PyStrObj`.
+        MirStmt::AttrSet { base, slot, value } => {
+            let base_scalar = emit_expr(context, builder, module, rt, user_functions, locals, base);
+            let base_ptr = expect_instance_pointer(base_scalar, "attribute assignment base");
+            let value_ty = value.ty();
+            let value_scalar =
+                emit_expr(context, builder, module, rt, user_functions, locals, value);
+            let value_scalar = incref_if_str_duplicate(builder, rt, value, value_scalar);
+            let slot_index = context.i64_type().const_int(*slot as u64, false);
+            if value_ty == pycc_mir::Ty::Str {
+                decref_str_attr_slot_before_store(context, builder, rt, base_ptr, slot_index);
+            }
+            let word = scalar_to_slot_word(context, builder, value_scalar);
+            builder
+                .build_call(
+                    rt.instance_set_slot,
+                    &[base_ptr.into(), slot_index.into(), word.into()],
+                    "instance_set_slot",
+                )
+                .expect("build_call should not fail for a well-formed attribute write");
             Ok(())
         }
         // `for k in d:` (PR-11 Task 5, D-123): an intentional inline
@@ -9816,6 +10299,700 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"2\n");
+    }
+
+    fn instance_ty(class_name: &str) -> Ty {
+        Ty::Instance(Box::new(class_name.to_string()))
+    }
+
+    #[test]
+    fn class_instantiation_attribute_and_method_call_codegens_and_runs() {
+        // D-154 (Part 1 of #375), end to end through `compile_to_object`:
+        //
+        //     class Point:
+        //         def __init__(self, x: int, y: int) -> None:
+        //             self.x = x
+        //             self.y = y
+        //         def bump(self) -> None:
+        //             self.x = self.x + 1
+        //
+        //     p = Point(1, 2)
+        //     p.bump()
+        //     print(p.x)
+        //     print(p.y)
+        //
+        // Expected output verified against `python3` on this exact source
+        // (`p.x` starts `1`, `bump()` increments it once to `2`; `p.y`
+        // stays `2`). Exercises every new codegen path this issue adds in
+        // one program: `MirExpr::Instantiate` (allocation + `__init__`
+        // call), `MirStmt::AttrSet` (both inside `__init__` and inside
+        // `bump`), `MirExpr::AttrGet` (both inside `bump`'s own `self.x +
+        // 1` and at module scope for the two `print` calls), and an
+        // ordinary method call lowered to `MirExpr::Call` with `self`
+        // prepended.
+        let self_ty = instance_ty("Point");
+        let init = MirItem::Function {
+            name: "Point.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+                ("y".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    },
+                },
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 1,
+                    value: MirExpr::Name {
+                        name: "y".to_string(),
+                        ty: Ty::Int,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let bump = MirItem::Function {
+            name: "Point.bump".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(MirExpr::AttrGet {
+                            base: Box::new(MirExpr::Name {
+                                name: "self".to_string(),
+                                ty: self_ty.clone(),
+                            }),
+                            slot: 0,
+                            ty: Ty::Int,
+                        }),
+                        right: Box::new(MirExpr::IntLiteral(1)),
+                        ty: Ty::Int,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let mir = MirModule {
+            items: vec![
+                init,
+                bump,
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "p".to_string(),
+                    value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
+                        ctor: "Point.__init__".to_string(),
+                        attr_count: 2,
+                        args: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
+                        ty: self_ty.clone(),
+                    })),
+                }),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "Point.bump".to_string(),
+                    args: vec![MirExpr::Name {
+                        name: "p".to_string(),
+                        ty: self_ty.clone(),
+                    }],
+                    ty: Ty::None,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "p".to_string(),
+                        ty: self_ty.clone(),
+                    }),
+                    slot: 0,
+                    ty: Ty::Int,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "p".to_string(),
+                        ty: self_ty,
+                    }),
+                    slot: 1,
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("class_instantiation_attribute_and_method_call");
+        let obj_path = dir.join("class_instantiation_attribute_and_method_call.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("class_instantiation_attribute_and_method_call");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"2\n2\n");
+    }
+
+    #[test]
+    fn bool_float_and_str_typed_attribute_slots_round_trip_correctly() {
+        // `class_instantiation_attribute_and_method_call_codegens_and_runs`
+        // above only ever exercises `int`-typed attribute slots --
+        // `slot_word_to_scalar`/`scalar_to_slot_word`'s own `Bool`/`Float`/
+        // `Str` arms (D-154) need their own exercise. `__init__` forwarding
+        // each constructor parameter straight into its own attribute slot
+        // exercises both the write (`scalar_to_slot_word`, during
+        // `__init__`) and the read (`slot_word_to_scalar`, at each
+        // `print(w.<attr>)` below) halves of all three in one program:
+        //
+        //     class Widget:
+        //         def __init__(self, flag: bool, ratio: float, label: str) -> None:
+        //             self.flag = flag
+        //             self.ratio = ratio
+        //             self.label = label
+        //
+        //     w = Widget(True, 2.5, "hi")
+        //     print(w.flag)
+        //     print(w.ratio)
+        //     print(w.label)
+        //
+        // Expected output verified against `python3` on this exact source.
+        let self_ty = instance_ty("Widget");
+        let init = MirItem::Function {
+            name: "Widget.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("flag".to_string(), Ty::Bool),
+                ("ratio".to_string(), Ty::Float),
+                ("label".to_string(), Ty::Str),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::Name {
+                        name: "flag".to_string(),
+                        ty: Ty::Bool,
+                    },
+                },
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 1,
+                    value: MirExpr::Name {
+                        name: "ratio".to_string(),
+                        ty: Ty::Float,
+                    },
+                },
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 2,
+                    value: MirExpr::Name {
+                        name: "label".to_string(),
+                        ty: Ty::Str,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let mir = MirModule {
+            items: vec![
+                init,
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "w".to_string(),
+                    value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
+                        ctor: "Widget.__init__".to_string(),
+                        attr_count: 3,
+                        args: vec![
+                            MirExpr::BoolLiteral(true),
+                            MirExpr::FloatLiteral(2.5),
+                            MirExpr::StringLiteral("hi".to_string()),
+                        ],
+                        ty: self_ty.clone(),
+                    })),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty.clone(),
+                    }),
+                    slot: 0,
+                    ty: Ty::Bool,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty.clone(),
+                    }),
+                    slot: 1,
+                    ty: Ty::Float,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty,
+                    }),
+                    slot: 2,
+                    ty: Ty::Str,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("bool_float_str_attribute_slots");
+        let obj_path = dir.join("bool_float_str_attribute_slots.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("bool_float_str_attribute_slots");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"True\n2.5\nhi\n");
+    }
+
+    #[test]
+    fn a_str_attribute_read_twice_and_then_reassigned_does_not_use_after_free() {
+        // D-154 Part 1's own post-merge review finding: the first version
+        // of `MirStmt::AttrSet`'s codegen neither incref'd a `str` value
+        // read out of an instance attribute (`str_value_is_a_duplicate_
+        // reference` had no `MirExpr::AttrGet` arm) nor decref'd a slot's
+        // previous `str` occupant before overwriting it. Reading a `str`
+        // attribute a second time reliably observed freed memory (the
+        // first `print` already decrefs the read pointer to 0, freeing it,
+        // since the read was wrongly treated as a fresh, unshared value),
+        // and `bool_float_and_str_typed_attribute_slots_round_trip_
+        // correctly` above cannot catch this: it reads `w.label` exactly
+        // once, which structurally cannot observe a premature free.
+        //
+        //     class Widget:
+        //         def __init__(self, label: str) -> None:
+        //             self.label = label
+        //         def relabel(self, new_label: str) -> None:
+        //             self.label = new_label
+        //
+        //     w = Widget("hi")
+        //     print(w.label)
+        //     print(w.label)
+        //     w.relabel("bye")
+        //     print(w.label)
+        //
+        // Exercises both halves of the fix in one program: the two
+        // `print(w.label)` calls before `relabel` exercise
+        // `incref_if_str_duplicate`'s new `AttrGet` arm (without it, the
+        // second `print` reads freed memory); `relabel`'s own
+        // `self.label = new_label` exercises
+        // `decref_str_attr_slot_before_store` (without it, `"hi"`'s
+        // `PyStrObj` leaks rather than being released when overwritten --
+        // not itself a crash this test can observe, but exercised by the
+        // same code path the crash-causing half shares).
+        let self_ty = instance_ty("Widget");
+        let init = MirItem::Function {
+            name: "Widget.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("label".to_string(), Ty::Str),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::Name {
+                        name: "label".to_string(),
+                        ty: Ty::Str,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let relabel = MirItem::Function {
+            name: "Widget.relabel".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("new_label".to_string(), Ty::Str),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::Name {
+                        name: "new_label".to_string(),
+                        ty: Ty::Str,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let mir = MirModule {
+            items: vec![
+                init,
+                relabel,
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "w".to_string(),
+                    value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
+                        ctor: "Widget.__init__".to_string(),
+                        attr_count: 1,
+                        args: vec![MirExpr::StringLiteral("hi".to_string())],
+                        ty: self_ty.clone(),
+                    })),
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty.clone(),
+                    }),
+                    slot: 0,
+                    ty: Ty::Str,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty.clone(),
+                    }),
+                    slot: 0,
+                    ty: Ty::Str,
+                })),
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "Widget.relabel".to_string(),
+                    args: vec![
+                        MirExpr::Name {
+                            name: "w".to_string(),
+                            ty: self_ty.clone(),
+                        },
+                        MirExpr::StringLiteral("bye".to_string()),
+                    ],
+                    ty: Ty::None,
+                })),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "w".to_string(),
+                        ty: self_ty,
+                    }),
+                    slot: 0,
+                    ty: Ty::Str,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("str_attribute_read_twice_and_reassigned");
+        let obj_path = dir.join("str_attribute_read_twice_and_reassigned.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("str_attribute_read_twice_and_reassigned");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"hi\nhi\nbye\n");
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "an instance attribute of type `list[int]` is not supported yet"
+    )]
+    fn slot_word_to_scalar_rejects_an_unsupported_attribute_type() {
+        // `pycc_hir::class::slot_ty_from_init_rhs` structurally restricts
+        // every attribute slot to `int`/`float`/`bool`/`str` (D-154), so a
+        // `list[T]`-typed slot can never reach this function from real,
+        // type-checked source -- hand-built directly, matching this file's
+        // own established internal-error-test convention (e.g.
+        // `to_numeric_encoded_int_rejects_a_list_operand` above).
+        let context = Context::create();
+        let module = context.create_module("test");
+        let builder = context.create_builder();
+        let raw = context.i64_type().const_int(0, false);
+        slot_word_to_scalar(&context, &builder, raw, &pycc_mir::Ty::List(Box::new(pycc_mir::Ty::Int)));
+        let _ = module;
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot store this value into an instance attribute slot")]
+    fn scalar_to_slot_word_rejects_an_unsupported_scalar() {
+        // Mirror image of `slot_word_to_scalar_rejects_an_unsupported_attribute_type`
+        // above, for the write direction: a `Scalar::List` can never reach
+        // `scalar_to_slot_word` from real, type-checked source either.
+        let context = Context::create();
+        let module = context.create_module("test");
+        let builder = context.create_builder();
+        let ptr = context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        scalar_to_slot_word(&context, &builder, Scalar::List(ptr));
+        let _ = module;
+    }
+
+    #[test]
+    #[should_panic(expected = "did not evaluate to a class instance")]
+    fn attribute_read_over_a_non_instance_base_panics_with_an_internal_error() {
+        // Bypasses `pycc_types::check` (T0043 would reject this) with a
+        // hand-built `MirExpr::AttrGet` over an `int`-typed base, matching
+        // `pycc_mir`'s own established internal-error-test convention.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                base: Box::new(MirExpr::IntLiteral(1)),
+                slot: 0,
+                ty: Ty::Int,
+            }))],
+        };
+        let dir = tempfile_dir("attribute_read_over_a_non_instance_base");
+        let obj_path = dir.join("attribute_read_over_a_non_instance_base.o");
+        let _ = compile_to_object(&mir, &obj_path, None, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "should have been registered as an ordinary user function")]
+    fn instantiation_of_an_unregistered_constructor_panics_with_an_internal_error() {
+        // Bypasses `pycc_hir::class::lower_class` (which always mangles
+        // `__init__` into `HirModule::items`) with a hand-built
+        // `MirExpr::Instantiate` naming a constructor no `MirItem::Function`
+        // ever declares.
+        let mir = MirModule {
+            items: vec![MirItem::TopLevelStmt(MirStmt::Assign {
+                target: "g".to_string(),
+                value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
+                    ctor: "Ghost.__init__".to_string(),
+                    attr_count: 0,
+                    args: vec![],
+                    ty: instance_ty("Ghost"),
+                })),
+            })],
+        };
+        let dir = tempfile_dir("instantiation_of_an_unregistered_constructor");
+        let obj_path = dir.join("instantiation_of_an_unregistered_constructor.o");
+        let _ = compile_to_object(&mir, &obj_path, None, false);
+    }
+
+    #[test]
+    fn a_function_returning_an_instance_codegens_and_runs() {
+        // `Ty::Instance`-typed call/return results are not reachable from
+        // this PR's own frontend today (a method's return type is never
+        // resolved to `Ty::Instance` by `pycc_types` -- see the plan's own
+        // out-of-scope list for class-typed annotations), but
+        // `emit_stmt`'s `Return` arm's own `Scalar::Instance` pass-through
+        // (D-154) is still real, load-bearing codegen (a future PR that
+        // does support `-> Self`/`-> ClassName` needs no further work
+        // here) -- exercised directly with hand-built MIR: an `identity`
+        // function that takes and returns a `Point`, called once and its
+        // result's own attribute printed to prove the same pointer round-
+        // trips correctly.
+        let self_ty = instance_ty("Point");
+        let init = MirItem::Function {
+            name: "Point.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let identity = MirItem::Function {
+            name: "identity".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: self_ty.clone(),
+            body: vec![MirStmt::Return(Some(MirExpr::Name {
+                name: "self".to_string(),
+                ty: self_ty.clone(),
+            }))],
+        };
+        let mir = MirModule {
+            items: vec![
+                init,
+                identity,
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "p".to_string(),
+                    value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
+                        ctor: "Point.__init__".to_string(),
+                        attr_count: 1,
+                        args: vec![MirExpr::IntLiteral(7)],
+                        ty: self_ty.clone(),
+                    })),
+                }),
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "p2".to_string(),
+                    value: MirExpr::Call {
+                        callee: "identity".to_string(),
+                        args: vec![MirExpr::Name {
+                            name: "p".to_string(),
+                            ty: self_ty.clone(),
+                        }],
+                        ty: self_ty.clone(),
+                    },
+                }),
+                MirItem::TopLevelStmt(print_expr(MirExpr::AttrGet {
+                    base: Box::new(MirExpr::Name {
+                        name: "p2".to_string(),
+                        ty: self_ty,
+                    }),
+                    slot: 0,
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("a_function_returning_an_instance");
+        let obj_path = dir.join("a_function_returning_an_instance.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("a_function_returning_an_instance");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"7\n");
+    }
+
+    #[test]
+    fn instantiating_a_class_at_module_scope_with_a_truthiness_check_codegens_and_runs() {
+        // `p = Point(1, 2)\nif p:\n    print(1)\n` -- exercises `truthy`'s
+        // new `Scalar::Instance` arm (always `True`, this PR's own
+        // documented default-object rule, see that arm's doc comment) and
+        // `declare_module_globals`'s new `Ty::Instance` arm together.
+        let self_ty = instance_ty("Point");
+        let init = MirItem::Function {
+            name: "Point.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+                ("y".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 0,
+                    value: MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    },
+                },
+                MirStmt::AttrSet {
+                    base: MirExpr::Name {
+                        name: "self".to_string(),
+                        ty: self_ty.clone(),
+                    },
+                    slot: 1,
+                    value: MirExpr::Name {
+                        name: "y".to_string(),
+                        ty: Ty::Int,
+                    },
+                },
+                MirStmt::Return(None),
+            ],
+        };
+        let mir = MirModule {
+            items: vec![
+                init,
+                MirItem::TopLevelStmt(MirStmt::Assign {
+                    target: "p".to_string(),
+                    value: MirExpr::Instantiate(Box::new(pycc_mir::InstantiateExpr {
+                        ctor: "Point.__init__".to_string(),
+                        attr_count: 2,
+                        args: vec![MirExpr::IntLiteral(1), MirExpr::IntLiteral(2)],
+                        ty: self_ty.clone(),
+                    })),
+                }),
+                MirItem::TopLevelStmt(MirStmt::If {
+                    test: MirExpr::Name {
+                        name: "p".to_string(),
+                        ty: self_ty,
+                    },
+                    body: vec![print_expr(MirExpr::IntLiteral(1))],
+                    orelse: vec![],
+                }),
+            ],
+        };
+        let dir = tempfile_dir("class_instance_truthiness");
+        let obj_path = dir.join("class_instance_truthiness.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("class_instance_truthiness");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"1\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_codegen: string conversion of a class instance is not supported yet")]
+    fn string_conversion_of_a_class_instance_panics_honestly() {
+        // Mirrors `string_conversion_of_a_list_value_panics_honestly`
+        // above exactly: `pycc_types` type-checks `print(p)` for a class
+        // instance unconditionally, and this PR ships no `__str__`/
+        // `__repr__` (out of scope), so `to_str` panics honestly instead of
+        // handing a `PyInstanceObj` pointer to a `pycc_rt_*_to_str`
+        // function expecting a `PyStrObj`.
+        let context = Context::create();
+        let (_module, rt) = list_scalar_panic_fixture(&context);
+        let builder = context.create_builder();
+        let ptr = context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        to_str(&builder, &rt, Scalar::Instance(ptr));
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: expected an int-or-bool operand, got instance")]
+    fn to_numeric_encoded_int_rejects_an_instance_operand() {
+        // Mirrors `to_numeric_encoded_int_rejects_a_list_operand` above:
+        // `pycc_types`' `numeric_result_type` has no `as_numeric` mapping
+        // for `Ty::Instance`, so any arithmetic with a class-instance
+        // operand is rejected as `T0021` long before codegen -- this is
+        // genuinely defensive, not a reachable feature gap.
+        let context = Context::create();
+        let ptr = context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        let builder = context.create_builder();
+        to_numeric_encoded_int(&context, &builder, Scalar::Instance(ptr));
+    }
+
+    #[test]
+    #[should_panic(expected = "internal error: expected a numeric operand, got instance")]
+    fn to_float_rejects_an_instance_operand() {
+        let context = Context::create();
+        let (_module, rt) = list_scalar_panic_fixture(&context);
+        let builder = context.create_builder();
+        let ptr = context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        to_float(&context, &builder, &rt, Scalar::Instance(ptr));
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_codegen: internal error: range() start did not evaluate to int")]
+    fn range_operand_to_tagged_int_rejects_an_instance_operand() {
+        let context = Context::create();
+        let (_module, rt) = list_scalar_panic_fixture(&context);
+        let builder = context.create_builder();
+        let ptr = context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        range_operand_to_tagged_int(&context, &builder, &rt, Scalar::Instance(ptr), "start");
     }
 
     #[test]

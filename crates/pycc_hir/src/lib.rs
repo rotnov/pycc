@@ -1,8 +1,11 @@
 use pycc_ast::{Expr, ModModule, Stmt};
 use pycc_diag::{Diagnostic, Span};
 
+mod class;
 mod expr;
 mod stmt;
+
+pub use class::HirClassDef;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -72,6 +75,22 @@ pub enum Ty {
     /// numbers above as the authoritative facts and this paragraph's
     /// mechanism as a plausible, not proven, explanation.
     Tuple(Box<Vec<Ty>>),
+    /// A single-class instance (no inheritance in this PR -- see D-154,
+    /// "class instance layout"). Carries only the originating class's name,
+    /// not its shape: attribute-name -> slot-index mapping and method
+    /// signatures live in a module-level side table
+    /// (`HirModule::class_defs`, `pycc_hir::class::HirClassDef`), the same
+    /// shape `type_aliases`/`imports` already use for compile-time-only
+    /// side information that isn't part of a `HirItem`/`HirStmt` value
+    /// itself. Boxed as `Box<String>`, not `Box<str>`, mirroring
+    /// `Ty::Param`'s own documented reasoning exactly: `Box<str>` is a fat
+    /// (16-byte) pointer because `str` is unsized, which would break the
+    /// niche-filling layout uniformity every other dataful `Ty` variant
+    /// relies on to stay at a single thin (8-byte) pointer; `Box<String>`
+    /// is a single thin pointer to a further heap-indirected `String`, so
+    /// this variant does not move `size_of::<Ty>()` past the D-109 16-byte
+    /// ceiling (see `ty_size_stays_within_d109_ceiling` below).
+    Instance(Box<String>),
 }
 
 impl Ty {
@@ -91,6 +110,7 @@ impl Ty {
                 "tuple[{}]",
                 elems.iter().map(Ty::name).collect::<Vec<_>>().join(", ")
             ),
+            Ty::Instance(class_name) => class_name.to_string(),
         }
     }
 }
@@ -295,6 +315,45 @@ pub enum HirExpr {
         set: String,
         value: Box<HirExpr>,
     },
+    /// `base.attr` (D-154, Part 1 of #375): a read of an instance attribute
+    /// (or, structurally, any attribute-shaped expression -- `base` is
+    /// lowered generically, since `lower_expr` has no type information to
+    /// narrow it at this stage). Distinct from the `Expr::Attribute` arm's
+    /// other lowering target, `HirExpr::Name("module.symbol")`: that form
+    /// only fires when the receiver is a bare name that resolves against
+    /// `pycc_std`'s stdlib module registry (a compile-time textual match,
+    /// D-136/D-137); every other attribute-access shape -- including `self`
+    /// and any other class-instance-typed receiver -- falls through to this
+    /// variant instead. `pycc_types` rejects it when `base`'s inferred type
+    /// is not `Ty::Instance` or `attr` does not name one of that class's
+    /// declared attribute slots; `pycc_mir`/`pycc_codegen` resolve `attr` to
+    /// a compile-time slot index via the class's `HirClassDef` (never a
+    /// runtime string-keyed lookup, per the class-instance-layout ADR).
+    AttrGet {
+        base: Box<HirExpr>,
+        attr: String,
+    },
+    /// `base.method(args)` (D-154, Part 1 of #375): a call shaped like an
+    /// attribute access followed by a call, structurally recognized for any
+    /// receiver that isn't one of the hand-recognized container methods
+    /// (`.append()`/`.pop()`/`.get()`/`.add()`, tried first, see
+    /// `lower_expr`'s `Expr::Call` arm) or a resolved stdlib module symbol
+    /// call (`math.sqrt(x)`, also tried first). `self.foo()` and
+    /// `some_instance.foo()` both lower to this same shape -- there is
+    /// nothing at HIR-lowering time to distinguish them, since both are
+    /// just "call a method named `foo` on whatever `base` evaluates to".
+    /// `pycc_types` resolves `base`'s inferred type to a `Ty::Instance`,
+    /// looks `method` up in that class's method table, and checks the call
+    /// against the method's real signature; `pycc_mir`/`pycc_codegen`
+    /// resolve the call to the method's compile-time-known mangled function
+    /// symbol (`<ClassName>.<method_name>`, D-006's static-dispatch framing
+    /// for a non-inherited class -- there is no vtable or runtime dispatch
+    /// in this PR).
+    MethodCall {
+        base: Box<HirExpr>,
+        method: String,
+        args: Vec<HirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -416,6 +475,25 @@ pub enum HirStmt {
         elt: Box<HirExpr>,
     },
     Return(Option<HirExpr>),
+    /// `base.attr = value` (D-154, Part 1 of #375). Structurally recognized
+    /// for any assignment target shaped like an attribute access -- `base`
+    /// is lowered generically, exactly like `HirExpr::AttrGet`'s own `base`,
+    /// and for the same reason (no type information is available at this
+    /// lowering step to narrow it to only `self` or only an instance-typed
+    /// receiver). No slot `Ty` is carried here: `pycc_types` resolves
+    /// `attr`'s declared type from the class's `HirModule::class_defs` entry
+    /// (populated by `class::lower_class`'s own `__init__` pre-scan) and
+    /// checks `value` against it; `pycc_mir`/`pycc_codegen` resolve `attr`
+    /// to a compile-time slot index the same way. This single shape covers
+    /// both an attribute's first (slot-establishing) assignment inside
+    /// `__init__` and every later reassignment inside any method body --
+    /// the two are distinguished only by `class::lower_class`'s own
+    /// pre-scan, not by this node's own shape.
+    AttrSet {
+        base: HirExpr,
+        attr: String,
+        value: HirExpr,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -458,6 +536,18 @@ pub enum ImportBinding {
     },
 }
 
+/// The bound local name of an import, regardless of which `ImportBinding`
+/// variant it is -- used by `lower_checked`'s class-name-collision check
+/// (D-068 review finding on #385) so it does not need to duplicate the
+/// match on both variants at its own call site.
+fn import_local_name(binding: &ImportBinding) -> &str {
+    match binding {
+        ImportBinding::Module { local_name, .. } | ImportBinding::Symbol { local_name, .. } => {
+            local_name
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirModule {
     pub items: Vec<HirItem>,
@@ -478,6 +568,16 @@ pub struct HirModule {
     /// catch-all, exactly like every other statement kind this compiler
     /// does not support inside a nested block.
     pub imports: Vec<ImportBinding>,
+    /// Class name -> declared shape (attribute slots in first-`__init__`-
+    /// assignment order, method table) (D-154, Part 1 of #375). Populated by
+    /// `class::lower_class` as `lower_checked` walks the module body, in
+    /// source order, mirroring `type_aliases`/`imports`'s own shape: a class
+    /// definition has no `HirItem`/`HirStmt` footprint of its own (unlike a
+    /// top-level function) -- only its individual methods do, each lowered
+    /// into `items` as an ordinary mangled `HirItem::Function` (see
+    /// `class::lower_class`'s own doc comment for the mangling scheme and
+    /// the reasoning for not adding a dedicated `HirItem::ClassDef` variant).
+    pub class_defs: Vec<(String, HirClassDef)>,
 }
 
 /// Lowers a parsed module into the HIR subset implemented by this pycc
@@ -495,19 +595,156 @@ pub struct HirModule {
 pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
     let mut aliases: Vec<(String, Ty)> = Vec::new();
     let mut imports: Vec<ImportBinding> = Vec::new();
+    let mut class_defs: Vec<(String, HirClassDef)> = Vec::new();
     let mut items = Vec::with_capacity(module.body.len());
     for stmt in &module.body {
         if let Some((name, ty)) = lower_type_alias_stmt(stmt, &aliases)? {
+            // D-068 review finding on #385, second round: the class-vs-alias
+            // check below (at the `Stmt::ClassDef` arm) only ever catches a
+            // class defined *after* a same-named alias -- without this
+            // check, `class Foo: ...` followed by `type Foo = int` would
+            // silently establish a second, alias-shaped `Foo` binding with
+            // no diagnostic, the exact failure mode this finding exists to
+            // close, just in the untreated direction.
+            if class_defs.iter().any(|(class_name, _)| *class_name == name) {
+                return Err(unsupported(
+                    format!(
+                        "type alias `{name}` collides with a class of the same name \
+                         already defined in this module"
+                    ),
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             aliases.push((name, ty));
             continue;
         }
         if let Some((name, ty)) = lower_legacy_type_alias_ann_assign(stmt, &aliases)? {
+            // Same reverse-direction check as the `type X = ...` arm above,
+            // for the legacy `X: TypeAlias = <expr>` spelling.
+            if class_defs.iter().any(|(class_name, _)| *class_name == name) {
+                return Err(unsupported(
+                    format!(
+                        "type alias `{name}` collides with a class of the same name \
+                         already defined in this module"
+                    ),
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             aliases.push((name, ty));
             continue;
         }
         if let Some(mut bound) = lower_import_stmt(stmt)? {
+            // Same reverse-direction check as the two type-alias arms above,
+            // for `import ...`/`from ... import ...` (a single statement can
+            // bind more than one local name, e.g. `from math import sqrt,
+            // pi`, so every bound name is checked, not just the first).
+            if let Some(colliding) = bound
+                .iter()
+                .map(import_local_name)
+                .find(|local_name| class_defs.iter().any(|(class_name, _)| class_name == local_name))
+            {
+                return Err(unsupported(
+                    format!(
+                        "import `{colliding}` collides with a class of the same name \
+                         already defined in this module"
+                    ),
+                    pycc_ast::stmt_range(stmt),
+                ));
+            }
             imports.append(&mut bound);
             continue;
+        }
+        if let Stmt::ClassDef(def) = stmt {
+            let (class_def, mut method_items) = class::lower_class(def, &aliases)?;
+            // D-154 Part 1's own post-merge review finding: two module-level
+            // classes sharing a name would each lower their own `__init__`
+            // (and any other same-named method) to the identical mangled
+            // `<Name>.<method>` function name, silently colliding in
+            // `HirModule::items`/`class_defs`'s `HashMap`-collected class
+            // table downstream (`pycc_types::Environment::classes`,
+            // `pycc_mir`'s own `classes` map) rather than producing a clean
+            // diagnostic -- reject it here, at the same point `lower_class`'s
+            // own duplicate-method check (`crates/pycc_hir/src/class.rs`)
+            // fires for the identical shape one level down.
+            if class_defs.iter().any(|(name, _)| name == &class_def.name) {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` is defined more than once in this module",
+                        class_def.name
+                    ),
+                    def.range,
+                ));
+            }
+            // D-068 review finding on #385: a class name colliding with an
+            // already-defined top-level function, type alias, or import
+            // name produced no diagnostic and silently, permanently
+            // shadowed the earlier binding -- `pycc_types::Environment`
+            // checks `env.lookup_class(callee)` before the ordinary
+            // function lookup at every call site (`crates/pycc_types/src/
+            // lib.rs`), on the (until now unenforced) assumption that a
+            // class name can never collide with a real function name in
+            // this compiler's flat, single-namespace model. Enforce that
+            // assumption here, at the same point the class-vs-class check
+            // above already fires, rather than leaving it merely asserted
+            // in a comment one crate over. Only a top-level function name
+            // is checked against `items` (a method's own mangled
+            // `<ClassName>.<method>` name can never collide with a bare
+            // class name -- a real Python `NAME` token can never contain a
+            // `.`, `pycc_hir::class`'s own doc comment).
+            if items
+                .iter()
+                .any(|item| matches!(item, HirItem::Function { name, .. } if *name == class_def.name))
+            {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` collides with a function of the same name already \
+                         defined in this module",
+                        class_def.name
+                    ),
+                    def.range,
+                ));
+            }
+            if aliases.iter().any(|(name, _)| name == &class_def.name) {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` collides with a type alias of the same name already \
+                         defined in this module",
+                        class_def.name
+                    ),
+                    def.range,
+                ));
+            }
+            if imports
+                .iter()
+                .any(|binding| import_local_name(binding) == class_def.name)
+            {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` collides with an import of the same name already \
+                         defined in this module",
+                        class_def.name
+                    ),
+                    def.range,
+                ));
+            }
+            class_defs.push((class_def.name.clone(), class_def));
+            items.append(&mut method_items);
+            continue;
+        }
+        if let Stmt::FunctionDef(def) = stmt
+            && class_defs.iter().any(|(name, _)| name == def.name.as_str())
+        {
+            // The reverse direction of the check above: a top-level
+            // function defined *after* a same-named class must be rejected
+            // too, not only a class defined after a same-named function.
+            return Err(unsupported(
+                format!(
+                    "function `{}` collides with a class of the same name already \
+                     defined in this module",
+                    def.name
+                ),
+                def.range,
+            ));
         }
         let item = match stmt {
             Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
@@ -519,6 +756,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         items,
         type_aliases: aliases,
         imports,
+        class_defs,
     })
 }
 
@@ -853,9 +1091,27 @@ fn lower_params(
             parameters.range,
         ));
     }
-    parameters
-        .args
-        .iter()
+    lower_arg_list(&parameters.args, is_public, fn_name, type_param, aliases)
+}
+
+/// Lowers a plain positional-parameter list (no `/`/`*`/`**`/keyword-only
+/// markers -- callers are responsible for rejecting those first, since their
+/// diagnostics differ by caller: `lower_params` reports them against a
+/// top-level function's own `parameters`, `class::lower_method` (D-154, Part
+/// 1 of #375) reports the identical checks against a method's `parameters`,
+/// which also includes the leading `self` parameter that helper strips
+/// before delegating here). Factored out of `lower_params` (which still owns
+/// every top-level function's own shape validation, unchanged) so both
+/// callers share this one per-parameter annotation-resolution rule instead
+/// of duplicating it.
+pub(crate) fn lower_arg_list(
+    args: &[pycc_ast::ParameterWithDefault],
+    is_public: bool,
+    fn_name: &str,
+    type_param: Option<&str>,
+    aliases: &[(String, Ty)],
+) -> Result<Vec<(String, Ty)>, Diagnostic> {
+    args.iter()
         .map(|param| {
             if param.default.is_some() {
                 return Err(unsupported(
@@ -1062,31 +1318,36 @@ mod tests {
         // D-109: before this task, size_of::<Ty>() measured 24 bytes (Vec<Ty>'s
         // ptr+len+cap dominates). This is a real regression guard, not a vibe --
         // it must stay strictly smaller than 24 forever, catching any future
-        // change that re-inflates Ty back to its pre-fix size. PR-13 (D-133)
-        // later added Ty::Param, a new dataful variant -- see the more
-        // general `ty_size_stays_within_d109_ceiling` test below, which
-        // covers the ceiling for the current variant set including it.
+        // change that re-inflates Ty back to its pre-fix size. This test's
+        // own numeric assertion documents PR-11's variant set specifically
+        // (PR-11 itself added no new Ty variants, only the Dict/Tuple boxing
+        // fix) -- every later PR that adds a new dataful variant (D-133's
+        // `Ty::Param`, D-154's `Ty::Instance`) is covered instead by the
+        // more general `ty_size_stays_within_d109_ceiling` test below, which
+        // tracks the ceiling for the *current* variant set rather than
+        // pinning it to one historical PR's shape.
         assert_eq!(
             std::mem::size_of::<Ty>(),
             16,
-            "size_of::<Ty>() must stay 16 bytes (PR-10 Task 14, D-109) -- PR-11 adds \
-             no new Ty variants, so this must not move; if it does, something in this \
-             PR accidentally widened Ty's boxing, not the containers themselves",
+            "size_of::<Ty>() must stay 16 bytes (PR-10 Task 14, D-109) -- if it \
+             moves, something accidentally widened Ty's boxing, not the containers \
+             themselves",
         );
     }
 
     #[test]
     fn ty_size_stays_within_d109_ceiling() {
-        // D-133: `Ty::Param(Box<String>)` is a new dataful variant added
-        // after the D-109 boxing fix. `Box<String>` is a single (thin,
-        // 8-byte) pointer -- unlike `Box<str>`, which measured 24 bytes here
-        // because `str` is unsized (see the variant's own doc comment) --
-        // so it must not push `size_of::<Ty>()` back past the 16-byte
-        // ceiling that fix established.
+        // D-133 added `Ty::Param(Box<String>)`; D-154 added
+        // `Ty::Instance(Box<String>)`. Both are a single (thin, 8-byte)
+        // pointer -- unlike `Box<str>`, which measured 24 bytes here because
+        // `str` is unsized (see each variant's own doc comment) -- so
+        // neither pushes `size_of::<Ty>()` back past the 16-byte ceiling
+        // D-109 established.
         assert!(
             std::mem::size_of::<Ty>() <= 16,
             "size_of::<Ty>() must stay within the D-109 16-byte ceiling; adding \
-             Ty::Param(Box<String>) (D-133) must not regress it, got {}",
+             Ty::Param(Box<String>) (D-133) and Ty::Instance(Box<String>) (D-154) \
+             must not regress it, got {}",
             std::mem::size_of::<Ty>(),
         );
     }
@@ -1103,6 +1364,18 @@ mod tests {
         assert_eq!(
             Ty::Tuple(Box::new(vec![Ty::Int, Ty::Str])).name(),
             "tuple[int, str]"
+        );
+    }
+
+    #[test]
+    fn ty_instance_name_is_the_bare_class_name() {
+        // Unlike every other dataful variant, `Ty::Instance`'s `.name()`
+        // is not wrapped in a `<kind>[...]` shape -- a class instance's
+        // type is spelled exactly like the class itself in real Python
+        // (`Point`, not `Instance[Point]`).
+        assert_eq!(
+            Ty::Instance(Box::new("Point".to_string())).name(),
+            "Point"
         );
     }
 
@@ -1381,9 +1654,47 @@ mod tests {
     }
 
     #[test]
-    fn assigning_to_a_non_name_target_is_unsupported() {
+    fn assigning_to_an_attribute_target_lowers_to_attr_set() {
+        // D-154 (Part 1 of #375) supersedes this test's own former
+        // "`x.attr = 1` is unsupported" invariant: attribute-assignment
+        // targets are now structurally recognized (`HirStmt::AttrSet`) for
+        // every class method's own `self.<attr> = ...` writes, and -- since
+        // this lowering step has no type information, mirroring
+        // `HirStmt::DictSet`'s own bare-name-base precedent -- for any other
+        // base expression too. `pycc_types` rejects a base that isn't
+        // actually a class instance, or an attribute name the base's class
+        // never declares.
+        let module = pycc_parser_test_helper::parse("x.attr = 1\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::AttrSet {
+                base: HirExpr::Name("x".to_string()),
+                attr: "attr".to_string(),
+                value: HirExpr::IntLiteral(1),
+            })]
+        );
+    }
+
+    #[test]
+    fn assigning_to_an_attribute_target_propagates_an_unsupported_base_expression() {
+        // Exercises the `?` inside `Stmt::Assign`'s own `Expr::Attribute`
+        // arm's `base` lowering (D-154), mirroring
+        // `method_call_propagates_an_unsupported_base_expression` above.
+        let module = pycc_parser_test_helper::parse("(1j).attr = 1\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn assigning_to_a_tuple_unpacking_target_is_unsupported() {
+        // The remaining assignment-target shape this file still rejects
+        // after `Expr::Name`/`Expr::Subscript`/`Expr::Attribute` are all
+        // now recognized: multi-target unpacking (`a, b = ...`) has no HIR
+        // shape at all yet.
         assert_capability_error_message(
-            "x.attr = 1\n",
+            "a, b = 1, 2\n",
             "only assigning to a bare name is supported so far",
         );
     }
@@ -2346,9 +2657,11 @@ mod tests {
 
     #[test]
     fn rejects_an_annotated_assignment_to_a_non_name_target() {
-        // Matches Stmt::Assign's own existing restriction (only a bare name
-        // target is supported so far) -- e.g. `obj.attr: int = 1` has no
-        // attribute-access support anywhere else in the compiler either.
+        // Unlike `Stmt::Assign` (which now accepts an `Expr::Attribute`
+        // target -- `obj.attr = 1` -- as of D-154 Part 1 of #375, see
+        // `stmt.rs`'s own comment on that arm), `Stmt::AnnAssign` still only
+        // accepts a bare-name target: `obj.attr: int = 1` has no
+        // attribute-annotated-assignment support anywhere in the compiler.
         assert_capability_error_message(
             "obj.attr: int = 1\n",
             "only assigning to a bare name is supported so far",
@@ -2641,21 +2954,48 @@ mod tests {
     }
 
     #[test]
-    fn calling_an_unrecognized_method_is_unsupported() {
-        // Any other `.method()` call is rejected before ever falling through
-        // to the bare-name-callee check below it -- this project only
-        // special-cases `.append()`/`.pop()`/`.get()`/`.add()`, not general
-        // method dispatch (D-105, widened by D-119). `.remove()` is a
-        // deliberately chosen example: it is a real `list` method D-119
-        // explicitly did not ship (`list.pop()` is the one growable/lookup
-        // operation this PR ships for `list`), not a strawman.
-        assert_capability_error_message(
-            "foo.bar()\n",
-            "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.bar(...)`",
+    fn calling_an_unrecognized_method_lowers_to_a_generic_method_call() {
+        // Before D-154 (Part 1 of #375), any `.method()` call other than
+        // `.append()`/`.pop()`/`.get()`/`.add()` was rejected right here at
+        // HIR-lowering time (D-105, widened by D-119) -- this project had no
+        // general method-dispatch shape at all yet. D-154 adds one
+        // (`HirExpr::MethodCall`, for instance methods), and -- since this
+        // lowering step has no type information to distinguish "receiver is
+        // a class instance" from "receiver is anything else" -- every
+        // `.method()` call not claimed by a hand-recognized container
+        // method or a resolved stdlib symbol call now lowers successfully
+        // into that generic shape. `foo`/`x` are never assigned in either
+        // snippet below, so real rejection now happens downstream, at
+        // `pycc_types` (an unbound-name or non-instance-receiver
+        // diagnostic), not here. `.remove()` is kept as the same
+        // deliberately-chosen example as before (a real `list` method this
+        // compiler doesn't special-case, D-119) to show it now takes the
+        // identical generic path as an arbitrary, entirely unrecognized
+        // name like `.bar()`.
+        let module = pycc_parser_test_helper::parse("foo.bar()\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name("foo".to_string())),
+                    method: "bar".to_string(),
+                    args: vec![],
+                }
+            ))]
         );
-        assert_capability_error_message(
-            "x.remove(1)\n",
-            "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.remove(...)`",
+
+        let module = pycc_parser_test_helper::parse("x.remove(1)\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name("x".to_string())),
+                    method: "remove".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                }
+            ))]
         );
     }
 
@@ -3858,6 +4198,42 @@ mod tests {
                 value: Box::new(HirExpr::Name("new".to_string())),
             }
         );
+
+        // AttrGet (D-154): renames `base`, `attr` is untouched (it names a
+        // field, never a local variable this rename could shadow).
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("old".to_string())),
+                    attr: "x".to_string(),
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("new".to_string())),
+                attr: "x".to_string(),
+            }
+        );
+
+        // MethodCall (D-154): renames `base` and every argument; `method`
+        // is untouched for the same reason `attr` is above.
+        assert_eq!(
+            rename_name_in_expr(
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name("old".to_string())),
+                    method: "bump".to_string(),
+                    args: vec![HirExpr::Name("old".to_string())],
+                },
+                "old",
+                "new",
+            ),
+            HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("new".to_string())),
+                method: "bump".to_string(),
+                args: vec![HirExpr::Name("new".to_string())],
+            }
+        );
     }
 
     // -- D-135: `type` statement and legacy `TypeAlias` -------------------
@@ -4140,24 +4516,54 @@ mod tests {
     }
 
     #[test]
-    fn os_path_bare_attribute_access_is_unsupported() {
+    fn os_path_bare_attribute_access_lowers_to_a_generic_attr_get() {
         // No `import os` here on purpose -- `os` isn't a registered
         // `pycc_std` module at all, so this exercises the "receiver name
         // does not resolve to a stdlib module" branch directly, distinct
         // from `math_tan_bare_reference_is_unsupported_since_it_is_not_registered`
-        // above (recognized module, unregistered attribute).
+        // above (recognized module, unregistered attribute -- which stays
+        // `C0001`, see that test and `math_tan_call_is_unsupported_since_it_is_not_registered`'s
+        // own updated comment). Before D-154 (Part 1 of #375), a receiver
+        // that didn't resolve to a stdlib module made *any* attribute
+        // access `C0001` unconditionally; D-154 adds a generic
+        // instance-attribute-read shape (`HirExpr::AttrGet`) that this now
+        // falls through to instead, deferring real rejection (`os` is
+        // never assigned, so it isn't a class instance either) to
+        // `pycc_types`.
         let module = pycc_parser_test_helper::parse("print(os.path)\n");
-        let diagnostic = lower_checked(&module).unwrap_err();
-
-        assert_eq!(diagnostic.code, "C0001");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("os".to_string())),
+                    attr: "path".to_string(),
+                }],
+            }))]
+        );
     }
 
     #[test]
-    fn attribute_access_on_a_non_name_receiver_is_unsupported() {
+    fn attribute_access_on_a_non_name_receiver_lowers_to_a_generic_attr_get() {
+        // Same D-154 widening as the `os.path` test above, exercised on a
+        // receiver that isn't even a bare name (a list literal) -- `base`
+        // is lowered generically regardless of its own shape.
         let module = pycc_parser_test_helper::parse("print([1, 2].sqrt)\n");
-        let diagnostic = lower_checked(&module).unwrap_err();
-
-        assert_eq!(diagnostic.code, "C0001");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::ListLiteral(vec![
+                        HirExpr::IntLiteral(1),
+                        HirExpr::IntLiteral(2)
+                    ])),
+                    attr: "sqrt".to_string(),
+                }],
+            }))]
+        );
     }
 
     #[test]
@@ -4173,14 +4579,58 @@ mod tests {
     }
 
     #[test]
-    fn method_call_on_a_non_name_receiver_is_unsupported() {
-        // Exercises the call-position stdlib-intrinsic branch's own
-        // `Expr::Name(receiver)` guard failing (as opposed to the bare
-        // attribute-access arm's analogous guard above).
-        let module = pycc_parser_test_helper::parse("[1, 2].sqrt()\n");
+    fn method_call_propagates_an_unsupported_base_expression() {
+        // Exercises the `?` inside `MethodCall`'s own `base` lowering
+        // (D-154), as opposed to `method_call_on_a_non_name_receiver_lowers_to_a_generic_method_call`
+        // below, which only exercises the success path for a non-name base.
+        let module = pycc_parser_test_helper::parse("(1j).bump()\n");
         let diagnostic = lower_checked(&module).unwrap_err();
 
         assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn method_call_propagates_an_unsupported_argument_expression() {
+        // Exercises the `?` inside `MethodCall`'s own argument lowering
+        // (D-154), mirroring `math_sqrt_call_propagates_an_unsupported_argument_expression`
+        // above.
+        let module = pycc_parser_test_helper::parse("p.bump(1j)\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn attr_get_propagates_an_unsupported_base_expression() {
+        // Exercises the `?` inside `AttrGet`'s own `base` lowering (D-154).
+        let module = pycc_parser_test_helper::parse("(1j).x\n");
+        let diagnostic = lower_checked(&module).unwrap_err();
+
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn method_call_on_a_non_name_receiver_lowers_to_a_generic_method_call() {
+        // Exercises the call-position stdlib-intrinsic branch's own
+        // `Expr::Name(receiver)` guard failing (as opposed to the bare
+        // attribute-access arm's analogous guard above) -- before D-154
+        // (Part 1 of #375) this was unconditionally `C0001`; now it falls
+        // through to the generic `HirExpr::MethodCall` shape instead, same
+        // as `os_path_bare_attribute_access_lowers_to_a_generic_attr_get`
+        // above.
+        let module = pycc_parser_test_helper::parse("[1, 2].sqrt()\n");
+        let hir = lower_checked(&module).unwrap();
+        assert_eq!(
+            hir.items,
+            vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::MethodCall {
+                base: Box::new(HirExpr::ListLiteral(vec![
+                    HirExpr::IntLiteral(1),
+                    HirExpr::IntLiteral(2)
+                ])),
+                method: "sqrt".to_string(),
+                args: vec![],
+            }))]
+        );
     }
 
     #[test]

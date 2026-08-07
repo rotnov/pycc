@@ -243,8 +243,25 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                 // design, recorded here rather than silently.
                 if let Expr::Name(receiver) = attr.value.as_ref()
                     && let Some(module) = pycc_std::resolve_module(receiver.id.as_str())
-                    && let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str())
                 {
+                    // Unlike the generic `MethodCall` fallback below, a
+                    // receiver that *is* a resolvable stdlib module keeps
+                    // its existing "not registered" rejection even when the
+                    // called symbol itself doesn't resolve -- falling
+                    // through to `MethodCall` here would silently turn
+                    // `math.tan(1.0)` (a real module, an unregistered
+                    // symbol) into "call method `tan` on `math`", losing
+                    // the far more precise stdlib diagnostic.
+                    let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str()) else {
+                        return Err(unsupported(
+                            format!(
+                                "module `{}` has no importable symbol named `{}`",
+                                receiver.id.as_str(),
+                                attr.attr
+                            ),
+                            call.range,
+                        ));
+                    };
                     let args = call
                         .arguments
                         .args
@@ -256,13 +273,30 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                         args,
                     });
                 }
-                return Err(unsupported(
-                    format!(
-                        "only the `.append()`/`.pop()`/`.get()`/`.add()` methods are supported so far, got `.{}(...)`",
-                        attr.attr
-                    ),
-                    call.range,
-                ));
+                // `base.method(args)` (D-154, Part 1 of #375): the generic
+                // instance-method-call fallback, tried only after every
+                // hand-recognized container method and the stdlib-module
+                // call above -- both must keep winning first, or e.g.
+                // `xs.append(1)` would start lowering as a `MethodCall`
+                // instead of the dedicated `ListAppend` node, silently
+                // breaking every existing container-method conformance
+                // fixture. `base` is lowered generically (mirroring
+                // `Expr::Attribute`'s own instance-attribute-read fallback
+                // below): this lowering step has no type information to
+                // narrow it further, so `pycc_types` is the one that
+                // rejects a method call on a non-instance-typed receiver or
+                // an unknown method name.
+                let args = call
+                    .arguments
+                    .args
+                    .iter()
+                    .map(|e| lower_expr(e, in_function))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(HirExpr::MethodCall {
+                    base: Box::new(lower_expr(&attr.value, in_function)?),
+                    method: attr.attr.to_string(),
+                    args,
+                });
             }
             let Expr::Name(callee) = call.func.as_ref() else {
                 return Err(unsupported(
@@ -378,29 +412,40 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
         // special-case without any risk of colliding with a real variable
         // named `pi`.
         Expr::Attribute(attr) => {
-            let Expr::Name(receiver) = attr.value.as_ref() else {
-                return Err(unsupported(
-                    "attribute access is only supported on a stdlib module name so far",
-                    pycc_ast::expr_range(expr),
-                ));
-            };
-            let Some(module) = pycc_std::resolve_module(receiver.id.as_str()) else {
-                return Err(unsupported(
-                    "attribute access is only supported on a stdlib module name so far",
-                    pycc_ast::expr_range(expr),
-                ));
-            };
-            let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str()) else {
-                return Err(unsupported(
-                    format!(
-                        "module `{}` has no attribute `{}`",
-                        receiver.id.as_str(),
-                        attr.attr
-                    ),
-                    pycc_ast::expr_range(expr),
-                ));
-            };
-            HirExpr::Name(format!("{}.{}", receiver.id.as_str(), symbol.name))
+            if let Expr::Name(receiver) = attr.value.as_ref()
+                && let Some(module) = pycc_std::resolve_module(receiver.id.as_str())
+            {
+                let Some(symbol) = pycc_std::resolve_symbol(module, attr.attr.as_str()) else {
+                    return Err(unsupported(
+                        format!(
+                            "module `{}` has no attribute `{}`",
+                            receiver.id.as_str(),
+                            attr.attr
+                        ),
+                        pycc_ast::expr_range(expr),
+                    ));
+                };
+                return Ok(HirExpr::Name(format!(
+                    "{}.{}",
+                    receiver.id.as_str(),
+                    symbol.name
+                )));
+            }
+            // `base.attr` (D-154, Part 1 of #375): the generic
+            // instance-attribute-read fallback, tried only after the
+            // stdlib-module case above -- a receiver that *is* a resolvable
+            // module keeps its existing "no attribute named ..." rejection
+            // unchanged rather than falling through here (that error names
+            // the exact reason far more precisely than a generic
+            // "not a declared attribute" `pycc_types` diagnostic could).
+            // Every other receiver shape -- `self`, any other bare name,
+            // or an arbitrary nested expression -- lowers `base` generically
+            // and defers to `pycc_types` to reject a non-instance base or an
+            // attribute name the base's class never declares.
+            HirExpr::AttrGet {
+                base: Box::new(lower_expr(&attr.value, in_function)?),
+                attr: attr.attr.to_string(),
+            }
         }
         // `yield`/`yield from` outside any function body is a CPython
         // `SyntaxError`, not "valid but unimplemented" (D-149, the
@@ -524,6 +569,15 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
         HirExpr::SetAdd { set, value } => HirExpr::SetAdd {
             set: if set == from { to.to_string() } else { set },
             value: Box::new(recurse(*value)),
+        },
+        HirExpr::AttrGet { base, attr } => HirExpr::AttrGet {
+            base: Box::new(recurse(*base)),
+            attr,
+        },
+        HirExpr::MethodCall { base, method, args } => HirExpr::MethodCall {
+            base: Box::new(recurse(*base)),
+            method,
+            args: args.into_iter().map(recurse).collect(),
         },
     }
 }
