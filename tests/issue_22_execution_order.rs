@@ -359,3 +359,36 @@ fn multiple_calls_to_same_function_work() {
         "multiple calls should produce correct output"
     );
 }
+
+#[test]
+fn generic_function_calls_dispatch_directly() {
+    // Monomorphized generic specializations (`0gen_...` names) dispatch
+    // directly through `direct_value`, not through the indirect
+    // function-pointer slot. This test covers that code path and verifies
+    // a generic function still produces correct output after the
+    // execution-order changes.
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_issue22_generic_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "generic.py",
+        "def identity[T](x: T) -> T:\n    return x\n\nprint(identity(1))\nprint(identity(\"hi\"))\nprint(identity(2))\n",
+    );
+    let out = dir.join("generic");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "pycc build should succeed for a generic function"
+    );
+
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(
+        output.stdout, b"1\nhi\n2\n",
+        "generic function should produce correct output"
+    );
+}

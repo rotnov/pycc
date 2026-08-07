@@ -4361,15 +4361,15 @@ fn compile_to_object_with_observer(
                 // Monomorphized generic specializations (`0gen_...` names)
                 // have no `fn_ptr_global` (they dispatch directly), so
                 // skip the store for them.
-                if let Some(&(_, f)) = def_iter.next() {
-                    let uf = &user_functions[name.as_str()];
-                    if let Some(ref fn_ptr_global) = uf.fn_ptr_global {
-                        let _ = builder
-                            .build_store(
-                                fn_ptr_global.as_pointer_value(),
-                                f.as_global_value().as_pointer_value(),
-                            );
-                    }
+                let &(_, f) = def_iter.next().expect(
+                    "def_iter should have an entry for every MirItem::Function                      (the declaration pass populates function_defs_in_order                      from the same mir.items in the same order)",
+                );
+                let uf = &user_functions[name.as_str()];
+                if let Some(ref fn_ptr_global) = uf.fn_ptr_global {
+                    let _ = builder.build_store(
+                        fn_ptr_global.as_pointer_value(),
+                        f.as_global_value().as_pointer_value(),
+                    );
                 }
             }
         }
@@ -6983,6 +6983,44 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"42\n");
+    }
+
+    #[test]
+    fn monomorphized_generic_function_dispatches_directly_without_fn_ptr_global() {
+        // A monomorphized generic specialization (`0gen_...` name) has no
+        // `fn_ptr_global` -- it dispatches directly through `direct_value`.
+        // This test covers the `None` path of `if let Some(ref fn_ptr_global)`
+        // in the top-level binding pass and the `direct_value` path in
+        // `build_call_to_with_leading_args`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "0gen_identity__T_int".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "0gen_identity__T_int".to_string(),
+                        args: vec![MirExpr::IntLiteral(7)],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("monomorphized_direct_dispatch");
+        let obj_path = dir.join("monomorphized_direct_dispatch.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("monomorphized_direct_dispatch");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"7\n");
     }
 
     #[test]
