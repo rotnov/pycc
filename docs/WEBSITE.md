@@ -54,14 +54,15 @@ is now caught mechanically instead of relying on a reviewer to notice.
 
 The status page's "Planned next" section states, in one sentence, that the
 `frontend-perf-gate`'s greater-than-7.0% regression floor (D-051/D-053/D-056/
-D-062/D-114) stays required through all of v0.3's remaining work, enforced by
-a paired predecessor/candidate measurement, and links to `docs/ROADMAP.md`
-for the gate's full mechanics instead of restating them on the page. The
-detailed mechanics themselves — same-runner sequencing, sealed predecessor
-timing, executable-input classification, the fixed five-run plan, the
-ten-file evidence set, and the fail-closed identity checks — live only in
-this roadmap entry and the cited decision records, not duplicated on the
-public page.
+D-062/D-114) stays required through all of this remaining work (v0.3's
+class-model items plus the conformance-matrix, fuzzing, and corpus-testing
+work carried over from v0.1/v0.2), enforced by a paired predecessor/candidate
+measurement, and links to `docs/ROADMAP.md` for the gate's full mechanics
+instead of restating them on the page. The detailed mechanics themselves —
+same-runner sequencing, sealed predecessor timing, executable-input
+classification, the fixed five-run plan, the ten-file evidence set, and the
+fail-closed identity checks — live only in the roadmap entry cited above and
+its decision records, not duplicated on the public page.
 
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile
