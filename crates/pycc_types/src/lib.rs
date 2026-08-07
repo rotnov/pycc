@@ -20750,4 +20750,41 @@ mod tests {
         };
         assert!(check(&hir).is_ok());
     }
+
+    #[test]
+    fn check_incompatible_redefinitions_skips_infer_signature_functions() {
+        // Functions whose signature contains Ty::Infer (unresolved by the
+        // solver) are skipped by check_incompatible_redefinitions -- comparing
+        // Infer against a concrete type would be a false positive. The
+        // post-resolution call in check_and_resolve catches them.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        // check() should not reject this -- the Infer signature is skipped,
+        // so no incompatible redefinition is detected at this stage.
+        let result = check(&hir);
+        // The result may be Ok or Err depending on other checks, but it
+        // should NOT be a T0021 incompatible redefinition error.
+        if let Err(e) = result {
+            assert_ne!(
+                e.code, "T0021",
+                "should not report incompatible redefinition for Infer signatures: {}",
+                e.message
+            );
+        }
+    }
 }
