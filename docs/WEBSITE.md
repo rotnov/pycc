@@ -52,18 +52,16 @@ move with the authoritative roadmap whenever implementation depth changes; see
 "Status-page freshness enforcement" below for how a stale claim like this one
 is now caught mechanically instead of relying on a reviewer to notice.
 
-The status page presents D-051/D-053/D-056/D-062's active fixed-replicate,
-source-aware paired gate
-independently of later compiler slices. It states that the frontend measurement
-and regression gate are required through `ci-gate`, measure the exact
-predecessor and candidate sequentially on one hosted runner, seal the
-predecessor timing before candidate code runs, and classify complete
-repository-owned executable inputs before that execution. Identical inputs
-make timing non-blocking environment telemetry; changed source uses exactly
-five complete runs per revision, compares the median of their per-run medians,
-and keeps the hard greater-than-7.0% block (D-114). The gate fails closed on revision,
-benchmark-contract, executable-input identity, artifact-identity, exact
-ten-file evidence, or comparison drift.
+The status page's "Planned next" section states, in one sentence, that the
+`frontend-perf-gate`'s greater-than-7.0% regression floor (D-051/D-053/D-056/
+D-062/D-114) stays required through all of v0.3's remaining work, enforced by
+a paired predecessor/candidate measurement, and links to `docs/ROADMAP.md`
+for the gate's full mechanics instead of restating them on the page. The
+detailed mechanics themselves — same-runner sequencing, sealed predecessor
+timing, executable-input classification, the fixed five-run plan, the
+ten-file evidence set, and the fail-closed identity checks — live only in
+this roadmap entry and the cited decision records, not duplicated on the
+public page.
 
 The canonical search phrase is “ahead-of-time compiler for typed Python”.
 Copy may use close, natural variants such as “Python AOT compiler” and “compile
@@ -148,13 +146,13 @@ duplicate sitemap `lastmod` and a value that disagrees with the corresponding
 page's `WebPage.dateModified`. It also mutates
 the landing, status, architecture, comparison, Markdown, and `llms.txt`
 frontend/backend claims independently, preventing a structurally valid site
-from silently describing a superseded compiler milestone. It also removes the
-status page's paired same-runner measurement, exact-revision provenance,
-predecessor-before-candidate sealing, executable-input classification,
-conditional telemetry rule, changed-source hard threshold, and fail-closed
-revision/contract/identity/artifact/comparison requirements independently so
-the validator rejects a public performance-gate claim that no longer matches
-CI. The comparison-page claim/source binding has its own mutation suite:
+from silently describing a superseded compiler milestone. It also weakens the
+status page's perf-gate enforcement claim (the greater-than-7.0% regression
+floor enforced by a paired predecessor/candidate measurement) so the
+validator rejects a public performance-gate claim that no longer matches
+CI; the gate's detailed mechanics are documented only in `docs/ROADMAP.md`
+and its cited decision records, not asserted against the status page's own
+text, so no mutation targets them there. The comparison-page claim/source binding has its own mutation suite:
 value-false mutations corrupt each external project's output or positioning
 cell while keeping source URLs intact, proving that source-link presence alone
 does not satisfy a value claim; model-HTML mismatch mutations change
