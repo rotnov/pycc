@@ -234,8 +234,12 @@ fn incompatible_redefinition_is_a_check_error() {
 }
 
 /// Issue #22 review fix: a redefinition with a different signature must
-/// also be rejected by `pycc build` (the post-resolution check in
-/// `check_and_resolve` catches the solver path too).
+/// also be rejected by `pycc build`. Both signatures here are fully
+/// concrete, so this fixture is rejected by the pre-resolution check
+/// (`check_and_resolve` calls `checked_function_signatures`, which calls
+/// `check_incompatible_redefinitions` before any solver resolution runs)
+/// -- not by the post-resolution re-check, which only ever fires on a
+/// redefinition involving at least one `Ty::Infer` signature (see #402).
 #[test]
 fn incompatible_redefinition_is_a_build_error() {
     let dir = std::env::temp_dir()
