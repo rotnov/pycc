@@ -110,6 +110,27 @@ The sitemap lists the landing page plus `/status/`, `/architecture/`,
 exactly one `lastmod`, equal to that page's JSON-LD `WebPage.dateModified`, and
 both values advance when main content, structured data, or important links
 materially change. The social preview is `site/og.png`.
+
+The comparison page (`/python-aot-compilers/`) carries a structured
+claim/source model in `site/python-aot-compilers/claims.json`. This JSON file
+is the canonical, reviewable contract for every material comparison-table cell:
+each entity record has `name`, `input_contract`, `html_output_cell`,
+`positioning`, `maturity`, and a `sources` list of `{url, description}`
+records. The HTML page is a human-readable projection of this model.
+`scripts/check-site.sh` parses the HTML comparison table and validates every
+cell against the corresponding field in `claims.json`: it verifies that the
+HTML entity set exactly matches the model entity set, that each cell value
+matches the expected text, that every source URL appears as an `<a href>` on
+the page, that every entity has at least one source, and that `maturity` is a
+non-empty string. The `maturity` field uses explicit labels from sources
+(`pre-alpha`, `alpha`) or `unknown` when no explicit label is found—maturity
+must never be inferred from URL segments, version numbers, or adoption. A
+human or agent reviewer verifies the model against the cited sources at
+model-authoring time; the validator then enforces that the HTML cannot drift
+from the reviewed model. Binding is structural, not semantic: the validator
+checks HTML↔model consistency and source-URL presence, not that source page
+content supports each claim (semantic binding is #202's domain).
+
 `scripts/check-site.sh` enforces these mechanical requirements locally and in
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
@@ -128,7 +149,15 @@ predecessor-before-candidate sealing, executable-input classification,
 conditional telemetry rule, changed-source hard threshold, and fail-closed
 revision/contract/identity/artifact/comparison requirements independently so
 the validator rejects a public performance-gate claim that no longer matches
-CI. The
+CI. The comparison-page claim/source binding has its own mutation suite:
+value-false mutations corrupt each external project's output or positioning
+cell while keeping source URLs intact, proving that source-link presence alone
+does not satisfy a value claim; model-HTML mismatch mutations change
+`claims.json` without the HTML and vice versa, add or remove entities on one
+side only, and relabel maturity in the model while the HTML disagrees; and
+model integrity mutations delete `claims.json`, malform its JSON, remove an
+entity's sources, and set an empty maturity. A positive control verifies that
+minor whitespace changes in comparison cells do not break validation. The
 landing-page contract also requires
 exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
