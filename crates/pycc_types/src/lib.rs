@@ -20774,17 +20774,17 @@ mod tests {
             ],
             type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
-        // check() should not reject this -- the Infer signature is skipped,
-        // so no incompatible redefinition is detected at this stage.
-        let result = check(&hir);
-        // The result may be Ok or Err depending on other checks, but it
-        // should NOT be a T0021 incompatible redefinition error.
-        if let Err(e) = result {
-            assert_ne!(
+        // check() should not reject this as a T0021 incompatible
+        // redefinition -- the Infer signature is skipped, so no
+        // incompatible redefinition is detected at this stage. The result
+        // may be Ok or Err for other reasons, but never T0021.
+        match check(&hir) {
+            Ok(()) => {}
+            Err(e) => assert_ne!(
                 e.code, "T0021",
                 "should not report incompatible redefinition for Infer signatures: {}",
                 e.message
-            );
+            ),
         }
     }
 }
