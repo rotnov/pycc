@@ -93,7 +93,8 @@ $ ./hello
 9227465
 ```
 
-Type errors are compile errors, Rust-style:
+Type errors are compile errors, Rust-style. For example, if `main` read
+`print(fib("35"))` instead:
 
 ```
 error[T0021]: argument 1 of `fib` expects `int`, got `str`

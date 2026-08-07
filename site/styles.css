@@ -376,6 +376,10 @@ h1 span {
   color: #e8c878;
 }
 
+.code-string {
+  color: #9fd8a3;
+}
+
 .diagnostic-card {
   position: absolute;
   right: -22px;
