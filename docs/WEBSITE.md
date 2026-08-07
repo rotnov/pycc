@@ -209,8 +209,10 @@ v0.2 acceptance milestone and into v0.3 before #401 caught it (D-156).
 scoped, two-signal check: it watches a pull request's or push's diff to
 `docs/ROADMAP.md` for (1) the `**Current milestone: ...**` bold line changing,
 or (2) a `<!-- roadmap-evidence: ... -->`-tagged checklist line's checked
-state flipping or a new evidence-marker line being added, reusing
-`scripts/check_roadmap_evidence.rb`'s existing `EVIDENCE_MARKER` parsing. When
+state flipping or a new evidence-marker line being added, using the same
+`EVIDENCE_MARKER` regex as `scripts/check_roadmap_evidence.rb` (duplicated
+byte-for-byte, not shared via `require_relative`, so the two must be kept in
+sync by hand). When
 either signal fires and the same diff touches neither `site/status/index.html`
 nor `site/index.html`, the check fails with a message pointing back at this
 document and at [issue #401](https://github.com/rotnov/pycc/issues/401).

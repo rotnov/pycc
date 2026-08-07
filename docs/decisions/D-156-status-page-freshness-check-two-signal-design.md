@@ -20,9 +20,10 @@ status: accepted
   mechanically detectable signals in a pull request's or push's diff: (1) the
   `**Current milestone: ...**` bold line changing, and (2) a `<!-- roadmap-evidence: ... -->`
   -tagged checklist line's checked state flipping, or a new evidence-marker line being added.
-  Signal detection reuses `scripts/check_roadmap_evidence.rb`'s existing `EVIDENCE_MARKER` regex
-  rather than reinventing marker parsing, matching this project's existing convention of only
-  one parser per marker format. When either signal fires and the same diff touches *neither*
+  Signal detection duplicates `scripts/check_roadmap_evidence.rb`'s `EVIDENCE_MARKER` regex
+  byte-for-byte rather than inventing a new marker format, kept manually in sync between the two
+  files since `check_status_page_freshness.rb` does not `require_relative` the other script. When
+  either signal fires and the same diff touches *neither*
   `site/status/index.html` *nor* `site/index.html`, the check fails with a message pointing at
   this issue and at `docs/WEBSITE.md`. Full auto-generation (mechanism (b)) is rejected as
   impractical: the status/landing pages carry hand-tuned narrative prose (which v0.3 subset has
@@ -70,17 +71,20 @@ status: accepted
   SHA may not already be present the way the literal ref `"HEAD"` always is — and in a
   full-history local run.
 - Empirical validation (performed against this repository's real history before finalizing,
-  per this issue's plan): `21af3ae` ("Fix review findings: advance ROADMAP review date...", a
-  pure date-refresh commit) does not fire — confirmed no milestone-line or evidence-marker
-  change. `4a1e677` ("Close v0.1 acceptance checklist: all 5 criteria now green") fires on the
-  evidence-marker signal, and — because that commit itself already updated both watched pages in
-  the same change — the overall check still passes; this is the correct, self-consistent
-  behavior for a commit that was already keeping the pages in sync manually. PR #388's merge
-  commit (`d7963df`, class model core, #385) does not fire: it does not touch
-  `docs/ROADMAP.md` at all (confirmed via `git show --stat d7963df -- docs/ROADMAP.md`
-  producing no output), so neither signal has anything to compare. No signal-definition
-  correction was needed; all three results matched the plan's stated expectations without
-  adjustment.
+  per this issue's plan, and re-run against the shipped `scripts/check_status_page_freshness.rb`
+  after the whole-line milestone-signal fix landed): `21af3ae` ("Fix review findings: advance
+  ROADMAP review date...", a pure date-refresh commit) does not fire — confirmed no
+  milestone-line or evidence-marker change. `4a1e677` ("Close v0.1 acceptance checklist: all 5
+  criteria now green") fires on the evidence-marker signal, and — because that commit itself
+  already updated both watched pages in the same change — the overall check still passes; this
+  is the correct, self-consistent behavior for a commit that was already keeping the pages in
+  sync manually. PR #388's merge commit (`d7963df`, class model core, #385) does not fire: it
+  does not touch `docs/ROADMAP.md` at all (confirmed via
+  `git show --stat d7963df -- docs/ROADMAP.md` producing no output), so neither signal has
+  anything to compare. All three commits were re-run directly through
+  `ruby scripts/check_status_page_freshness.rb <parent> <commit> .` against the final,
+  whole-line-comparison implementation and produced the same three results recorded above; no
+  signal-definition correction was needed.
 - Consequences: a pull request that flips the roadmap's milestone or an evidence checkbox
   without touching either watched page now fails a required-eligible CI check with an actionable
   message, closing the exact silent-drift failure mode #401 reported. The check is
