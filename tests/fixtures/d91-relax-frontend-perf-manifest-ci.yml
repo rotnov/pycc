@@ -46,7 +46,7 @@ jobs:
       # coverage" section) -- and its two tests are `#[ignore]`d by default,
       # so this step needs no CPython oracle at all; see the oracle-setup
       # steps and explicit `--include-ignored` run further down this job.
-      - name: Hard coverage gate — 100% lines + functions (D-014)
+      - name: Hard coverage gate — 100% lines + regions (D-014)
         run: |
           set -euo pipefail
           LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -83,7 +83,7 @@ jobs:
           run_isolated "$TRUSTED_CARGO" build --target x86_64-apple-darwin -p pycc_rt
           run_isolated "$TRUSTED_CARGO" build --workspace
           run_isolated "$TRUSTED_CARGO" build --release -p pycc_rt
-          run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-functions 100
+          run_isolated "$TRUSTED_COV" llvm-cov --workspace --fail-under-lines 100 --fail-under-regions 100
           rm "$GITHUB_WORKSPACE/target"
           printf 'LLVM_SYS_221_PREFIX=%s\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 
