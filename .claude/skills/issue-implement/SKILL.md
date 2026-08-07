@@ -374,6 +374,34 @@ producing job runs again too. Only a rerun that gathered fresh data counts towar
 one-re-run allowance. If the default branch moves mid-monitoring, reconcile once; two
 consecutive failed reconciliation rounds against a moving target is a stop condition.
 
+A second known-noisy signature, distinct from the nbody gate: `Failed to resolve action
+download info. Error: Service Unavailable` during GitHub Actions' own pre-checkout `Getting
+action download info` step, identical across structurally unrelated jobs (different runners,
+different workflow files) and occurring before any job-specific work — checkout, build, test —
+begins. This is platform infrastructure instability, not a defect in the diff. A commit's
+checks can also span more than one top-level workflow run (e.g. `Agent policy`, `Agent assets`,
+`CI`, `Workflow policy` in this repository); `gh run rerun <id> --failed` only reruns jobs
+within the one run it targets, so `gh run list --repo <repo> --commit <sha>` before assuming a
+rerun covered everything — a missed run's stale failure keeps surfacing as if unresolved.
+Separately, when an aggregating gate job (e.g. `ci-gate`) fails only because some of its
+dependency jobs show `CANCELLED` rather than a genuine `FAILURE`/`TIMED_OUT` — a side effect of
+a partial `--failed` rerun, or of GitHub cancelling in-flight jobs during a platform incident —
+that is not diff-attributable evidence either; rerun the full workflow run (not `--failed`) for
+every affected run so every dependency actually re-executes, rather than investigating the
+diff. `scripts/ci-watch.sh`'s `CHECK FAILED` line names every failing check (not just the
+first) and flags the all-`CANCELLED` case with this same hint.
+
+Before spending the one-re-run allowance on any of the above, corroborate with
+`scripts/gh-status-check.sh Actions` (a single-shot, unauthenticated read of
+`githubstatus.com` — informational only, never a merge blocker by itself): empty output means
+GitHub reports Actions as operational with nothing unresolved, which weakens the infra
+hypothesis and raises the bar for treating a failure as noise; a reported incident or
+non-operational status corroborates it directly. When the status page confirms an active,
+severe incident (e.g. `major_outage`) unlikely to clear inside one re-run's timescale, prefer
+waiting it out via `Monitor` running `scripts/gh-status-check.sh --watch Actions` over
+repeatedly re-running CI into a still-broken platform; re-run once that watch reports the
+matched component back to operational with incidents cleared.
+
 When a push moves the head and monitoring is re-established, carry the previous checkpoint's
 comment inventory forward: a fresh watch replays every pre-existing comment as though it were
 new, and a finding already fixed and resolved re-surfacing as "new" wastes a verification

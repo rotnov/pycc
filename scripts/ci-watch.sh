@@ -4,10 +4,18 @@ set -eu
 # Poll one or more GitHub pull requests every $POLL_INTERVAL seconds
 # (default 10) and emit exactly one line per PR the moment it reaches a
 # terminal state -- merged/closed, merge conflicts, a stale (behind-base)
-# branch, a failed/timed-out/cancelled check, or fully green + CLEAN
-# (ready to merge). Silent between polls: no per-poll spam, one line per
-# PR's actual outcome. Exits once every PR passed on the command line has
-# reached a terminal state.
+# branch, one or more failed/timed-out/cancelled checks (every such check is
+# named, not just the first), or fully green + CLEAN (ready to merge).
+# Silent between polls: no per-poll spam, one line per PR's actual outcome.
+# Exits once every PR passed on the command line has reached a terminal
+# state.
+#
+# When every reported failing check is CANCELLED (no genuine FAILURE or
+# TIMED_OUT among them), the line adds a hint that this is often a
+# partial-rerun or GitHub Actions infra artifact rather than a code defect
+# -- see `issue-implement`'s "Attribute CI failures before reacting" step
+# for how to act on it (a full, non-`--failed` rerun, not a diff
+# investigation).
 #
 # Intended for `Monitor`-style background polling (see
 # .claude/skills/autopilot-async-monitoring/SKILL.md) instead of a fixed
@@ -76,9 +84,16 @@ poll_once() {
       continue
     fi
 
-    failed=$(echo "$data" | jq -r '[.statusCheckRollup[]? | select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="CANCELLED" or .conclusion=="STARTUP_FAILURE")] | .[0].name // empty')
-    if [ -n "$failed" ]; then
-      echo "PR #$pr: CHECK FAILED -- $failed"
+    failed_checks=$(echo "$data" | jq -c '[.statusCheckRollup[]? | select(.conclusion=="FAILURE" or .conclusion=="TIMED_OUT" or .conclusion=="CANCELLED" or .conclusion=="STARTUP_FAILURE")]')
+    failed_count=$(echo "$failed_checks" | jq 'length')
+    if [ "$failed_count" != "0" ]; then
+      failed_list=$(echo "$failed_checks" | jq -r 'map("\(.name) (\(.conclusion))") | join(", ")')
+      non_cancelled=$(echo "$failed_checks" | jq '[.[] | select(.conclusion!="CANCELLED")] | length')
+      if [ "$non_cancelled" = "0" ]; then
+        echo "PR #$pr: CHECK FAILED -- $failed_list -- all CANCELLED, no genuine FAILURE/TIMED_OUT among them; often a partial-rerun or GitHub Actions infra artifact, not a code defect -- consider a full (non --failed) rerun of the affected workflow run(s) before investigating the diff"
+      else
+        echo "PR #$pr: CHECK FAILED -- $failed_list"
+      fi
       mark_resolved "$pr"
       continue
     fi

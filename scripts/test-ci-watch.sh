@@ -14,20 +14,25 @@ fail() {
   exit 1
 }
 
-# --- Fixture 1: a PR whose first poll already reports a failed check -----
+# --- Fixture 1: a PR whose first poll already reports two failed checks --
+# (mixed genuine FAILURE + CANCELLED, not just the first check) ------------
 mkdir -p "$work_dir/fixture-fail/bin"
 cat >"$work_dir/fixture-fail/bin/gh" <<'EOF'
 #!/usr/bin/env sh
 cat <<'JSON'
-{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"agent-assets","status":"COMPLETED","conclusion":"FAILURE"},{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"agent-assets","status":"COMPLETED","conclusion":"FAILURE"},{"name":"ci-gate","status":"COMPLETED","conclusion":"CANCELLED"},{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
 JSON
 EOF
 chmod +x "$work_dir/fixture-fail/bin/gh"
 
 output=$(PATH="$work_dir/fixture-fail/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 42)
 case "$output" in
-  *"PR #42: CHECK FAILED -- agent-assets"*) ;;
-  *) fail "expected failed-check line, got: $output" ;;
+  *"PR #42: CHECK FAILED -- agent-assets (FAILURE), ci-gate (CANCELLED)"*) ;;
+  *) fail "expected failed-check line naming both checks, got: $output" ;;
+esac
+case "$output" in
+  *"all CANCELLED"*) fail "mixed FAILURE+CANCELLED must not get the all-CANCELLED infra hint, got: $output" ;;
+  *) ;;
 esac
 
 # --- Fixture 2: a PR that is CONFLICTING on the first poll ----------------
@@ -132,6 +137,23 @@ esac
 case "$output" in
   *"PR #48: CLOSED"*) ;;
   *) fail "expected PR #48 CLOSED line, got: $output" ;;
+esac
+
+# --- Fixture 7: a PR whose only failing checks are all CANCELLED, with no
+# genuine FAILURE/TIMED_OUT among them -- expects the infra-artifact hint --
+mkdir -p "$work_dir/fixture-all-cancelled/bin"
+cat >"$work_dir/fixture-all-cancelled/bin/gh" <<'EOF'
+#!/usr/bin/env sh
+cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"agent-assets","status":"COMPLETED","conclusion":"CANCELLED"},{"name":"audit","status":"COMPLETED","conclusion":"CANCELLED"}]}
+JSON
+EOF
+chmod +x "$work_dir/fixture-all-cancelled/bin/gh"
+
+output=$(PATH="$work_dir/fixture-all-cancelled/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 49)
+case "$output" in
+  *"PR #49: CHECK FAILED -- agent-assets (CANCELLED), audit (CANCELLED) -- all CANCELLED"*) ;;
+  *) fail "expected all-CANCELLED infra hint, got: $output" ;;
 esac
 
 echo "ci-watch.sh: valid"

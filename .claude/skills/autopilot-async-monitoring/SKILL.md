@@ -47,9 +47,18 @@ timeout is just a backstop). The script polls every `POLL_INTERVAL` seconds
 (default 10, overridable via env) and prints exactly one line per PR the
 moment it becomes: `MERGED`/`CLOSED`, `CONFLICTS` (merge base diverged),
 `STALE` (branch fell behind base — e.g. a sibling PR merged first), `CHECK
-FAILED -- <name>`, or `READY` (every check green and `mergeStateStatus:
-CLEAN`). It is silent between polls — no per-poll spam, only real terminal
-events reach the conversation as `Monitor` notifications.
+FAILED -- <name> (<conclusion>)[, <name> (<conclusion>)...]` (every
+non-passing check is named, not just the first), or `READY` (every check
+green and `mergeStateStatus: CLEAN`). It is silent between polls — no
+per-poll spam, only real terminal events reach the conversation as `Monitor`
+notifications.
+
+When every listed failing check in a `CHECK FAILED` line is `CANCELLED`
+(no genuine `FAILURE`/`TIMED_OUT`/`STARTUP_FAILURE` among them), the script
+appends a hint that this is often a partial-rerun or GitHub Actions infra
+artifact rather than a code defect — see `issue-implement`'s "Attribute CI
+failures before reacting" step for how to act on it (a full, non-`--failed`
+rerun of every affected top-level workflow run, not a diff investigation).
 
 This composes with the "check real state before waiting" rule above: the
 script *is* that state check, run in a loop instead of once, so the terminal
