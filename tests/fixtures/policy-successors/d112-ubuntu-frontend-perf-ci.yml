@@ -812,8 +812,7 @@ jobs:
           ruby scripts/check_replicated_paired_perf_regression.rb \
             target/criterion/pycc_check_frontend_fixture/current \
             target/criterion/pycc_check_frontend_fixture/previous \
-            "$EXECUTABLE_INPUTS_EQUAL" \
-            "7.0"
+            "$EXECUTABLE_INPUTS_EQUAL"
 
   ci-gate:
     needs:

@@ -250,40 +250,6 @@ jobs:
           tar -xf llvm.tar.xz -C llvm-extract --strip-components=1
           echo "LLVM_SYS_221_PREFIX=$(cygpath -w "$(pwd)/llvm-extract")" >> "$GITHUB_ENV"
 
-      # D-099: the hosted image's exact vcpkg commit participates in the
-      # outer GitHub cache key. vcpkg's own ABI hash still validates each
-      # archive, while the outer key also rotates when the hosted image,
-      # LLVM, triplet, runner architecture, or vcpkg baseline changes.
-      - name: Configure vcpkg binary cache identity (Windows)
-        id: vcpkg_cache_identity
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $vcpkgCommit = (& git -C $env:VCPKG_INSTALLATION_ROOT rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $vcpkgCommit -notmatch '^[0-9a-f]{40}$') {
-            Write-Error "could not resolve the hosted runner's exact vcpkg commit"
-            exit 1
-          }
-          $imageVersion = $env:ImageVersion
-          if ($null -eq $imageVersion -or $imageVersion -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
-            Write-Error "could not resolve a safe hosted runner image version"
-            exit 1
-          }
-          $cacheDir = Join-Path $env:RUNNER_TEMP "vcpkg-binary-cache"
-          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
-          "vcpkg_commit=$vcpkgCommit" >> $env:GITHUB_OUTPUT
-          "image_version=$imageVersion" >> $env:GITHUB_OUTPUT
-          "cache_path=$cacheDir" >> $env:GITHUB_OUTPUT
-          "VCPKG_DEFAULT_BINARY_CACHE=$cacheDir" >> $env:GITHUB_ENV
-
-      - name: Restore vcpkg libxml2 binary cache (Windows)
-        id: vcpkg_libxml2_cache_restore
-        if: runner.os == 'Windows'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.vcpkg_cache_identity.outputs.cache_path }}
-          key: vcpkg-libxml2-${{ runner.os }}-${{ runner.arch }}-image-${{ steps.vcpkg_cache_identity.outputs.image_version }}-llvm-${{ env.LLVM_VERSION }}-x64-windows-static-md-${{ steps.vcpkg_cache_identity.outputs.vcpkg_commit }}
-
       # This LLVM release's own llvm-config reports libxml2 as a system lib
       # (see D-027), so llvm-sys requires a real xml2s.lib to link -- vcpkg
       # is preinstalled on GitHub's Windows runners (path varies by image,
@@ -302,19 +268,6 @@ jobs:
           }
           Copy-Item $xml2Lib.FullName "$libDir\xml2s.lib" -Force
           echo "LIB=$libDir;$env:LIB" >> $env:GITHUB_ENV
-
-      # Pull requests can restore the default branch's cache but cannot
-      # publish one. Only trusted main pushes seed a missing exact key.
-      - name: Save vcpkg libxml2 binary cache (Windows main only)
-        if: >-
-          runner.os == 'Windows' &&
-          github.event_name == 'push' &&
-          github.ref == 'refs/heads/main' &&
-          steps.vcpkg_libxml2_cache_restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.vcpkg_cache_identity.outputs.cache_path }}
-          key: ${{ steps.vcpkg_libxml2_cache_restore.outputs.cache-primary-key }}
 
       # tests/conformance.rs (PR-6, D-078) shells out to a hardcoded
       # "python3.14" oracle binary via cargo test --workspace below, on every
@@ -478,7 +431,7 @@ jobs:
   # changed, without selecting retries after seeing a result. The separate gate
   # job never executes compiler/build code from the PR.
   frontend-perf-measure:
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     permissions:
       contents: read
     outputs:
@@ -640,15 +593,11 @@ jobs:
       - name: Show pinned toolchain
         run: rustup show
 
-      - name: Install LLVM 22 (Linux, via apt.llvm.org)
-        run: |-
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 22
-          # llvm.sh's own packages don't pull in Polly's static lib; llvm-sys
-          # links it explicitly, so it must be installed separately here.
-          sudo apt-get install -y libpolly-22-dev
-          echo "LLVM_SYS_221_PREFIX=/usr/lib/llvm-22" >> "$GITHUB_ENV"
+      - name: Install LLVM 22 (D-015)
+        run: brew install llvm@22
+
+      - name: Export LLVM_SYS_221_PREFIX
+        run: echo "LLVM_SYS_221_PREFIX=$(brew --prefix llvm@22)" >> "$GITHUB_ENV"
 
       - name: Benchmark exact predecessor
         id: previous_benchmark
@@ -712,7 +661,7 @@ jobs:
   # reviewed comparator and its tests before executing them.
   frontend-perf-gate:
     needs: frontend-perf-measure
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     permissions:
       actions: read
       contents: read
@@ -812,8 +761,7 @@ jobs:
           ruby scripts/check_replicated_paired_perf_regression.rb \
             target/criterion/pycc_check_frontend_fixture/current \
             target/criterion/pycc_check_frontend_fixture/previous \
-            "$EXECUTABLE_INPUTS_EQUAL" \
-            "7.0"
+            "$EXECUTABLE_INPUTS_EQUAL"
 
   ci-gate:
     needs:

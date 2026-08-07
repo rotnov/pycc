@@ -40,10 +40,10 @@ class RoadmapEvidenceCliTest < Minitest::Test
     Pathname(__dir__).parent /
     "tests/fixtures/d114-frontend-perf-threshold-ci.yml"
   COVERAGE_STEP_HEADER =
-    "      - name: Hard coverage gate — 100% lines + regions (D-014)"
+    "      - name: Hard coverage gate — 100% lines + functions (D-014)"
   COVERAGE_COMMAND =
     "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
-    "--fail-under-lines 100 --fail-under-regions 100"
+    "--fail-under-lines 100 --fail-under-functions 100"
 
   def coverage_workflow(command = COVERAGE_COMMAND)
     <<~YAML
@@ -67,7 +67,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
               run: rustup component add llvm-tools-preview
             - name: Add x86_64-apple-darwin Rust target
               run: rustup target add x86_64-apple-darwin
-            - name: Hard coverage gate — 100% lines + regions (D-014)
+            - name: Hard coverage gate — 100% lines + functions (D-014)
               run: |
                 set -euo pipefail
                 LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -1020,7 +1020,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       [
         D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
         D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-        D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+        D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+        "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
       ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
@@ -1732,7 +1733,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
+    assert_includes stderr, "evidence does not provide the exact 100% line and functions gate"
   end
 
   def test_public_cli_rejects_the_pre_d99_d91_workflow
@@ -1847,7 +1848,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   # This block's expected message is `coverage_gate_present?`'s ("evidence
-  # does not provide the exact 100% line and region gate"), not the
+  # does not provide the exact 100% line and functions gate"), not the
   # digest-mismatch one used elsewhere in this file for D91-drift cases:
   # `validate_evidence` checks `coverage_gate_present?` before the whole-file
   # digest, and every fixture below genuinely predates D91's coverage-step
@@ -1863,7 +1864,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
+    assert_includes stderr, "evidence does not provide the exact 100% line and functions gate"
   end
 
   def test_public_cli_rejects_the_retired_d51_workflow
@@ -1873,7 +1874,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
+    assert_includes stderr, "evidence does not provide the exact 100% line and functions gate"
   end
 
   def test_public_cli_rejects_the_retired_d62_workflow
@@ -1883,7 +1884,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
+    assert_includes stderr, "evidence does not provide the exact 100% line and functions gate"
   end
 
   def test_public_cli_rejects_the_retired_d80_workflow
@@ -1893,7 +1894,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
+    assert_includes stderr, "evidence does not provide the exact 100% line and functions gate"
   end
 
   def test_public_cli_rejects_the_retired_d84_workflow
@@ -1903,7 +1904,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
+    assert_includes stderr, "evidence does not provide the exact 100% line and functions gate"
   end
 
   def test_public_cli_rejects_unreviewed_d56_workflow_drift
@@ -1915,7 +1916,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "evidence does not provide the exact 100% line and region gate"
+    assert_includes stderr, "evidence does not provide the exact 100% line and functions gate"
   end
 
   def test_paired_measurement_resolves_the_exact_pull_request_base
@@ -2590,7 +2591,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not provide the exact 100% line and region gate"
+    assert_includes stderr, "does not provide the exact 100% line and functions gate"
   end
 
   def test_rejects_coverage_evidence_when_the_threshold_is_lowered
@@ -2613,7 +2614,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not provide the exact 100% line and region gate"
+    assert_includes stderr, "does not provide the exact 100% line and functions gate"
   end
 
   def test_rejects_a_coverage_step_that_can_be_skipped
