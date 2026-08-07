@@ -983,6 +983,292 @@ fi
 
 cp "$repo_root/site/python-aot-compilers/index.html" \
   "$fixture_root/site/python-aot-compilers/index.html"
+cp "$repo_root/site/python-aot-compilers/claims.json" \
+  "$fixture_root/site/python-aot-compilers/claims.json"
+python3 - "$repo_root" "$fixture_root/site" <<'PY'
+from pathlib import Path
+import json
+import os
+import subprocess
+import sys
+
+
+repo_root = Path(sys.argv[1])
+site_dir = Path(sys.argv[2])
+checker = repo_root / "scripts" / "check-site.sh"
+comp_html = site_dir / "python-aot-compilers" / "index.html"
+claims_json = site_dir / "python-aot-compilers" / "claims.json"
+original_html = comp_html.read_text()
+original_claims = claims_json.read_text()
+environment = dict(os.environ)
+environment["SITE_DIR"] = str(site_dir)
+
+
+def run_checker():
+    return subprocess.run(
+        [str(checker)],
+        cwd=repo_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+
+
+def restore():
+    comp_html.write_text(original_html)
+    claims_json.write_text(original_claims)
+
+
+def expect_reject(description, fn):
+    fn()
+    result = run_checker()
+    restore()
+    if result.returncode == 0:
+        raise SystemExit(
+            f"Validator accepted {description}"
+        )
+
+
+def expect_accept(description, fn):
+    fn()
+    result = run_checker()
+    restore()
+    if result.returncode != 0:
+        raise SystemExit(
+            f"Validator rejected {description}"
+        )
+
+
+# --- Value-false mutations (corrupt HTML cell, keep sources intact) ---
+
+codon_output = "Native machine code without interpreter runtime overhead"
+codon_false = "Requires the CPython interpreter at runtime"
+expect_reject(
+    "Codon output cell corrupted to require CPython",
+    lambda: comp_html.write_text(
+        original_html.replace(codon_output, codon_false, 1)
+    ),
+)
+
+nuitka_output = (
+    "Executable or extension; standalone and onefile modes "
+    "package required runtime dependencies"
+)
+nuitka_false = (
+    "Pure standalone native executable; no CPython or runtime dependencies"
+)
+expect_reject(
+    "Nuitka output cell corrupted to claim no CPython dependency",
+    lambda: comp_html.write_text(
+        original_html.replace(nuitka_output, nuitka_false, 1)
+    ),
+)
+
+mypyc_output = "Native C extension imported and run by CPython"
+mypyc_false = "Standalone native executable that does not use CPython"
+expect_reject(
+    "mypyc output cell corrupted to claim standalone executable",
+    lambda: comp_html.write_text(
+        original_html.replace(mypyc_output, mypyc_false, 1)
+    ),
+)
+
+cython_output = (
+    "Generated C or C++; commonly a CPython extension, with a "
+    "documented CPython-embedding executable path"
+)
+cython_false = (
+    "Pure standalone C/C++ with no Python interpreter dependency"
+)
+expect_reject(
+    "Cython output cell corrupted to claim no Python interpreter dependency",
+    lambda: comp_html.write_text(
+        original_html.replace(cython_output, cython_false, 1)
+    ),
+)
+
+lpython_output = (
+    "AOT binary via LLVM; C, C++, and WASM are also documented "
+    "backends, with optional CPython interop"
+)
+lpython_false = "CPython C extension only; no native executable backend"
+expect_reject(
+    "LPython output cell corrupted to claim CPython extension only",
+    lambda: comp_html.write_text(
+        original_html.replace(lpython_output, lpython_false, 1)
+    ),
+)
+
+mypyc_positioning = (
+    "Alpha; accelerating typed Python modules while keeping "
+    "CPython interoperability"
+)
+mypyc_no_alpha = (
+    "Accelerating typed Python modules while keeping CPython interoperability"
+)
+expect_reject(
+    "mypyc positioning with alpha label removed",
+    lambda: comp_html.write_text(
+        original_html.replace(mypyc_positioning, mypyc_no_alpha, 1)
+    ),
+)
+
+mypyc_stable = (
+    "Stable; accelerating typed Python modules while keeping "
+    "CPython interoperability"
+)
+expect_reject(
+    "mypyc positioning relabeled as Stable",
+    lambda: comp_html.write_text(
+        original_html.replace(mypyc_positioning, mypyc_stable, 1)
+    ),
+)
+
+# --- Model-HTML mismatch mutations ---
+
+# Change claims.json without changing HTML
+def corrupt_claims_codon():
+    data = json.loads(original_claims)
+    for e in data["entities"]:
+        if e["name"] == "Codon":
+            e["html_output_cell"] = "Requires the CPython interpreter at runtime"
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject(
+    "claims.json Codon value changed without HTML update",
+    corrupt_claims_codon,
+)
+
+# Change HTML cell without changing claims.json
+def corrupt_html_codon():
+    comp_html.write_text(
+        original_html.replace(codon_output, "Different output text", 1)
+    )
+
+expect_reject(
+    "HTML Codon cell changed without claims.json update",
+    corrupt_html_codon,
+)
+
+# Add entity to HTML not in claims.json
+def add_html_entity():
+    new_row = (
+        "                  <tr>\n"
+        '                    <th scope="row">ExtraTool</th>\n'
+        "                    <td>Some language</td>\n"
+        "                    <td>Some output</td>\n"
+        "                    <td>Some positioning</td>\n"
+        "                  </tr>\n"
+    )
+    comp_html.write_text(
+        original_html.replace(
+            "                </tbody>\n",
+            new_row + "                </tbody>\n",
+            1,
+        )
+    )
+
+expect_reject(
+    "extra HTML entity not in claims.json",
+    add_html_entity,
+)
+
+# Remove entity from HTML still in claims.json
+def remove_html_entity():
+    start = original_html.index('<tr>\n                    <th scope="row">Codon</th>')
+    end = original_html.index("                  </tr>\n", start) + len("                  </tr>\n")
+    comp_html.write_text(original_html[:start] + original_html[end:])
+
+expect_reject(
+    "HTML entity removed but still in claims.json",
+    remove_html_entity,
+)
+
+# --- Model integrity mutations ---
+
+# Delete claims.json
+def delete_claims():
+    claims_json.unlink()
+
+expect_reject(
+    "missing claims.json",
+    delete_claims,
+)
+
+# Malform claims.json
+def malform_claims():
+    claims_json.write_text("{ invalid json ]")
+
+expect_reject(
+    "malformed claims.json",
+    malform_claims,
+)
+
+# Entity with no sources
+def no_sources():
+    data = json.loads(original_claims)
+    for e in data["entities"]:
+        if e["name"] == "Codon":
+            e["sources"] = []
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject(
+    "claims.json entity with no sources",
+    no_sources,
+)
+
+# Maturity mismatch: model says stable, HTML says Alpha
+def maturity_mismatch():
+    data = json.loads(original_claims)
+    for e in data["entities"]:
+        if e["name"] == "mypyc":
+            e["positioning"] = (
+                "Stable; accelerating typed Python modules while keeping "
+                "CPython interoperability"
+            )
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject(
+    "claims.json maturity mismatch with HTML positioning",
+    maturity_mismatch,
+)
+
+# Empty maturity
+def empty_maturity():
+    data = json.loads(original_claims)
+    for e in data["entities"]:
+        if e["name"] == "Codon":
+            e["maturity"] = ""
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject(
+    "claims.json entity with empty maturity",
+    empty_maturity,
+)
+
+# --- Positive control: minor whitespace change should still pass ---
+
+def whitespace_tolerant():
+    comp_html.write_text(
+        original_html.replace(
+            "<td>Native machine code without interpreter runtime overhead</td>",
+            "<td>  Native machine code without interpreter runtime overhead  </td>",
+            1,
+        )
+    )
+
+expect_accept(
+    "minor whitespace change in comparison cell",
+    whitespace_tolerant,
+)
+PY
+
+cp "$repo_root/site/python-aot-compilers/index.html" \
+  "$fixture_root/site/python-aot-compilers/index.html"
+cp "$repo_root/site/python-aot-compilers/claims.json" \
+  "$fixture_root/site/python-aot-compilers/claims.json"
 cp "$repo_root/site/sitemap.xml" "$fixture_root/site/sitemap.xml"
 python3 - "$fixture_root/site/sitemap.xml" <<'PY'
 from pathlib import Path
@@ -1043,9 +1329,9 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/python-aot-compilers/</loc>
-    <lastmod>2026-08-02</lastmod>"""
+    <lastmod>2026-08-07</lastmod>"""
 assert entry in content
-path.write_text(content.replace(entry, entry.replace("2026-08-02", "2026-07-27"), 1))
+path.write_text(content.replace(entry, entry.replace("2026-08-07", "2026-07-27"), 1))
 PY
 
 if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then

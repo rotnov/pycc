@@ -49,6 +49,15 @@ pub struct Environment {
     /// `helper = 1; def helper(): ...; helper = "leaked"` reach codegen with
     /// an `int`-allocated slot stored as `str`.
     def_rebound: HashSet<String>,
+    /// Issue #22: function names whose `def` has been encountered so far in
+    /// top-level source order. In top-level code, a call to a function not
+    /// yet in this set is a static error (matching CPython's `NameError` for
+    /// call-before-`def`). Function bodies see all module functions
+    /// regardless of order (Python's late binding: a function body is
+    /// evaluated at call time, by which point all module-level `def`s have
+    /// typically executed), so `child_for_function` seeds this set with
+    /// every function name.
+    defined_functions: HashSet<String>,
     /// PR-13 Task 3 (D-133/D-134): the subset of `functions` whose signature
     /// contains a `Ty::Param` (a PEP 695 generic function), keyed by its
     /// *original* (un-mangled) name and carrying the full `HirItem` its
@@ -162,7 +171,14 @@ impl Environment {
     }
 
     pub fn bind_function(&mut self, name: String, param_tys: Vec<Ty>, return_ty: Ty) {
-        Arc::make_mut(&mut self.functions).insert(name, (param_tys, return_ty));
+        Arc::make_mut(&mut self.functions).insert(name.clone(), (param_tys, return_ty));
+        // Issue #22: by default, binding a function also marks it as
+        // defined. This makes standalone `infer_expr` / `check_function`
+        // calls work without callers needing to separately track
+        // `defined_functions`. `check_with_environment` clears this set
+        // before its top-level source-order pass so call-before-`def` is
+        // caught there.
+        self.defined_functions.insert(name);
     }
 
     pub fn lookup_function(&self, name: &str) -> Option<&(Vec<Ty>, Ty)> {
@@ -202,6 +218,14 @@ impl Environment {
             child.bindings.remove(*name);
             child.declared.remove(*name);
         }
+        // Issue #22: a function body may call any module-level function
+        // regardless of source order -- Python's late binding evaluates a
+        // function body at call time, by which point all module-level
+        // `def`s have typically executed. Seed `defined_functions` with
+        // every known function name so the call-before-`def` check in
+        // `infer_expr_in`'s `HirExpr::Call` arm never fires inside a
+        // function body.
+        child.defined_functions.extend(child.functions.keys().cloned());
         child
     }
 }
@@ -1849,6 +1873,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         declared: HashMap::new(),
         functions: Arc::new(functions),
         def_rebound: HashSet::new(),
+        defined_functions: HashSet::new(),
         generics: Arc::new(generics),
         classes: Arc::new(hir.class_defs.iter().cloned().collect()),
     })
@@ -2019,6 +2044,9 @@ fn checked_function_signatures(
     hir: &HirModule,
     function_local_names: &[Vec<&str>],
 ) -> Result<HashMap<String, (Vec<Ty>, Ty)>, Diagnostic> {
+    // Issue #22: reject incompatible redefinitions before trying either the
+    // concrete or solver path (same rationale as `check`'s own call).
+    check_incompatible_redefinitions(hir)?;
     // Fully annotated valid modules have no inference variables to constrain.
     // Validate them once and avoid the preceding constraint-collection walk.
     // If validation fails, deliberately fall back to the historical
@@ -2313,6 +2341,23 @@ fn infer_expr_in(
                     Span::new(0, 0),
                 ));
             };
+            // Issue #22: in top-level code, a call to a function whose
+            // `def` has not been encountered yet in source order is a
+            // static error -- CPython raises `NameError` at runtime for
+            // the same case. Function bodies are exempt (all functions
+            // are marked defined in `child_for_function`) because Python
+            // evaluates a function body at call time, by which point all
+            // module-level `def`s have typically executed.
+            if !env.defined_functions.contains(callee.as_str()) {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!(
+                        "cannot call function `{callee}` before its definition \
+                         (NameError in CPython: name '{callee}' is not defined)"
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
             if arg_tys.len() != param_tys.len() {
                 return Err(Diagnostic::error(
                     "T0021",
@@ -4972,6 +5017,14 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         *return_ty = resolved_return.clone();
     }
 
+    // Issue #22: re-check for incompatible redefinitions on the resolved
+    // HIR. The pre-resolution check in `check`/`checked_function_signatures`
+    // skips functions whose signature contained `Ty::Infer` (the solver
+    // path), so a redefinition whose incompatibility only becomes visible
+    // after inference would slip past it. Here, all types are resolved --
+    // the check catches every case.
+    check_incompatible_redefinitions(&resolved_hir)?;
+
     monomorphize(&resolved_hir)
 }
 
@@ -5019,11 +5072,91 @@ fn check_with_signatures(
     check_with_environment(hir, env, function_local_names)
 }
 
+/// Issue #22: reject a redefinition of the same function name with an
+/// incompatible signature. The codegen uses the first definition's LLVM
+/// function type for indirect calls through the per-name function-pointer
+/// slot, so all definitions of the same name must share one signature.
+/// CPython allows arbitrary redefinition, but pycc's v0.1/v0.2 scope does
+/// not need to support it, and the pre-#22 behavior was already broken
+/// (a compile-time LLVM verification failure or silent runtime UB). This
+/// check makes the "one signature per name" invariant the codegen already
+/// assumes actually true.
+///
+/// Skips any function whose signature contains `Ty::Infer` (the solver
+/// path resolves those before this matters). Called from `check` and
+/// `checked_function_signatures` (catches the concrete path before the
+/// concrete/solver split) and from `check_and_resolve` after type
+/// resolution (catches the solver path, where raw HIR still carried
+/// `Ty::Infer` at `check`/`checked_function_signatures` time).
+fn check_incompatible_redefinitions(hir: &HirModule) -> Result<(), Diagnostic> {
+    let mut seen: HashMap<String, (Vec<Ty>, Ty)> = HashMap::new();
+    for item in &hir.items {
+        let HirItem::Function {
+            name,
+            params,
+            return_ty,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        // Skip if this definition's signature contains Ty::Infer -- the
+        // solver hasn't resolved it yet, and comparing Infer against a
+        // concrete type would be a false positive. The post-resolution
+        // call in `check_and_resolve` catches these.
+        if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
+            continue;
+        }
+        let current = (
+            params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>(),
+            return_ty.clone(),
+        );
+        if let Some(prev) = seen.get(name) {
+            if prev != &current {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!(
+                        "cannot redefine function `{name}` with a different signature \
+                         (previous: {}, current: {})",
+                        format_function_signature(prev),
+                        format_function_signature(&current),
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
+        } else {
+            seen.insert(name.clone(), current);
+        }
+    }
+    Ok(())
+}
+
+/// Formats a `(param_tys, return_ty)` pair as `def name(params) -> return`
+/// for diagnostic messages.
+fn format_function_signature(sig: &(Vec<Ty>, Ty)) -> String {
+    let params = sig
+        .0
+        .iter()
+        .map(|ty| ty.name())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("({params}) -> {}", sig.1.name())
+}
+
 fn check_with_environment(
     hir: &HirModule,
     mut env: Environment,
     function_local_names: &[Vec<&str>],
 ) -> Result<(), Diagnostic> {
+    // Issue #22: clear `defined_functions` before the top-level source-order
+    // pass. `bind_function` (called by `check_with_signatures`'s pass 1 or
+    // `concrete_function_environment`) adds every function to this set, but
+    // for top-level checking we need to track which `def`s have actually
+    // been *executed* in source order -- a call before the `def`'s position
+    // is a NameError in CPython and must be rejected here. Function bodies
+    // (pass 3) get a fresh seed of all function names via
+    // `child_for_function`, so they're unaffected.
+    env.defined_functions.clear();
     // Pass 2: check every top-level statement in source order, growing
     // `env`'s bindings as module-level assignments are encountered --
     // ordinary top-level code is still checked top-to-bottom (a top-level
@@ -5042,6 +5175,12 @@ fn check_with_environment(
             HirItem::TopLevelStmt(stmt) => check_stmt(&mut env, stmt)?,
             HirItem::Function { name, .. } => {
                 env.def_rebound.insert(name.clone());
+                // Issue #22: a `def` at its source position makes the
+                // function name callable from this point forward in
+                // top-level code. Calls before this point (the name is
+                // not yet in `defined_functions`) are rejected by
+                // `infer_expr_in`'s `HirExpr::Call` arm.
+                env.defined_functions.insert(name.clone());
             }
         }
     }
@@ -5081,6 +5220,14 @@ fn check_with_environment(
 /// private-helper signatures in the returned HIR.
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     let function_local_names = module_function_local_names(hir);
+    // Issue #22: reject incompatible redefinitions before trying either the
+    // concrete or solver path. This check skips functions whose signature
+    // contains `Ty::Infer` (the solver resolves those); the post-resolution
+    // check in `check_and_resolve` catches them for `pycc build`. Calling
+    // it here (not inside `check_with_environment`) ensures the error is
+    // returned directly rather than being masked by the concrete-path
+    // fallback to the solver path.
+    check_incompatible_redefinitions(hir)?;
     // The public validation-only API has no resolved-signature result to
     // return. Avoid building a temporary concrete signature map and then
     // cloning it into an `Environment`: construct that environment directly.
@@ -15128,6 +15275,29 @@ mod tests {
     }
 
     #[test]
+    fn infer_expr_in_rejects_call_before_def_in_top_level() {
+        // Directly exercises the call-before-def check in infer_expr_in's
+        // HirExpr::Call arm for top-level code (not inside a function body).
+        let mut env = Environment::new();
+        // Manually insert into functions without adding to defined_functions,
+        // simulating a function that exists but hasn't been "executed" yet
+        // in source order.
+        Arc::make_mut(&mut env.functions).insert(
+            "foo".to_string(),
+            (vec![], Ty::None),
+        );
+        // Do NOT insert "foo" into defined_functions -- simulates a call
+        // before the def's source-order position.
+        let expr = HirExpr::Call {
+            callee: "foo".to_string(),
+            args: vec![],
+        };
+        let err = infer_expr_in(&env, &[], &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot call function `foo` before its definition"));
+    }
+
+    #[test]
     fn a_local_first_assignment_does_not_inherit_the_globals_type() {
         let hir = HirModule {
             items: vec![
@@ -20428,5 +20598,193 @@ mod tests {
             check_and_resolve(&generic).unwrap().type_aliases.is_empty(),
             "monomorphization path must discharge `type_aliases`"
         );
+    }
+
+    // ---- Issue #22 review fixes: incompatible redefinition rejection ----
+
+    #[test]
+    fn incompatible_redefinition_with_different_param_count_is_rejected() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![
+                        ("x".to_string(), Ty::Int),
+                        ("y".to_string(), Ty::Int),
+                    ],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo` with a different signature"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn checked_function_signatures_rejects_incompatible_redefinition() {
+        // Exercises the fast path in checked_function_signatures that calls
+        // check_incompatible_redefinitions before trying concrete or solver.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![
+                        ("x".to_string(), Ty::Int),
+                        ("y".to_string(), Ty::Int),
+                    ],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let local_names = module_function_local_names(&hir);
+        let err = checked_function_signatures(&hir, &local_names).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo` with a different signature"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn incompatible_redefinition_with_different_return_type_is_rejected() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo` with a different signature"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn incompatible_redefinition_with_different_param_type_is_rejected() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Str)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo` with a different signature"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn compatible_redefinition_with_same_signature_is_accepted() {
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::IntLiteral(1)],
+                    })],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::Call {
+                        callee: "print".to_string(),
+                        args: vec![HirExpr::IntLiteral(2)],
+                    })],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn check_incompatible_redefinitions_skips_infer_signature_functions() {
+        // Functions whose signature contains Ty::Infer (unresolved by the
+        // solver) are skipped by check_incompatible_redefinitions -- comparing
+        // Infer against a concrete type would be a false positive. The
+        // post-resolution call in check_and_resolve catches them.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        // check() should not reject this as a T0021 incompatible
+        // redefinition -- the Infer signature is skipped, so no
+        // incompatible redefinition is detected at this stage. The result
+        // may be Ok or Err for other reasons, but never T0021.
+        match check(&hir) {
+            Ok(()) => {}
+            Err(e) => assert_ne!(
+                e.code, "T0021",
+                "should not report incompatible redefinition for Infer signatures: {}",
+                e.message
+            ),
+        }
     }
 }

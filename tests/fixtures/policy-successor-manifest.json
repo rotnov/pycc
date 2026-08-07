@@ -3,8 +3,8 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": "tests/fixtures/policy-successors/ci.yml",
-      "sha256": "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
+      "source_path": ".github/workflows/ci.yml",
+      "sha256": "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
     },
     {
       "path": "scripts/check_ci_permissions.rb",
@@ -18,8 +18,8 @@
     },
     {
       "path": "scripts/check_roadmap_evidence.rb",
-      "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
-      "sha256": "b5c6e0c0e25131541cab2f1648237d6d28a0b83019baca3eed19729ae620e0f2"
+      "source_path": "scripts/check_roadmap_evidence.rb",
+      "sha256": "3cefc98fb77550948970484357ffdf83c6506d4d70776ff2811efdba2255a107"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -43,8 +43,8 @@
     },
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
-      "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
-      "sha256": "b7415581d2f3f2b2b9d43cea23889488e205e636c6e82e2fb49e052fdbf610df"
+      "source_path": "scripts/test_check_roadmap_evidence.rb",
+      "sha256": "df4745597a7bdfd74500a04b6973c8196684ecdd7ef0dd08618c8e8e74ad2f98"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",
@@ -58,18 +58,18 @@
     },
     {
       "path": "tests/fixtures/d100-compose-d91-d99-ci.yml",
-      "source_path": "tests/fixtures/policy-successors/d100-compose-d91-d99-ci.yml",
-      "sha256": "159f6f14fd69f4cf8bef7e0edc3b0316f520ba38df27e1cfdeb86803bd6a4d6e"
+      "source_path": "tests/fixtures/d100-compose-d91-d99-ci.yml",
+      "sha256": "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
     },
     {
       "path": "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml",
-      "source_path": "tests/fixtures/policy-successors/d112-ubuntu-frontend-perf-ci.yml",
-      "sha256": "365c196b96dd4875a06bdc2cc2e0ad4b96d55dbb72f6cb3c91859f528ecef6de"
+      "source_path": "tests/fixtures/d112-ubuntu-frontend-perf-ci.yml",
+      "sha256": "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
     },
     {
       "path": "tests/fixtures/d114-frontend-perf-threshold-ci.yml",
-      "source_path": "tests/fixtures/policy-successors/d114-frontend-perf-threshold-ci.yml",
-      "sha256": "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
+      "source_path": "tests/fixtures/d114-frontend-perf-threshold-ci.yml",
+      "sha256": "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
     },
     {
       "path": "tests/fixtures/d51-paired-ci.yml",
@@ -98,8 +98,8 @@
     },
     {
       "path": "tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml",
-      "source_path": "tests/fixtures/policy-successors/d91-relax-frontend-perf-manifest-ci.yml",
-      "sha256": "f068783df7b791345dffaf51e624e6d2dd8df8ccdea9d6db1b76e0e20f82a12c"
+      "source_path": "tests/fixtures/d91-relax-frontend-perf-manifest-ci.yml",
+      "sha256": "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
     },
     {
       "path": "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml",
