@@ -467,7 +467,7 @@ fn a_multi_argument_print_space_separates_mixed_str_int_float_and_bool_values() 
     // between `print` arguments) and the float/bool `to_str` paths
     // (`pycc_rt_float_to_str`/`pycc_rt_bool_to_str`) with zero e2e coverage
     // even though the row asserts all of them work. All are genuinely
-    // implemented (`emit_print_arg`'s own doc comment: "any number of
+    // implemented (the print argument pipeline's doc comment: "any number of
     // int/float/bool/str arguments"), so this closes a missing e2e
     // citation, not a missing feature -- one mixed-type fixture covering
     // every v0.1 scalar type at once rather than a separate test per type.
@@ -1154,7 +1154,7 @@ fn converting_a_list_to_str_stops_the_build_with_an_honest_unsupported_message()
     // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
     //
     // Both source forms, not just `print(xs)`: `to_str` has exactly two
-    // call sites in `pycc_codegen` -- `emit_print_arg` and `emit_expr`'s
+    // call sites in `pycc_codegen` -- `emit_eval_print_arg` and `emit_expr`'s
     // f-string interpolation arm -- and `docs/ARCHITECTURE.md` names both
     // as reachable, so both need evidence rather than one standing in for
     // the other. (An earlier version of this test covered only `print(xs)`
