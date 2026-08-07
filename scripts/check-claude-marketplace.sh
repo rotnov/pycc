@@ -65,24 +65,39 @@ fi
 reviewer_manifest=$1
 set -- "$test_claude_config"/plugins/cache/ievo-skills/ievo/*/skills/deep-review/SKILL.md
 if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-  echo "error: expected one pinned Claude deep-review entrypoint" >&2
+  echo "error: expected one Claude deep-review entrypoint" >&2
   exit 1
 fi
 review_skill=$1
-python3 - "$review_skill" "$reviewer_manifest" <<'PY'
-import hashlib
+set -- "$test_claude_config"/plugins/cache/ievo-skills/ievo/*/.claude-plugin/plugin.json
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+  echo "error: expected one Claude ievo plugin manifest" >&2
+  exit 1
+fi
+plugin_manifest=$1
+python3 - "$review_skill" "$reviewer_manifest" "$plugin_manifest" <<'PY'
+import json
 import pathlib
+import re
 import sys
 
-expected = {
-    "SKILL.md": "ec8805e22fff7db49cfe49c2a7cd49f340a618bf58da6acaf4253e875279670d",
-    "deep-reviewer.md": "b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2",
-}
-for raw_path in sys.argv[1:]:
-    path = pathlib.Path(raw_path)
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    assert digest == expected[path.name], f"{path.name} digest drifted"
-print("Claude pinned deep-review entrypoint and agent: valid")
+review_skill, reviewer_manifest, plugin_manifest = (
+    pathlib.Path(raw) for raw in sys.argv[1:]
+)
+
+# D-155 dropped the exact-commit pin: this is a structural well-formedness
+# check (installs cleanly, artifacts are non-empty, version is semver-shaped),
+# not the supply-chain guarantee D-068's digest comparison used to provide.
+for path in (review_skill, reviewer_manifest):
+    assert path.stat().st_size > 0, f"{path.name} is empty"
+
+manifest = json.loads(plugin_manifest.read_text(encoding="utf-8"))
+version = manifest.get("version")
+assert isinstance(version, str) and re.fullmatch(r"\d+\.\d+\.\d+", version), (
+    f"plugin.json version is not semver-shaped: {version!r}"
+)
+
+print(f"Claude deep-review entrypoint and agent: valid (ievo {version})")
 PY
 
 skill_debug="$test_claude_config/skill-discovery.log"
