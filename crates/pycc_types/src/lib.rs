@@ -20622,7 +20622,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -20655,7 +20655,7 @@ mod tests {
                     body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
         let local_names = module_function_local_names(&hir);
         let err = checked_function_signatures(&hir, &local_names).unwrap_err();
@@ -20684,7 +20684,7 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -20712,7 +20712,7 @@ mod tests {
                     body: vec![],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
         let err = check(&hir).unwrap_err();
         assert_eq!(err.code, "T0021");
@@ -20746,7 +20746,7 @@ mod tests {
                     })],
                 },
             ],
-            type_aliases: Vec::new(), imports: Vec::new(),
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
     }

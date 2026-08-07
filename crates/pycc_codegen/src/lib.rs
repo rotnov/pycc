@@ -3142,7 +3142,7 @@ fn build_call_to_with_leading_args<'ctx>(
     user_functions: &HashMap<&str, UserFunction<'ctx>>,
     locals: &HashMap<String, StorageSlot<'ctx>>,
     user_function: &UserFunction<'ctx>,
-    callee_name: &str,
+    _callee_name: &str,
     leading_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
