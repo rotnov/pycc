@@ -20777,14 +20777,45 @@ mod tests {
         // check() should not reject this as a T0021 incompatible
         // redefinition -- the Infer signature is skipped, so no
         // incompatible redefinition is detected at this stage. The result
-        // may be Ok or Err for other reasons, but never T0021.
-        match check(&hir) {
-            Ok(()) => {}
-            Err(e) => assert_ne!(
-                e.code, "T0021",
-                "should not report incompatible redefinition for Infer signatures: {}",
-                e.message
-            ),
-        }
+        // is Ok for this input; unwrap() fails on any error.
+        check(&hir).unwrap();
+    }
+
+    #[test]
+    fn check_and_resolve_rejects_incompatible_redefinition_after_inference() {
+        // Exercises the post-resolution `check_incompatible_redefinitions`
+        // call in `check_and_resolve` (line 5026). Two functions share the
+        // name `foo`; the first has `Ty::Infer` (skipped by the
+        // pre-resolution check), the second has a concrete but incompatible
+        // signature. After the solver resolves the Infer signature, the
+        // resolved HIR has two `foo` definitions with different param
+        // counts -- `check_incompatible_redefinitions` catches this.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![
+                        ("x".to_string(), Ty::Int),
+                        ("y".to_string(), Ty::Int),
+                    ],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo` with a different signature"),
+            "got: {}",
+            err.message
+        );
     }
 }
