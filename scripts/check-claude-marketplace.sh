@@ -38,7 +38,7 @@ source = settings["extraKnownMarketplaces"]["ievo-skills"]["source"]
 marketplace = {
     "name": source["name"],
     "owner": {"name": "pycc maintainers"},
-    "description": "Pinned repository agent tooling.",
+    "description": "Reviewed repository agent tooling.",
     "plugins": source["plugins"],
 }
 marketplace_path.write_text(
@@ -59,7 +59,7 @@ env CLAUDE_CONFIG_DIR="$test_claude_config" \
 )
 set -- "$test_claude_config"/plugins/cache/ievo-skills/ievo/*/agents/deep-reviewer.md
 if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
-  echo "error: expected one pinned Claude deep-reviewer artifact" >&2
+  echo "error: expected one Claude deep-reviewer artifact" >&2
   exit 1
 fi
 reviewer_manifest=$1

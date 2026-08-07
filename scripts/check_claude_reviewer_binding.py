@@ -154,7 +154,10 @@ def check_binding(config_dir: Path, project_root: str | None) -> str:
     if install is None:
         raise BindingError(f"{PLUGIN_KEY}: NOT FOUND")
 
-    install_path = Path(install.get("installPath", ""))
+    raw_install_path = install.get("installPath")
+    if not raw_install_path:
+        raise BindingError(f"{PLUGIN_KEY}: NOT FOUND")
+    install_path = Path(raw_install_path)
     if not install_path.is_dir():
         raise BindingError(f"{PLUGIN_KEY}: NOT FOUND")
 

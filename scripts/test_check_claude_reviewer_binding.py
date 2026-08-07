@@ -11,7 +11,7 @@ from unittest import mock
 
 import check_claude_reviewer_binding as binder
 
-PROJECT_ROOT = "/Users/denis/projects/pycc-proto"
+PROJECT_ROOT = "/repo/pycc-proto"
 
 
 class CheckClaudeReviewerBindingTests(unittest.TestCase):
@@ -92,6 +92,26 @@ class CheckClaudeReviewerBindingTests(unittest.TestCase):
             (plugins_dir / "installed_plugins.json").write_text(
                 json.dumps({"version": 2}), encoding="utf-8"
             )
+            with self.assertRaises(binder.BindingError) as ctx:
+                binder.check_binding(config_dir, PROJECT_ROOT)
+            self.assertIn("NOT FOUND", str(ctx.exception))
+
+    def test_entry_missing_install_path_fails_closed_as_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_dir = Path(directory)
+            entry = self.project_entry(Path("/unused"))
+            del entry["installPath"]
+            self.write_installed_plugins(config_dir, [entry])
+            with self.assertRaises(binder.BindingError) as ctx:
+                binder.check_binding(config_dir, PROJECT_ROOT)
+            self.assertIn("NOT FOUND", str(ctx.exception))
+
+    def test_entry_empty_install_path_fails_closed_as_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_dir = Path(directory)
+            entry = self.project_entry(Path("/unused"))
+            entry["installPath"] = ""
+            self.write_installed_plugins(config_dir, [entry])
             with self.assertRaises(binder.BindingError) as ctx:
                 binder.check_binding(config_dir, PROJECT_ROOT)
             self.assertIn("NOT FOUND", str(ctx.exception))
