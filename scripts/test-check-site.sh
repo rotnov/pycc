@@ -675,6 +675,12 @@ mutations = (
         "landing page with a superseded acceptance status",
     ),
     (
+        site_dir / "index.html",
+        "v0.2 acceptance criteria also met; v0.3's class model core has landed",
+        "v0.2 acceptance criteria remain unmet",
+        "landing page with a superseded v0.2/v0.3 status",
+    ),
+    (
         site_dir / "status" / "index.html",
         "<strong>Strict checking and inference</strong>",
         "<strong>Type checker placeholder</strong>",
@@ -695,9 +701,9 @@ mutations = (
     (
         site_dir / "status" / "index.html",
         (
-            "The full\n              multi-version conformance matrix, "
-            "differential fuzzing, corpus\n              testing, and "
-            "v0.2's collections and generics work remain planned."
+            "The full multi-version conformance\n              matrix, "
+            "differential fuzzing, and corpus testing remain\n              "
+            "planned, alongside the rest of v0.3's class-model work."
         ),
         "The full multi-version conformance matrix is already complete.",
         "status page that overclaims conformance-matrix completion",
@@ -716,7 +722,7 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "greater-than-2% regression gate remain required",
+        "greater-than-7.0% regression gate remain required",
         "The frontend performance gate follows the compiler work",
         "status page with stale performance-gate sequencing",
     ),
@@ -758,8 +764,8 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "keeps the hard greater-than-2%",
-        "disables the greater-than-2%",
+        "keeps the hard greater-than-7.0%",
+        "disables the greater-than-7.0%",
         "status page without the changed-source hard threshold",
     ),
     (
@@ -1277,7 +1283,7 @@ import sys
 path = Path(sys.argv[1])
 content = path.read_text()
 entry = """    <loc>https://rotnov.github.io/pycc/</loc>
-    <lastmod>2026-08-02</lastmod>"""
+    <lastmod>2026-08-07</lastmod>"""
 assert entry in content
 path.write_text(content.replace(entry, entry + "\n    <lastmod>2026-07-30</lastmod>", 1))
 PY
@@ -1294,7 +1300,7 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-lastmod = "<lastmod>2026-08-02</lastmod>"
+lastmod = "<lastmod>2026-08-07</lastmod>"
 assert lastmod in content
 path.write_text(content.replace(lastmod, "<lastmod>not-a-date</lastmod>", 1))
 PY
@@ -1311,7 +1317,7 @@ import sys
 
 path = Path(sys.argv[1])
 content = path.read_text()
-lastmod = "<lastmod>2026-08-02</lastmod>"
+lastmod = "<lastmod>2026-08-07</lastmod>"
 assert lastmod in content
 path.write_text(content.replace(lastmod, "<lastmod>9999-12-31</lastmod>", 1))
 PY

@@ -42,10 +42,15 @@ landing, status, architecture, comparison, Markdown, and `llms.txt` surfaces:
 `pycc check` owns the v0.1 parser → HIR → strict-type-checker path, including
 stable human and JSON frontend diagnostics, while `pycc build` and `pycc run`
 lower the same implemented language surface through MIR → LLVM → host linker →
-native executable. The project remains pre-alpha because the documented
-representation and lifetime gaps, conformance testkit, named demos, and final
-v0.1 acceptance remain unfinished. These facts must move with the authoritative
-roadmap whenever implementation depth changes.
+native executable. `docs/ROADMAP.md`'s v0.1 and v0.2 acceptance criteria are
+both met, and v0.3's class model core (#385) has landed; the project remains
+pre-alpha because the documented representation and lifetime gaps, the full
+multi-version conformance testkit, named demos, and the rest of v0.3's class
+model (inheritance, `@property`, dataclasses, enums, protocols, structural
+pattern matching, and custom exceptions) remain unfinished. These facts must
+move with the authoritative roadmap whenever implementation depth changes; see
+"Status-page freshness enforcement" below for how a stale claim like this one
+is now caught mechanically instead of relying on a reviewer to notice.
 
 The status page presents D-051/D-053/D-056/D-062's active fixed-replicate,
 source-aware paired gate
@@ -56,7 +61,7 @@ predecessor timing before candidate code runs, and classify complete
 repository-owned executable inputs before that execution. Identical inputs
 make timing non-blocking environment telemetry; changed source uses exactly
 five complete runs per revision, compares the median of their per-run medians,
-and keeps the hard greater-than-2% block. The gate fails closed on revision,
+and keeps the hard greater-than-7.0% block (D-114). The gate fails closed on revision,
 benchmark-contract, executable-input identity, artifact-identity, exact
 ten-file evidence, or comparison drift.
 
@@ -193,6 +198,42 @@ viewports up to 680 CSS pixels, the footer must stack into one grid column and
 its navigation group must wrap within the available width; the validator and
 an independent negative mutation preserve that footer contract as the
 evidence-page link set grows.
+
+## Status-page freshness enforcement
+
+`site/status/index.html` and `site/index.html` restate `docs/ROADMAP.md`'s
+current milestone and acceptance status in prose; nothing previously enforced
+that they stayed in sync with it, and both pages drifted silently past the
+v0.2 acceptance milestone and into v0.3 before #401 caught it (D-156).
+`scripts/check_status_page_freshness.rb` closes that gap with a narrowly
+scoped, two-signal check: it watches a pull request's or push's diff to
+`docs/ROADMAP.md` for (1) the `**Current milestone: ...**` bold line changing,
+or (2) a `<!-- roadmap-evidence: ... -->`-tagged checklist line's checked
+state flipping or a new evidence-marker line being added, using the same
+`EVIDENCE_MARKER` regex as `scripts/check_roadmap_evidence.rb` (duplicated
+byte-for-byte, not shared via `require_relative`, so the two must be kept in
+sync by hand). When
+either signal fires and the same diff touches neither `site/status/index.html`
+nor `site/index.html`, the check fails with a message pointing back at this
+document and at [issue #401](https://github.com/rotnov/pycc/issues/401).
+Full auto-generation of the status pages from `docs/ROADMAP.md` was
+considered and rejected: the pages carry hand-tuned narrative (which v0.3
+subset has landed, which gaps are real versus roadmap shorthand) that a
+mechanical transform cannot reproduce without re-deriving the roadmap's own
+editorial judgment in a second format. `scripts/test_check_status_page_freshness.rb`
+is the validator's paired self-test, run directly rather than measured by
+`llvm-cov`, mirroring `scripts/check_roadmap_evidence.rb`'s own pairing,
+though it is wired into `.github/workflows/status-page-freshness.yml` itself
+as a dedicated step rather than into `ci.yml`/`workflow-policy.yml` the way
+`scripts/test_check_roadmap_evidence.rb` is. The freshness check is wired
+into that same dedicated workflow, on ordinary `pull_request` and
+`push`-to-`main` triggers with no `paths:` filter; see D-156 for why it is not
+folded into `ci.yml` or `workflow-policy.yml`, and for the empirical
+validation performed against this repository's own history before the check
+was finalized. The workflow is not yet a required branch-protection check;
+that registration is a deliberate, separate follow-up performed only after
+the workflow is observed green on a real push-to-main run and red on a real
+violating pull request.
 
 GitHub project Pages are served below `/pycc/`, while the robots exclusion
 protocol only discovers `robots.txt` at the origin root. The page-level robots

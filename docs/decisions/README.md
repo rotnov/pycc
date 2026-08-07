@@ -162,3 +162,4 @@ current.
 | [D-153](./D-153-correct-v0-3-s-conformance-target-before-any-v0.md) | Correct v0.3's conformance target before any v0.3 PR starts | accepted |
 | [D-154](./D-154-class-instance-runtime-layout-stays-opaque.md) | Class instance runtime layout stays opaque with FFI-only accessors (#385, Part 1 of #375) | accepted |
 | [D-155](./D-155-stop-exact-pinning-the-claude-side-ievo-reviewer.md) | Stop exact-pinning the Claude-side ievo reviewer to a commit | accepted |
+| [D-156](./D-156-status-page-freshness-check-two-signal-design.md) | Enforce GitHub Pages status/landing freshness with a two-signal ROADMAP.md diff check (#401) | accepted |
