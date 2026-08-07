@@ -89,6 +89,12 @@ ALPHA_EVAL_RUNNERS = {
         "milestone-evidence-requires-update-met-note",
         "open-ended-directive-loops-single-milestone-stops",
     },
+    "ultra-review": {
+        "blocker-severity-maps-to-p1",
+        "empty-diff-checkpoint-not-advanced",
+        "deduped-finding-never-refiled",
+        "oversized-batch-stops-before-filing",
+    },
 }
 PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 # Required PR CI has no model credentials. Promotion stays fail-closed until
@@ -3226,7 +3232,15 @@ def validate_alpha_skill_contracts(
     failures: list[str],
     root: Path = ROOT,
 ) -> None:
-    for name in ("pycc", "pycc-feedback", "issue-to-plan", "issue-implement", "issue-select", "next-milestone"):
+    for name in (
+        "pycc",
+        "pycc-feedback",
+        "issue-to-plan",
+        "issue-implement",
+        "issue-select",
+        "next-milestone",
+        "ultra-review",
+    ):
         path = skills_root / name / "SKILL.md"
         relative = display_path(path, root)
         try:
