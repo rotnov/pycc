@@ -504,6 +504,66 @@ class AlphaSkillEvalTests(unittest.TestCase):
             evals.next_milestone_loop_continues(directive_scope="finish v0.3")
         )
 
+    def test_ultra_review_severity_priority(self) -> None:
+        self.assertEqual(evals.ultra_review_severity_priority("blocker"), "P1")
+        self.assertEqual(evals.ultra_review_severity_priority("warning"), "P2")
+        self.assertEqual(evals.ultra_review_severity_priority("note"), "P3")
+        with self.assertRaises(evals.EvalError):
+            evals.ultra_review_severity_priority("critical")
+
+    def test_ultra_review_checkpoint_should_advance(self) -> None:
+        self.assertFalse(
+            evals.ultra_review_checkpoint_should_advance(diff_is_empty=True)
+        )
+        self.assertTrue(
+            evals.ultra_review_checkpoint_should_advance(diff_is_empty=False)
+        )
+
+    def test_ultra_review_may_file(self) -> None:
+        self.assertTrue(
+            evals.ultra_review_may_file(
+                has_file_line_evidence=True, already_tracked=False
+            )
+        )
+        self.assertFalse(
+            evals.ultra_review_may_file(
+                has_file_line_evidence=True, already_tracked=True
+            )
+        )
+        self.assertFalse(
+            evals.ultra_review_may_file(
+                has_file_line_evidence=False, already_tracked=False
+            )
+        )
+
+    def test_ultra_review_batch_within_guard(self) -> None:
+        self.assertTrue(evals.ultra_review_batch_within_guard(candidate_count=15))
+        self.assertFalse(evals.ultra_review_batch_within_guard(candidate_count=16))
+
+    def test_ultra_review_eval_fails_when_a_contract_phrase_is_missing(
+        self,
+    ) -> None:
+        # `run_ultra_review_case`'s fail-closed loop is what stops a future
+        # edit from silently dropping the skill's own bounded-evidence
+        # invariants (concrete file:line, GitHub-native checkpoint, batch
+        # guard). Each phrase is pinned independently, so removing any single
+        # one -- not necessarily the first -- must fail the eval, mirroring
+        # the same negative-coverage pattern issue-select and issue-implement
+        # already carry.
+        raw = evals.canonical_skill("claude", "ultra-review")
+        normalized = " ".join(raw.split())
+        case = next(
+            case
+            for case in evals.load_cases("ultra-review")
+            if case["runner"] == "blocker-severity-maps-to-p1"
+        )
+        for phrase in evals.ULTRA_REVIEW_CONTRACT:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, normalized)
+                stripped = normalized.replace(phrase, "")
+                with self.assertRaisesRegex(evals.EvalError, "is missing"):
+                    evals.run_ultra_review_case(case, stripped)
+
     def test_issue_select_eval_fails_when_the_scoring_order_text_is_missing(
         self,
     ) -> None:
@@ -547,11 +607,13 @@ class AlphaSkillEvalTests(unittest.TestCase):
             "issue-to-plan": evals.canonical_skill("claude", "issue-to-plan"),
             "issue-implement": evals.canonical_skill("claude", "issue-implement"),
             "issue-select": evals.canonical_skill("claude", "issue-select"),
+            "ultra-review": evals.canonical_skill("claude", "ultra-review"),
         }
         dispatch = {
             "issue-to-plan": evals.run_issue_to_plan_case,
             "issue-implement": evals.run_issue_implement_case,
             "issue-select": evals.run_issue_select_case,
+            "ultra-review": evals.run_ultra_review_case,
         }
         for name, run_case in dispatch.items():
             case = dict(evals.load_cases(name)[0])

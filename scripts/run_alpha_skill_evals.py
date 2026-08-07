@@ -65,6 +65,12 @@ EXPECTED_RUNNERS = {
         "milestone-evidence-requires-update-met-note",
         "open-ended-directive-loops-single-milestone-stops",
     },
+    "ultra-review": {
+        "blocker-severity-maps-to-p1",
+        "empty-diff-checkpoint-not-advanced",
+        "deduped-finding-never-refiled",
+        "oversized-batch-stops-before-filing",
+    },
 }
 LOCKED_RESEARCH_CASES = {
     1: (
@@ -118,6 +124,11 @@ ISSUE_SELECT_CONTRACT = (
     "P1:",
     "P2:",
     "P3:",
+)
+ULTRA_REVIEW_CONTRACT = (
+    "a concrete `file:line`",
+    "GitHub-native checkpoint",
+    "stop short of filing any of them",
 )
 CommandRunner = Callable[
     [list[str], Path],
@@ -282,6 +293,43 @@ def next_milestone_loop_continues(*, directive_scope: str) -> bool:
     """A directive naming exactly one milestone stops at step 6 once it
     completes; an open-ended directive re-enters step 1."""
     return directive_scope == "open-ended"
+
+
+_ULTRA_REVIEW_SEVERITY_PRIORITY = {"blocker": "P1", "warning": "P2", "note": "P3"}
+
+
+def ultra_review_severity_priority(severity: str) -> str:
+    """ultra-review step 5's fixed severity-to-priority mapping -- the same
+    blocker/warning/note scale the pinned deep-reviewer already returns."""
+    try:
+        return _ULTRA_REVIEW_SEVERITY_PRIORITY[severity]
+    except KeyError as error:
+        raise EvalError(f"unknown ultra-review severity {severity!r}") from error
+
+
+def ultra_review_checkpoint_should_advance(*, diff_is_empty: bool) -> bool:
+    """ultra-review step 3/8: an empty diff since the last checkpoint is a
+    clean no-op -- no dispatch, and the checkpoint issue is left untouched."""
+    return not diff_is_empty
+
+
+def ultra_review_may_file(
+    *, has_file_line_evidence: bool, already_tracked: bool
+) -> bool:
+    """ultra-review step 7's publish gate: a finding is only ever filed when
+    it carries concrete file:line evidence AND step 6's dedup pass found no
+    existing `ultra-review`-labeled issue already tracking it."""
+    return has_file_line_evidence and not already_tracked
+
+
+ULTRA_REVIEW_BATCH_GUARD_THRESHOLD = 15
+
+
+def ultra_review_batch_within_guard(*, candidate_count: int) -> bool:
+    """ultra-review step 7's batch-size guard: a run whose dedup-survived
+    candidate count exceeds this threshold stops short of filing any of them
+    and reports the batch instead of auto-filing a flood."""
+    return candidate_count <= ULTRA_REVIEW_BATCH_GUARD_THRESHOLD
 
 
 def run_command(
@@ -839,6 +887,49 @@ def run_next_milestone_case(case: dict[str, Any], skill_text: str) -> None:
         raise EvalError(f"{runner_name} has an incomplete expected output")
 
 
+def run_ultra_review_case(case: dict[str, Any], skill_text: str) -> None:
+    normalized = " ".join(skill_text.split())
+    for contract in ULTRA_REVIEW_CONTRACT:
+        if contract not in normalized:
+            raise EvalError(f"ultra-review skill is missing {contract!r}")
+
+    runner_name = case["runner"]
+    expected = case["expected_output"]
+    if runner_name == "blocker-severity-maps-to-p1":
+        priority = ultra_review_severity_priority("blocker")
+        required = ("blocker", "P1")
+        if priority != "P1":
+            raise EvalError(f"{runner_name} did not map blocker severity to P1")
+    elif runner_name == "empty-diff-checkpoint-not-advanced":
+        advances_empty = ultra_review_checkpoint_should_advance(diff_is_empty=True)
+        advances_nonempty = ultra_review_checkpoint_should_advance(diff_is_empty=False)
+        required = ("nothing new", "no dispatch, no checkpoint update")
+        if advances_empty or not advances_nonempty:
+            raise EvalError(
+                f"{runner_name} did not gate the checkpoint update on a "
+                f"non-empty diff"
+            )
+    elif runner_name == "deduped-finding-never-refiled":
+        may_file = ultra_review_may_file(
+            has_file_line_evidence=True, already_tracked=True
+        )
+        required = ("already tracked", "never re-filed")
+        if may_file:
+            raise EvalError(
+                f"{runner_name} filed a finding the dedup pass already found tracked"
+            )
+    elif runner_name == "oversized-batch-stops-before-filing":
+        within_guard = ultra_review_batch_within_guard(candidate_count=16)
+        required = ("stop short of filing any of them", "report the batch")
+        if within_guard:
+            raise EvalError(f"{runner_name} let an oversized batch pass the guard")
+    else:
+        raise EvalError(f"unknown ultra-review runner {runner_name!r}")
+
+    if not all(fragment in expected for fragment in required):
+        raise EvalError(f"{runner_name} has an incomplete expected output")
+
+
 def run_evals(
     client: str,
     pycc_binary: Path,
@@ -882,6 +973,10 @@ def run_evals(
     next_milestone_skill = canonical_skill(client, "next-milestone", root)
     for case in load_cases("next-milestone", root):
         run_next_milestone_case(case, next_milestone_skill)
+
+    ultra_review_skill = canonical_skill(client, "ultra-review", root)
+    for case in load_cases("ultra-review", root):
+        run_ultra_review_case(case, ultra_review_skill)
 
 
 def main() -> int:
