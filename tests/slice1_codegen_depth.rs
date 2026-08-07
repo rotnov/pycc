@@ -939,6 +939,19 @@ fn none_typed_list_append_result_from_issue_242_matches_cpython() {
 }
 
 #[test]
+fn issue_145_print_evaluates_all_args_before_output() {
+    // #145: `print(1, side_effect())` where `side_effect` itself prints --
+    // all arguments are evaluated before any output is emitted, so stdout
+    // is `2\n1 3\n` (CPython's order), not the interleaved `1 2\n3\n`.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/regress/issue_145.py");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", fixture.display()));
+    let output = build_and_run("issue_145_print_arg_order", &source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n1 3\n");
+}
+
+#[test]
 fn issue_239_list_subscript_return_infers_int_and_prints_1() {
     // D-146 (#239): an unannotated private helper that assigns a list literal
     // to a local and returns a subscript of that local now infers `int` and

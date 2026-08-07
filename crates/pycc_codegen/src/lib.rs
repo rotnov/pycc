@@ -1412,7 +1412,7 @@ fn to_str<'ctx>(
         // `print(xs)` for a `list[int]` local type-checks today and lands
         // here -- and so does f-string interpolation (`f"{xs}"`, the
         // interpolation arm in `emit_expr`), a second, independent reachable
-        // route into this same arm (`emit_print_arg` and that interpolation
+        // route into this same arm (`emit_eval_print_arg` and that interpolation
         // arm both call into this one shared `to_str` helper). v0.2 has no
         // `str(list)`/list-printing semantics (D-105), and there is no
         // `pycc_rt_list_to_str` to call -- so this panics honestly instead
@@ -4687,43 +4687,56 @@ fn verify_module(module: &inkwell::module::Module<'_>) {
     );
 }
 
-/// Emits one `print()` argument (Task 10), called once per element of
-/// `emit_stmt`'s `print`-call arm's `args`, in order, with the separator
-/// space between arguments already built by that arm itself (not here) --
-/// `Ty::None` evaluates `arg` for its side effects and discards its canonical
-/// unit carrier, printing the literal `"None"` instead; every other v0.1
-/// scalar type converts to `str` via `to_str` (reusing `pycc_rt_int_to_str`/
-/// `float_to_str`/`bool_to_str`, the same conversions f-string
-/// interpolation already uses) and writes it with `pycc_rt_print_write_str`,
-/// then immediately decrefs the fresh `str` `to_str` built -- it's never
-/// retained beyond this one print call (same ownership pattern as
+/// Phase 1 of the two-phase `print()` argument pipeline (fixes #145):
+/// evaluates one `print()` argument's expression for its side effects and
+/// converts it to a `str` pointer, returning `None` for a `Ty::None`
+/// argument (side effects evaluated, no `str` pointer -- the literal
+/// `"None"` is written later by `emit_write_print_arg`) or
+/// `Some(str_ptr)` for every other v0.1 scalar type (evaluated, incref'd
+/// if needed via `incref_if_str_duplicate`, converted to `str` via
+/// `to_str`, reusing `pycc_rt_int_to_str`/`float_to_str`/`bool_to_str`,
+/// the same conversions f-string interpolation already uses).
+///
+/// `emit_stmt`'s `print`-call arm now runs this once per argument in a
+/// first loop -- evaluating *all* arguments left-to-right *before* any
+/// output is emitted -- collecting the resulting `Option<PointerValue>`
+/// into a `Vec`, then runs `emit_write_print_arg` in a second loop to
+/// emit separators and write each value. This splits evaluation from
+/// output so that a later argument's side effects (e.g. a user function
+/// that itself calls `print`) happen before any of the outer `print`'s
+/// own output, matching CPython's left-to-right argument-evaluation
+/// semantics: `print(1, side_effect())` emits `2\n1 3\n`, not the
+/// interleaved `1 2\n3\n` the old single-phase `emit_print_arg` produced.
+///
+/// The `str` pointer returned here is an LLVM SSA value that persists
+/// within the same basic block between the two phases -- `PointerValue`
+/// is `Copy` (inkwell 0.9.0), and no `emit_expr` call for a `print`
+/// argument creates LLVM branches (no `and`/`or`/short-circuit in MIR's
+/// `BinOpKind`), so no allocas are needed to retain it. The `str_decref`
+/// that balances the incref/`to_str` allocation is deferred to
+/// `emit_write_print_arg`, keeping the incref/decref pairing identical to
+/// the old single-phase `emit_print_arg` (same ownership pattern as
 /// `emit_expr`'s `FString` arm's own intermediate concatenation results).
 ///
-/// Pulled out of `emit_stmt`'s own `print`-call arm into its own named
-/// function, rather than left inlined in that arm's `for` loop body as the
-/// task brief's own version had it, for two reasons: it matches this file's
-/// established style of extracting each self-contained unit of IR-building
-/// logic into its own helper (see `to_str`/`incref_if_str_duplicate`/
-/// `truthy` above, all extracted the same way); and, empirically, it fixes
-/// a `cargo llvm-cov` region-attribution quirk this task's own development
-/// hit -- with this logic left inlined directly inside `emit_stmt`'s large
-/// `match`, the lines building the `None` branch's `emit_expr`/
-/// `rt.print_none` calls were reported as 0-hit ("uncovered") by `cargo
+/// Kept as an extracted top-level helper rather than inlined back into
+/// `emit_stmt`'s `match` arm for the same `cargo llvm-cov`
+/// region-attribution artifact the original `emit_print_arg`'s own doc
+/// comment recorded: with this logic left inlined directly inside
+/// `emit_stmt`'s large `match`, the lines building the `None` branch's
+/// `emit_expr` calls were reported as 0-hit ("uncovered") by `cargo
 /// llvm-cov --show-missing-lines` even though a `eprintln!` placed on
-/// exactly those lines confirmed, via a direct `cargo test -p pycc_codegen
-/// -- --nocapture` run, that they really do execute for `compiles_print_
-/// of_a_void_returning_call_as_none`. Restructuring the same logic (first
-/// as a plain `if`, ruling out `let-else` specifically as the cause, then)
-/// into its own top-level function made the exact same code report 100%
-/// covered with no further changes -- behavior is provably identical
-/// either way (every test in this file, including the runtime-stdout ones,
-/// still passes), so this is treated as a coverage-instrumentation
-/// measurement artifact of a large `match` arm's own inlining/region
-/// mapping, not a real gap, and worked around structurally rather than by
-/// reaching for a `--ignore-filename-regex` exemption (D-014's own policy:
-/// that exemption is for a documented design constraint, not a
-/// measurement quirk with an available structural fix).
-fn emit_print_arg<'ctx>(
+/// exactly those lines confirmed, via a direct `cargo test -p
+/// pycc_codegen -- --nocapture` run, that they really do execute.
+/// Restructuring the same logic into its own top-level function made the
+/// exact same code report 100% covered with no further changes --
+/// behavior is provably identical either way, so this is treated as a
+/// coverage-instrumentation measurement artifact of a large `match`
+/// arm's own inlining/region mapping, not a real gap, and worked around
+/// structurally rather than by reaching for a `--ignore-filename-regex`
+/// exemption (D-014's own policy: that exemption is for a documented
+/// design constraint, not a measurement quirk with an available
+/// structural fix).
+fn emit_eval_print_arg<'ctx>(
     context: &'ctx Context,
     builder: &inkwell::builder::Builder<'ctx>,
     module: &inkwell::module::Module<'ctx>,
@@ -4731,22 +4744,48 @@ fn emit_print_arg<'ctx>(
     user_functions: &HashMap<&str, UserFunction<'ctx>>,
     locals: &HashMap<String, StorageSlot<'ctx>>,
     arg: &MirExpr,
-) {
+) -> Option<PointerValue<'ctx>> {
     if arg.ty() == pycc_mir::Ty::None {
         emit_expr(context, builder, module, rt, user_functions, locals, arg);
-        builder
-            .build_call(rt.print_none, &[], "print_none")
-            .expect("build_call should not fail for a well-formed print of None");
+        None
     } else {
         let scalar = emit_expr(context, builder, module, rt, user_functions, locals, arg);
         let scalar = incref_if_str_duplicate(builder, rt, arg, scalar);
-        let str_ptr = to_str(builder, rt, scalar);
-        builder
-            .build_call(rt.print_write_str, &[str_ptr.into()], "print_write")
-            .expect("build_call should not fail for a well-formed print write");
-        builder
-            .build_call(rt.str_decref, &[str_ptr.into()], "print_decref_temp")
-            .expect("build_call should not fail for a well-formed decref");
+        Some(to_str(builder, rt, scalar))
+    }
+}
+
+/// Phase 2 of the two-phase `print()` argument pipeline (fixes #145):
+/// writes one argument's already-evaluated value -- `print_none` for the
+/// `None` case (the literal `"None"`), or `print_write_str` followed by
+/// `str_decref` for a `Some(str_ptr)` scalar (writing the `str` built in
+/// phase 1, then freeing the temporary `to_str` allocated for
+/// `int`/`float`/`bool` or the incref'd duplicate of a bare `Name`/
+/// `AttrGet` `str`). `emit_stmt`'s `print`-call arm calls this once per
+/// argument in its second loop, after `emit_eval_print_arg` has already
+/// evaluated every argument, so that output happens only after all
+/// argument side effects complete (see `emit_eval_print_arg`'s own doc
+/// comment for the two-phase design and the `cargo llvm-cov`
+/// region-attribution artifact that keeps this an extracted helper).
+fn emit_write_print_arg<'ctx>(
+    builder: &inkwell::builder::Builder<'ctx>,
+    rt: &RtFns<'ctx>,
+    maybe_str: Option<PointerValue<'ctx>>,
+) {
+    match maybe_str {
+        None => {
+            builder
+                .build_call(rt.print_none, &[], "print_none")
+                .expect("build_call should not fail for a well-formed print of None");
+        }
+        Some(str_ptr) => {
+            builder
+                .build_call(rt.print_write_str, &[str_ptr.into()], "print_write")
+                .expect("build_call should not fail for a well-formed print write");
+            builder
+                .build_call(rt.str_decref, &[str_ptr.into()], "print_decref_temp")
+                .expect("build_call should not fail for a well-formed decref");
+        }
     }
 }
 
@@ -4756,8 +4795,11 @@ fn emit_print_arg<'ctx>(
 /// non-`print()` `None` expression, including direct user-function,
 /// `ListAppend`, and `SetAdd` results, a D-075 parameter, or ordinary
 /// assignment storage (space-separated, one trailing newline, matching
-/// CPython's `print(*args)`; D-072 still excludes using `print()` itself as a
-/// nested expression), any
+/// CPython's `print(*args)` -- all arguments are now evaluated
+/// left-to-right before any output is emitted, matching CPython's own
+/// argument-evaluation semantics (fixes #145; see
+/// `emit_eval_print_arg`/`emit_write_print_arg`); D-072 still excludes
+/// using `print()` itself as a nested expression), any
 /// other bare expression statement (a user-function call with any number of
 /// arguments included -- see `emit_expr`'s `Call` arm, which this now
 /// delegates to uniformly instead of special-casing zero-arg calls here), a
@@ -4785,13 +4827,34 @@ fn emit_stmt<'ctx>(
 ) -> Result<(), String> {
     match stmt {
         MirStmt::ExprStmt(MirExpr::Call { callee, args, .. }) if callee == "print" => {
-            for (i, arg) in args.iter().enumerate() {
+            // Two-phase evaluate-then-output (fixes #145): evaluate *all*
+            // arguments left-to-right before emitting any output, so a
+            // later argument's side effects (e.g. a user function that
+            // itself calls `print`) complete before this `print`'s own
+            // output begins -- matching CPython's left-to-right
+            // argument-evaluation semantics. See `emit_eval_print_arg`/
+            // `emit_write_print_arg` for the phase split and the
+            // `cargo llvm-cov` region-attribution artifact that keeps
+            // them as extracted helpers.
+            let mut evaluated: Vec<Option<PointerValue<'ctx>>> = Vec::with_capacity(args.len());
+            for arg in args.iter() {
+                evaluated.push(emit_eval_print_arg(
+                    context,
+                    builder,
+                    module,
+                    rt,
+                    user_functions,
+                    locals,
+                    arg,
+                ));
+            }
+            for (i, maybe_str) in evaluated.into_iter().enumerate() {
                 if i > 0 {
                     builder
                         .build_call(rt.print_space, &[], "print_sep")
                         .expect("build_call should not fail for a well-formed print separator");
                 }
-                emit_print_arg(context, builder, module, rt, user_functions, locals, arg);
+                emit_write_print_arg(builder, rt, maybe_str);
             }
             builder
                 .build_call(rt.print_newline, &[], "print_end")
@@ -7413,6 +7476,108 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"None\n");
+    }
+
+    #[test]
+    fn compiles_print_evaluating_all_args_before_output_with_a_side_effecting_call() {
+        // #145: `def side_effect() -> int: print(2); return 3` ;
+        // `print(1, side_effect())` -- the later argument's side effect
+        // (printing `2`) must complete before the outer `print`'s own
+        // output begins, so stdout is `2\n1 3\n` (CPython's order), not
+        // the interleaved `1 2\n3\n` the old single-phase emit produced.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "side_effect".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![
+                        MirStmt::ExprStmt(MirExpr::Call {
+                            callee: "print".to_string(),
+                            args: vec![MirExpr::IntLiteral(2)],
+                            ty: Ty::None,
+                        }),
+                        MirStmt::Return(Some(MirExpr::IntLiteral(3))),
+                    ],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::Call {
+                            callee: "side_effect".to_string(),
+                            args: vec![],
+                            ty: Ty::Int,
+                        },
+                    ],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("print_eval_order_side_effect");
+        let obj_path = dir.join("print_eval_order_side_effect.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("print_eval_order_side_effect");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"2\n1 3\n");
+    }
+
+    #[test]
+    fn compiles_print_with_a_failing_later_argument_produces_no_partial_output() {
+        // #145: `def fail_later() -> int: return 1 // 0` ;
+        // `print(1, fail_later())` -- the later argument aborts (zero-
+        // divisor panic in `pycc_rt_int_floordiv`), and because all
+        // arguments are now evaluated before any output is written, the
+        // outer `print`'s `1 ` is never emitted. stdout is empty by
+        // design (not by buffering accident). This test passes both
+        // before and after the fix today (Rust's buffered stdout is lost
+        // on abort), but locks in the correct behavior so a future
+        // runtime change that flushes before abort cannot reintroduce
+        // partial output.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "fail_later".to_string(),
+                    params: vec![],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                        op: BinOpKind::FloorDiv,
+                        left: Box::new(MirExpr::IntLiteral(1)),
+                        right: Box::new(MirExpr::IntLiteral(0)),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![
+                        MirExpr::IntLiteral(1),
+                        MirExpr::Call {
+                            callee: "fail_later".to_string(),
+                            args: vec![],
+                            ty: Ty::Int,
+                        },
+                    ],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("print_eval_order_fail_later");
+        let obj_path = dir.join("print_eval_order_fail_later.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("print_eval_order_fail_later");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert!(
+            output.stdout.is_empty(),
+            "no partial output: {:?}",
+            output.stdout
+        );
+        assert!(
+            !output.status.success(),
+            "process should abort on zero-divisor: {:?}",
+            output.status
+        );
     }
 
     #[test]
