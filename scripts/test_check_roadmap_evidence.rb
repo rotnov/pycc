@@ -1020,7 +1020,8 @@ class RoadmapEvidenceCliTest < Minitest::Test
       [
         D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
         D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-        D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+        D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+        "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
       ],
       REVIEWED_PERF_CI_WORKFLOW_SHA256S
     )
@@ -1847,7 +1848,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
   end
 
   # This block's expected message is `coverage_gate_present?`'s ("evidence
-  # does not provide the exact 100% line and region gate"), not the
+  # does not provide the exact 100% line and functions gate"), not the
   # digest-mismatch one used elsewhere in this file for D91-drift cases:
   # `validate_evidence` checks `coverage_gate_present?` before the whole-file
   # digest, and every fixture below genuinely predates D91's coverage-step
@@ -2590,7 +2591,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not provide the exact 100% line and region gate"
+    assert_includes stderr, "does not provide the exact 100% line and functions gate"
   end
 
   def test_rejects_coverage_evidence_when_the_threshold_is_lowered
@@ -2613,7 +2614,7 @@ class RoadmapEvidenceCliTest < Minitest::Test
     )
 
     refute status.success?
-    assert_includes stderr, "does not provide the exact 100% line and region gate"
+    assert_includes stderr, "does not provide the exact 100% line and functions gate"
   end
 
   def test_rejects_a_coverage_step_that_can_be_skipped
