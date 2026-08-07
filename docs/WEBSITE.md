@@ -220,9 +220,11 @@ subset has landed, which gaps are real versus roadmap shorthand) that a
 mechanical transform cannot reproduce without re-deriving the roadmap's own
 editorial judgment in a second format. `scripts/test_check_status_page_freshness.rb`
 is the validator's paired self-test, run directly rather than measured by
-`llvm-cov`, mirroring `scripts/check_roadmap_evidence.rb`'s own pairing. The
-check is wired into its own dedicated workflow,
-`.github/workflows/status-page-freshness.yml`, on ordinary `pull_request` and
+`llvm-cov`, mirroring `scripts/check_roadmap_evidence.rb`'s own pairing,
+though it is wired into `.github/workflows/status-page-freshness.yml` itself
+as a dedicated step rather than into `ci.yml`/`workflow-policy.yml` the way
+`scripts/test_check_roadmap_evidence.rb` is. The freshness check is wired
+into that same dedicated workflow, on ordinary `pull_request` and
 `push`-to-`main` triggers with no `paths:` filter; see D-156 for why it is not
 folded into `ci.yml` or `workflow-policy.yml`, and for the empirical
 validation performed against this repository's own history before the check

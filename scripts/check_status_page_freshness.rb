@@ -10,7 +10,12 @@ class StatusPageFreshnessError < StandardError; end
 # established for docs/ROADMAP.md instead of reinventing marker parsing.
 EVIDENCE_MARKER = /<!--\s*roadmap-evidence:\s*(?<id>[a-z0-9][a-z0-9-]*)\s*-->/
 CHECKBOX_PREFIX = /\A\s*-\s*\[(?<mark>.)\]/
-MILESTONE_LINE = /\A\*\*Current milestone:.*\*\*\s*\z/
+# Deliberately not /m: the real docs/ROADMAP.md milestone span never wraps
+# past its own physical line, and without /m a malformed span (a stray
+# "**Current milestone:" with no closing "**" before EOF) simply fails to
+# match instead of `.` running across unrelated later bold text -- nil vs. a
+# real span is itself a correct "the milestone line changed" signal.
+MILESTONE_SPAN = /\*\*Current milestone:.*?\*\*/
 
 ROADMAP_PATH = "docs/ROADMAP.md"
 WATCHED_PAGES = %w[site/status/index.html site/index.html].freeze
@@ -67,8 +72,9 @@ def diff_name_only(root, base_revision, head_revision)
   output.each_line.map(&:strip).reject(&:empty?)
 end
 
-def milestone_line(text)
-  text.each_line.map(&:chomp).find { |line| MILESTONE_LINE.match?(line) }
+def milestone_span(text)
+  match = MILESTONE_SPAN.match(text)
+  match && match[0]
 end
 
 def evidence_checklist_states(text)
@@ -87,12 +93,13 @@ def evidence_checklist_states(text)
 end
 
 def roadmap_signal?(base_text, head_text)
-  milestone_line(base_text) != milestone_line(head_text) ||
+  milestone_span(base_text) != milestone_span(head_text) ||
     evidence_checklist_states(base_text) != evidence_checklist_states(head_text)
 end
 
 def check_status_page_freshness(root, base_revision, head_revision, diff_fetcher: method(:diff_name_only))
   ensure_revision_available(root, base_revision)
+  ensure_revision_available(root, head_revision)
 
   base_roadmap = read_file_at_revision(root, base_revision, ROADMAP_PATH)
   head_roadmap = read_file_at_revision(root, head_revision, ROADMAP_PATH)

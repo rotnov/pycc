@@ -33,13 +33,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Run the freshness checker's own paired self-test
+        run: ruby scripts/test_check_status_page_freshness.rb
+
       - name: Check status/landing page freshness against docs/ROADMAP.md
         env:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
             echo "No usable base revision for this event (e.g. a branch's first push); skipping."
             exit 0
           fi
-          ruby scripts/check_status_page_freshness.rb "${BASE_SHA}" HEAD .
+          ruby scripts/check_status_page_freshness.rb "${BASE_SHA}" "${HEAD_SHA}" .
