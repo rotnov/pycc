@@ -1,0 +1,45 @@
+name: Status page freshness
+
+# Enforces D-156 (#401): when docs/ROADMAP.md's current-milestone line or a
+# roadmap-evidence checklist entry changes, the same diff must also touch
+# site/status/index.html or site/index.html -- the two GitHub Pages surfaces
+# that restate the roadmap's status. Deliberately its own workflow, not
+# ci.yml (a D-103 protected target) and not workflow-policy.yml (the
+# pull_request_target trust anchor) -- see D-156's "Decision (wiring)".
+#
+# No paths: filter on either trigger: this check is meant to become a
+# required status check in a later follow-up, and a path filter would
+# permanently block non-matching pull requests from merging. The script
+# itself decides whether it has anything to say.
+#
+# Not yet registered in branch protection as a required check -- that is an
+# explicit, separate follow-up performed after this workflow is observed
+# green on a real push-to-main run and red on a real violating pull request.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  status-page-freshness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Check status/landing page freshness against docs/ROADMAP.md
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_SHA}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base revision for this event (e.g. a branch's first push); skipping."
+            exit 0
+          fi
+          ruby scripts/check_status_page_freshness.rb "${BASE_SHA}" HEAD .
