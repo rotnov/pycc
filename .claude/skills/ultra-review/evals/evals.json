@@ -1,0 +1,29 @@
+{
+  "skill_name": "ultra-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The pinned deep-reviewer's checklist reports a `blocker`-severity finding during a run.",
+      "expected_output": "A blocker-severity finding always maps to P1: severity determines the filed issue's priority prefix directly.",
+      "runner": "blocker-severity-maps-to-p1"
+    },
+    {
+      "id": 2,
+      "prompt": "The diff between the checkpoint commit and the current default-branch tip is empty -- nothing merged since the last run.",
+      "expected_output": "Report that there is nothing new since the checkpoint and stop: no dispatch, no checkpoint update -- advancing the checkpoint on an empty diff would be a no-op that only obscures the last real review.",
+      "runner": "empty-diff-checkpoint-not-advanced"
+    },
+    {
+      "id": 3,
+      "prompt": "A candidate finding has concrete file:line evidence, but the dedup pass (which searches `--state all`, so a closed issue counts as tracked too) finds an existing `ultra-review`-labeled issue already tracking the same file and description.",
+      "expected_output": "Skip filing: a finding the dedup pass confirms is already tracked is never re-filed, even though it independently satisfies the file:line evidence bar on its own.",
+      "runner": "deduped-finding-never-refiled"
+    },
+    {
+      "id": 4,
+      "prompt": "27 candidate issues survive the dedup pass in a single run.",
+      "expected_output": "When more than roughly 15 candidate issues survive dedup in one run, stop short of filing any of them and report the batch for a human to look at, rather than auto-filing a flood.",
+      "runner": "oversized-batch-stops-before-filing"
+    }
+  ]
+}
