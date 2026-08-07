@@ -1,3 +1,4 @@
+
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::OptimizationLevel;
@@ -167,8 +168,36 @@ enum Scalar<'ctx> {
 }
 
 struct UserFunction<'ctx> {
-    value: FunctionValue<'ctx>,
     param_tys: Vec<pycc_mir::Ty>,
+    /// Issue #22: the global function-pointer slot for this function name.
+    /// Initialized to null; set to the current definition's address when
+    /// the `def` executes at module level. Calls load from this slot and
+    /// dispatch indirectly, so a call before the `def` has executed sees
+    /// null and aborts with `pycc_rt_name_error`, and a redefinition
+    /// updates the slot so later calls see the new function.
+    /// `None` for monomorphized generic specializations (`0gen_...` names),
+    /// which are compiler-generated, not user-defined: they have no
+    /// top-level `def` whose execution order matters, so they dispatch
+    /// directly through `direct_value` instead.
+    fn_ptr_global: Option<inkwell::values::GlobalValue<'ctx>>,
+    /// The LLVM function type (parameter types + return type) for this
+    /// function name. All definitions of the same name share one type
+    /// (the type checker resolves to one signature per name). Needed to
+    /// type the indirect call through `fn_ptr_global`.
+    fn_type: inkwell::types::FunctionType<'ctx>,
+    /// Issue #22: a global string constant holding the function name as a
+    /// null-terminated C string, passed to `pycc_rt_name_error` on the
+    /// null-pointer (call-before-`def`) path. Created once per function
+    /// name in the declaration pass and reused at every call site, rather
+    /// than recreating a duplicate-named global on each call.
+    /// `None` for monomorphized specializations (no call-before-`def`
+    /// path exists for compiler-generated functions).
+    name_global: Option<inkwell::values::GlobalValue<'ctx>>,
+    /// Issue #22: for monomorphized generic specializations (`0gen_...`
+    /// names), the LLVM function value to call directly. `None` for
+    /// ordinary user-defined functions, which dispatch indirectly through
+    /// `fn_ptr_global` to preserve Python execution order.
+    direct_value: Option<FunctionValue<'ctx>>,
 }
 
 #[derive(Clone)]
@@ -290,6 +319,11 @@ struct RtFns<'ctx> {
     instance_new: FunctionValue<'ctx>,
     instance_get_slot: FunctionValue<'ctx>,
     instance_set_slot: FunctionValue<'ctx>,
+    /// Issue #22: runtime NameError for call-before-`def`. Takes a
+    /// null-terminated C string (the function name) and panics -- which
+    /// becomes a process abort at the `extern "C"` boundary, matching every
+    /// other runtime error in `pycc_rt`.
+    name_error: FunctionValue<'ctx>,
 }
 
 fn declare_rt_functions<'ctx>(
@@ -515,6 +549,10 @@ fn declare_rt_functions<'ctx>(
         instance_set_slot: declare(
             "pycc_rt_instance_set_slot",
             void_type.fn_type(&[ptr_type.into(), i64_type.into(), i64_type.into()], false),
+        ),
+        name_error: declare(
+            "pycc_rt_name_error",
+            void_type.fn_type(&[ptr_type.into()], false),
         ),
     }
 }
@@ -2151,6 +2189,7 @@ fn emit_expr<'ctx>(
                      should have been rejected by pycc_types before reaching codegen"
                 )
             });
+            let _ = user_function; // validated above; build_call_to looks up by name
             let call_site = build_call_to(
                 context,
                 builder,
@@ -2158,7 +2197,7 @@ fn emit_expr<'ctx>(
                 rt,
                 user_functions,
                 locals,
-                user_function,
+                callee,
                 args,
             );
             match ty {
@@ -2891,6 +2930,7 @@ fn emit_expr<'ctx>(
                 user_functions,
                 locals,
                 ctor_function,
+                ctor,
                 &[instance_ptr.into()],
                 args,
             );
@@ -3074,9 +3114,10 @@ fn build_call_to<'ctx>(
     rt: &RtFns<'ctx>,
     user_functions: &HashMap<&str, UserFunction<'ctx>>,
     locals: &HashMap<String, StorageSlot<'ctx>>,
-    user_function: &UserFunction<'ctx>,
+    callee_name: &str,
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
+    let user_function = &user_functions[callee_name];
     build_call_to_with_leading_args(
         context,
         builder,
@@ -3085,6 +3126,7 @@ fn build_call_to<'ctx>(
         user_functions,
         locals,
         user_function,
+        callee_name,
         &[],
         args,
     )
@@ -3111,6 +3153,7 @@ fn build_call_to_with_leading_args<'ctx>(
     user_functions: &HashMap<&str, UserFunction<'ctx>>,
     locals: &HashMap<String, StorageSlot<'ctx>>,
     user_function: &UserFunction<'ctx>,
+    _callee_name: &str,
     leading_args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
     args: &[MirExpr],
 ) -> inkwell::values::CallSiteValue<'ctx> {
@@ -3166,9 +3209,66 @@ fn build_call_to_with_leading_args<'ctx>(
         })
         .collect();
     arg_values.extend(marshalled_args);
+    // Issue #22: dispatch indirectly through the function-pointer slot.
+    // Load the current binding; if null, the function hasn't been defined
+    // yet at this point in execution -- abort with a runtime NameError.
+    // Otherwise, call through the loaded pointer.
+    // Monomorphized generic specializations (`0gen_...` names) have no
+    // `fn_ptr_global` -- they dispatch directly through `direct_value`
+    // since they are compiler-generated, not user-defined.
+    if let Some(ref direct_value) = user_function.direct_value {
+        return builder
+            .build_call(*direct_value, &arg_values, "call_user_fn")
+            .expect("build_call should not fail for a well-formed direct call");
+    }
+    let fn_ptr_global = user_function
+        .fn_ptr_global
+        .as_ref()
+        .expect("non-monomorphized user function has a fn_ptr_global");
+    let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+    let fn_ptr = builder
+        .build_load(
+            fn_ptr_type,
+            fn_ptr_global.as_pointer_value(),
+            "load_fnptr",
+        )
+        .expect("build_load should not fail for a global function-pointer slot")
+        .into_pointer_value();
+    let null_ptr = fn_ptr_type.const_null();
+    let is_null = builder
+        .build_int_compare(IntPredicate::EQ, fn_ptr, null_ptr, "fnptr_is_null")
+        .expect("build_int_compare should not fail for a null check");
+    let current_fn = builder
+        .get_insert_block()
+        .expect("builder is always positioned in a block during call emission")
+        .get_parent()
+        .expect("every block has a parent function");
+    let not_null_block = context.append_basic_block(current_fn, "fnptr_not_null");
+    let is_null_block = context.append_basic_block(current_fn, "fnptr_is_null");
     builder
-        .build_call(user_function.value, &arg_values, "call_user_fn")
-        .expect("build_call should not fail for a well-formed user function call")
+        .build_conditional_branch(is_null, is_null_block, not_null_block)
+        .expect("build_conditional_branch should not fail for a null-check dispatch");
+    // Null path: call pycc_rt_name_error with the function name as a C
+    // string, then unreachable (name_error never returns). The name
+    // global was created once per function name in the declaration pass
+    // and is reused at every call site.
+    builder.position_at_end(is_null_block);
+    let name_global = user_function
+        .name_global
+        .as_ref()
+        .expect("non-monomorphized user function has a name_global");
+    let name_ptr = name_global.as_pointer_value();
+    builder
+        .build_call(rt.name_error, &[name_ptr.into()], "name_error")
+        .expect("build_call should not fail for a well-formed runtime error call");
+    builder
+        .build_unreachable()
+        .expect("build_unreachable terminates the null-pointer path");
+    // Non-null path: indirect call through the loaded pointer.
+    builder.position_at_end(not_null_block);
+    builder
+        .build_indirect_call(user_function.fn_type, fn_ptr, &arg_values, "call_user_fn")
+        .expect("build_indirect_call should not fail for a well-formed indirect call")
 }
 
 /// Turns any supported `Scalar` into an LLVM `i1` for use as a `br`
@@ -4122,7 +4222,23 @@ fn compile_to_object_with_observer(
     // call it, which is exactly the bug this pass structure fixes (see
     // git history: an earlier version treated a function merely named
     // `main` as auto-invoked, which doesn't match CPython at all).
+    //
+    // Issue #22: each `def` now gets a unique mangled name so redefinition
+    // doesn't collide (`pyfn_{name}` for the first, `pyfn_{name}__redef_{n}`
+    // for subsequent). A global function-pointer slot per unique name is
+    // initialized to null; the top-level emission pass stores each def's
+    // address into the slot when the def is "executed" in source order, and
+    // all calls dispatch indirectly through the slot. This separates
+    // LLVM symbol declaration (this pass, needed for the compiler to
+    // generate call instructions) from Python name binding (the store,
+    // which happens at the def's source position in top-level execution).
     let mut user_functions: HashMap<&str, UserFunction> = HashMap::new();
+    // Maps function name to the number of definitions seen so far, for
+    // unique mangled-name generation on redefinition.
+    let mut def_counts: HashMap<&str, usize> = HashMap::new();
+    // List of (function name, LLVM function value) in source order, for
+    // the top-level binding pass.
+    let mut function_defs_in_order: Vec<(&str, FunctionValue)> = Vec::new();
     for item in &mir.items {
         if let MirItem::Function {
             name,
@@ -4139,15 +4255,60 @@ fn compile_to_object_with_observer(
                 pycc_mir::Ty::None => context.void_type().fn_type(&param_types, false),
                 other => ty_to_basic_type(&context, other.clone()).fn_type(&param_types, false),
             };
-            let mangled = format!("pyfn_{name}");
+            let count = def_counts.entry(name.as_str()).or_insert(0);
+            let mangled = if *count == 0 {
+                format!("pyfn_{name}")
+            } else {
+                format!("pyfn_{name}__redef_{count}")
+            };
+            *count += 1;
             let f = module.add_function(&mangled, fn_type, None);
-            user_functions.insert(
-                name.as_str(),
-                UserFunction {
-                    value: f,
-                    param_tys: params.iter().map(|(_, ty)| ty.clone()).collect(),
-                },
-            );
+            function_defs_in_order.push((name.as_str(), f));
+            // Only insert into user_functions on the first definition;
+            // subsequent definitions update fn_ptr_global at their source
+            // position but share the same slot and type info. The param_tys
+            // and fn_type come from the first definition (the type checker
+            // resolves one signature per name).
+            user_functions.entry(name.as_str()).or_insert_with(|| {
+                // Monomorphized generic specializations (`0gen_...` names)
+                // are compiler-generated, not user-defined: they have no
+                // top-level `def` whose execution order matters, so they
+                // dispatch directly through `direct_value` instead of
+                // through the indirect function-pointer slot.
+                let is_monomorphized = name.starts_with("0gen_");
+                if is_monomorphized {
+                    UserFunction {
+                        param_tys: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                        fn_ptr_global: None,
+                        fn_type,
+                        name_global: None,
+                        direct_value: Some(f),
+                    }
+                } else {
+                    let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+                    let fn_ptr_global = module.add_global(
+                        fn_ptr_type,
+                        None,
+                        &format!("fnptr_{name}"),
+                    );
+                    fn_ptr_global.set_initializer(&fn_ptr_type.const_null());
+                    let name_global = module.add_global(
+                        context.i8_type().array_type(name.len() as u32 + 1),
+                        None,
+                        &format!("fnname_{name}"),
+                    );
+                    name_global.set_linkage(Linkage::Internal);
+                    name_global.set_constant(true);
+                    name_global.set_initializer(&context.const_string(name.as_bytes(), true));
+                    UserFunction {
+                        param_tys: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                        fn_ptr_global: Some(fn_ptr_global),
+                        fn_type,
+                        name_global: Some(name_global),
+                        direct_value: None,
+                    }
+                }
+            });
         }
     }
 
@@ -4170,18 +4331,47 @@ fn compile_to_object_with_observer(
         .iter()
         .map(|(name, binding)| (name.clone(), binding.clone()))
         .collect();
+    // Issue #22: iterate over ALL items in source order, not just
+    // top-level statements. A `MirItem::Function` at its source position
+    // represents a `def` statement's runtime binding effect: store the
+    // function's address into the global function-pointer slot so calls
+    // after this point dispatch to it. A call before the `def` (the slot
+    // is still null) aborts with `pycc_rt_name_error` -- matching
+    // CPython's `NameError: name 'foo' is not defined`.
+    let mut def_iter = function_defs_in_order.iter().peekable();
     for item in &mir.items {
-        if let MirItem::TopLevelStmt(stmt) = item {
-            emit_stmt(
-                &context,
-                &builder,
-                &module,
-                &rt,
-                &user_functions,
-                &mut top_level_locals,
-                stmt,
-                pycc_mir::Ty::None,
-            )?;
+        match item {
+            MirItem::TopLevelStmt(stmt) => {
+                emit_stmt(
+                    &context,
+                    &builder,
+                    &module,
+                    &rt,
+                    &user_functions,
+                    &mut top_level_locals,
+                    stmt,
+                    pycc_mir::Ty::None,
+                )?;
+            }
+            MirItem::Function { name, .. } => {
+                // Store this definition's function pointer into the
+                // global slot, representing the `def`'s runtime binding.
+                // `def_iter` is in the same source order as `mir.items`,
+                // so the next entry matches this function definition.
+                // Monomorphized generic specializations (`0gen_...` names)
+                // have no `fn_ptr_global` (they dispatch directly), so
+                // skip the store for them.
+                let &(_, f) = def_iter.next().expect(
+                    "def_iter should have an entry for every MirItem::Function                      (the declaration pass populates function_defs_in_order                      from the same mir.items in the same order)",
+                );
+                let uf = &user_functions[name.as_str()];
+                if let Some(ref fn_ptr_global) = uf.fn_ptr_global {
+                    let _ = builder.build_store(
+                        fn_ptr_global.as_pointer_value(),
+                        f.as_global_value().as_pointer_value(),
+                    );
+                }
+            }
         }
     }
     // Module-level Python code has no `return` (T0024) -- every top-level
@@ -4249,6 +4439,12 @@ fn compile_to_object_with_observer(
     // uses (see `emit_assign`), so a parameter is fully ordinary once
     // bound: reassignable, and readable via `emit_expr`'s `Name` arm with
     // no special-casing.
+    // Issue #22: use `function_defs_in_order` to get the correct LLVM
+    // function value for each definition -- a redefined name has multiple
+    // function values (one per def, with unique mangled names), and each
+    // body must be emitted into its own function value, not the first
+    // definition's.
+    let mut body_def_iter = function_defs_in_order.iter();
     for item in &mir.items {
         if let MirItem::Function {
             name,
@@ -4257,7 +4453,12 @@ fn compile_to_object_with_observer(
             body,
         } = item
         {
-            let f = user_functions[name.as_str()].value;
+            // Advance the iterator in lockstep with `mir.items`'s
+            // Function items -- same source order, same count.
+            let f = body_def_iter
+                .next()
+                .map(|&(_, f)| f)
+                .expect("function body has matching declaration");
             let block = context.append_basic_block(f, "entry");
             builder.position_at_end(block);
             let mut fn_locals: HashMap<_, _> = module_globals
@@ -4624,6 +4825,7 @@ fn emit_stmt<'ctx>(
             let user_function = user_functions.get(callee.as_str()).ok_or_else(|| {
                 format!("pycc_codegen v0.1: call to undefined function `{callee}`")
             })?;
+            let _ = user_function; // validated above; build_call_to looks up by name
             build_call_to(
                 context,
                 builder,
@@ -4631,7 +4833,7 @@ fn emit_stmt<'ctx>(
                 rt,
                 user_functions,
                 locals,
-                user_function,
+                callee,
                 args,
             );
             Ok(())
@@ -6781,6 +6983,44 @@ mod tests {
         link_object_with_runtime(&obj_path, &bin_path);
         let output = Command::new(&bin_path).output().expect("binary should run");
         assert_eq!(output.stdout, b"42\n");
+    }
+
+    #[test]
+    fn monomorphized_generic_function_dispatches_directly_without_fn_ptr_global() {
+        // A monomorphized generic specialization (`0gen_...` name) has no
+        // `fn_ptr_global` -- it dispatches directly through `direct_value`.
+        // This test covers the `None` path of `if let Some(ref fn_ptr_global)`
+        // in the top-level binding pass and the `direct_value` path in
+        // `build_call_to_with_leading_args`.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "0gen_identity__T_int".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name {
+                        name: "x".to_string(),
+                        ty: Ty::Int,
+                    }))],
+                },
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::Call {
+                    callee: "print".to_string(),
+                    args: vec![MirExpr::Call {
+                        callee: "0gen_identity__T_int".to_string(),
+                        args: vec![MirExpr::IntLiteral(7)],
+                        ty: Ty::Int,
+                    }],
+                    ty: Ty::None,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("monomorphized_direct_dispatch");
+        let obj_path = dir.join("monomorphized_direct_dispatch.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("monomorphized_direct_dispatch");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"7\n");
     }
 
     #[test]
@@ -16282,6 +16522,49 @@ mod tests {
             None,
             false,
         );
+    }
+
+    #[test]
+    fn function_redefinition_uses_unique_mangled_names() {
+        // Issue #22: each `def` gets a unique mangled name so redefinition
+        // doesn't collide (`pyfn_{name}` for the first, `pyfn_{name}__redef_{n}`
+        // for subsequent). The global function-pointer slot is initialized to
+        // null and updated at each def's source position; calls dispatch
+        // indirectly through the slot.
+        let mir = MirModule {
+            items: vec![
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }))],
+                },
+                MirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Int,
+                    body: vec![MirStmt::Return(Some(MirExpr::Name { name: "x".to_string(), ty: Ty::Int }))],
+                },
+                // Call foo(42) and print the result -- exercises the
+                // indirect call dispatch through the function-pointer slot.
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "foo".to_string(),
+                    args: vec![MirExpr::IntLiteral(42)],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("fn_redef_unique_names");
+        let obj_path = dir.join("fn_redef_unique_names.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("fn_redef_unique_names");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        // The second definition (which returns its argument) is the one
+        // bound at call time, so foo(42) should print 42.
+        assert_eq!(output.stdout, b"42
+");
+        assert!(output.status.success());
     }
 
     #[test]

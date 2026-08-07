@@ -16,6 +16,11 @@ members = [
 edition = "2024"
 rust-version = "1.97.1"
 
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
+
+
 [package]
 name = "pycc"
 version = "0.1.0"

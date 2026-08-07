@@ -1725,6 +1725,41 @@ pub unsafe extern "C" fn pycc_rt_int_set_decref(set: *mut PyIntSetObj) {
     }
 }
 
+/// Runtime NameError for call-before-`def` (issue #22). pycc's type checker
+/// rejects a call to a not-yet-`def`ined function in top-level code statically,
+/// but a function body may call a sibling whose `def` has not executed yet at
+/// the time the caller is invoked -- CPython raises `NameError` at that point,
+/// and so does this. Until v0.3's exception machinery exists, a runtime panic
+/// becomes an explicit process failure at the plain-C ABI boundary, matching
+/// every other runtime error in this crate.
+///
+/// Takes a null-terminated C string (the function name) so the codegen can
+/// pass a global string constant directly. The panic-across-FFI note on
+/// `pycc_rt_int_add` applies: a panic that would unwind past this `extern "C"`
+/// boundary is caught and turned into a process abort by Rust's default
+/// panic-over-FFI behavior, which is exactly the desired outcome for a
+/// runtime NameError in a compiled program.
+///
+/// Split into a private freely-panicking function (testable with
+/// `#[should_panic]`) and a thin `extern "C"` wrapper, matching the same
+/// split every other panicking runtime function in this file uses.
+fn name_error(name: *const std::os::raw::c_char) -> ! {
+    let name_str = if name.is_null() {
+        "<unknown>"
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(name) }
+            .to_str()
+            .unwrap_or("<invalid utf-8>")
+    };
+    panic!("pycc_rt: NameError: name '{name_str}' is not defined");
+}
+
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+pub extern "C" fn pycc_rt_name_error(name: *const std::os::raw::c_char) -> ! {
+    name_error(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1735,6 +1770,19 @@ mod tests {
         // exactly the digits, then a single trailing newline, nothing else.
         assert_eq!(format_i64_line(42), "42\n");
         assert_eq!(format_i64_line(-7), "-7\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: NameError: name 'foo' is not defined")]
+    fn name_error_panics_with_function_name() {
+        let name = std::ffi::CString::new("foo").unwrap();
+        name_error(name.as_ptr());
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_rt: NameError: name '<unknown>' is not defined")]
+    fn name_error_on_null_pointer_uses_unknown() {
+        name_error(std::ptr::null());
     }
 
     #[test]
