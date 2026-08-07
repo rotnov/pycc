@@ -24,6 +24,11 @@ jobs:
           python3 -m unittest discover -s scripts -p 'test_*.py'
           python3 scripts/validate_agent_assets.py
 
+      - name: Validate CI-monitoring tooling scripts
+        run: |
+          sh scripts/test-ci-watch.sh
+          sh scripts/test-gh-status-check.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
