@@ -122,4 +122,35 @@ case "$output" in
   *) fail "expected a closing clear line, got: $output" ;;
 esac
 
+# --- Fixture 7: --watch reports an unreachable status page exactly once
+# across repeated failures, then reports clear once curl recovers ----------
+mkdir -p "$work_dir/fixture-watch-unreachable/bin"
+counter_file="$work_dir/fixture-watch-unreachable/counter"
+echo 0 >"$counter_file"
+cat >"$work_dir/fixture-watch-unreachable/bin/curl" <<EOF
+#!/usr/bin/env sh
+n=\$(cat "$counter_file")
+n=\$((n + 1))
+echo "\$n" >"$counter_file"
+if [ "\$n" -le 2 ]; then
+  exit 7
+fi
+cat <<'JSON'
+{"components":[{"name":"Actions","status":"operational"}],"incidents":[]}
+JSON
+EOF
+chmod +x "$work_dir/fixture-watch-unreachable/bin/curl"
+
+output=$(PATH="$work_dir/fixture-watch-unreachable/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/gh-status-check.sh" --watch Actions)
+line_count=$(printf '%s\n' "$output" | wc -l | tr -d ' ')
+[ "$line_count" = "2" ] || fail "expected exactly 2 lines from --watch (one unreachable report, then clear), got $line_count: $output"
+case "$output" in
+  *"failed to reach"*) ;;
+  *) fail "expected a single unreachable report line, got: $output" ;;
+esac
+case "$output" in
+  *"operational, no unresolved incidents (clear)"*) ;;
+  *) fail "expected a closing clear line once curl recovers, got: $output" ;;
+esac
+
 echo "gh-status-check.sh: valid"

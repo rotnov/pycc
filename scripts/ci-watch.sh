@@ -4,14 +4,16 @@ set -eu
 # Poll one or more GitHub pull requests every $POLL_INTERVAL seconds
 # (default 10) and emit exactly one line per PR the moment it reaches a
 # terminal state -- merged/closed, merge conflicts, a stale (behind-base)
-# branch, one or more failed/timed-out/cancelled checks (every such check is
-# named, not just the first), or fully green + CLEAN (ready to merge).
+# branch, one or more failed/timed-out/startup-failed/cancelled checks
+# (every such check is named, not just the first), or fully green + CLEAN
+# (ready to merge).
 # Silent between polls: no per-poll spam, one line per PR's actual outcome.
 # Exits once every PR passed on the command line has reached a terminal
 # state.
 #
-# When every reported failing check is CANCELLED (no genuine FAILURE or
-# TIMED_OUT among them), the line adds a hint that this is often a
+# When every reported failing check is CANCELLED (no genuine FAILURE,
+# TIMED_OUT, or STARTUP_FAILURE among them), the line adds a hint that this
+# is often a
 # partial-rerun or GitHub Actions infra artifact rather than a code defect
 # -- see `issue-implement`'s "Attribute CI failures before reacting" step
 # for how to act on it (a full, non-`--failed` rerun, not a diff

@@ -25,10 +25,12 @@ set -eu
 # line immediately for whatever the first poll finds (mirroring
 # ci-watch.sh's immediate first-poll report), then a line only when the
 # matched state changes, and exits once every matched component is
-# "operational" with no unresolved incidents naming it. Intended for the
-# `Monitor` tool exactly like ci-watch.sh, for when a confirmed active
-# incident is worth waiting out rather than repeatedly re-running CI into
-# it.
+# "operational" with no unresolved incidents naming it. A poll that fails
+# to reach the status page reports once (not on every retry) and stays
+# silent again once it starts succeeding, matching ci-watch.sh's own
+# per-poll error surfacing. Intended for the `Monitor` tool exactly like
+# ci-watch.sh, for when a confirmed active incident is worth waiting out
+# rather than repeatedly re-running CI into it.
 
 STATUS_URL=${GH_STATUS_URL:-https://www.githubstatus.com/api/v2/summary.json}
 
@@ -84,11 +86,17 @@ fi
 
 prev=""
 first=1
+unreachable_reported=0
 while true; do
   if ! lines=$(fetch_and_report); then
+    if [ "$unreachable_reported" = "0" ]; then
+      echo "gh-status-check: failed to reach $STATUS_URL"
+      unreachable_reported=1
+    fi
     sleep "$poll_interval"
     continue
   fi
+  unreachable_reported=0
 
   if [ -z "$lines" ]; then
     if [ "$first" = "1" ] || [ -n "$prev" ]; then
