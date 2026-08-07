@@ -467,7 +467,7 @@ fn a_multi_argument_print_space_separates_mixed_str_int_float_and_bool_values() 
     // between `print` arguments) and the float/bool `to_str` paths
     // (`pycc_rt_float_to_str`/`pycc_rt_bool_to_str`) with zero e2e coverage
     // even though the row asserts all of them work. All are genuinely
-    // implemented (`emit_print_arg`'s own doc comment: "any number of
+    // implemented (the print argument pipeline's doc comment: "any number of
     // int/float/bool/str arguments"), so this closes a missing e2e
     // citation, not a missing feature -- one mixed-type fixture covering
     // every v0.1 scalar type at once rather than a separate test per type.
@@ -939,6 +939,19 @@ fn none_typed_list_append_result_from_issue_242_matches_cpython() {
 }
 
 #[test]
+fn issue_145_print_evaluates_all_args_before_output() {
+    // #145: `print(1, side_effect())` where `side_effect` itself prints --
+    // all arguments are evaluated before any output is emitted, so stdout
+    // is `2\n1 3\n` (CPython's order), not the interleaved `1 2\n3\n`.
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/regress/issue_145.py");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", fixture.display()));
+    let output = build_and_run("issue_145_print_arg_order", &source);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"2\n1 3\n");
+}
+
+#[test]
 fn issue_239_list_subscript_return_infers_int_and_prints_1() {
     // D-146 (#239): an unannotated private helper that assigns a list literal
     // to a local and returns a subscript of that local now infers `int` and
@@ -1141,7 +1154,7 @@ fn converting_a_list_to_str_stops_the_build_with_an_honest_unsupported_message()
     // `pycc_rt_*_to_str` function that would read it as a `PyStrObj`.
     //
     // Both source forms, not just `print(xs)`: `to_str` has exactly two
-    // call sites in `pycc_codegen` -- `emit_print_arg` and `emit_expr`'s
+    // call sites in `pycc_codegen` -- `emit_eval_print_arg` and `emit_expr`'s
     // f-string interpolation arm -- and `docs/ARCHITECTURE.md` names both
     // as reachable, so both need evidence rather than one standing in for
     // the other. (An earlier version of this test covered only `print(xs)`

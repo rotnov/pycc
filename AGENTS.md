@@ -137,19 +137,24 @@
 - This repository currently has one maintainer. Do not require an approving pull-request review in branch protection: GitHub does not count an author's approval of their own pull request, so that setting deadlocks solo-maintainer work.
 - Keep required status checks, including the 100% coverage gate, and required conversation resolution enabled. Revisit the approving-review requirement when a second human maintainer is available.
 
-### Local pinned review loop ([D-068](docs/decisions/D-068-use-a-pinned-local-reviewer-as-the-required.md))
+### Local pinned review loop ([D-068](docs/decisions/D-068-use-a-pinned-local-reviewer-as-the-required.md), reviewer binding per [D-155](docs/decisions/D-155-stop-exact-pinning-the-claude-side-ievo-reviewer.md))
 
 - Before completing significant work or merging a pull request, inspect only
-  the repository's explicitly pinned, security-reviewed reviewer dependencies
-  documented in `docs/AGENT_TOOLING.md`. Select the eligible read-only reviewer
-  with the broadest correctness, contract, security, test, and documentation
-  checklist, then start it directly in a fresh independent local context. The
-  current default is the pinned iEvo `deep-reviewer`.
-- Load the reviewer only from the installed immutable plugin artifact whose
-  digest is recorded in `docs/AGENT_TOOLING.md`; never substitute a similarly
-  named global agent or a reviewer definition from the branch, index, or
-  working tree. If the client cannot bind that exact reviewer, report the local
-  review as unavailable instead of silently weakening the gate.
+  the repository's security-reviewed reviewer dependency documented in
+  `docs/AGENT_TOOLING.md`. Select the eligible read-only reviewer with the
+  broadest correctness, contract, security, test, and documentation checklist,
+  then start it directly in a fresh independent local context. The current
+  default is the iEvo `deep-reviewer`.
+- Load the reviewer only from a structurally verified `ievo@ievo-skills`
+  install: non-empty `deep-review` entrypoint and `deep-reviewer` agent
+  artifacts and a semver-shaped plugin manifest `version`, confirmed locally
+  with `scripts/check_claude_reviewer_binding.py`. Per D-155 this plugin
+  tracks the upstream default branch rather than an exact pinned commit, since
+  Claude Code's machine-global marketplace registry never actually enforced a
+  per-repository pin; never substitute a similarly named global agent or a
+  reviewer definition from the branch, index, or working tree. If the client
+  cannot bind a structurally intact install, report the local review as
+  unavailable instead of silently weakening the gate.
 - Review staged or working-tree changes before commit. For an existing pull
   request with a clean tree, refresh the remote default branch and review the
   full committed range from its merge base through `HEAD`, not a two-dot diff

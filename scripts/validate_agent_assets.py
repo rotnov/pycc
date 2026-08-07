@@ -89,6 +89,12 @@ ALPHA_EVAL_RUNNERS = {
         "milestone-evidence-requires-update-met-note",
         "open-ended-directive-loops-single-milestone-stops",
     },
+    "ultra-review": {
+        "blocker-severity-maps-to-p1",
+        "empty-diff-checkpoint-not-advanced",
+        "deduped-finding-never-refiled",
+        "oversized-batch-stops-before-filing",
+    },
 }
 PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
 # Required PR CI has no model credentials. Promotion stays fail-closed until
@@ -438,7 +444,6 @@ def validate_alpha_promotion_gate(
 
 def validate_claude_ievo_marketplace(
     settings: dict,
-    codex_ievo_ref: str | None,
     failures: list[str],
     settings_path: str = ".claude/settings.json",
 ) -> None:
@@ -505,18 +510,10 @@ def validate_claude_ievo_marketplace(
         )
     if plugin_source.get("path") != IEVO_PLUGIN_PATH:
         failures.append(f"{settings_path}: ievo plugin path must be {IEVO_PLUGIN_PATH}")
-    if "ref" in plugin_source:
+    if "sha" in plugin_source or "ref" in plugin_source:
         failures.append(
-            f"{settings_path}: ievo plugin must use sha, not ref, for an exact pin"
-        )
-    sha = plugin_source.get("sha")
-    if not isinstance(sha, str) or IMMUTABLE_SHA.fullmatch(sha) is None:
-        failures.append(
-            f"{settings_path}: ievo plugin sha must be a full immutable commit SHA"
-        )
-    elif codex_ievo_ref is not None and sha != codex_ievo_ref:
-        failures.append(
-            f"{settings_path}: ievo plugin sha must match the Codex iEvo commit"
+            f"{settings_path}: ievo plugin source must not pin sha or ref "
+            "(tracks the upstream default branch by design; see D-155)"
         )
 
 
@@ -525,7 +522,6 @@ def validate_marketplaces(failures: list[str]) -> None:
     settings = load_json(claude_path, failures)
     validate_claude_ievo_marketplace(
         settings,
-        None,
         failures,
         claude_path,
     )
@@ -3236,7 +3232,15 @@ def validate_alpha_skill_contracts(
     failures: list[str],
     root: Path = ROOT,
 ) -> None:
-    for name in ("pycc", "pycc-feedback", "issue-to-plan", "issue-implement", "issue-select", "next-milestone"):
+    for name in (
+        "pycc",
+        "pycc-feedback",
+        "issue-to-plan",
+        "issue-implement",
+        "issue-select",
+        "next-milestone",
+        "ultra-review",
+    ):
         path = skills_root / name / "SKILL.md"
         relative = display_path(path, root)
         try:

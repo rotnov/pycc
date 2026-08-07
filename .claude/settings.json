@@ -29,8 +29,7 @@
             "source": {
               "source": "git-subdir",
               "url": "https://github.com/ievo-ai/skills.git",
-              "path": "./plugins/ievo",
-              "sha": "7d5f3e12d0556cb6c5df2974e2babe0433674186"
+              "path": "./plugins/ievo"
             }
           }
         ]

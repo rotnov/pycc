@@ -1206,11 +1206,7 @@ class AgentAssetValidationTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn("could not read canonical instructions", failures[0])
 
-    def claude_settings(
-        self,
-        *,
-        sha: str = "7d5f3e12d0556cb6c5df2974e2babe0433674186",
-    ) -> dict:
+    def claude_settings(self) -> dict:
         return {
             "enabledPlugins": {
                 "ievo@ievo-skills": True,
@@ -1227,7 +1223,6 @@ class AgentAssetValidationTests(unittest.TestCase):
                                     "source": "git-subdir",
                                     "url": validator.IEVO_REPOSITORY_URL,
                                     "path": validator.IEVO_PLUGIN_PATH,
-                                    "sha": sha,
                                 },
                             }
                         ],
@@ -1237,15 +1232,10 @@ class AgentAssetValidationTests(unittest.TestCase):
             }
         }
 
-    def validate_claude_settings(
-        self,
-        settings: dict,
-        codex_ref: str = "7d5f3e12d0556cb6c5df2974e2babe0433674186",
-    ) -> list[str]:
+    def validate_claude_settings(self, settings: dict) -> list[str]:
         failures: list[str] = []
         validator.validate_claude_ievo_marketplace(
             settings,
-            codex_ref,
             failures,
         )
         return failures
@@ -1271,7 +1261,7 @@ class AgentAssetValidationTests(unittest.TestCase):
         )
         return failures
 
-    def test_inline_claude_marketplace_with_exact_plugin_sha_is_accepted(
+    def test_inline_claude_marketplace_without_pin_is_accepted(
         self,
     ) -> None:
         self.assertEqual(self.validate_claude_settings(self.claude_settings()), [])
@@ -1360,20 +1350,27 @@ class AgentAssetValidationTests(unittest.TestCase):
             any("inline settings marketplace" in failure for failure in failures)
         )
 
-    def test_claude_plugin_pin_must_be_an_exact_sha(self) -> None:
-        failures = self.validate_claude_settings(
-            self.claude_settings(sha="v0.58.1"),
-        )
+    def test_claude_plugin_source_rejects_a_sha_pin(self) -> None:
+        settings = self.claude_settings()
+        plugin_source = settings["extraKnownMarketplaces"]["ievo-skills"]["source"][
+            "plugins"
+        ][0]["source"]
+        plugin_source["sha"] = "7d5f3e12d0556cb6c5df2974e2babe0433674186"
+        failures = self.validate_claude_settings(settings)
         self.assertTrue(
-            any("full immutable commit SHA" in failure for failure in failures)
+            any("must not pin sha or ref" in failure for failure in failures)
         )
 
-    def test_claude_and_codex_pins_must_match(self) -> None:
-        failures = self.validate_claude_settings(
-            self.claude_settings(),
-            codex_ref="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    def test_claude_plugin_source_rejects_a_ref_pin(self) -> None:
+        settings = self.claude_settings()
+        plugin_source = settings["extraKnownMarketplaces"]["ievo-skills"]["source"][
+            "plugins"
+        ][0]["source"]
+        plugin_source["ref"] = "main"
+        failures = self.validate_claude_settings(settings)
+        self.assertTrue(
+            any("must not pin sha or ref" in failure for failure in failures)
         )
-        self.assertTrue(any("must match" in failure for failure in failures))
 
     def test_claude_ievo_plugin_must_be_enabled(self) -> None:
         settings = self.claude_settings()

@@ -28,6 +28,50 @@ never a merge gate.
 
 ---
 
+## 2026-08-07 — Proved a check "unreachable" by varying only one dimension of a two-dimensional equality; nearly deleted live code
+
+**What happened:** diagnosing the D-014 coverage gap regression on `main` (introduced
+by PR #358, `f4b3978`), the session found that `check_and_resolve`'s post-resolution
+call to `check_incompatible_redefinitions` was the one uncovered branch. It wrote one
+test — a 1-parameter `Ty::Infer` function redefined with a 1-parameter `Ty::Int`
+function (same arity, different element type) — observed the redefinition silently
+accepted, concluded the post-resolution call "can never fire," filed it as such in a
+P1 issue (#402), and staged a diff deleting the call as dead code together with
+rewritten doc comments asserting the same. The predicate the call actually evaluates,
+`check_incompatible_redefinitions`'s `prev != &current` on `(Vec<Ty>, Ty)`, has two
+independent dimensions: the parameter *types* and the `Vec`'s *length* (arity). The one
+test varied only the first dimension. `check_and_resolve`'s resolution loop
+(`params.iter_mut().zip(resolved_params)`) overwrites each item's own parameter types
+in place but never changes an item's parameter count, so same-arity redefinitions
+converge to identical resolved signatures (masking the mismatch, as observed) while
+different-arity redefinitions keep their own distinct lengths post-resolution and the
+comparison still catches them. The mistake was caught only because a concurrent
+automated actor (PR #403, `db2f9cf`) independently fixed the same coverage gap by
+adding a test that exercises exactly the untested arity-mismatch dimension, and the
+D-021 preflight's mandatory `git fetch` immediately before commit surfaced that
+commit's conflicting fix before the deletion was pushed — this was luck in the timing
+of a concurrent write, not a safeguard the session itself had in place.
+
+**Root cause:** treated one passing/failing test case as proof of a branch's universal
+(un)reachability without checking that the test varied every dimension the branch's
+own comparison logic reads.
+
+**What fixed it:** discarded the staged deletion, independently re-verified PR #403's
+test against a fresh worktree before trusting its commit message, corrected the
+now-falsified "can never fire" claims in issue #402 and the misleading doc comments
+that had encoded the same overclaim, and landed a narrower doc/comment-only fix
+describing the real three-way boundary (both concrete: rejected any arity; one
+inferred, arities differ: rejected post-resolution; one inferred, arities match:
+silently collapses — #402).
+
+**Lesson:** before concluding a branch is unreachable from empirical test results,
+enumerate every independent variable the branch's own comparison or guard condition
+reads (here: both element-wise content and container length), and construct at least
+one test case that isolates each one. A single test that happens to vary only one
+dimension of a multi-dimensional predicate proves nothing about the others.
+
+---
+
 ## 2026-08-05 — Used `sleep 240` to wait on CI instead of `ci-watch.sh`; missed `autopilot-async-monitoring` skill at the CI-wait fork
 
 **What happened:** during the `issue-implement` run for #345 (PR #348), the session

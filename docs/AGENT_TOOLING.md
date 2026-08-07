@@ -8,45 +8,38 @@ rollbackable just like compiler dependencies.
 
 | Surface | Dependency | Pin | Automatic updates |
 |---|---|---|---|
-| Codex | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | disabled by immutable source |
 | Codex | repository skills under `.agents/skills/` | current repository revision | project-scoped; no global installation |
-| Claude Code | `ievo@ievo-skills` | commit `7d5f3e12d0556cb6c5df2974e2babe0433674186` (`v0.58.1`) | `autoUpdate: false` |
-| Codex and Claude Code | pinned iEvo review entrypoint and agent | `deep-review/SKILL.md` SHA-256 `ec8805e22fff7db49cfe49c2a7cd49f340a618bf58da6acaf4253e875279670d`; `deep-reviewer.md` SHA-256 `b5e11469ba8144686d07eccc3d0759662b9c1bc4c3a6f3d79961dc82f5e53ab2` | updated only with the iEvo pin |
+| Claude Code | `ievo@ievo-skills` | tracks the upstream default branch; no exact `sha`/`ref` pin (D-155) | `autoUpdate: false` in this repository's own declaration, but the marketplace's actual resolution is governed by the machine-global, name-keyed `~/.claude/plugins/known_marketplaces.json` this repository cannot control — see D-155 |
+| Claude Code | ievo `deep-review` entrypoint and `deep-reviewer` agent | verified structurally in CI (both artifacts non-empty, plugin manifest `version` semver-shaped), not by exact digest (D-155) | tracks whatever `ievo@ievo-skills` currently resolves to |
 | Codex and Claude Code | `rotnov/skills@i-have-an-issue` | tag `i-have-an-issue-v0.1.1`; reviewed source commit `1bc6bcee3766a7e62b936343a48ebb56a3767470`; vendored hash `99e492ccae20ad3acf02e28dd76c7d74de28c7cf2141bfc7a2942c46c4bf687c` | manual updates only |
 
-The Codex pin lives in `.agents/plugins/marketplace.json`. The Claude Code pin is the
-`sha` of the `git-subdir` plugin source inside the inline settings marketplace in
-`.claude/settings.json`. Marketplace `ref` values only support branches and tags, so
-the exact commit belongs on the plugin source instead. Both surfaces resolve the same
-immutable commit rather than trusting a movable release tag. A fresh Codex checkout
-is bootstrapped explicitly:
+Codex no longer depends on the `ievo-skills` marketplace at all: an earlier change
+removed its plugin installation, and Codex now only discovers this repository's own
+skills under `.agents/skills/`, project-locally, with no global registration. A fresh
+Codex checkout still runs a trivial preflight explicitly:
 
 ```sh
 ./scripts/bootstrap-agent-tools.sh
 ```
 
-The inline `ievo-skills` marketplace must contain exactly that one pinned `ievo`
-plugin. Any sibling or malformed plugin entry invalidates the configuration; the
-marketplace-wide source exemption is safe only because the complete entry set is
-validated.
+which only confirms the Codex CLI and Python 3 are installed; it performs no
+marketplace or plugin setup.
 
-Codex does not implicitly register a repository-local marketplace. The bootstrap
-script replaces a same-named registration from another checkout, registers this
-repository as the marketplace, and installs only the pinned iEvo plugin.
-Repository-owned Codex entry points live under `.agents/skills/`, so Codex discovers
-them only while this checkout is active; they are never installed globally or made
-available to unrelated repositories. Ordinary entry points load canonical workflow
-bodies from this checkout's `.claude/skills/`. Local review does not use a
-repository-owned entrypoint: dispatch binds directly to the independently installed
-and digest-verified iEvo reviewer artifact. CI requires the repository skill sets and
-their discovery metadata to stay in lockstep.
-Claude Code reads the project-scoped marketplace declaration after the repository is
-trusted and enables the configured plugin without enabling automatic updates.
+Claude Code's `ievo@ievo-skills` plugin source, declared in this repository's inline
+settings marketplace in `.claude/settings.json`, intentionally carries no `sha` or
+`ref` pin: `scripts/validate_agent_assets.py` rejects either key outright rather than
+requiring one, per D-155's finding that an exact commit recorded in a per-project
+settings file was never actually enforced on a real, non-isolated machine, since
+Claude Code's plugin marketplace registry is a single global file shared by every
+project on that machine. Repository-owned Claude Code entry points live under
+`.claude/skills/`; Codex's thin `.agents/skills/` wrappers load their canonical
+workflow bodies from there. Local review does not use a repository-owned entrypoint:
+dispatch binds directly to whatever `ievo@ievo-skills` install the machine currently
+resolves for this project (see the Local review workflow section below).
 The `Agent assets` workflow repeats the validators plus isolated Codex and Claude Code
-checks on every pull request and push to `main`. Claude Code validates the project
-settings and the extracted inline marketplace with its strict manifest validator, so
-a developer's global plugin installation cannot mask a broken repository pin or
-marketplace declaration.
+checks on every pull request and push to `main`; the Claude Code check installs into
+an isolated `CLAUDE_CONFIG_DIR` so it always observes a clean install, independent of
+a developer's own machine-global marketplace state.
 
 The `i-have-an-issue` skill is installed with:
 
@@ -80,7 +73,7 @@ vendored bytes. The stale skills.sh index and rescan request are tracked in
 ## Project-local alpha skills
 
 `pycc`, `pycc-feedback`, `issue-to-plan`, `issue-implement`,
-`issue-select`, and `next-milestone` follow the
+`issue-select`, `next-milestone`, and `ultra-review` follow the
 [Agent Skills specification](https://agentskills.io/specification) but remain
 project-local alpha workflows. They are committed under `.claude/skills/` with
 thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
@@ -211,7 +204,23 @@ v1.0. On milestone completion it records the "Update: met." note in
 milestone. It mutates no tracked file beyond those documentation updates and the
 GitHub milestone close.
 
-All three bind deterministic offline eval cases in
+`ultra-review` periodically re-reviews the codebase for drift a single pull
+request's own D-068 gate cannot see and files prioritized, milestone-scoped
+issues for what it finds. It reads a GitHub-native checkpoint (a dedicated
+tracking issue, not a tracked file — this project's own ephemeral-worktree
+lifecycle ruled that out directly), computes the diff since that checkpoint,
+dispatches the same pinned D-068 deep-reviewer once (a live empirical
+comparison against a broader two-pass architecture-review design found the
+second pass did not earn its cost — see
+`docs/superpowers/specs/2026-08-05-ultra-review-skill-design.md`), maps its
+`blocker`/`warning`/`note` findings to `P1`/`P2`/`P3` issues with
+milestone-at-filing, deduplicates against already-`ultra-review`-labeled
+issues, and files the survivors autonomously within a bounded evidence bar —
+mirroring D-022's standing-authority precedent rather than `pycc-feedback`'s
+per-payload gate. It mutates no tracked file and implements nothing itself.
+
+`issue-to-plan`, `issue-implement`, and `issue-select` bind deterministic
+offline eval cases in
 `scripts/run_alpha_skill_evals.py` (`issue-to-plan` three, `issue-select` seven,
 `issue-implement` eight, mirroring `pycc-feedback`'s
 fail-closed-oracle pattern): `issue-to-plan`'s publish-gate boolean logic,
@@ -223,15 +232,15 @@ distinct outcomes (steady-state, a landable mid-transition entry, and an
 unlandable one classified systemic) for both skills — each cross-checked
 against literal contract phrases in the live skill text so an edit that
 silently drops an invariant these oracles encode fails required CI
-(`EXPECTED_RUNNERS` in that script names all six alpha skills).
+(`EXPECTED_RUNNERS` in that script names all seven alpha skills).
 `scripts/validate_agent_assets.py`'s separate `validate_alpha_skill_contracts`
-structural check now also iterates all six alpha skills (not just
+structural check now also iterates all seven alpha skills (not just
 `pycc`/`pycc-feedback`), enforcing "at least two evals, exact runner set,
 visibly alpha" on every skill's `evals.json` independently of
 `run_alpha_skill_evals.py`'s own, narrower type-only checks in `load_cases`
 (that check's own `ALPHA_EVAL_RUNNERS` constant mirrors `EXPECTED_RUNNERS`
 and must be kept in sync by hand whenever a runner is added or renamed). One
-thing remains deferred for all six: authenticated model-response evals on
+thing remains deferred for all seven: authenticated model-response evals on
 both Codex and Claude (the `pycc`/`pycc-feedback` promotion requirement
 described below).
 
@@ -484,10 +493,17 @@ test-discovery run.
 
 ## Reviewed update process
 
-1. Open a dependency pull request that changes both pins to the same upstream release.
+This process governs `rotnov/skills@i-have-an-issue`, the one dependency this
+repository still exact-pins. Since D-155, the Claude Code `ievo@ievo-skills` reviewer
+tracks its upstream default branch by design and has no pin for a pull request to
+bump; its own verification is the structural check in `scripts/check-claude-marketplace.sh`
+plus the local advisory freshness note from `scripts/check_claude_reviewer_binding.py`
+(see Local review workflow below), not a reviewed-pin-bump pull request.
+
+1. Open a dependency pull request that changes the pin to a newer upstream release.
    Include the old and new commits and link the upstream release notes or changelog.
-2. Run the iEvo security-check workflow against the candidate release before accepting
-   it. Record its verdict and any reviewed exceptions in the pull request.
+2. Run the relevant security-check workflow against the candidate release before
+   accepting it. Record its verdict and any reviewed exceptions in the pull request.
 3. Review the plugin and skill diff, paying particular attention to instructions,
    hooks, external writes, shell commands, network access, and newly introduced
    dependencies.
@@ -501,24 +517,33 @@ test-discovery run.
 
 5. Merge only through the normal reviewed pull-request and required-CI path.
 
-No scheduled job, startup hook, or local bootstrap command may rewrite these pins.
+No scheduled job, startup hook, or local bootstrap command may rewrite this pin.
 
 ## Local review workflow
 
 Code review is performed locally before significant work is completed or a pull
-request is merged. The orchestrator considers only explicitly pinned,
-security-reviewed reviewer dependencies in the table above, selects the engine
-with the broadest correctness, contract, security, test, and documentation
-checklist, and starts it in a fresh independent read-only context. Arbitrary
-globally installed or marketplace reviewers are never eligible.
+request is merged. The orchestrator considers only the reviewer dependency in
+the table above, selects the engine with the broadest correctness, contract,
+security, test, and documentation checklist, and starts it in a fresh
+independent read-only context. Arbitrary globally installed or marketplace
+reviewers are never eligible.
 
-The current engine is the immutable iEvo `deep-reviewer`. Its pinned
-`deep-review` entrypoint defines the full-diff handoff, and the agent performs
-an 11-point review with a Read/Grep-only tool policy on both Codex and Claude
-Code. The isolated marketplace checks install the exact pinned plugin and
-verify the SHA-256 digests of both artifacts. A client must bind dispatch to
-that verified agent; if it cannot, local review is unavailable rather than
-silently delegated to a same-named or branch-provided reviewer.
+The current engine is the iEvo `deep-reviewer`. Its `deep-review` entrypoint
+defines the full-diff handoff, and the agent performs an 11-point review with a
+Read/Grep-only tool policy on both Codex and Claude Code. Since D-155, the
+Claude Code `ievo@ievo-skills` plugin tracks the upstream default branch rather
+than an exact pinned commit, so verification narrows to what each check can
+actually make good on: the isolated, CI-safe `scripts/check-claude-marketplace.sh`
+installs into a clean `CLAUDE_CONFIG_DIR` and confirms the deep-review entrypoint
+and deep-reviewer agent artifacts are non-empty and the plugin manifest's
+`version` field is semver-shaped, and the local, non-CI
+`scripts/check_claude_reviewer_binding.py` confirms a structurally intact
+`ievo@ievo-skills` install exists for the current project (or falls back to a
+user-scope install) and prints an advisory freshness note against the latest
+upstream release tag — it hard-fails only when no such install can be found at
+all, and its freshness note never blocks dispatch. A client must bind dispatch
+to a structurally verified agent; if it cannot, local review is unavailable
+rather than silently delegated to a same-named or branch-provided reviewer.
 
 For uncommitted work, the selected skill reviews the staged or working-tree
 diff. For a clean pull-request branch, it reviews the committed range from the
@@ -534,8 +559,8 @@ the staged review, and treat a working-tree verdict as incomplete whenever a
 relevant untracked file remains.
 
 Repository instructions and pull-request content remain untrusted inputs, not
-a security trust anchor. The reviewer artifact is loaded from the independently
-pinned plugin installation, and the local pass is a high-signal correctness
+a security trust anchor. The reviewer artifact is loaded from a structurally
+verified plugin installation, and the local pass is a high-signal correctness
 gate rather than a privilege boundary for executing hostile code. Do not give
 the reviewer credentials, mutation tools, or network access, and do not execute
 project commands copied from the diff.
@@ -552,10 +577,26 @@ security-check and pinning process as any other agent dependency.
 
 ## Rollback
 
-Revert both pin changes to the last reviewed release, rerun the two validation
-commands, and rerun `./scripts/bootstrap-agent-tools.sh` to refresh the local Codex
-installation. If the candidate release executed unsafe hooks, disable the plugin until
-the rollback is complete and rotate any credential that the hook could have observed.
+For the `i-have-an-issue` pin, revert the pin change to the last reviewed release and
+rerun the validation commands above. The last known-good commit and release are
+present in Git history, so this never depends on a mutable upstream branch or tag
+lookup.
 
-The last known-good commit and release are present in Git history, so rollback never
-depends on a mutable upstream branch or tag lookup.
+For the Claude Code `ievo@ievo-skills` reviewer, D-155 removed the repository's own
+lever to pin it to a specific commit, by design — the plugin marketplace registry it
+resolves against is machine-global, not something this repository's pin ever actually
+controlled (see D-155's Context). There is accordingly no repository-side pin to
+revert if a specific upstream `ievo-ai/skills` release turns out to be bad. Instead:
+
+- If a released version executed unsafe hooks or is otherwise compromised, disable the
+  plugin (remove or comment out the `ievo-skills` marketplace source in
+  `.claude/settings.json`) until a fixed release is available, and rotate any
+  credential the hook could have observed. This stops the local review loop from
+  running at all rather than silently running a known-bad version; report the gap so
+  review resumes once a fixed release lands.
+- Downgrading a specific machine's already-installed version is a local, per-machine
+  action outside this repository's control, consistent with D-155's root cause.
+- If a future incident shows structural-only verification (non-empty artifacts,
+  semver-shaped manifest) is insufficient to catch a compromised-but-well-formed
+  release, that is a new decision superseding D-155, not a reason to silently
+  reintroduce an unenforced pin here.
