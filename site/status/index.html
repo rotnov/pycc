@@ -301,49 +301,30 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>v0.1 and v0.2's acceptance criteria are met; v0.3's class model core has landed.</h2>
+            <h2>The rest of v0.3's class model and the full conformance matrix are next.</h2>
             <p>
-              All five v0.1 acceptance-checklist bullets are green:
-              <code>fib</code> and <code>mandelbrot-ascii</code> match pinned
-              CPython output on all five Tier-1 targets, <code>pycc check</code>
-              clears its &lt;50ms/1000 LOC throughput floor, and diagnostic
-              output matches the stable CLI specification's example. v0.2's
-              own acceptance criteria are now also met: a hand-authored
-              <code>list</code>/<code>dict</code>/<code>set</code>/<code>tuple</code>
-              plus comprehensions/slicing/methods/generics corpus matches
-              CPython output on all five Tier-1 targets, <code>--release</code>
-              clears its nbody-vs-CPython speedup floor on every target, and
-              conformance covers at least 15
-              <a href="https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md">PYTHON_STANDARDS.md</a>
-              matrix rows (17 distinct PEPs). v0.3 is in progress: its class
-              model core (<code>Ty::Instance</code>, HIR class definitions,
-              single-class instantiation, attributes, and methods) has
-              landed; inheritance, <code>@property</code>, dataclasses,
-              enums, protocols, structural pattern matching, and custom
-              exceptions remain planned. The full multi-version conformance
-              matrix, differential fuzzing, and corpus testing remain
-              planned, alongside the rest of v0.3's class-model work.
-              The required frontend measurement
-              and greater-than-7.0% regression gate remain required through
-              <code>ci-gate</code>. This source-aware paired gate
-              measures the exact predecessor and candidate sequentially on one
-              hosted runner and seals the predecessor timing before candidate code
-              runs. Before candidate code runs, it classifies the complete
-              <code>src/</code> and <code>crates/</code> trees; the existing contract
-              independently binds every benchmark and build input. Identical
-              executable inputs keep the timing delta as visible, non-blocking
-              environment telemetry. Changed source uses exactly five complete
-              runs per revision, compares the median of their per-run medians,
-              and keeps the hard greater-than-7.0% regression block. All ten timing
-              files are retained. The gate compares through a hash-verified
-              predecessor-owned checker. Revision, benchmark-contract,
-              executable-input identity, artifact-identity, exact file-set, and
-              comparison drift fail closed.
-              These gates stay required while the full conformance matrix and
-              the rest of v0.3 proceed; the documented implementation gaps
-              above are accepted boundaries that the met milestones'
-              acceptance criteria never required closing, not outstanding
-              blockers.
+              v0.1 and v0.2's acceptance criteria are both met, and v0.3's
+              class model core has landed — see
+              <a href="#implemented">Implemented now</a> above for what that
+              covers today. Still ahead for v0.3: inheritance,
+              <code>@property</code>, dataclasses, enums, protocols,
+              structural pattern matching, and custom exceptions. Beyond the
+              class model, the full multi-version conformance matrix,
+              differential fuzzing, and corpus testing remain planned test-depth
+              work carried over from v0.1 and v0.2. See the
+              <a href="https://github.com/rotnov/pycc/blob/main/docs/DELIVERY_PLAN.md">delivery plan</a>
+              for the exact sequence.
+            </p>
+            <p>
+              The 100% line/region coverage gate and the required
+              <code>frontend-perf-gate</code> (currently a
+              greater-than-7.0% regression floor, enforced by a paired
+              predecessor/candidate measurement — see the
+              <a href="https://github.com/rotnov/pycc/blob/main/docs/ROADMAP.md">roadmap</a>
+              for the full mechanics) stay required through all of this work.
+              The implementation gaps listed above are accepted boundaries
+              the met v0.1/v0.2 milestones' acceptance criteria never
+              required closing, not outstanding blockers.
             </p>
             <div class="page-links">
               <a href="../architecture/">
