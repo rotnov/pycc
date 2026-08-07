@@ -20839,13 +20839,17 @@ mod tests {
     }
 
     #[test]
-    fn check_rejects_the_issue_402_reproduction_fixture() {
-        // Same fixture as check_and_resolve_rejects_the_issue_402_reproduction_fixture,
-        // but through `check`'s own separate call site
-        // (`check_incompatible_redefinitions` is called directly from both
+    fn checked_function_signatures_rejects_the_issue_402_reproduction_fixture() {
+        // Same fixture as check_and_resolve_rejects_the_issue_402_reproduction_fixture
+        // and check_incompatible_redefinitions_rejects_infer_signature_mismatch,
+        // but through `checked_function_signatures`'s own separate call site
+        // (mirrors checked_function_signatures_rejects_incompatible_redefinition
+        // above, which exercises that same call site with a fully-concrete,
+        // different-arity fixture instead of an Infer-involving one).
+        // `check_incompatible_redefinitions` is called directly from both
         // `check` and `checked_function_signatures`; each entry point is
         // exercised independently rather than relying on one to cover the
-        // other).
+        // other.
         let hir = HirModule {
             items: vec![
                 HirItem::Function {
@@ -20863,7 +20867,8 @@ mod tests {
             ],
             type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
-        let err = check(&hir).unwrap_err();
+        let local_names = module_function_local_names(&hir);
+        let err = checked_function_signatures(&hir, &local_names).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(
             err.message.contains("cannot redefine function `foo`"),
