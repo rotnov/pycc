@@ -73,7 +73,7 @@ vendored bytes. The stale skills.sh index and rescan request are tracked in
 ## Project-local alpha skills
 
 `pycc`, `pycc-feedback`, `issue-to-plan`, `issue-implement`,
-`issue-select`, and `next-milestone` follow the
+`issue-select`, `next-milestone`, and `ultra-review` follow the
 [Agent Skills specification](https://agentskills.io/specification) but remain
 project-local alpha workflows. They are committed under `.claude/skills/` with
 thin `.agents/skills/` entrypoints for equal Claude Code and Codex discovery.
@@ -204,7 +204,23 @@ v1.0. On milestone completion it records the "Update: met." note in
 milestone. It mutates no tracked file beyond those documentation updates and the
 GitHub milestone close.
 
-All three bind deterministic offline eval cases in
+`ultra-review` periodically re-reviews the codebase for drift a single pull
+request's own D-068 gate cannot see and files prioritized, milestone-scoped
+issues for what it finds. It reads a GitHub-native checkpoint (a dedicated
+tracking issue, not a tracked file — this project's own ephemeral-worktree
+lifecycle ruled that out directly), computes the diff since that checkpoint,
+dispatches the same pinned D-068 deep-reviewer once (a live empirical
+comparison against a broader two-pass architecture-review design found the
+second pass did not earn its cost — see
+`docs/superpowers/specs/2026-08-05-ultra-review-skill-design.md`), maps its
+`blocker`/`warning`/`note` findings to `P1`/`P2`/`P3` issues with
+milestone-at-filing, deduplicates against already-`ultra-review`-labeled
+issues, and files the survivors autonomously within a bounded evidence bar —
+mirroring D-022's standing-authority precedent rather than `pycc-feedback`'s
+per-payload gate. It mutates no tracked file and implements nothing itself.
+
+`issue-to-plan`, `issue-implement`, and `issue-select` bind deterministic
+offline eval cases in
 `scripts/run_alpha_skill_evals.py` (`issue-to-plan` three, `issue-select` seven,
 `issue-implement` eight, mirroring `pycc-feedback`'s
 fail-closed-oracle pattern): `issue-to-plan`'s publish-gate boolean logic,
@@ -216,15 +232,15 @@ distinct outcomes (steady-state, a landable mid-transition entry, and an
 unlandable one classified systemic) for both skills — each cross-checked
 against literal contract phrases in the live skill text so an edit that
 silently drops an invariant these oracles encode fails required CI
-(`EXPECTED_RUNNERS` in that script names all six alpha skills).
+(`EXPECTED_RUNNERS` in that script names all seven alpha skills).
 `scripts/validate_agent_assets.py`'s separate `validate_alpha_skill_contracts`
-structural check now also iterates all six alpha skills (not just
+structural check now also iterates all seven alpha skills (not just
 `pycc`/`pycc-feedback`), enforcing "at least two evals, exact runner set,
 visibly alpha" on every skill's `evals.json` independently of
 `run_alpha_skill_evals.py`'s own, narrower type-only checks in `load_cases`
 (that check's own `ALPHA_EVAL_RUNNERS` constant mirrors `EXPECTED_RUNNERS`
 and must be kept in sync by hand whenever a runner is added or renamed). One
-thing remains deferred for all six: authenticated model-response evals on
+thing remains deferred for all seven: authenticated model-response evals on
 both Codex and Claude (the `pycc`/`pycc-feedback` promotion requirement
 described below).
 
