@@ -175,7 +175,11 @@ struct UserFunction<'ctx> {
     /// dispatch indirectly, so a call before the `def` has executed sees
     /// null and aborts with `pycc_rt_name_error`, and a redefinition
     /// updates the slot so later calls see the new function.
-    fn_ptr_global: inkwell::values::GlobalValue<'ctx>,
+    /// `None` for monomorphized generic specializations (`0gen_...` names),
+    /// which are compiler-generated, not user-defined: they have no
+    /// top-level `def` whose execution order matters, so they dispatch
+    /// directly through `direct_value` instead.
+    fn_ptr_global: Option<inkwell::values::GlobalValue<'ctx>>,
     /// The LLVM function type (parameter types + return type) for this
     /// function name. All definitions of the same name share one type
     /// (the type checker resolves to one signature per name). Needed to
@@ -186,7 +190,14 @@ struct UserFunction<'ctx> {
     /// null-pointer (call-before-`def`) path. Created once per function
     /// name in the declaration pass and reused at every call site, rather
     /// than recreating a duplicate-named global on each call.
-    name_global: inkwell::values::GlobalValue<'ctx>,
+    /// `None` for monomorphized specializations (no call-before-`def`
+    /// path exists for compiler-generated functions).
+    name_global: Option<inkwell::values::GlobalValue<'ctx>>,
+    /// Issue #22: for monomorphized generic specializations (`0gen_...`
+    /// names), the LLVM function value to call directly. `None` for
+    /// ordinary user-defined functions, which dispatch indirectly through
+    /// `fn_ptr_global` to preserve Python execution order.
+    direct_value: Option<FunctionValue<'ctx>>,
 }
 
 #[derive(Clone)]
@@ -3202,11 +3213,23 @@ fn build_call_to_with_leading_args<'ctx>(
     // Load the current binding; if null, the function hasn't been defined
     // yet at this point in execution -- abort with a runtime NameError.
     // Otherwise, call through the loaded pointer.
+    // Monomorphized generic specializations (`0gen_...` names) have no
+    // `fn_ptr_global` -- they dispatch directly through `direct_value`
+    // since they are compiler-generated, not user-defined.
+    if let Some(ref direct_value) = user_function.direct_value {
+        return builder
+            .build_call(*direct_value, &arg_values, "call_user_fn")
+            .expect("build_call should not fail for a well-formed direct call");
+    }
+    let fn_ptr_global = user_function
+        .fn_ptr_global
+        .as_ref()
+        .expect("non-monomorphized user function has a fn_ptr_global");
     let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
     let fn_ptr = builder
         .build_load(
             fn_ptr_type,
-            user_function.fn_ptr_global.as_pointer_value(),
+            fn_ptr_global.as_pointer_value(),
             "load_fnptr",
         )
         .expect("build_load should not fail for a global function-pointer slot")
@@ -3230,7 +3253,11 @@ fn build_call_to_with_leading_args<'ctx>(
     // global was created once per function name in the declaration pass
     // and is reused at every call site.
     builder.position_at_end(is_null_block);
-    let name_ptr = user_function.name_global.as_pointer_value();
+    let name_global = user_function
+        .name_global
+        .as_ref()
+        .expect("non-monomorphized user function has a name_global");
+    let name_ptr = name_global.as_pointer_value();
     builder
         .build_call(rt.name_error, &[name_ptr.into()], "name_error")
         .expect("build_call should not fail for a well-formed runtime error call");
@@ -4243,30 +4270,43 @@ fn compile_to_object_with_observer(
             // and fn_type come from the first definition (the type checker
             // resolves one signature per name).
             user_functions.entry(name.as_str()).or_insert_with(|| {
-                let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
-                let fn_ptr_global = module.add_global(
-                    fn_ptr_type,
-                    None,
-                    &format!("fnptr_{name}"),
-                );
-                fn_ptr_global.set_initializer(&fn_ptr_type.const_null());
-                // Issue #22: create the function-name string constant once
-                // per name and reuse it at every call site's null-pointer
-                // (call-before-`def`) path, instead of recreating a
-                // duplicate-named global on each call.
-                let name_global = module.add_global(
-                    context.i8_type().array_type(name.len() as u32 + 1),
-                    None,
-                    &format!("fnname_{name}"),
-                );
-                name_global.set_linkage(Linkage::Internal);
-                name_global.set_constant(true);
-                name_global.set_initializer(&context.const_string(name.as_bytes(), true));
-                UserFunction {
-                    param_tys: params.iter().map(|(_, ty)| ty.clone()).collect(),
-                    fn_ptr_global,
-                    fn_type,
-                    name_global,
+                // Monomorphized generic specializations (`0gen_...` names)
+                // are compiler-generated, not user-defined: they have no
+                // top-level `def` whose execution order matters, so they
+                // dispatch directly through `direct_value` instead of
+                // through the indirect function-pointer slot.
+                let is_monomorphized = name.starts_with("0gen_");
+                if is_monomorphized {
+                    UserFunction {
+                        param_tys: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                        fn_ptr_global: None,
+                        fn_type,
+                        name_global: None,
+                        direct_value: Some(f),
+                    }
+                } else {
+                    let fn_ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+                    let fn_ptr_global = module.add_global(
+                        fn_ptr_type,
+                        None,
+                        &format!("fnptr_{name}"),
+                    );
+                    fn_ptr_global.set_initializer(&fn_ptr_type.const_null());
+                    let name_global = module.add_global(
+                        context.i8_type().array_type(name.len() as u32 + 1),
+                        None,
+                        &format!("fnname_{name}"),
+                    );
+                    name_global.set_linkage(Linkage::Internal);
+                    name_global.set_constant(true);
+                    name_global.set_initializer(&context.const_string(name.as_bytes(), true));
+                    UserFunction {
+                        param_tys: params.iter().map(|(_, ty)| ty.clone()).collect(),
+                        fn_ptr_global: Some(fn_ptr_global),
+                        fn_type,
+                        name_global: Some(name_global),
+                        direct_value: None,
+                    }
                 }
             });
         }
@@ -4318,13 +4358,18 @@ fn compile_to_object_with_observer(
                 // global slot, representing the `def`'s runtime binding.
                 // `def_iter` is in the same source order as `mir.items`,
                 // so the next entry matches this function definition.
+                // Monomorphized generic specializations (`0gen_...` names)
+                // have no `fn_ptr_global` (they dispatch directly), so
+                // skip the store for them.
                 if let Some(&(_, f)) = def_iter.next() {
                     let uf = &user_functions[name.as_str()];
-                    let _ = builder
-                        .build_store(
-                            uf.fn_ptr_global.as_pointer_value(),
-                            f.as_global_value().as_pointer_value(),
-                        );
+                    if let Some(ref fn_ptr_global) = uf.fn_ptr_global {
+                        let _ = builder
+                            .build_store(
+                                fn_ptr_global.as_pointer_value(),
+                                f.as_global_value().as_pointer_value(),
+                            );
+                    }
                 }
             }
         }
