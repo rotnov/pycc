@@ -50,7 +50,7 @@
             "name": "pycc status — what the Python AOT compiler can do today",
             "description": "See what pycc, the AI-created AOT compiler for typed Python, implements today, what's complete for v0.1 and what's planned next, and the CI evidence behind each claim.",
             "inLanguage": "en",
-            "dateModified": "2026-07-27",
+            "dateModified": "2026-08-07",
             "isPartOf": {
               "@id": "https://rotnov.github.io/pycc/#webpage"
             },
@@ -110,7 +110,7 @@
       </nav>
 
       <header class="page-hero">
-        <p class="eyebrow">Evidence page · Updated 2026-07-27</p>
+        <p class="eyebrow">Evidence page · Updated 2026-08-07</p>
         <h1>What pycc can do <span>today.</span></h1>
         <p class="page-lede">
           pycc is a pre-alpha ahead-of-time compiler for typed Python 3.14.
@@ -118,8 +118,8 @@
           larger design contract. It is not a release announcement.
         </p>
         <div class="page-meta" aria-label="Status summary">
-          <span><strong>Milestone</strong> v0.1 acceptance criteria met</span>
-          <span><strong>Acceptance</strong> 5 of 5 gates</span>
+          <span><strong>Milestone</strong> v0.2 acceptance criteria met; v0.3 in progress</span>
+          <span><strong>Acceptance</strong> v0.1 and v0.2 both fully met</span>
           <span><strong>Readiness</strong> pre-alpha</span>
         </div>
       </header>
@@ -136,7 +136,7 @@
         <article class="prose">
           <section id="implemented">
             <p class="section-kicker">Current implementation</p>
-            <h2>The frontend and native backend cover v0.1 with documented gaps.</h2>
+            <h2>The frontend and native backend cover v0.1 and v0.2, with v0.3's class model core landed.</h2>
             <p>
               <code>pycc check</code> runs the parser → HIR → strict type
               checker without entering code generation. The
@@ -200,12 +200,34 @@
                   and region coverage before the protected branch can merge.
                 </p>
               </div>
+              <div class="evidence-card">
+                <span>Collections and generics</span>
+                <strong>v0.2 acceptance criteria met</strong>
+                <p>
+                  <code>list</code>, <code>dict</code>, <code>set</code>, and
+                  <code>tuple</code>, plus comprehensions, slicing, methods,
+                  and generics, match pinned CPython output on all five
+                  Tier-1 targets, and <code>--release</code> clears its
+                  nbody-vs-CPython speedup floor on every target.
+                </p>
+              </div>
+              <div class="evidence-card">
+                <span>Class model core</span>
+                <strong>v0.3 in progress</strong>
+                <p>
+                  <code>Ty::Instance</code>, HIR class definitions, and
+                  single-class instantiation, attribute access, and methods
+                  have landed. Inheritance, <code>@property</code>,
+                  dataclasses, enums, protocols, structural pattern
+                  matching, and custom exceptions remain planned.
+                </p>
+              </div>
             </div>
           </section>
 
           <section id="not-yet">
             <p class="section-kicker">Scope boundary</p>
-            <h2>v0.1 still has explicit implementation gaps.</h2>
+            <h2>pycc still has explicit implementation gaps.</h2>
             <p>
               The current backend deliberately rejects bigint comparisons and
               several bigint arithmetic operations and float formatting outside
@@ -213,9 +235,20 @@
               HIR lowering with a spanned <code>C0001</code> capability diagnostic,
               including under <code>pycc check</code>. Unbound string
               temporaries and function-scoped string values can still leak
-              until ownership analysis lands. Containers,
-              <code>Optional</code>, and narrowing are outside the current
-              frontend grammar.
+              until ownership analysis lands, and the same leak-only
+              policy currently covers <code>list</code>, <code>dict</code>,
+              and <code>set</code> containers and class instances
+              (D-107/D-124, extended by D-154) — none of them carries a
+              real reference count yet. <code>set[int]</code> has no
+              membership test; <code>in</code>, <code>not in</code>,
+              <code>is</code>, and <code>is not</code> all route through
+              the generic <code>C0001</code> diagnostic.
+              <code>tuple[...]</code> slicing remains deferred (D-118)
+              until its result shape can be expressed without a
+              fixed-arity struct's fixed bounds. <code>Optional</code>
+              and narrowing still have no grammar surface, and type
+              diagnostics still use the documented line-1/column-1
+              placeholder span (D-043).
             </p>
             <div class="callout">
               <strong>Do not use pycc in production.</strong>
@@ -268,17 +301,30 @@
 
           <section id="next">
             <p class="section-kicker">Planned next</p>
-            <h2>v0.1's acceptance criteria are met; the full conformance matrix is next.</h2>
+            <h2>v0.1 and v0.2's acceptance criteria are met; v0.3's class model core has landed.</h2>
             <p>
               All five v0.1 acceptance-checklist bullets are green:
               <code>fib</code> and <code>mandelbrot-ascii</code> match pinned
               CPython output on all five Tier-1 targets, <code>pycc check</code>
               clears its &lt;50ms/1000 LOC throughput floor, and diagnostic
-              output matches the stable CLI specification's example. The full
-              multi-version conformance matrix, differential fuzzing, corpus
-              testing, and v0.2's collections and generics work remain planned.
+              output matches the stable CLI specification's example. v0.2's
+              own acceptance criteria are now also met: a hand-authored
+              <code>list</code>/<code>dict</code>/<code>set</code>/<code>tuple</code>
+              plus comprehensions/slicing/methods/generics corpus matches
+              CPython output on all five Tier-1 targets, <code>--release</code>
+              clears its nbody-vs-CPython speedup floor on every target, and
+              conformance covers at least 15
+              <a href="https://github.com/rotnov/pycc/blob/main/docs/PYTHON_STANDARDS.md">PYTHON_STANDARDS.md</a>
+              matrix rows (17 distinct PEPs). v0.3 is in progress: its class
+              model core (<code>Ty::Instance</code>, HIR class definitions,
+              single-class instantiation, attributes, and methods) has
+              landed; inheritance, <code>@property</code>, dataclasses,
+              enums, protocols, structural pattern matching, and custom
+              exceptions remain planned. The full multi-version conformance
+              matrix, differential fuzzing, and corpus testing remain
+              planned, alongside the rest of v0.3's class-model work.
               The required frontend measurement
-              and greater-than-2% regression gate remain required through
+              and greater-than-7.0% regression gate remain required through
               <code>ci-gate</code>. This source-aware paired gate
               measures the exact predecessor and candidate sequentially on one
               hosted runner and seals the predecessor timing before candidate code
@@ -288,15 +334,16 @@
               executable inputs keep the timing delta as visible, non-blocking
               environment telemetry. Changed source uses exactly five complete
               runs per revision, compares the median of their per-run medians,
-              and keeps the hard greater-than-2% regression block. All ten timing
+              and keeps the hard greater-than-7.0% regression block. All ten timing
               files are retained. The gate compares through a hash-verified
               predecessor-owned checker. Revision, benchmark-contract,
               executable-input identity, artifact-identity, exact file-set, and
               comparison drift fail closed.
               These gates stay required while the full conformance matrix and
-              v0.2 work proceed; the documented implementation gaps above are
-              accepted v0.1 boundaries that this milestone's acceptance
-              criteria never required closing, not outstanding blockers.
+              the rest of v0.3 proceed; the documented implementation gaps
+              above are accepted boundaries that the met milestones'
+              acceptance criteria never required closing, not outstanding
+              blockers.
             </p>
             <div class="page-links">
               <a href="../architecture/">
