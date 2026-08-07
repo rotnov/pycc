@@ -5017,16 +5017,14 @@ pub fn check_and_resolve(hir: &HirModule) -> Result<HirModule, Diagnostic> {
         *return_ty = resolved_return.clone();
     }
 
-    // Issue #22: re-check for incompatible redefinitions on the resolved
-    // HIR. The pre-resolution check in `check`/`checked_function_signatures`
-    // skips functions whose signature contained `Ty::Infer` (the solver
-    // path), so a redefinition whose incompatibility only becomes visible
-    // after inference would slip past it. This re-check catches such a
-    // redefinition when the resolved *arities* differ; a same-arity,
-    // Infer-involving mismatch converges to one shared resolved signature
-    // and slips through uncaught (see #402).
-    check_incompatible_redefinitions(&resolved_hir)?;
-
+    // Issue #22/#402: no post-resolution redefinition recheck is needed
+    // here. `checked_function_signatures` (called above) already runs
+    // `check_incompatible_redefinitions` pre-resolution, and that function
+    // now compares the full raw shape unconditionally, including any
+    // `Ty::Infer` position (see its own doc comment) -- so every
+    // redefinition pair that reaches this point is already raw-shape-
+    // identical and is guaranteed to resolve to the same concrete
+    // signature. A second check here would be unreachable dead code.
     monomorphize(&resolved_hir)
 }
 
@@ -5084,19 +5082,30 @@ fn check_with_signatures(
 /// check makes the "one signature per name" invariant the codegen already
 /// assumes actually true.
 ///
-/// Skips any function whose signature contains `Ty::Infer` (the solver
-/// hasn't resolved it yet; comparing `Infer` against a concrete type would
-/// be a false positive). Called from `check` and
-/// `checked_function_signatures` (catches the concrete path before the
-/// concrete/solver split) and, again, from `check_and_resolve` after type
-/// resolution -- but that second call only catches a redefinition whose
-/// resolved signatures still have different *arities*. The resolution loop
-/// in `check_and_resolve` overwrites each item's own parameter *types* in
-/// place (`params.iter_mut().zip(resolved_params)`) but never changes an
-/// item's parameter *count*, so two same-named, same-arity definitions, at
-/// least one of which started with an `Infer` signature, converge to
-/// bit-identical resolved signatures here and this comparison never
-/// observes their original mismatch -- tracked as #402.
+/// Compares each definition's raw, pre-resolution `(param_tys, return_ty)`
+/// shape via `Ty`'s derived structural `PartialEq` -- including any
+/// `Ty::Infer` position. `Ty::Infer` is an ordinary unit variant under that
+/// derive, so it only ever equals another `Ty::Infer` at the same position,
+/// never a concrete type: comparing it unconditionally is correct by
+/// construction, not a false positive. An earlier version of this function
+/// skipped any function whose signature contained `Ty::Infer`, reasoning
+/// that comparing an unresolved `Infer` against a concrete type would be
+/// unsound -- that reasoning was wrong (the derived `PartialEq` already
+/// handles it correctly) and the skip instead let a same-named,
+/// same-arity, `Ty::Infer`-vs-concrete redefinition collapse onto one
+/// shared signature and pass silently (issue #402). Do not reintroduce a
+/// skip for `Ty::Infer` positions.
+///
+/// Called from `check` and `checked_function_signatures` (catches the
+/// concrete path before the concrete/solver split), both pre-resolution.
+/// `check_and_resolve` no longer needs its own post-resolution recheck:
+/// since this function now rejects every raw-shape mismatch up front
+/// (arity or `Infer`-vs-concrete), any redefinition pair it accepts is
+/// already raw-shape-identical, and `infer_function_signatures_with_solver`
+/// resolves same-named items through one shared, name-keyed signature
+/// entry -- so raw-shape-identical items are guaranteed to resolve to the
+/// same concrete signature too. A post-resolution recheck would therefore
+/// never observe a case this pre-resolution check didn't already reject.
 fn check_incompatible_redefinitions(hir: &HirModule) -> Result<(), Diagnostic> {
     let mut seen: HashMap<String, (Vec<Ty>, Ty)> = HashMap::new();
     for item in &hir.items {
@@ -5109,16 +5118,6 @@ fn check_incompatible_redefinitions(hir: &HirModule) -> Result<(), Diagnostic> {
         else {
             continue;
         };
-        // Skip if this definition's signature contains Ty::Infer -- the
-        // solver hasn't resolved it yet, and comparing Infer against a
-        // concrete type would be a false positive. The post-resolution
-        // call in `check_and_resolve` catches a same-named redefinition
-        // whose *resolved* arities differ; a same-arity Infer-involving
-        // mismatch collapses onto one shared signature instead and slips
-        // through uncaught (see #402).
-        if *return_ty == Ty::Infer || params.iter().any(|(_, ty)| *ty == Ty::Infer) {
-            continue;
-        }
         let current = (
             params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>(),
             return_ty.clone(),
@@ -5233,14 +5232,11 @@ fn check_with_environment(
 pub fn check(hir: &HirModule) -> Result<(), Diagnostic> {
     let function_local_names = module_function_local_names(hir);
     // Issue #22: reject incompatible redefinitions before trying either the
-    // concrete or solver path. This check skips functions whose signature
-    // contains `Ty::Infer` (the solver resolves those); for `pycc build`,
-    // the post-resolution check in `check_and_resolve` catches such a
-    // redefinition only when the resolved arities differ -- a same-arity
-    // mismatch slips through uncaught (see #402). Calling it here (not
-    // inside `check_with_environment`) ensures the error is returned
-    // directly rather than being masked by the concrete-path fallback to
-    // the solver path.
+    // concrete or solver path -- including a same-arity, `Ty::Infer`-
+    // involving mismatch (see `check_incompatible_redefinitions`'s own doc
+    // comment). Calling it here (not inside `check_with_environment`)
+    // ensures the error is returned directly rather than being masked by
+    // the concrete-path fallback to the solver path.
     check_incompatible_redefinitions(hir)?;
     // The public validation-only API has no resolved-signature result to
     // return. Avoid building a temporary concrete signature map and then
@@ -20766,13 +20762,14 @@ mod tests {
     }
 
     #[test]
-    fn check_incompatible_redefinitions_skips_infer_signature_functions() {
-        // Functions whose signature contains Ty::Infer (unresolved by the
-        // solver) are skipped by check_incompatible_redefinitions -- comparing
-        // Infer against a concrete type would be a false positive. This
-        // fixture is same-arity (one parameter each), so the post-resolution
-        // call in check_and_resolve does not catch it either -- it collapses
-        // onto one shared resolved signature instead (see #402).
+    fn check_incompatible_redefinitions_rejects_infer_signature_mismatch() {
+        // Issue #402: a same-arity redefinition where one signature still
+        // carries Ty::Infer (unresolved by the solver) and the other is
+        // concrete must be rejected, not silently accepted. Ty::Infer is an
+        // ordinary unit variant under Ty's derived PartialEq, so it only
+        // ever equals another Ty::Infer at the same position -- comparing
+        // it unconditionally against check_incompatible_redefinitions's
+        // `seen` map correctly flags this as a mismatch.
         let hir = HirModule {
             items: vec![
                 HirItem::Function {
@@ -20790,22 +20787,174 @@ mod tests {
             ],
             type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
-        // check() should not reject this as a T0021 incompatible
-        // redefinition -- the Infer signature is skipped, so no
-        // incompatible redefinition is detected at this stage. The result
-        // is Ok for this input; unwrap() fails on any error.
-        check(&hir).unwrap();
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo` with a different signature"),
+            "got: {}",
+            err.message
+        );
     }
 
     #[test]
-    fn check_and_resolve_rejects_incompatible_redefinition_after_inference() {
-        // Exercises the post-resolution `check_incompatible_redefinitions`
-        // call in `check_and_resolve`. Two functions share the
-        // name `foo`; the first has `Ty::Infer` (skipped by the
-        // pre-resolution check), the second has a concrete but incompatible
-        // signature. After the solver resolves the Infer signature, the
-        // resolved HIR has two `foo` definitions with different param
-        // counts -- `check_incompatible_redefinitions` catches this.
+    fn check_and_resolve_rejects_the_issue_402_reproduction_fixture() {
+        // Issue #402's own reproduction fixture, exercised through
+        // check_and_resolve (the `pycc build` path): first `foo` is fully
+        // unannotated (Ty::Infer for both the parameter and the return
+        // type), second `foo` is fully concrete and a different shape.
+        // This is now rejected by the pre-resolution
+        // check_incompatible_redefinitions call inside
+        // checked_function_signatures, before check_and_resolve ever
+        // builds a resolved HIR.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo`"),
+            "got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("<inferred>"),
+            "message should render the unresolved first signature's Ty::Infer \
+             positions as `<inferred>`, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn check_rejects_the_issue_402_reproduction_fixture() {
+        // Same fixture as check_and_resolve_rejects_the_issue_402_reproduction_fixture,
+        // but through `check`'s own separate call site
+        // (`check_incompatible_redefinitions` is called directly from both
+        // `check` and `checked_function_signatures`; each entry point is
+        // exercised independently rather than relying on one to cover the
+        // other).
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo`"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn infer_signature_redefinition_is_rejected_regardless_of_body_evidence() {
+        // Issue #402: the rejection is structural, based on each
+        // definition's raw pre-resolution shape -- not on what the solver
+        // would eventually infer from the body. The first `foo`'s body
+        // would resolve `x`/the return type to `int` if it ran, but the
+        // second `foo` is concretely `(str) -> str`; the raw shapes
+        // (Infer, Infer) vs (Str, Str) already disagree, so this is
+        // rejected before the solver ever sees the first body.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::BinOp {
+                        op: BinOpKind::Add,
+                        left: Box::new(HirExpr::Name("x".to_string())),
+                        right: Box::new(HirExpr::IntLiteral(1)),
+                    }))],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Str)],
+                    return_ty: Ty::Str,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo`"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn compatible_infer_signature_redefinition_with_call_site_evidence_is_accepted() {
+        // Issue #402 must-not-regress: two structurally identical
+        // Ty::Infer signatures (an unannotated helper redefined verbatim)
+        // must still be accepted -- the fix only rejects a *mismatch*
+        // between raw shapes, not an unresolved shape on its own. A call
+        // site is required so the solver has evidence to resolve `x`/the
+        // return type; without one, this fixture would fail for an
+        // unrelated reason ("cannot infer type of parameter").
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Infer)],
+                    return_ty: Ty::Infer,
+                    body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+                },
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call {
+                    callee: "foo".to_string(),
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        assert!(check_and_resolve(&hir).is_ok());
+    }
+
+    #[test]
+    fn check_and_resolve_rejects_incompatible_redefinition_with_infer_signature() {
+        // Issue #402: two functions share the name `foo`; the first has
+        // Ty::Infer, the second has a concrete but incompatible (different
+        // arity) signature. Before this fix, only a resolved-arity mismatch
+        // like this one was caught, and only by a post-resolution recheck
+        // inside `check_and_resolve`. That recheck is gone now: this raw
+        // shape mismatch (arity, independent of Infer) is caught by the
+        // pre-resolution `check_incompatible_redefinitions` call inside
+        // `checked_function_signatures`, reached before `check_and_resolve`
+        // ever builds a resolved HIR.
         let hir = HirModule {
             items: vec![
                 HirItem::Function {
@@ -20833,5 +20982,72 @@ mod tests {
             "got: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn incompatible_redefinition_with_bare_return_type_is_rejected() {
+        // Issue #402's most plausible real-world trip (see the plan's own
+        // §3.5): a first definition that annotates its parameter but
+        // leaves the return type bare (Ty::Infer), redefined with a fully
+        // concrete signature that adds a return annotation. Params agree;
+        // only the return position differs by Infer-vs-concrete -- this
+        // isolates that the fix triggers on the return position alone.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::Infer,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "foo".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(
+            err.message.contains("cannot redefine function `foo` with a different signature"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn mangled_method_name_does_not_collide_with_same_named_top_level_function() {
+        // Issue #402 §3.6 regression: `check_incompatible_redefinitions`
+        // iterates the same flat `hir.items` list a class's own methods are
+        // merged into, name-keyed with no class metadata. A method always
+        // lowers into a mangled `<ClassName>.<method_name>` name (never
+        // containing a bare `.`-free `NAME` token), so it can never
+        // conflate with a bare top-level function of the unmangled name --
+        // confirmed here with deliberately *different* signatures: if the
+        // name-keyed map ever conflated `"Foo.bar"` and `"bar"`, this
+        // fixture would trip T0021 for a differing param type "under the
+        // same name". Accepting it is a stronger check than accepting two
+        // identical signatures would be.
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "Foo.bar".to_string(),
+                    params: vec![("x".to_string(), Ty::Int)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+                HirItem::Function {
+                    name: "bar".to_string(),
+                    params: vec![("x".to_string(), Ty::Str)],
+                    return_ty: Ty::None,
+                    body: vec![],
+                },
+            ],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        assert!(check_and_resolve(&hir).is_ok());
     }
 }
