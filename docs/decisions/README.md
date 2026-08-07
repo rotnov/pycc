@@ -153,6 +153,7 @@ current.
 | [D-144](./D-144-milestone-scope-the-issue-select-next-milestone.md) | Milestone-scope the issue-select/next-milestone autopilot loop | accepted |
 | [D-145](./D-145-add-the-process-error-postmortem-skill-for.md) | Add the `process-error-postmortem` skill for structured process-mistake diagnosis | accepted |
 | [D-146](./D-146-preserve-list-bindings-during-private-helper.md) | Preserve list bindings during private-helper constraint collection (#239) | accepted |
+| [D-147](./D-147-add-the-ultra-review-skill-for-periodic-review.md) | Add the `ultra-review` skill for periodic, evidence-gated codebase review | accepted |
 | [D-148](./D-148-reuse-l0001-for-context-invalid-break-continue.md) | Reuse `L0001` for context-invalid `break`/`continue`/`async for`, not a new code (#141) | accepted |
 | [D-149](./D-149-reuse-l0001-for-context-invalid-yield-yield-from.md) | Reuse `L0001` for context-invalid `yield`/`yield from`, not a new code (#361) | accepted |
 | [D-150](./D-150-hand-authored-explanations-const-slice-as-pycc.md) | Hand-authored `EXPLANATIONS` const slice as `pycc explain`'s content source, not a runtime `docs/DIAGNOSTICS.md` parser (#366, Part 1 of #338) | accepted |
