@@ -30,6 +30,8 @@
 
 use std::cell::Cell;
 
+mod instance;
+
 fn format_i64_line(value: i64) -> String {
     format!("{value}\n")
 }

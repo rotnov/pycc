@@ -44,6 +44,8 @@ Every code: stable forever, documented via `pycc explain`, covered by at least o
 | `T0040` | error | tuple index must be a non-negative literal integer within range (D-116) |
 | `T0041` | error | local name may not be bound on every path reaching this use (definite-assignment tracking, issue #118 Part 1, D-147) |
 | `T0042` | error | generic-function shape or call-site instantiation rejected beyond the PR-13 v0.2 thin slice (D-133/D-134): more than one PEP 695 type parameter; a type parameter used in a container position (`list[T]`); a call site whose occurrences of the type parameter resolve to different concrete types; a call site whose argument for the type parameter is not `int`/`float`/`bool`/`str`; a generic function's body calling itself or any other generic function (recursive generic instantiation is outside D-134's single-call-site monomorphization slice); also reused (D-135) for a generic `type` alias declaring its own type parameters |
+| `T0043` | error | attribute access, attribute assignment, or method call on a value that is not a class instance (D-154, Part 1 of #375) |
+| `T0044` | error | class has no attribute or method with the given name (D-154, Part 1 of #375); a mismatched instantiation/method call-site argument list reuses `T0021` instead, exactly like an ordinary function call |
 | `O0201` | error | value used after move across scope boundary *(internal-only: never fires on legal Python — see note)* |
 | `O0301` | error | non-Shareable value crosses thread boundary without move |
 | `O0302` | error | lock-guarded field accessed without holding lock |
