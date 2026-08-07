@@ -14,8 +14,11 @@ class StatusPageFreshnessTest < Minitest::Test
   # Trailing prose continues on the same physical line after the closing
   # `**`, matching the real docs/ROADMAP.md shape (see the D-068 finding
   # that caught the original fixture putting the bold span alone on its
-  # own line -- a shape MILESTONE_LINE's old whole-line regex matched but
-  # the real file never did).
+  # own line -- a shape the real file never took). The very first, pre-fix
+  # regex's defect was its anchoring (`\A...\s*\z` required nothing after
+  # the closing `**`), not its whole-line scope; `milestone_line` restores
+  # whole-line comparison while fixing that anchoring bug, so this fixture
+  # keeps the trailing prose on the same line deliberately.
   BASE_ROADMAP = <<~MARKDOWN
     # pycc Roadmap
 
@@ -98,6 +101,30 @@ class StatusPageFreshnessTest < Minitest::Test
       assert_match(/site\/status\/index\.html/, error.message)
       assert_match(%r{https://github\.com/rotnov/pycc/issues/401}, error.message)
       assert_match(/docs\/WEBSITE\.md/, error.message)
+    end
+  end
+
+  # (b2) trailing-prose-only edit on the milestone line: the bold span text
+  # itself ("**Current milestone: ...**") is untouched, only the status
+  # prose that continues on the same physical line *after* the closing
+  # "**" changes. WITHOUT a watched-page touch -> must still fail. This
+  # pins the exact gap the whole-line `milestone_line` comparison closes:
+  # a span-only comparison produces no signal at all for this shape,
+  # silently reproducing the staleness-detection gap issue #401 was filed
+  # to fix.
+  def test_milestone_line_trailing_prose_edit_without_status_page_touch_fails
+    with_repo do |root|
+      base_sha = write_and_commit(root, { ROADMAP_PATH => BASE_ROADMAP }, "base")
+      changed_roadmap = BASE_ROADMAP.sub(
+        "All five v0.1 acceptance-checklist bullets below are green",
+        "All five v0.1 acceptance-checklist bullets below are green and re-verified"
+      )
+      write_and_commit(root, { ROADMAP_PATH => changed_roadmap }, "trailing prose only")
+
+      error = assert_raises(StatusPageFreshnessError) do
+        check_status_page_freshness(root, base_sha, "HEAD")
+      end
+      assert_match(/site\/status\/index\.html/, error.message)
     end
   end
 

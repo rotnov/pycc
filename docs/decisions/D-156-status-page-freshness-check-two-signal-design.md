@@ -56,15 +56,19 @@ status: accepted
   merging once this check is later registered as required. Registration as a required
   branch-protection check is an explicit, separate follow-up performed only after this PR merges
   and the workflow is observed green on a real push-to-main run and red on a real violating PR.
-- Decision (diff mechanics): the check takes an explicit base revision and diffs it against
-  `HEAD` with a two-dot `git diff --name-only`, not a three-dot merge-base diff — a shallow CI
-  checkout does not have enough history to compute a merge base. For `pull_request` events the
-  base is `github.event.pull_request.base.sha` (a fixed commit), not `$GITHUB_BASE_REF` (a
-  branch name that can move between the workflow starting and the check running). For `push`
-  events to `main`, the base is `github.event.before`. The script itself (not the workflow)
-  resolves the base revision locally when possible and falls back to
-  `git fetch --no-tags --depth=1 origin <base-sha>` otherwise, so the same code path works
-  unmodified in a shallow CI checkout and in a full-history local run.
+- Decision (diff mechanics): the check takes an explicit base revision and an explicit head
+  revision and diffs them with a two-dot `git diff --name-only`, not a three-dot merge-base
+  diff — a shallow CI checkout does not have enough history to compute a merge base. For
+  `pull_request` events the base is `github.event.pull_request.base.sha` (a fixed commit), not
+  `$GITHUB_BASE_REF` (a branch name that can move between the workflow starting and the check
+  running), and the head is `github.event.pull_request.head.sha` rather than the literal
+  checked-out `HEAD` — the workflow passes both explicit SHAs as `BASE_SHA`/`HEAD_SHA` env vars.
+  For `push` events to `main`, the base is `github.event.before` and the head is `github.sha`.
+  The script itself (not the workflow) resolves both the base and the head revision locally when
+  possible and falls back to `git fetch --no-tags --depth=1 origin <revision>` otherwise for
+  each, so the same code path works unmodified in a shallow CI checkout — where an explicit head
+  SHA may not already be present the way the literal ref `"HEAD"` always is — and in a
+  full-history local run.
 - Empirical validation (performed against this repository's real history before finalizing,
   per this issue's plan): `21af3ae` ("Fix review findings: advance ROADMAP review date...", a
   pure date-refresh commit) does not fire — confirmed no milestone-line or evidence-marker
