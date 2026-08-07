@@ -20,6 +20,7 @@ for required_file in \
   status/index.html \
   architecture/index.html \
   python-aot-compilers/index.html \
+  python-aot-compilers/claims.json \
   ai-native/index.html
 do
   test -f "$site_dir/$required_file"
@@ -544,7 +545,7 @@ PAGE_SPECS = {
     },
     "python-aot-compilers": {
         "canonical": f"{ROOT}python-aot-compilers/",
-        "date_modified": "2026-08-02",
+        "date_modified": "2026-08-07",
         "title": "Python AOT compilers compared — where pycc fits",
         "description": (
             "Compare pycc, LPython, Codon, Nuitka, mypyc, and Cython from "
@@ -632,6 +633,13 @@ class PageParser(HTMLParser):
         self.visible_text = []
         self.anchors = []
         self.keyword_metas = []
+        self.in_table = False
+        self.in_tr = False
+        self.in_th = False
+        self.in_td = False
+        self.current_cell_text = []
+        self.current_row_header = None
+        self.table_rows = {}
 
     def handle_starttag(self, tag, attrs):
         if tag == "meta":
@@ -659,6 +667,19 @@ class PageParser(HTMLParser):
             )
             if tag == "a" and not hidden and attributes.get("href"):
                 self.anchors.append(attributes["href"])
+            if tag == "table":
+                self.in_table = True
+            elif tag == "tr" and self.in_table:
+                self.in_tr = True
+                self.current_row_header = None
+            elif tag == "th" and self.in_tr:
+                scope = attributes.get("scope", "")
+                if scope == "row":
+                    self.in_th = True
+                    self.current_cell_text = []
+            elif tag == "td" and self.in_tr:
+                self.in_td = True
+                self.current_cell_text = []
             if tag not in self.void_tags:
                 self.body_stack.append((tag, hidden))
                 if hidden:
@@ -680,6 +701,26 @@ class PageParser(HTMLParser):
             self.in_body = False
             return
         if self.in_body:
+            if tag == "table":
+                self.in_table = False
+            elif tag == "tr" and self.in_tr:
+                self.in_tr = False
+            elif tag == "th" and self.in_th:
+                self.in_th = False
+                self.current_row_header = "".join(
+                    self.current_cell_text
+                ).strip()
+                self.current_cell_text = []
+            elif tag == "td" and self.in_td:
+                self.in_td = False
+                cell_text = " ".join(
+                    "".join(self.current_cell_text).split()
+                )
+                if self.current_row_header is not None:
+                    self.table_rows.setdefault(
+                        self.current_row_header, []
+                    ).append(cell_text)
+                self.current_cell_text = []
             if tag in self.void_tags:
                 return
             if not self.body_stack:
@@ -706,6 +747,8 @@ class PageParser(HTMLParser):
             self.current_json_ld.append(data)
         if self.in_body and self.hidden_depth == 0:
             self.visible_text.append(data)
+        if self.in_th or self.in_td:
+            self.current_cell_text.append(data)
 
 
 def require_one(items, description):
@@ -920,6 +963,77 @@ for path_value in sys.argv[1:]:
             raise SystemExit(
                 f"{slug} is missing required source link: {required_href}"
             )
+
+    if slug == "python-aot-compilers":
+        claims_path = path.parent / "claims.json"
+        claims = json.loads(claims_path.read_text())
+        if "entities" not in claims:
+            raise SystemExit("claims.json must contain an 'entities' list")
+        model_entities = claims["entities"]
+        if not isinstance(model_entities, list) or not model_entities:
+            raise SystemExit("claims.json entities must be a non-empty list")
+
+        column_names = ["Input contract", "Output and runtime", "Current positioning"]
+        html_entity_map = {}
+        for entity_name, cells in parser.table_rows.items():
+            if len(cells) != len(column_names):
+                raise SystemExit(
+                    f"comparison table row '{entity_name}' has "
+                    f"{len(cells)} cells; expected {len(column_names)}"
+                )
+            html_entity_map[entity_name] = dict(zip(column_names, cells))
+
+        model_names = [e["name"] for e in model_entities]
+        html_names = list(html_entity_map.keys())
+        if set(html_names) != set(model_names):
+            missing = set(model_names) - set(html_names)
+            extra = set(html_names) - set(model_names)
+            detail = []
+            if missing:
+                detail.append(f"missing from HTML: {sorted(missing)}")
+            if extra:
+                detail.append(f"extra in HTML: {sorted(extra)}")
+            raise SystemExit(
+                f"comparison entity set mismatch: {'; '.join(detail)}"
+            )
+
+        for entity in model_entities:
+            name = entity["name"]
+            html_cells = html_entity_map[name]
+            for field, column in (
+                ("input_contract", "Input contract"),
+                ("html_output_cell", "Output and runtime"),
+                ("positioning", "Current positioning"),
+            ):
+                expected = entity[field]
+                actual = html_cells[column]
+                if actual != expected:
+                    raise SystemExit(
+                        f"comparison cell mismatch for {name} "
+                        f"{column!r}: expected {expected!r}, "
+                        f"found {actual!r}"
+                    )
+            maturity = entity.get("maturity", "")
+            if not maturity or not maturity.strip():
+                raise SystemExit(
+                    f"claims.json entity {name!r} has empty maturity"
+                )
+            sources = entity.get("sources", [])
+            if not sources:
+                raise SystemExit(
+                    f"claims.json entity {name!r} has no sources"
+                )
+            for source in sources:
+                url = source.get("url", "")
+                if not url:
+                    raise SystemExit(
+                        f"claims.json entity {name!r} has a source with no URL"
+                    )
+                if url not in parser.anchors:
+                    raise SystemExit(
+                        f"comparison page is missing source link for "
+                        f"{name!r}: {url}"
+                    )
 PY
 
 assert_once "Sitemap: ${canonical}sitemap.xml" "$site_dir/robots.txt"
