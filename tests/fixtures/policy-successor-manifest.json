@@ -3,7 +3,7 @@
   "targets": [
     {
       "path": ".github/workflows/ci.yml",
-      "source_path": "tests/fixtures/policy-successors/ci.yml",
+      "source_path": ".github/workflows/ci.yml",
       "sha256": "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
     },
     {
@@ -19,7 +19,7 @@
     {
       "path": "scripts/check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/check_roadmap_evidence.rb",
-      "sha256": "b5c6e0c0e25131541cab2f1648237d6d28a0b83019baca3eed19729ae620e0f2"
+      "sha256": "696d762f2a6b3f4f03eaf6f1b3bf40a82e4630b7769eeeabb6cf35299fc3bcba"
     },
     {
       "path": "scripts/check_search_visibility_audit.py",
@@ -44,7 +44,7 @@
     {
       "path": "scripts/test_check_roadmap_evidence.rb",
       "source_path": "tests/fixtures/policy-successors/test_check_roadmap_evidence.rb",
-      "sha256": "b7415581d2f3f2b2b9d43cea23889488e205e636c6e82e2fb49e052fdbf610df"
+      "sha256": "64d7b286f47bbb3640b1fdcec7ee22ea5d9ebaf88791cae04b69212c330de459"
     },
     {
       "path": "scripts/test_check_search_visibility_audit.py",

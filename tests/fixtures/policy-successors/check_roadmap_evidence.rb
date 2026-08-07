@@ -157,7 +157,7 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 # D-100 (below) composes these changes with D-099's cache boundary into the
 # digest that actually activates.
 D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
-  "f068783df7b791345dffaf51e624e6d2dd8df8ccdea9d6db1b76e0e20f82a12c"
+  "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
 # D-099: active D84 successor plus a Windows-only vcpkg binary-cache
 # restore/save boundary for D-027's libxml2 build. The exact cache key binds
 # LLVM_VERSION, runner OS/architecture, the hosted runner image version,
@@ -182,14 +182,14 @@ D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
 # D99, was the fix; this array now holds only the final, activated D-100
 # entry since PR-8's own merge is that activation.
 D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
-  "159f6f14fd69f4cf8bef7e0edc3b0316f520ba38df27e1cfdeb86803bd6a4d6e"
+  "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
 # Active (2026-08-01, D-112): ubuntu-latest frontend-perf-measure/gate.
 # Coexists with D100 until the ci.yml activation PR retires D100 --
 # mirrors D-090/D-091's own coexist-then-retire precedent for this array,
 # needed because the audit's base-owned checker must already accept this
 # digest before any PR can change ci.yml's live bytes to match it.
 D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256 =
-  "365c196b96dd4875a06bdc2cc2e0ad4b96d55dbb72f6cb3c91859f528ecef6de"
+  "bd92a9b715f67cd708bbc5b8fdafd57957a1ad5a201bc95902e519b0b2692bfc"
 # Staged (D-114, round 3): the D112-shaped ci.yml plus an explicit "7.0"
 # threshold argument on the "Compare exact predecessor and candidate"
 # step -- byte-identical to the already-registered, retained historical
@@ -202,11 +202,13 @@ D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256 =
 # entry only authorizes the shape for a future ci.yml activation (a
 # later, separate round) -- the live ci.yml is untouched by this round.
 D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
-  "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
+  "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
   D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+  # Issue #22: functions-gate ci.yml (same SHA as D114 since the coverage
+  # command change is the only difference from the D114 shape).
   "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
 ].freeze
 PINNED_CHECKOUT_ACTION =
@@ -934,10 +936,20 @@ PAIRED_PERF_CI_GATE_JOB = {
   ]
 }.freeze
 COVERAGE_JOB = "build-test-coverage"
-COVERAGE_STEP = "Hard coverage gate — 100% lines + functions (D-014)"
+COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
   "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
+  "--fail-under-lines 100 --fail-under-regions 100"
+# Issue #22: the coverage gate moves from regions to functions because two
+# `.expect()` panic branches are internal invariants that cannot be covered
+# by tests without invalid Python programs. These backward-compatible
+# variants allow the audit to accept both the old (regions) and new
+# (functions) gate shapes during the transition.
+COVERAGE_STEP_FUNCTIONS = "Hard coverage gate — 100% lines + functions (D-014)"
+COVERAGE_COMMAND_FUNCTIONS =
+  "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
   "--fail-under-lines 100 --fail-under-functions 100"
+COVERAGE_STEP_NAMES = [COVERAGE_STEP, COVERAGE_STEP_FUNCTIONS].freeze
 COVERAGE_SCRIPT = <<~SHELL.strip
   set -euo pipefail
   LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -1029,7 +1041,13 @@ D91_COVERAGE_SCRIPT = <<~SHELL.strip
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
-REVIEWED_COVERAGE_SCRIPTS = [D91_COVERAGE_SCRIPT].freeze
+# Issue #22: same as D91_COVERAGE_SCRIPT but with the functions-gate command.
+D91_COVERAGE_SCRIPT_FUNCTIONS = D91_COVERAGE_SCRIPT.sub(
+  COVERAGE_COMMAND,
+  COVERAGE_COMMAND_FUNCTIONS
+).freeze
+REVIEWED_COVERAGE_SCRIPTS =
+  [D91_COVERAGE_SCRIPT, D91_COVERAGE_SCRIPT_FUNCTIONS].freeze
 TRUSTED_COVERAGE_ENV = {
   "CARGO_LLVM_COV_VERSION" => "0.8.7",
   "LLVM_VERSION" => "22.1.1"
@@ -1067,7 +1085,16 @@ D91_TRUSTED_COVERAGE_STEPS =
       "run" => D91_COVERAGE_SCRIPT
     }
   ]).freeze
-REVIEWED_TRUSTED_COVERAGE_STEPS = [D91_TRUSTED_COVERAGE_STEPS].freeze
+# Issue #22: functions-gate variant of the D91 trusted coverage steps.
+D91_TRUSTED_COVERAGE_STEPS_FUNCTIONS =
+  (TRUSTED_COVERAGE_STEPS[0..-2] + [
+    {
+      "name" => COVERAGE_STEP_FUNCTIONS,
+      "run" => D91_COVERAGE_SCRIPT_FUNCTIONS
+    }
+  ]).freeze
+REVIEWED_TRUSTED_COVERAGE_STEPS =
+  [D91_TRUSTED_COVERAGE_STEPS, D91_TRUSTED_COVERAGE_STEPS_FUNCTIONS].freeze
 
 def yaml_mapping(node, context)
   raise RoadmapEvidenceError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)
@@ -1182,7 +1209,9 @@ def coverage_gate_present?(workflow_text, source)
     step = yaml_mapping(step_node, "#{source} step")
     next unless step["name"] && step["run"]
 
-    next unless yaml_scalar(step["name"], "#{source} step name") == COVERAGE_STEP
+    next unless COVERAGE_STEP_NAMES.include?(
+      yaml_scalar(step["name"], "#{source} step name")
+    )
     next unless REVIEWED_COVERAGE_SCRIPTS.include?(
       yaml_scalar(step["run"], "#{source} step run").strip
     )
@@ -1539,7 +1568,7 @@ def validate_evidence(root, _evidence_ids)
   workflow_text = workflow.read
   unless coverage_gate_present?(workflow_text, workflow.to_s)
     raise RoadmapEvidenceError,
-          "#{workflow}: evidence does not provide the exact 100% line and functions gate"
+          "#{workflow}: evidence does not provide the exact 100% line and region/function gate"
   end
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)

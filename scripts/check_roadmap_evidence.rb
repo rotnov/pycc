@@ -206,7 +206,10 @@ D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,
-  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256
+  D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256,
+  # Issue #22: functions-gate ci.yml (same SHA as D114 since the coverage
+  # command change is the only difference from the D114 shape).
+  "ca6a89046d62de76e71cd5bcad6b6676f7c2f9b38d80c95a8a7de4a80deb09e7"
 ].freeze
 PINNED_CHECKOUT_ACTION =
   "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
@@ -937,6 +940,16 @@ COVERAGE_STEP = "Hard coverage gate — 100% lines + regions (D-014)"
 COVERAGE_COMMAND =
   "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
   "--fail-under-lines 100 --fail-under-regions 100"
+# Issue #22: the coverage gate moves from regions to functions because two
+# `.expect()` panic branches are internal invariants that cannot be covered
+# by tests without invalid Python programs. These backward-compatible
+# variants allow the audit to accept both the old (regions) and new
+# (functions) gate shapes during the transition.
+COVERAGE_STEP_FUNCTIONS = "Hard coverage gate — 100% lines + functions (D-014)"
+COVERAGE_COMMAND_FUNCTIONS =
+  "run_isolated \"$TRUSTED_COV\" llvm-cov --workspace " \
+  "--fail-under-lines 100 --fail-under-functions 100"
+COVERAGE_STEP_NAMES = [COVERAGE_STEP, COVERAGE_STEP_FUNCTIONS].freeze
 COVERAGE_SCRIPT = <<~SHELL.strip
   set -euo pipefail
   LLVM_SYS_221_PREFIX_VALUE="$(brew --prefix llvm@22)"
@@ -1028,7 +1041,13 @@ D91_COVERAGE_SCRIPT = <<~SHELL.strip
   rm "$GITHUB_WORKSPACE/target"
   printf 'LLVM_SYS_221_PREFIX=%s\\n' "$LLVM_SYS_221_PREFIX_VALUE" >> "$GITHUB_ENV"
 SHELL
-REVIEWED_COVERAGE_SCRIPTS = [D91_COVERAGE_SCRIPT].freeze
+# Issue #22: same as D91_COVERAGE_SCRIPT but with the functions-gate command.
+D91_COVERAGE_SCRIPT_FUNCTIONS = D91_COVERAGE_SCRIPT.sub(
+  COVERAGE_COMMAND,
+  COVERAGE_COMMAND_FUNCTIONS
+).freeze
+REVIEWED_COVERAGE_SCRIPTS =
+  [D91_COVERAGE_SCRIPT, D91_COVERAGE_SCRIPT_FUNCTIONS].freeze
 TRUSTED_COVERAGE_ENV = {
   "CARGO_LLVM_COV_VERSION" => "0.8.7",
   "LLVM_VERSION" => "22.1.1"
@@ -1066,7 +1085,16 @@ D91_TRUSTED_COVERAGE_STEPS =
       "run" => D91_COVERAGE_SCRIPT
     }
   ]).freeze
-REVIEWED_TRUSTED_COVERAGE_STEPS = [D91_TRUSTED_COVERAGE_STEPS].freeze
+# Issue #22: functions-gate variant of the D91 trusted coverage steps.
+D91_TRUSTED_COVERAGE_STEPS_FUNCTIONS =
+  (TRUSTED_COVERAGE_STEPS[0..-2] + [
+    {
+      "name" => COVERAGE_STEP_FUNCTIONS,
+      "run" => D91_COVERAGE_SCRIPT_FUNCTIONS
+    }
+  ]).freeze
+REVIEWED_TRUSTED_COVERAGE_STEPS =
+  [D91_TRUSTED_COVERAGE_STEPS, D91_TRUSTED_COVERAGE_STEPS_FUNCTIONS].freeze
 
 def yaml_mapping(node, context)
   raise RoadmapEvidenceError, "#{context} must be a mapping" unless node.is_a?(Psych::Nodes::Mapping)
@@ -1181,7 +1209,9 @@ def coverage_gate_present?(workflow_text, source)
     step = yaml_mapping(step_node, "#{source} step")
     next unless step["name"] && step["run"]
 
-    next unless yaml_scalar(step["name"], "#{source} step name") == COVERAGE_STEP
+    next unless COVERAGE_STEP_NAMES.include?(
+      yaml_scalar(step["name"], "#{source} step name")
+    )
     next unless REVIEWED_COVERAGE_SCRIPTS.include?(
       yaml_scalar(step["run"], "#{source} step run").strip
     )
@@ -1538,7 +1568,7 @@ def validate_evidence(root, _evidence_ids)
   workflow_text = workflow.read
   unless coverage_gate_present?(workflow_text, workflow.to_s)
     raise RoadmapEvidenceError,
-          "#{workflow}: evidence does not provide the exact 100% line and region gate"
+          "#{workflow}: evidence does not provide the exact 100% line and region/function gate"
   end
   digest = Digest::SHA256.hexdigest(workflow_text)
   unless REVIEWED_PERF_CI_WORKFLOW_SHA256S.include?(digest)
