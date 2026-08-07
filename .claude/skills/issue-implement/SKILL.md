@@ -297,11 +297,12 @@ differently than planned — do not force it. Record what refuted it, refresh th
 refutation changes the approach, and note the deviation in the pull request body. A plan
 refuted twice on the same point is a stop condition.
 
-### 5. Review loop (D-068)
+### 5. Review loop (D-068, reviewer binding per D-155)
 
 Stage all changes, including new files — the pinned reviewer omits untracked files from
-working-tree review. Invoke the pinned deep reviewer from the digest-recorded artifact; if
-that exact reviewer cannot be bound, the review gate is unavailable — report that and stop
+working-tree review. Invoke the pinned deep reviewer from a structurally verified
+`ievo@ievo-skills` install (`scripts/check_claude_reviewer_binding.py`, per D-155); if
+no such install can be bound, the review gate is unavailable — report that and stop
 rather than substituting a weaker reviewer or skipping the loop.
 
 Verify each finding against the sources before acting on it — preferably by *running* the
