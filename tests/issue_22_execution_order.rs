@@ -237,9 +237,11 @@ fn incompatible_redefinition_is_a_check_error() {
 /// also be rejected by `pycc build`. Both signatures here are fully
 /// concrete, so this fixture is rejected by the pre-resolution check
 /// (`check_and_resolve` calls `checked_function_signatures`, which calls
-/// `check_incompatible_redefinitions` before any solver resolution runs)
-/// -- not by the post-resolution re-check, which only ever fires on a
-/// redefinition involving at least one `Ty::Infer` signature (see #402).
+/// `check_incompatible_redefinitions` before any solver resolution runs).
+/// Issue #402 fixed the same pre-resolution check to also reject a
+/// same-arity redefinition where one signature still carries `Ty::Infer`
+/// (see `incompatible_redefinition_with_unannotated_first_definition_is_a_build_error`
+/// below for that case specifically).
 #[test]
 fn incompatible_redefinition_is_a_build_error() {
     let dir = std::env::temp_dir()
@@ -260,6 +262,71 @@ fn incompatible_redefinition_is_a_build_error() {
         output.status.code(),
         Some(1),
         "pycc build should reject incompatible redefinition with exit code 1"
+    );
+}
+
+/// Issue #402: a same-arity redefinition where the *first* definition is
+/// unannotated (`Ty::Infer` for its parameter and return type -- a leading
+/// underscore marks it a private helper, per D-038, so the frontend
+/// doesn't itself require an annotation) and the second is concrete but
+/// structurally different must be rejected by `pycc check`, just like the
+/// fully-concrete case above. Before the #402 fix, this specific shape
+/// silently collapsed onto one shared resolved signature and was accepted.
+#[test]
+fn incompatible_redefinition_with_unannotated_first_definition_is_a_check_error() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_issue402_incompat_check_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "incompat_infer.py",
+        "def _foo(x):\n    return x\n\ndef _foo(x: int) -> None:\n    print(x)\n\n_foo(1)\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pycc check should reject an unannotated-first-definition incompatible \
+         redefinition with exit code 1"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("cannot redefine function `_foo` with a different signature"),
+        "stdout should mention incompatible redefinition, got: {stdout}"
+    );
+}
+
+/// Issue #402: the same unannotated-first-definition redefinition must
+/// also be rejected by `pycc build`.
+#[test]
+fn incompatible_redefinition_with_unannotated_first_definition_is_a_build_error() {
+    let dir = std::env::temp_dir().join(format!(
+        "pycc_issue402_incompat_build_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "incompat_infer.py",
+        "def _foo(x):\n    return x\n\ndef _foo(x: int) -> None:\n    print(x)\n\n_foo(1)\n",
+    );
+    let out = dir.join("incompat_infer");
+
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "pycc build should reject an unannotated-first-definition incompatible \
+         redefinition with exit code 1"
     );
 }
 
