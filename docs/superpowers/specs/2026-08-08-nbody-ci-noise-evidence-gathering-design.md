@@ -1,6 +1,6 @@
 # nbody CI-Noise Evidence-Gathering Design (`ubuntu-latest` x86_64 leg)
 
-**Status:** Approved by repository owner in brainstorming dialogue (2026-08-08). Spec self-review complete (adversarial three-lens review: fact-check, brainstorming self-review checklist, engineering-soundness). §3.5/§4.5 (pre-merge validation, added per repository-owner request during spec review) went through a second adversarial fact-check/self-review round; all findings from that round are fixed inline. Pending written-spec review by the repository owner before handoff to `writing-plans`.
+**Status:** Approved by repository owner in brainstorming dialogue (2026-08-08). Spec self-review complete (adversarial three-lens review: fact-check, brainstorming self-review checklist, engineering-soundness). §3.5/§4.5 (pre-merge validation, added per repository-owner request during spec review) went through a second adversarial fact-check/self-review round; all findings from that round are fixed inline. Written spec reviewed and approved by the repository owner (2026-08-08, "правки не нужны"). Proceeding to `writing-plans`.
 
 **Origin:** [issue #414](https://github.com/rotnov/pycc/issues/414) ("Two independent performance gates ... failed repeatedly on `main`"), narrowed through brainstorming dialogue to exactly one CI step and one leg.
 
