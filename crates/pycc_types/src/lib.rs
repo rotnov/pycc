@@ -1,4 +1,5 @@
 mod class;
+mod solver;
 
 use pycc_diag::{Diagnostic, Span};
 #[cfg(test)]
@@ -727,14 +728,14 @@ struct SolverConstraints {
 }
 
 #[derive(Debug, Clone)]
-struct ConstraintEnvironment<'scope, 'hir> {
-    bindings: HashMap<String, TypeTerm>,
-    local_names: &'scope [&'hir str],
+pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
+    pub(crate) bindings: HashMap<String, TypeTerm>,
+    pub(crate) local_names: &'scope [&'hir str],
     /// Mirror of `Environment::def_rebound` (D-110): names whose net
     /// source-order module binding is a `def`, kept apart from the term
     /// bindings for the same reason -- terms must survive a `def` for
     /// representation purposes.
-    defs_rebound: HashSet<String>,
+    pub(crate) defs_rebound: HashSet<String>,
     /// Issue #359 (Part 2 of #118): names whose binding is *maybe* —
     /// assigned in only one branch of an `if` (no `else`), or only in a
     /// loop body, or introduced as a `for` loop variable (the loop may
@@ -744,7 +745,7 @@ struct ConstraintEnvironment<'scope, 'hir> {
     /// type), but `collect_expr_constraints`'s `Name` arm skips
     /// unification for maybe-bound names — the validation pass's `T0041`
     /// diagnostic is the user-facing gate, not the solver's inferred type.
-    maybe_bindings: HashSet<String>,
+    pub(crate) maybe_bindings: HashSet<String>,
 }
 
 fn fresh_variable(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> usize {
@@ -1430,71 +1431,6 @@ fn bind_comp_loop_var(
     Ok(())
 }
 
-/// Issue #359 (Part 2 of #118): joins two if-branch environments back
-/// into `env` after cloning and running each branch independently.
-/// Mirrors the validation pass's `join_if_branches` (D-147) but works
-/// with the solver's `TypeTerm`-based `ConstraintEnvironment.bindings`
-/// and tracks maybe-bound names in `maybe_bindings` instead of wrapping
-/// each binding in a `BindingState` variant.
-///
-/// `pre_existing` is the set of binding names that were in `env.bindings`
-/// before the `if` — names introduced by only one branch are maybe-bound,
-/// names introduced by both branches are definitely bound.
-fn join_if_branches_solver(
-    env: &mut ConstraintEnvironment,
-    body_env: &ConstraintEnvironment,
-    orelse_env: &ConstraintEnvironment,
-    pre_existing: &HashSet<String>,
-) {
-    // Merge bindings: first-binding-wins (body first, then orelse).
-    // `entry().or_insert()` preserves the existing binding for pre-existing
-    // names and takes the body's term for new names introduced by the body.
-    for (name, term) in &body_env.bindings {
-        env.bindings.entry(name.clone()).or_insert(term.clone());
-    }
-    for (name, term) in &orelse_env.bindings {
-        env.bindings.entry(name.clone()).or_insert(term.clone());
-    }
-    // Update maybe_bindings for names introduced by the branches.
-    let body_new: HashSet<&String> = body_env
-        .bindings
-        .keys()
-        .filter(|k| !pre_existing.contains(*k))
-        .collect();
-    let orelse_new: HashSet<&String> = orelse_env
-        .bindings
-        .keys()
-        .filter(|k| !pre_existing.contains(*k))
-        .collect();
-    for name in body_new.iter().chain(orelse_new.iter()) {
-        if body_new.contains(name) && orelse_new.contains(name) {
-            // Both branches bind it → definitely bound.
-            env.maybe_bindings.remove(*name);
-        } else {
-            // Only one branch binds it → maybe bound.
-            env.maybe_bindings.insert((*name).clone());
-        }
-    }
-}
-
-/// Issue #359 (Part 2 of #118): joins a loop body environment back into
-/// `env` after cloning and running the body. Mirrors the validation pass's
-/// `join_loop_body` (D-147): a loop body may execute zero times, so every
-/// body-only binding is maybe-bound. Pre-existing bindings stay as-is
-/// (their maybe/definite status is unchanged).
-fn join_loop_body_solver(
-    env: &mut ConstraintEnvironment,
-    body_env: &ConstraintEnvironment,
-    pre_existing: &HashSet<String>,
-) {
-    for (name, term) in &body_env.bindings {
-        if !pre_existing.contains(name) {
-            env.bindings.entry(name.clone()).or_insert(term.clone());
-            env.maybe_bindings.insert(name.clone());
-        }
-    }
-}
-
 fn collect_block_constraints(
     signatures: &HashMap<String, SignatureTerms>,
     parents: &mut Vec<usize>,
@@ -1510,6 +1446,11 @@ fn collect_block_constraints(
                 // A value assignment re-shadows any earlier same-named `def`
                 // (D-110), independent of the first-term-wins rule below.
                 env.defs_rebound.remove(target.as_str());
+                // Issue #359 (Part 2 of #118): an unconditional assignment
+                // upgrades a maybe-bound name back to definitely bound
+                // (mirrors the validation pass's contract: `if c: x = 1`
+                // followed by `x = 2` makes `x` readable).
+                env.maybe_bindings.remove(target.as_str());
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,
@@ -1526,6 +1467,10 @@ fn collect_block_constraints(
                 value: Some(value),
                 annotation,
             } => {
+                // Issue #359 (Part 2 of #118): an unconditional annotated
+                // assignment upgrades a maybe-bound name back to definitely
+                // bound, same as a plain `Assign`.
+                env.maybe_bindings.remove(target.as_str());
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,
@@ -1626,7 +1571,7 @@ fn collect_block_constraints(
                     orelse,
                     return_term.clone(),
                 )?;
-                join_if_branches_solver(env, &body_env, &orelse_env, &pre_existing);
+                solver::join_if_branches_solver(env, &body_env, &orelse_env, &pre_existing);
             }
             HirStmt::While { test, body } => {
                 collect_expr_constraints(
@@ -1655,7 +1600,7 @@ fn collect_block_constraints(
                     body,
                     return_term.clone(),
                 )?;
-                join_loop_body_solver(env, &body_env, &pre_existing);
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
             }
             HirStmt::ForRange {
                 var,
@@ -1711,7 +1656,7 @@ fn collect_block_constraints(
                     body,
                     return_term.clone(),
                 )?;
-                join_loop_body_solver(env, &body_env, &pre_existing);
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
                 // The loop variable itself is maybe-bound after the loop
                 // if it was newly introduced (the loop may not execute).
                 if !pre_existing.contains(var) {
@@ -1748,7 +1693,7 @@ fn collect_block_constraints(
                     body,
                     return_term.clone(),
                 )?;
-                join_loop_body_solver(env, &body_env, &pre_existing);
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
                 // The loop variable itself is maybe-bound after the loop
                 // if it was newly introduced (the loop may not execute).
                 if !pre_existing.contains(var) {
@@ -22091,6 +22036,54 @@ mod tests {
     }
 
     #[test]
+    fn solver_unconditional_assignment_upgrades_maybe_to_definite() {
+        // Issue #359: an unconditional assignment after a maybe-binding
+        // join upgrades the name back to definitely bound, mirroring the
+        // validation pass's contract: `if c: x = 1; x = 2; return x` is
+        // valid because `x = 2` makes `x` definitely bound.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+            local_names: &["cond", "x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        let body = vec![
+            HirStmt::If {
+                test: HirExpr::Name("cond".to_string()),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+                orelse: vec![],
+            },
+            // Unconditional assignment upgrades x to definitely bound
+            HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            },
+        ];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        // x should NOT be in maybe_bindings after the unconditional assignment
+        assert!(!env.maybe_bindings.contains("x"));
+        assert!(env.bindings.contains_key("x"));
+    }
+
+    #[test]
     fn solver_definitely_bound_name_returns_its_term() {
         // A definitely-bound name (not in maybe_bindings) returns its
         // type term as before.
@@ -22205,6 +22198,39 @@ mod tests {
                             target: "x".to_string(),
                             value: HirExpr::IntLiteral(2),
                         }],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn solver_private_helper_with_unconditional_upgrade_infers_correctly() {
+        // End-to-end: `if c: x = 1; x = 2; return x` — the unconditional
+        // `x = 2` after the maybe-binding `if` upgrades x to definitely
+        // bound, so the solver can infer the return type from `return x`.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("cond".to_string(), Ty::Bool)],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::If {
+                        test: HirExpr::Name("cond".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                        orelse: vec![],
+                    },
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::IntLiteral(2),
                     },
                     HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
                 ],
