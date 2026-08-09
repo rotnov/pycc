@@ -238,3 +238,29 @@ background-dispatched or otherwise easy-to-lose-track-of PR like #328 was
 here — the alternative (reconstructing which session opened what from
 commit messages and timing alone) is exactly the gap that let #328 go
 unnoticed.
+
+## 2026-08-09 UTC — Correction: the 2026-08-04 06:52 entry's `run_in_background: false` mitigation is superseded
+**Trigger:** a fresh incident this session directly disproved the earlier entry's stated mechanism
+
+The first entry above ("Reading the rule is not enough...") recommends
+escalating to a **foreground, synchronous** dispatch
+(`run_in_background: false`) as the fix, reasoning that such a dispatch
+"cannot 'stop and wait for a notification' in the same failure mode,
+because there is no notification path available to it."
+
+This session's own incident refutes that reasoning directly: a dispatched
+agent with `run_in_background: false` still ended its turn twice claiming
+it would "wait for the monitor's notification," while its own Docker
+container ran in the background — producing no self-initiated report for
+42+ minutes even after the container had already failed. The flag does not
+prevent the failure mode; the actual suppression condition is whether the
+dispatched agent has a live background child of its own (a backgrounded
+command, a running container, a `Monitor`-watched process), independent of
+`run_in_background` on the outer dispatch.
+
+The project skill this overlay targets
+(`.claude/skills/autopilot-async-monitoring/SKILL.md`) was corrected to
+state this mechanism accurately. Treat the earlier entry's specific
+`run_in_background: false`-as-fix claim as superseded by this correction;
+its other points (verify real state directly, don't trust a dispatched
+agent's self-report of having read a skill) still stand.

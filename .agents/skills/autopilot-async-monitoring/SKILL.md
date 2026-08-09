@@ -1,6 +1,6 @@
 ---
 name: autopilot-async-monitoring
-description: Use when driving the pycc autonomous-delivery autopilot loop (writing-plans -> subagent-driven-development chains, PR/CI monitoring, background Agent orchestration) and deciding how to wait on async state such as a pull request, a CI run, or a dispatched background agent. Covers checking real state before waiting, monitoring only currently-active work, and never letting a dispatched orchestrator "stop and wait" for its own sub-dispatch.
+description: Use when driving the pycc autonomous-delivery autopilot loop (writing-plans -> subagent-driven-development chains, PR/CI monitoring, background Agent orchestration) and deciding how to wait on async state such as a pull request, a CI run, or any dispatched `Agent` -- a one-off spike/build/benchmark task just as much as a nested sub-dispatch inside a pipeline. Covers checking real state before waiting, monitoring only currently-active work, and never ending a turn to "wait for a notification" while a dispatched agent, or a background child it started, is still live.
 ---
 
 # autopilot-async-monitoring
