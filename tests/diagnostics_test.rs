@@ -433,3 +433,27 @@ fn c0001_import_unrecognized_module() {
 fn c0002_from_import_unregistered_symbol() {
     assert_diagnostic_matches_fixture("c0002_from_import_unregistered_symbol");
 }
+
+// Issue #142: known Python 3.14 callable builtins that this compiler version
+// does not implement (e.g. `ValueError`, `Exception`, `int`, `range`) are
+// classified as `C0001` (capability gap), not `T0021` (name-resolution
+// failure). The builtin genuinely exists in Python 3.14 -- the compiler just
+// does not implement it yet. User-defined functions always take priority: a
+// `def ValueError(...)` is called correctly, not classified as C0001. The
+// same classification applies in the private-helper inference path.
+
+#[test]
+fn c0001_callable_builtin_value_error() {
+    assert_diagnostic_matches_fixture("c0001_callable_builtin_value_error");
+    assert_json_diagnostic_matches_fixture("c0001_callable_builtin_value_error");
+}
+
+#[test]
+fn c0001_callable_builtin_exception() {
+    assert_diagnostic_matches_fixture("c0001_callable_builtin_exception");
+}
+
+#[test]
+fn c0001_callable_builtin_private_helper() {
+    assert_diagnostic_matches_fixture("c0001_callable_builtin_private_helper");
+}

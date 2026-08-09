@@ -75,7 +75,14 @@ language rule. A construct stops producing it when the corresponding roadmap
 slice is implemented; the code remains reserved so older compiler output keeps
 an unambiguous meaning. HIR lowering uses it for valid Python outside the
 currently implemented frontend subset, with the unsupported AST node as the
-primary span.
+primary span. `pycc_types` also uses it for calls to known Python 3.14
+callable builtins that this compiler version does not implement (e.g.
+`ValueError("x")`, `Exception("msg")`, `int("5")`, `range(10)` as a
+standalone call) -- these are valid Python, not name-resolution failures
+(`T0021`), so they are classified as capability gaps. User-defined functions
+always take priority: a `def ValueError(...)` is called correctly, not
+classified as `C0001`. The same classification applies in both the final
+validation pass and the private-helper inference path (issue #142).
 
 ## Quality bar
 

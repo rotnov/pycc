@@ -345,6 +345,192 @@ fn std_constant_is_not_callable(name: &str) -> Diagnostic {
     )
 }
 
+/// Issue #142: the sorted set of known Python 3.14 callable builtin names
+/// that this compiler version does not implement. These are valid Python --
+/// `ValueError("x")`, `Exception("msg")`, `int("5")`, `range(10)` (as a
+/// standalone call, not a `for`-loop iterable) -- but the current pycc slice
+/// only hand-recognizes `print`, `len`, and `float`. A bare-name call to any
+/// name in this table is a *capability gap* (`C0001`), not a name-resolution
+/// failure (`T0021`): the builtin genuinely exists in Python 3.14, this
+/// compiler just does not implement it yet.
+///
+/// The table is the 139 callable, non-dunder, non-`site`-module names in
+/// Python 3.14's `builtins` module, minus the three already implemented
+/// (`print`, `len`, `float`), plus `__import__` (the one callable dunder
+/// that users legitimately call), yielding 137. `range` is included
+/// because it only works inside `for` loops (via `HirStmt::ForRange`), not
+/// as a standalone call. `site`-module additions (`copyright`, `credits`,
+/// `exit`, `help`, `license`, `quit`) are excluded because they are not
+/// part of the `builtins` module proper and are host-dependent. Other
+/// dunders (`__build_class__`, `__debug__`, etc.) are excluded as
+/// internal/interpreter-implementation details users do not call directly.
+///
+/// **Invariant:** the array is kept sorted lexicographically by Rust's `str`
+/// ordering (byte-wise UTF-8, which for ASCII identifiers matches ASCII
+/// code-point order) so `is_known_callable_builtin` can use binary search.
+/// A unit test (`known_callable_builtins_table_is_sorted`) asserts this.
+const KNOWN_CALLABLE_BUILTINS: &[&str] = &[
+    "ArithmeticError",
+    "AssertionError",
+    "AttributeError",
+    "BaseException",
+    "BaseExceptionGroup",
+    "BlockingIOError",
+    "BrokenPipeError",
+    "BufferError",
+    "BytesWarning",
+    "ChildProcessError",
+    "ConnectionAbortedError",
+    "ConnectionError",
+    "ConnectionRefusedError",
+    "ConnectionResetError",
+    "DeprecationWarning",
+    "EOFError",
+    "EncodingWarning",
+    "EnvironmentError",
+    "Exception",
+    "ExceptionGroup",
+    "FileExistsError",
+    "FileNotFoundError",
+    "FloatingPointError",
+    "FutureWarning",
+    "GeneratorExit",
+    "IOError",
+    "ImportError",
+    "ImportWarning",
+    "IndentationError",
+    "IndexError",
+    "InterruptedError",
+    "IsADirectoryError",
+    "KeyError",
+    "KeyboardInterrupt",
+    "LookupError",
+    "MemoryError",
+    "ModuleNotFoundError",
+    "NameError",
+    "NotADirectoryError",
+    "NotImplementedError",
+    "OSError",
+    "OverflowError",
+    "PendingDeprecationWarning",
+    "PermissionError",
+    "ProcessLookupError",
+    "PythonFinalizationError",
+    "RecursionError",
+    "ReferenceError",
+    "ResourceWarning",
+    "RuntimeError",
+    "RuntimeWarning",
+    "StopAsyncIteration",
+    "StopIteration",
+    "SyntaxError",
+    "SyntaxWarning",
+    "SystemError",
+    "SystemExit",
+    "TabError",
+    "TimeoutError",
+    "TypeError",
+    "UnboundLocalError",
+    "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "UnicodeError",
+    "UnicodeTranslateError",
+    "UnicodeWarning",
+    "UserWarning",
+    "ValueError",
+    "Warning",
+    "ZeroDivisionError",
+    "__import__",
+    "abs",
+    "aiter",
+    "all",
+    "anext",
+    "any",
+    "ascii",
+    "bin",
+    "bool",
+    "breakpoint",
+    "bytearray",
+    "bytes",
+    "callable",
+    "chr",
+    "classmethod",
+    "compile",
+    "complex",
+    "delattr",
+    "dict",
+    "dir",
+    "divmod",
+    "enumerate",
+    "eval",
+    "exec",
+    "filter",
+    "format",
+    "frozenset",
+    "getattr",
+    "globals",
+    "hasattr",
+    "hash",
+    "hex",
+    "id",
+    "input",
+    "int",
+    "isinstance",
+    "issubclass",
+    "iter",
+    "list",
+    "locals",
+    "map",
+    "max",
+    "memoryview",
+    "min",
+    "next",
+    "object",
+    "oct",
+    "open",
+    "ord",
+    "pow",
+    "property",
+    "range",
+    "repr",
+    "reversed",
+    "round",
+    "set",
+    "setattr",
+    "slice",
+    "sorted",
+    "staticmethod",
+    "str",
+    "sum",
+    "super",
+    "tuple",
+    "type",
+    "vars",
+    "zip",
+];
+
+/// Issue #142: returns `true` if `name` is a known Python 3.14 callable
+/// builtin that this compiler version does not implement. Uses binary search
+/// over the sorted [`KNOWN_CALLABLE_BUILTINS`] table. Called only after
+/// user-defined function lookup (and the `print`/`len`/`float`/stdlib/class
+/// special cases) have all missed, so a user `def ValueError(...)` always
+/// takes priority over this classification.
+fn is_known_callable_builtin(name: &str) -> bool {
+    KNOWN_CALLABLE_BUILTINS.binary_search(&name).is_ok()
+}
+
+/// Issue #142: the `C0001` diagnostic for a call to a known but unsupported
+/// callable builtin (e.g. `ValueError("x")`). Distinct from `T0021`'s "call
+/// to undefined function" -- the builtin genuinely exists in Python 3.14,
+/// this compiler just does not implement it yet.
+fn unsupported_callable_builtin(name: &str) -> Diagnostic {
+    Diagnostic::error(
+        "C0001",
+        format!("call to builtin `{name}` is valid Python but not implemented yet"),
+        Span::new(0, 0),
+    )
+}
+
 /// Looks up a bare name's already-bound type, producing the same
 /// "unbound local" vs. "not defined" distinction `HirExpr::Name` itself
 /// uses in `infer_expr_in` below. `HirStmt::ForList`'s `list` field and
@@ -933,6 +1119,16 @@ fn collect_expr_constraints(
                 return Ok(Some(Ok(Ty::Float)));
             }
             let Some(signature) = signatures.get(callee) else {
+                // Issue #142: a private helper calling a known callable
+                // builtin (e.g. `ValueError("x")`) gets the same `C0001`
+                // classification as the final validation pass, rather than
+                // deferring with `Ok(None)` -- the builtin genuinely exists
+                // in Python 3.14, so it is a capability gap, not an
+                // unresolved callee. A genuinely unknown name still returns
+                // `Ok(None)` and defers to final validation's `T0021`.
+                if is_known_callable_builtin(callee) {
+                    return Err(unsupported_callable_builtin(callee));
+                }
                 return Ok(None);
             };
             for (index, (arg, parameter)) in arg_terms.into_iter().zip(&signature.1).enumerate() {
@@ -2348,6 +2544,20 @@ fn infer_expr_in(
                 return Ok(instantiate_generic_call(generic_func, arg_tys)?.return_ty);
             }
             let Some((param_tys, return_ty)) = env.lookup_function(callee) else {
+                // Issue #142: before falling back to T0021 ("call to undefined
+                // function"), check whether `callee` is a known Python 3.14
+                // callable builtin that this compiler version does not implement
+                // (e.g. `ValueError`, `Exception`, `int`, `range`). Such a call
+                // is valid Python -- the builtin genuinely exists -- so it is a
+                // capability gap (`C0001`), not a name-resolution failure
+                // (`T0021`). This check is deliberately *after* the user-defined
+                // function lookup, the `print`/`len`/`float` special cases, the
+                // stdlib-qualified symbol lookup, the class-instantiation lookup,
+                // and the generic-function lookup, so a user `def
+                // ValueError(...)` always takes priority over this classification.
+                if is_known_callable_builtin(callee) {
+                    return Err(unsupported_callable_builtin(callee));
+                }
                 return Err(Diagnostic::error(
                     "T0021",
                     format!("call to undefined function `{callee}`"),
@@ -12214,6 +12424,302 @@ mod tests {
             args: vec![HirExpr::StringLiteral("hello".to_string())],
         };
         assert_eq!(infer_expr(&env, &expr), Ok(Ty::Str));
+    }
+
+    // -- Issue #142: callable builtin classification as C0001 ------------
+
+    #[test]
+    fn known_callable_builtins_table_is_sorted() {
+        // The `is_known_callable_builtin` binary search relies on
+        // `KNOWN_CALLABLE_BUILTINS` being sorted by Rust's `str` ordering.
+        // If this invariant is ever violated, binary search silently returns
+        // false negatives -- a known builtin would be misclassified as
+        // T0021 instead of C0001. The explicit `let` bindings ensure both
+        // values are always evaluated (coverage), while the `assert!`
+        // without format args avoids an uncovered panic-message branch.
+        for w in KNOWN_CALLABLE_BUILTINS.windows(2) {
+            let prev = w[0];
+            let next = w[1];
+            assert!(prev <= next, "KNOWN_CALLABLE_BUILTINS is not sorted");
+            // Strict ordering (no duplicates): `prev < next` is the real
+            // invariant, but `prev <= next` above already covers both
+            // values. This redundant strict check catches duplicates without
+            // introducing an uncovered format-arg branch.
+            assert!(prev != next, "KNOWN_CALLABLE_BUILTINS has a duplicate");
+        }
+    }
+
+    #[test]
+    fn known_callable_builtins_table_has_137_entries() {
+        assert_eq!(
+            KNOWN_CALLABLE_BUILTINS.len(),
+            137,
+            "KNOWN_CALLABLE_BUILTINS should have 137 entries (139 builtins minus print/len/float, plus __import__)"
+        );
+    }
+
+    #[test]
+    fn known_callable_builtins_excludes_already_implemented() {
+        // `print`, `len`, and `float` are already hand-recognized and must
+        // not appear in the table -- they would never reach this fallback.
+        assert!(!is_known_callable_builtin("print"));
+        assert!(!is_known_callable_builtin("len"));
+        assert!(!is_known_callable_builtin("float"));
+    }
+
+    #[test]
+    fn is_known_callable_builtin_finds_table_entries() {
+        // Representative samples from both halves of the table (exception
+        // classes and ordinary builtins).
+        assert!(is_known_callable_builtin("ValueError"));
+        assert!(is_known_callable_builtin("Exception"));
+        assert!(is_known_callable_builtin("int"));
+        assert!(is_known_callable_builtin("range"));
+        assert!(is_known_callable_builtin("zip"));
+        assert!(is_known_callable_builtin("ArithmeticError"));
+        assert!(is_known_callable_builtin("ZeroDivisionError"));
+    }
+
+    #[test]
+    fn is_known_callable_builtin_rejects_unknown_names() {
+        assert!(!is_known_callable_builtin("totally_undefined"));
+        assert!(!is_known_callable_builtin("print"));
+        assert!(!is_known_callable_builtin(""));
+    }
+
+    #[test]
+    fn value_error_call_produces_c0001_not_t0021() {
+        // `ValueError("x")` is valid Python -- the builtin genuinely exists
+        // in Python 3.14 -- so it must be classified as a capability gap
+        // (C0001), not a name-resolution failure (T0021).
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "ValueError".to_string(),
+            args: vec![HirExpr::StringLiteral("x".to_string())],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("ValueError"));
+    }
+
+    #[test]
+    fn exception_call_produces_c0001() {
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "Exception".to_string(),
+            args: vec![HirExpr::StringLiteral("msg".to_string())],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("Exception"));
+    }
+
+    #[test]
+    fn other_callable_builtins_produce_c0001() {
+        // A representative sample of other callable builtins from the table.
+        for name in ["int", "str", "bool", "range", "zip", "dict", "list", "sum"] {
+            let env = Environment::new();
+            let expr = HirExpr::Call {
+                callee: name.to_string(),
+                args: vec![HirExpr::IntLiteral(1)],
+            };
+            let err = infer_expr(&env, &expr).unwrap_err();
+            assert_eq!(err.code, "C0001", "builtin `{name}` should be C0001");
+            assert!(err.message.contains(name));
+        }
+    }
+
+    #[test]
+    fn a_genuinely_undefined_function_still_produces_t0021() {
+        // A typo or genuinely undefined name must retain the T0021
+        // name-resolution behavior, not be reclassified as C0001.
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "totally_undefined".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("undefined function"));
+    }
+
+    #[test]
+    fn a_user_defined_value_error_takes_priority_over_c0001() {
+        // A user `def ValueError(...)` is called correctly, not classified as
+        // C0001 -- user definitions always take priority over the builtin
+        // classification, matching `float`'s own user-definition-takes-
+        // priority precedent.
+        let mut env = Environment::new();
+        env.bind_function("ValueError".to_string(), vec![Ty::Str], Ty::Int);
+        let expr = HirExpr::Call {
+            callee: "ValueError".to_string(),
+            args: vec![HirExpr::StringLiteral("x".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn a_user_defined_exception_takes_priority_over_c0001() {
+        let mut env = Environment::new();
+        env.bind_function("Exception".to_string(), vec![Ty::Str], Ty::Bool);
+        let expr = HirExpr::Call {
+            callee: "Exception".to_string(),
+            args: vec![HirExpr::StringLiteral("msg".to_string())],
+        };
+        assert_eq!(infer_expr(&env, &expr), Ok(Ty::Bool));
+    }
+
+    #[test]
+    fn range_as_a_standalone_call_produces_c0001() {
+        // `range` works in `for` loops (via `HirStmt::ForRange`) but not as
+        // a standalone call -- a standalone `range(10)` is C0001.
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "range".to_string(),
+            args: vec![HirExpr::IntLiteral(10)],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("range"));
+    }
+
+    #[test]
+    fn import_dunder_call_produces_c0001_not_t0021() {
+        // `__import__("math")` is valid Python -- the callable dunder
+        // `__import__` is the one dunder users legitimately call, so it
+        // is included in the builtin table. It must be classified as C0001,
+        // not T0021 (Codex review P2).
+        let env = Environment::new();
+        let expr = HirExpr::Call {
+            callee: "__import__".to_string(),
+            args: vec![HirExpr::StringLiteral("math".to_string())],
+        };
+        let err = infer_expr(&env, &expr).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("__import__"));
+    }
+
+    #[test]
+    fn constraint_collection_classifies_value_error_as_c0001() {
+        // The private-helper inference path (`collect_expr_constraints`)
+        // must apply the same C0001 classification for a known callable
+        // builtin, rather than deferring with `Ok(None)` -- a private
+        // helper calling `ValueError` gets C0001 directly.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "ValueError".to_string(),
+            args: vec![HirExpr::StringLiteral("x".to_string())],
+        };
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("ValueError"));
+    }
+
+    #[test]
+    fn constraint_collection_classifies_exception_as_c0001() {
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "Exception".to_string(),
+            args: vec![HirExpr::StringLiteral("msg".to_string())],
+        };
+        let err = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(err.message.contains("Exception"));
+    }
+
+    #[test]
+    fn constraint_collection_defers_unknown_callees_to_final_validation() {
+        // A genuinely unknown callee still returns `Ok(None)` and defers to
+        // final validation's T0021 -- the C0001 classification only applies
+        // to known callable builtins.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "totally_undefined".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        };
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+        assert_eq!(term, None);
+    }
+
+    #[test]
+    fn constraint_collection_honors_user_defined_value_error_over_c0001() {
+        // A registered `ValueError` signature resolves through normal
+        // signature lookup, not the C0001 builtin classification -- user
+        // definitions take priority in the private-helper path too.
+        let signatures = HashMap::from([(
+            "ValueError".to_string(),
+            (vec!["x".to_string()], vec![Ok(Ty::Str)], Ok(Ty::Int)),
+        )]);
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &[],
+            defs_rebound: HashSet::new(),
+        };
+        let expr = HirExpr::Call {
+            callee: "ValueError".to_string(),
+            args: vec![HirExpr::StringLiteral("x".to_string())],
+        };
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &expr,
+        )
+        .unwrap();
+        assert_eq!(term, Some(Ok(Ty::Int)));
     }
 
     // -- PR-11 Task 3 (D-123): dict[str, int] type-checking --------------

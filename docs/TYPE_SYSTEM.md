@@ -54,7 +54,15 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   still resolve to a module global. Call targets follow the same lookup before
   builtin or function-registry resolution: an unbound local target is `T0021`,
   while a bound local or parameter from the current primitive subset cannot be
-  called by falling through to a same-named function. Definite-assignment
+  called by falling through to a same-named function. A call to a known Python
+  3.14 callable builtin that this compiler version does not implement (e.g.
+  `ValueError("x")`, `Exception("msg")`, `int("5")`, `range(10)` as a
+  standalone call) is classified as `C0001` (capability gap), not `T0021`
+  (name-resolution failure) -- the builtin genuinely exists, this compiler
+  just does not implement it yet (issue #142). User-defined functions always
+  take priority: a `def ValueError(...)` is called correctly, not classified
+  as `C0001`. The same classification applies in both the final validation
+  pass and the private-helper inference path. Definite-assignment
   tracking (issue #118 Part 1, D-147) extends this to control-flow joins: a
   name assigned in only one branch of an `if`/`elif` (no `else`), or only in a
   `while`/`for` body (which may execute zero times), is *maybe* bound after the
