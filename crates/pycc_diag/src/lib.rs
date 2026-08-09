@@ -154,7 +154,7 @@ pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String 
 /// `spans[{file,line,col,len,label}]`. Columns are 1-indexed Unicode scalar
 /// positions and lengths count Unicode scalar values. `help` is a
 /// single-element array holding `Diagnostic.help` when it carries a
-/// determinate, safe suggestion (D-151), and an empty array otherwise --
+/// determinate, safe suggestion (D-152), and an empty array otherwise --
 /// `render_human` still has no equivalent `help:` line (see its own doc
 /// comment and D-043).
 pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
