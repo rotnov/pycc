@@ -77,14 +77,26 @@ fn main() -> ExitCode {
             error_format,
         } => check_paths(&paths, error_format),
         Command::Init { name } => {
-            let cwd = std::env::current_dir().expect("current directory must be readable");
-            match init(name.as_deref(), &cwd) {
-                Ok(()) => {
-                    println!("Created pycc.toml and src/main.py");
-                    ExitCode::SUCCESS
-                }
+            // `std::env::current_dir()` is fallible: the process's cwd may
+            // have been deleted, unmounted, or become otherwise inaccessible
+            // after launch (#251). This is an invocation/environment error
+            // controlled outside pycc, not an internal invariant, so it is
+            // reported as an exit-2 diagnostic (CLI_SPEC.md's exit-code
+            // contract) rather than a panic. No scaffold write is attempted
+            // and no fallback directory is used.
+            match std::env::current_dir() {
+                Ok(cwd) => match init(name.as_deref(), &cwd) {
+                    Ok(()) => {
+                        println!("Created pycc.toml and src/main.py");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("error: pycc init failed: {e}");
+                        ExitCode::from(2)
+                    }
+                },
                 Err(e) => {
-                    eprintln!("error: pycc init failed: {e}");
+                    eprintln!("error: pycc init failed: cannot read current directory: {e}");
                     ExitCode::from(2)
                 }
             }
