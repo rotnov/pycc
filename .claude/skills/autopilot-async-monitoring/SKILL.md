@@ -11,8 +11,8 @@ description: Use when driving the pycc autonomous-delivery autopilot loop (writi
 
 Procedural rules for waiting on asynchronous state correctly during this
 project's autonomous PR-by-PR delivery loop: pull requests, CI runs, and
-dispatched background agents (including nested orchestrators that themselves
-dispatch sub-agents).
+any dispatched background agent — a plain first-level `Agent` dispatch just
+as much as a nested orchestrator that itself dispatches sub-agents.
 
 ## Check real state before waiting
 
