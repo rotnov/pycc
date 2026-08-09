@@ -66,14 +66,27 @@ one GitHub issue comment above.
 
 `issue-to-plan`'s Non-negotiable #4 explicitly withholds repository-mutation
 authority beyond the one published comment — this session could not and did
-not start implementing #416. The natural next unit of autonomous work is a
-fresh `issue-implement #416` invocation (or equivalent), which will run its
-own D-021 preflight, confirm the plan is still current against whatever
-`origin/main` tip it finds, and dispatch Phase 1's implementation. Standard
-D-021 preflight applies as always: re-fetch, re-resolve the default branch,
-re-check `docs/ROADMAP.md`/milestone issue list, and re-read this plan's own
-baseline section before trusting it verbatim if any meaningful time has
-passed.
+not start implementing #416. The natural next unit of autonomous work is
+Phase 1 of the published plan (the raw-fd-bypass retrieval mechanism in
+`tests/nbody_bench.rs`) — **but do not invoke a plain `issue-implement #416`
+and let it run to its ordinary conclusion.** That skill's default path opens
+one pull request carrying `Fixes #416` and treats the issue as closed on
+merge; #416's own plan is explicitly phased (Phase 1 mergeable now, Phases
+2-5 spanning a Cachegrind spike, Valgrind CI enablement, a multi-week
+observation window, and a final decision), so a Phase-1-only PR that closes
+#416 would be premature — this is exactly the defect an automated Codex
+review caught on this session-log entry's first draft (see PR #417). Have
+the implementing session tag Phase 1's PR to reference #416 without closing
+it (e.g. "Progresses #416", not `Fixes #416`) and leave #416 open until the
+phase that actually satisfies the plan's Phase 5 decision closes it —
+mirroring, by extension, `issue-implement`'s own existing rule that
+"`Fixes #N` goes only on the composed sequence's own final PR, never on an
+intermediate one," today written for its D-080/D-103 stage-then-activate
+pairs specifically but equally applicable to any multi-PR plan this issue
+produces. Standard D-021 preflight applies as always: re-fetch, re-resolve
+the default branch, re-check `docs/ROADMAP.md`/milestone issue list, and
+re-read this plan's own baseline section before trusting it verbatim if any
+meaningful time has passed.
 
 Separately, PR #391 is stale enough to be worth a status check (not a fix)
 on the next preflight, and issue #414's two new corroborating comments are
