@@ -116,14 +116,20 @@ A session that ends before the loop reaches one of those stop conditions — whe
 context-bounding checkpoint, because the user diverted to other work, or for any other reason
 that is not the loop's own termination — leaves the autopilot **paused**, not stopped. The
 session log for whatever task the session was doing last must include a "Paused autopilot"
-section recording the active milestone, the last autopilot iteration's outcome, and the exact
-next autopilot step (e.g. "re-enter `issue-select` for v0.3"). This applies even when the
-session's final task is unrelated to the autopilot: the latest session log is the only artifact
-a fresh session reads to determine where to resume, so a side-task checkpoint that omits the
-paused autopilot state makes the loop invisible to the next session. A fresh session that
-finds a "Paused autopilot" section in the latest session log resumes the loop from the recorded
-next step, after a fresh D-021 baseline — it does not re-derive the milestone from scratch
-unless the recorded milestone is now met.
+section recording: the **directive scope** (whether the original directive targeted one named
+milestone, in which case the loop stops at step 6 once it completes, or was open-ended, in
+which case the loop re-enters step 1 for the next milestone); the active milestone; the last
+autopilot iteration's outcome; the exact next autopilot step (e.g. "re-enter `issue-select`
+for v0.3"); and the in-run denylist of issues that reached a per-issue stop condition this run
+(see `issue-select`'s `## Loop` section), so the resumed session does not re-select and re-fail
+an issue already denylisted. This applies even when the session's final task is unrelated to
+the autopilot: the latest session log is the only artifact a fresh session reads to determine
+where to resume, so a side-task checkpoint that omits the paused autopilot state makes the loop
+invisible to the next session. A fresh session that finds a "Paused autopilot" section in the
+latest session log resumes the loop from the recorded next step, after a fresh D-021 baseline
+— it does not re-derive the milestone from scratch unless the recorded milestone is now met,
+and it honors the recorded directive scope to decide whether to stop or continue after the
+current milestone.
 
 ## Output
 
