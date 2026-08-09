@@ -112,6 +112,19 @@ milestone — do not silently drop back to step 1 as if that milestone were comp
 that completes with parked Minor/deferred findings per `issue-implement`'s own conventions is a
 normal completion, not a stop condition.
 
+A session that ends before the loop reaches one of those stop conditions — whether at a
+context-bounding checkpoint, because the user diverted to other work, or for any other reason
+that is not the loop's own termination — leaves the autopilot **paused**, not stopped. The
+session log for whatever task the session was doing last must include a "Paused autopilot"
+section recording the active milestone, the last autopilot iteration's outcome, and the exact
+next autopilot step (e.g. "re-enter `issue-select` for v0.3"). This applies even when the
+session's final task is unrelated to the autopilot: the latest session log is the only artifact
+a fresh session reads to determine where to resume, so a side-task checkpoint that omits the
+paused autopilot state makes the loop invisible to the next session. A fresh session that
+finds a "Paused autopilot" section in the latest session log resumes the loop from the recorded
+next step, after a fresh D-021 baseline — it does not re-derive the milestone from scratch
+unless the recorded milestone is now met.
+
 ## Output
 
 The determined milestone name, the evidence review that ruled out every earlier milestone as
