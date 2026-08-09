@@ -34,22 +34,28 @@
 //! `HirItem`/`MirItem` surface and zero new coverage regions in either of
 //! those two crates' own item-dispatch code.
 //!
-//! **Class-body statement execution** is minimal and single-pass, matching
-//! #385's own explicit scope (Correction 2: the class-body statement
-//! execution-order/redefinition-binding scheme is #386's design work, not
-//! this PR's): a class body statement must be a `def` (a nested class, a
-//! bare `pass`, a class-level attribute declaration, or any other statement
-//! kind is `C0001`); redefining a method name within one class body is
-//! `C0001`; a class must declare `__init__` (a class with no `__init__` is
-//! `C0001` -- this PR ships no default no-op constructor). The
-//! attribute-slot pre-scan below only looks at `__init__`'s own top-level
-//! body statements (no recursion into a nested `if`/`while`/`for`), matching
-//! this same minimal, single-pass scope.
+//! **Class-body statement execution** follows PR #358's redefinition-is-
+//! rebind pattern, extended to class methods via mangled-name namespacing
+//! (#386): a class body statement must be a `def` (a nested class, a bare
+//! `pass`, a class-level attribute declaration, or any other statement kind
+//! is `C0001`); redefining a non-`__init__` method name within one class
+//! body **rebinds** -- the second `def` replaces the method table entry, and
+//! the latest definition is the one dispatched to at runtime (both
+//! definitions share the same mangled `<ClassName>.<method>` name, so PR
+//! #358's function-pointer slot infrastructure already handles the rebind:
+//! the second `def`'s source-order execution stores the new function's
+//! address into the slot, and later calls dispatch to it); redefining
+//! `__init__` is still `C0001` (the compile-time attribute-slot pre-scan
+//! `collect_init_attrs` cannot reconcile two different `__init__` bodies); a
+//! class must declare `__init__` (a class with no `__init__` is `C0001` --
+//! this PR ships no default no-op constructor). The attribute-slot pre-scan
+//! below only looks at `__init__`'s own top-level body statements (no
+//! recursion into a nested `if`/`while`/`for`), matching this same minimal,
+//! single-pass scope.
 
 use crate::{HirItem, Ty, lower_arg_list, unsupported};
 use pycc_ast::{Expr, Number, Stmt};
 use pycc_diag::Diagnostic;
-use std::collections::HashSet;
 
 /// Method names that collide with `crates/pycc_hir/src/expr.rs`'s own
 /// hand-recognized container-method call syntax (`Expr::Call` over
@@ -116,7 +122,7 @@ pub(crate) fn lower_class(
     let mut methods: Vec<(String, String)> = Vec::new();
     let mut items: Vec<HirItem> = Vec::new();
     let mut attrs: Vec<(String, Ty)> = Vec::new();
-    let mut seen_method_names: HashSet<String> = HashSet::new();
+    let mut init_seen = false;
     for stmt in &def.body {
         let Stmt::FunctionDef(method_def) = stmt else {
             return Err(unsupported(
@@ -135,20 +141,39 @@ pub(crate) fn lower_class(
                 method_def.range,
             ));
         }
-        if !seen_method_names.insert(method_name.clone()) {
+        // #386: `__init__` redefinition stays C0001 -- the compile-time
+        // attribute-slot pre-scan (`collect_init_attrs`) derives slot types
+        // from the first `__init__` body's assignments and cannot reconcile
+        // a second, different `__init__` body. A non-`__init__` method
+        // redefinition is a rebind, not an error (see below).
+        if method_name == "__init__" && init_seen {
             return Err(unsupported(
-                format!(
-                    "redefining method `{method_name}` in the same class body is not \
-                     supported yet"
-                ),
+                "redefining `__init__` in the same class body is not supported yet \
+                 -- the attribute-slot pre-scan cannot reconcile two different \
+                 `__init__` bodies",
                 method_def.range,
             ));
         }
         let (item, params) = lower_method(method_def, &class_name, aliases)?;
         if method_name == "__init__" {
+            init_seen = true;
             attrs = collect_init_attrs(&method_def.body, &params)?;
         }
-        methods.push((method_name.clone(), format!("{class_name}.{method_name}")));
+        let mangled = format!("{class_name}.{method_name}");
+        // #386: rebind semantics for non-`__init__` method redefinition.
+        // Both definitions share the same mangled `<ClassName>.<method>`
+        // name, so PR #358's function-pointer slot infrastructure already
+        // handles the actual rebind at the codegen level (the second `def`'s
+        // source-order execution stores the new function's address into the
+        // slot). Here, replacing the method table entry on redefinition
+        // rather than appending a duplicate keeps the table clean -- the
+        // mangled name is the same either way, so `resolve_method_call` and
+        // MIR lowering's `.methods.iter().find(..)` resolve identically.
+        if let Some(entry) = methods.iter_mut().find(|(name, _)| name == &method_name) {
+            *entry = (method_name.clone(), mangled.clone());
+        } else {
+            methods.push((method_name.clone(), mangled));
+        }
         items.push(item);
     }
     if !methods.iter().any(|(name, _)| name == "__init__") {
@@ -512,10 +537,51 @@ mod tests {
     }
 
     #[test]
-    fn redefining_a_method_in_one_class_body_is_unsupported() {
+    fn redefining_init_in_one_class_body_is_unsupported() {
+        // #386: `__init__` redefinition stays C0001 -- the compile-time
+        // attribute-slot pre-scan (`collect_init_attrs`) cannot reconcile
+        // two different `__init__` bodies.
         assert_c0001(
             "class C:\n    def __init__(self) -> None:\n        return\n    def __init__(self) -> None:\n        return\n",
         );
+    }
+
+    #[test]
+    fn redefining_a_non_init_method_rebinds_to_the_latest_definition() {
+        // #386: a non-`__init__` method redefinition is a rebind, not an
+        // error. Both definitions lower into separate `HirItem::Function`s
+        // with the same mangled name (`C.foo`), and the method table entry
+        // is replaced (not duplicated) -- so `methods` has exactly one
+        // `foo` entry, while `items` has two `C.foo` function items.
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    def foo(self) -> None:\n        return\n    def foo(self) -> None:\n        return\n",
+        );
+        assert_eq!(hir.class_defs.len(), 1);
+        let (_, class_def) = &hir.class_defs[0];
+        // The method table has exactly one `foo` entry (replaced, not
+        // duplicated), plus the `__init__` entry.
+        assert_eq!(
+            class_def.methods,
+            vec![
+                ("__init__".to_string(), "C.__init__".to_string()),
+                ("foo".to_string(), "C.foo".to_string()),
+            ]
+        );
+        // Both definitions are lowered as separate `HirItem::Function`s
+        // with the same mangled name -- PR #358's function-pointer slot
+        // handles the rebind at the codegen level. Using `matches!` rather
+        // than an `if let .. { true } else { false }` keeps the closure
+        // branch-free under D-014's 100%-region coverage gate (every item
+        // in this fixture is a `HirItem::Function`, so an `else { false }`
+        // arm would be a permanently uncovered region).
+        let foo_items: Vec<&HirItem> = hir
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(item, HirItem::Function { name, .. } if name == "C.foo")
+            })
+            .collect();
+        assert_eq!(foo_items.len(), 2, "both foo definitions should be lowered");
     }
 
     #[test]
@@ -525,7 +591,7 @@ mod tests {
         // the identical mangled `<Name>.__init__` function name, colliding
         // silently in `pycc_types`'/`pycc_mir`'s own `HashMap`-collected
         // class tables downstream rather than producing a clean diagnostic.
-        // Mirrors `redefining_a_method_in_one_class_body_is_unsupported`
+        // Mirrors `redefining_init_in_one_class_body_is_unsupported`
         // above, one level up (module scope rather than one class body).
         assert_c0001(
             "class C:\n    def __init__(self) -> None:\n        return\nclass C:\n    def __init__(self) -> None:\n        return\n",

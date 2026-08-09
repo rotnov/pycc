@@ -96,15 +96,25 @@ existing control-flow-join machinery #118 already built for `check_stmt`
   `E0101`/`E0102`/`E0103`/`E0105` are each explicitly reserved as *"part of
   the planned v0.7 dynamic-Python rejection surface"* and are **not** v0.3
   deliverables; PR-15/PR-16 do not implement them.
-- **PR #358's execution-order mechanism does not generalize to class
-  bodies.** PR #358 ("Fix #22") establishes a global, name-keyed
-  LLVM-function-pointer slot scheme for module-level `def`
-  execution-order/redefinition binding. That mechanism is specifically a
-  *global, flat* namespace scheme — a per-class namespace (where two
-  different classes may share a method name without colliding) needs its
-  own analogous-but-distinct scheme. PR-15 owns designing that scheme,
-  reusing the *pattern* PR #358 establishes (source-order registration,
-  redefinition-is-rebind), not its literal mechanism.
+- **PR #358's execution-order mechanism and class bodies.** PR #358 ("Fix
+  #22") establishes a global, name-keyed LLVM-function-pointer slot scheme
+  for module-level `def` execution-order/redefinition binding. That
+  mechanism is specifically a *global, flat* namespace scheme — a per-class
+  namespace (where two different classes may share a method name without
+  colliding) needs its own analogous-but-distinct scheme. PR-15 owns
+  designing that scheme, reusing the *pattern* PR #358 establishes
+  (source-order registration, redefinition-is-rebind), not its literal
+  mechanism. **Update (#386):** the per-class namespacing is provided by
+  the mangled `<ClassName>.<method>` naming convention itself — PR #358's
+  function-pointer slot infrastructure already applies to mangled method
+  names (they flow through the flat `hir.items` list as ordinary
+  `HirItem::Function`s), so no new codegen, type-checker, or MIR mechanism
+  was needed. The only code change was in `lower_class`
+  (`crates/pycc_hir/src/class.rs`): removing the non-`__init__` method
+  redefinition rejection (C0001) and replacing it with rebind semantics
+  (replace the method table entry on redefinition), while keeping
+  `__init__` redefinition as C0001 (the attribute-slot pre-scan
+  `collect_init_attrs` cannot reconcile two different `__init__` bodies).
 - **The `match`-exhaustiveness ↔ #359 dependency in #374's original body is
   not supported by #359's own text.** #359 ("Part 2 of #118") never
   mentions "match," "pattern," or "exhaustive" anywhere; its actual scope is
@@ -282,7 +292,10 @@ consistent with Correction 4's own framing.
   new ADR, mirroring D-089's role for the recursive `Ty` in v0.2.
 - **Class-body execution-order mechanism specifics** (the per-class
   namespace scheme reusing PR #358's pattern, not its mechanism, per Context
-  above) — PR-15's own design work.
+  above) — resolved by #386: the mangled `<ClassName>.<method>` naming
+  convention provides per-class namespacing, and PR #358's function-pointer
+  slot infrastructure already applies to mangled method names; no new
+  codegen, type-checker, or MIR mechanism was needed (see Context above).
 - **`match` exhaustiveness-checking algorithm choice** (decision-tree
   compilation vs. a simpler per-arm coverage check sufficient for the
   literal/capture/wildcard/sequence/mapping/or-pattern/class-pattern set
