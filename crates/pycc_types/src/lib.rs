@@ -1938,7 +1938,7 @@ fn infer_function_signatures_with_solver(
         }
     }
     for (item, local_names) in hir.items.iter().zip(function_local_names) {
-        let HirItem::Function { name, body, .. } = item else {
+        let HirItem::Function { name, body, params, .. } = item else {
             continue;
         };
         let signature = &signatures[name];
@@ -1956,7 +1956,20 @@ fn infer_function_signatures_with_solver(
             // the mirror gate and be mislabeled "not bound before this use".
             env.defs_rebound.remove(local_name);
         }
-        for (param_name, param_ty) in signature.0.iter().zip(&signature.1) {
+        // Use the current item's own parameter names, not the last-inserted
+        // signature's names (#386): a redefined method shares its mangled
+        // name but has its own parameter names, and checking its body against
+        // the wrong names would report false T0021 "not bound" errors. The
+        // type terms (signature.1) and return type (signature.2) come from
+        // the last definition, which is correct — compatible redefinitions
+        // have the same raw type shape (already validated by
+        // check_incompatible_redefinitions), and the last definition is the
+        // one bound at call sites.
+        for (param_name, param_ty) in params
+            .iter()
+            .map(|(n, _)| n)
+            .zip(&signature.1)
+        {
             env.bindings.insert(param_name.clone(), param_ty.clone());
         }
         collect_block_constraints(
