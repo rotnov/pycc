@@ -261,6 +261,14 @@ criteria are confirmed met by the per-cycle evidence check — hand off to `next
 Every iteration still re-derives its own inventory, scores, and baselines from scratch; only the
 denylist itself carries forward.
 
+If the session ends before the loop reaches one of those stop conditions — a context-bounding
+checkpoint, a user-directed diversion, or any other non-terminal exit — record the paused
+autopilot state per `next-milestone`'s `## Loop` section (directive scope, active milestone,
+last iteration's outcome, next step, and this run's denylist with reasons) in the session log
+of whatever task the session was doing last. The denylist is the one piece of in-run state
+that must carry forward across the session boundary — without it, the resumed session's
+fresh inventory can re-select and re-fail an issue already denylisted this run.
+
 ## Output
 
 The named issue, the written justification, the advisor round's outcome, runners-up, and any

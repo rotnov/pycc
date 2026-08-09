@@ -5,8 +5,10 @@ set -eu
 # (default 10) and emit exactly one line per PR the moment it reaches a
 # terminal state -- merged/closed, merge conflicts, a stale (behind-base)
 # branch, one or more failed/timed-out/startup-failed/cancelled checks
-# (every such check is named, not just the first), or fully green + CLEAN
-# (ready to merge).
+# (every such check is named, not just the first), all checks completed
+# with none failing but still blocked by something other than checks (e.g.
+# an unresolved required review or conversation thread), or fully green +
+# CLEAN (ready to merge).
 # Silent between polls: no per-poll spam, one line per PR's actual outcome.
 # Exits once every PR passed on the command line has reached a terminal
 # state.
@@ -103,6 +105,12 @@ poll_once() {
     pending=$(echo "$data" | jq -r '[.statusCheckRollup[]? | select(.status!="COMPLETED")] | length')
     if [ "$pending" = "0" ] && [ "$merge_state" = "CLEAN" ]; then
       echo "PR #$pr: READY -- all checks green, CLEAN, mergeable"
+      mark_resolved "$pr"
+      continue
+    fi
+
+    if [ "$pending" = "0" ] && [ "$merge_state" != "CLEAN" ]; then
+      echo "PR #$pr: BLOCKED -- all checks completed with no failures, but mergeStateStatus=$merge_state (not CLEAN) -- often an unresolved required review or conversation thread; check the PR directly for the reason"
       mark_resolved "$pr"
       continue
     fi

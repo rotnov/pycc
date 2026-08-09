@@ -694,16 +694,16 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "All five v0.1 acceptance-checklist bullets are green",
-        "Most v0.1 acceptance-checklist bullets are green",
-        "status page that understates v0.1 acceptance-checklist completion",
+        "v0.1 and v0.2's acceptance criteria are both met, and v0.3's\n              class model core has landed",
+        "v0.1's acceptance criteria remain unmet, and v0.3's\n              class model core has landed",
+        "status page that understates v0.1/v0.2 acceptance-checklist completion",
     ),
     (
         site_dir / "status" / "index.html",
         (
-            "The full multi-version conformance\n              matrix, "
-            "differential fuzzing, and corpus testing remain\n              "
-            "planned, alongside the rest of v0.3's class-model work."
+            "the full multi-version conformance matrix,\n              "
+            "differential fuzzing, and corpus testing remain planned "
+            "test-depth\n              work carried over from v0.1 and v0.2."
         ),
         "The full multi-version conformance matrix is already complete.",
         "status page that overclaims conformance-matrix completion",
@@ -722,63 +722,12 @@ mutations = (
     ),
     (
         site_dir / "status" / "index.html",
-        "greater-than-7.0% regression gate remain required",
-        "The frontend performance gate follows the compiler work",
-        "status page with stale performance-gate sequencing",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "This source-aware paired gate\n              measures the",
-        "This cross-run gate measures the",
-        "status page without source-aware paired performance measurement",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "exact predecessor and candidate sequentially on one\n              hosted runner",
-        "candidate on whichever hosted runner is available",
-        "status page without same-runner exact revisions",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "seals the predecessor timing",
-        "records the predecessor timing only afterward",
-        "status page without sealed predecessor timing",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "Before candidate code runs, it classifies the complete",
-        "After candidate code runs, it samples part of the",
-        "status page without pre-execution executable-input classification",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "Identical\n              executable inputs keep the timing delta as visible, non-blocking",
-        "Identical\n              executable inputs can still make the timing delta blocking",
-        "status page without unchanged-input telemetry semantics",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "Changed source uses exactly five complete",
-        "Changed source uses one convenient",
-        "status page without fixed changed-source replicates",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "keeps the hard greater-than-7.0%",
-        "disables the greater-than-7.0%",
-        "status page without the changed-source hard threshold",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "All ten timing\n              files are retained.",
-        "Only the favorable timing file is retained.",
-        "status page without complete fixed-sample evidence",
-    ),
-    (
-        site_dir / "status" / "index.html",
-        "Revision, benchmark-contract,\n              executable-input identity, artifact-identity, exact file-set, and",
-        "Revision and comparison differences are tolerated, and",
-        "status page without fail-closed source-aware paired evidence",
+        (
+            "currently a\n              greater-than-7.0% regression floor, "
+            "enforced by a paired\n              predecessor/candidate measurement"
+        ),
+        "currently a non-blocking telemetry signal, not enforced",
+        "status page that understates perf-gate enforcement",
     ),
     (
         site_dir / "architecture" / "index.html",

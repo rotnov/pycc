@@ -156,4 +156,22 @@ case "$output" in
   *) fail "expected all-CANCELLED infra hint, got: $output" ;;
 esac
 
+# --- Fixture 8: a PR whose checks are all COMPLETED/SUCCESS but is BLOCKED
+# by something other than checks (e.g. an unresolved required review
+# thread) -- must be reported as terminal, not polled forever ------------
+mkdir -p "$work_dir/fixture-blocked-clean-checks/bin"
+cat >"$work_dir/fixture-blocked-clean-checks/bin/gh" <<'EOF'
+#!/usr/bin/env sh
+cat <<'JSON'
+{"state":"OPEN","mergeStateStatus":"BLOCKED","mergeable":"MERGEABLE","statusCheckRollup":[{"name":"ci-gate","status":"COMPLETED","conclusion":"SUCCESS"},{"name":"audit","status":"COMPLETED","conclusion":"SUCCESS"}]}
+JSON
+EOF
+chmod +x "$work_dir/fixture-blocked-clean-checks/bin/gh"
+
+output=$(PATH="$work_dir/fixture-blocked-clean-checks/bin:$PATH" POLL_INTERVAL=1 "$repo_root/scripts/ci-watch.sh" owner/repo 50)
+case "$output" in
+  *"PR #50: BLOCKED -- all checks completed with no failures, but mergeStateStatus=BLOCKED"*) ;;
+  *) fail "expected a terminal BLOCKED line for all-green-but-not-CLEAN checks, got: $output" ;;
+esac
+
 echo "ci-watch.sh: valid"
