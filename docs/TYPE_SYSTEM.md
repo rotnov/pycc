@@ -69,7 +69,14 @@ The contract: **surface syntax is standard Python typing** (PEP 484 → 695/696/
   construct. Reading a maybe-bound name is `T0041` (possibly-unbound read),
   distinct from `T0021` (never bound). An unconditional assignment on the
   current path after the join upgrades a maybe-bound name back to definitely
-  bound, so `if c: x = 1` followed by `x = 2` makes `x` readable.
+  bound, so `if c: x = 1` followed by `x = 2` makes `x` readable. The
+  private-helper constraint solver mirrors this tracking (issue #118 Part 2,
+  #359): its `ConstraintEnvironment` carries a `maybe_bindings` side-table
+  populated by `join_if_branches_solver`/`join_loop_body_solver`, and
+  `collect_expr_constraints`'s `Name` arm skips unification for maybe-bound
+  names so the solver does not infer a private-helper return type from a value
+  that may not exist (the validation pass's `T0041` remains the user-facing
+  gate when an explicit annotation makes inference unnecessary).
 - The first assignment fixes a local variable's inferred type. Later
   assignments must be compatible or produce `T0023`; assigning `bool` to an
   `int` binding preserves the static `int` representation and, per D-141, the
