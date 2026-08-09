@@ -86,7 +86,7 @@ validation pass and the private-helper inference path (issue #142).
 
 ## Quality bar
 
-- Every error: primary span, ≥1 label, expected/found where applicable, help with a suggestion when one is safe. Populated for arity/type-mismatch, missing-annotation, and literal-index-constraint families as of D-151 (`docs/DECISIONS.md`); still `None`/empty for name-resolution, capability-limitation, and ambiguous-conflict diagnostics, and human-format output never renders it.
+- Every error: primary span, ≥1 label, expected/found where applicable, help with a suggestion when one is safe. Populated for arity/type-mismatch, missing-annotation, and literal-index-constraint families as of D-152 (`docs/decisions/D-152-populate-diagnostic-help-for-arity-type.md`); still `None`/empty for name-resolution, capability-limitation, and ambiguous-conflict diagnostics, and human-format output never renders it.
 - Suggestions marked machine-applicable are applied by `pycc check --fix` and must be idempotent + tested.
 - Message text changes are allowed; codes and JSON structure are not (corpus bot fingerprints on code + span shape).
 - Diagnostics on all Tier-1 platforms byte-identical (paths normalized).

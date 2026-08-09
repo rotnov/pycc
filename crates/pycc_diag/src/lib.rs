@@ -55,7 +55,7 @@ impl Diagnostic {
     }
 
     /// Attaches a structured `help` suggestion -- a determinate, safe fix
-    /// derived from the diagnostic's own message (see D-151). Rendered as a
+    /// derived from the diagnostic's own message (see D-152). Rendered as a
     /// single-element JSON `help[]` array by `render_json`; `render_human`
     /// has no `help:` line codepath yet (D-083, D-043's still-open gap).
     #[must_use]
