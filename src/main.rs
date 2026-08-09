@@ -268,7 +268,7 @@ fn resolve_release_flag(explicit_release: bool, source_path: &Path) -> bool {
 enum FrontendFailure {
     Input(String),
     Compile {
-        // Boxed (D-151): `Diagnostic` grew a `help: Option<String>` field,
+        // Boxed (D-152): `Diagnostic` grew a `help: Option<String>` field,
         // which pushed this variant's inline size past clippy's
         // `result_large_err` threshold. Boxing keeps `Result<_,
         // FrontendFailure>` small regardless of how large `Diagnostic`

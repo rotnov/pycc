@@ -55,7 +55,7 @@ impl Diagnostic {
     }
 
     /// Attaches a structured `help` suggestion -- a determinate, safe fix
-    /// derived from the diagnostic's own message (see D-151). Rendered as a
+    /// derived from the diagnostic's own message (see D-152). Rendered as a
     /// single-element JSON `help[]` array by `render_json`; `render_human`
     /// has no `help:` line codepath yet (D-083, D-043's still-open gap).
     #[must_use]
@@ -154,7 +154,7 @@ pub fn render_human(diag: &Diagnostic, file_path: &str, source: &str) -> String 
 /// `spans[{file,line,col,len,label}]`. Columns are 1-indexed Unicode scalar
 /// positions and lengths count Unicode scalar values. `help` is a
 /// single-element array holding `Diagnostic.help` when it carries a
-/// determinate, safe suggestion (D-151), and an empty array otherwise --
+/// determinate, safe suggestion (D-152), and an empty array otherwise --
 /// `render_human` still has no equivalent `help:` line (see its own doc
 /// comment and D-043).
 pub fn render_json(diag: &Diagnostic, file_path: &str, source: &str) -> String {
