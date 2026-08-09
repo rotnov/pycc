@@ -1,4 +1,5 @@
 mod class;
+mod solver;
 
 use pycc_diag::{Diagnostic, Span};
 #[cfg(test)]
@@ -726,15 +727,25 @@ struct SolverConstraints {
     non_scalar_local_terms: Vec<usize>,
 }
 
-#[derive(Debug)]
-struct ConstraintEnvironment<'scope, 'hir> {
-    bindings: HashMap<String, TypeTerm>,
-    local_names: &'scope [&'hir str],
+#[derive(Debug, Clone)]
+pub(crate) struct ConstraintEnvironment<'scope, 'hir> {
+    pub(crate) bindings: HashMap<String, TypeTerm>,
+    pub(crate) local_names: &'scope [&'hir str],
     /// Mirror of `Environment::def_rebound` (D-110): names whose net
     /// source-order module binding is a `def`, kept apart from the term
     /// bindings for the same reason -- terms must survive a `def` for
     /// representation purposes.
-    defs_rebound: HashSet<String>,
+    pub(crate) defs_rebound: HashSet<String>,
+    /// Issue #359 (Part 2 of #118): names whose binding is *maybe* —
+    /// assigned in only one branch of an `if` (no `else`), or only in a
+    /// loop body, or introduced as a `for` loop variable (the loop may
+    /// execute zero times). Mirrors the validation pass's
+    /// `BindingState::Maybe` distinction (D-147): a maybe-bound name's
+    /// type term is still in `bindings` (if it IS bound, it has that
+    /// type), but `collect_expr_constraints`'s `Name` arm skips
+    /// unification for maybe-bound names — the validation pass's `T0041`
+    /// diagnostic is the user-facing gate, not the solver's inferred type.
+    pub(crate) maybe_bindings: HashSet<String>,
 }
 
 fn fresh_variable(parents: &mut Vec<usize>, concrete: &mut Vec<Option<Ty>>) -> usize {
@@ -933,6 +944,17 @@ fn collect_expr_constraints(
                         Err(std_function_used_as_a_value(name))
                     }
                 };
+            }
+            // Issue #359 (Part 2 of #118): a maybe-bound name (assigned
+            // in only one branch of an `if`, or only in a loop body) is
+            // not safely readable — the validation pass's T0041 diagnostic
+            // is the user-facing gate. In the solver, skip unification for
+            // such names by returning `Ok(None)` (no type term available),
+            // so the solver does not infer a return type from a value that
+            // might not exist. This mirrors the validation pass's
+            // `BindingState::Maybe` distinction (D-147).
+            if env.maybe_bindings.contains(name.as_str()) {
+                return Ok(None);
             }
             match env.bindings.get(name).cloned() {
                 Some(term) => Ok(Some(term)),
@@ -1424,6 +1446,11 @@ fn collect_block_constraints(
                 // A value assignment re-shadows any earlier same-named `def`
                 // (D-110), independent of the first-term-wins rule below.
                 env.defs_rebound.remove(target.as_str());
+                // Issue #359 (Part 2 of #118): an unconditional assignment
+                // upgrades a maybe-bound name back to definitely bound
+                // (mirrors the validation pass's contract: `if c: x = 1`
+                // followed by `x = 2` makes `x` readable).
+                env.maybe_bindings.remove(target.as_str());
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,
@@ -1440,6 +1467,10 @@ fn collect_block_constraints(
                 value: Some(value),
                 annotation,
             } => {
+                // Issue #359 (Part 2 of #118): an unconditional annotated
+                // assignment upgrades a maybe-bound name back to definitely
+                // bound, same as a plain `Assign`.
+                env.maybe_bindings.remove(target.as_str());
                 if let Some(term) = collect_expr_constraints(
                     signatures,
                     parents,
@@ -1511,24 +1542,36 @@ fn collect_block_constraints(
                     env,
                     test,
                 )?;
+                // Issue #359 (Part 2 of #118): clone the environment for
+                // each branch so bindings from one branch do not leak into
+                // the other, then join them back — mirroring the validation
+                // pass's `join_if_branches` (D-147). Names introduced by
+                // only one branch are tracked as maybe-bound in
+                // `maybe_bindings`; names introduced by both branches are
+                // definitely bound.
+                let pre_existing: HashSet<String> =
+                    env.bindings.keys().cloned().collect();
+                let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
                     constraints,
-                    env,
+                    &mut body_env,
                     body,
                     return_term.clone(),
                 )?;
+                let mut orelse_env = env.clone();
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
                     constraints,
-                    env,
+                    &mut orelse_env,
                     orelse,
                     return_term.clone(),
                 )?;
+                solver::join_if_branches_solver(env, &body_env, &orelse_env, &pre_existing);
             }
             HirStmt::While { test, body } => {
                 collect_expr_constraints(
@@ -1539,15 +1582,25 @@ fn collect_block_constraints(
                     env,
                     test,
                 )?;
+                // Issue #359 (Part 2 of #118): clone the environment for
+                // the loop body so body-only bindings do not leak into the
+                // post-loop environment as definitely bound. A `while` body
+                // may execute zero times, so every body-only binding is
+                // maybe-bound — mirroring the validation pass's
+                // `join_loop_body` (D-147).
+                let pre_existing: HashSet<String> =
+                    env.bindings.keys().cloned().collect();
+                let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
                     constraints,
-                    env,
+                    &mut body_env,
                     body,
                     return_term.clone(),
                 )?;
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
             }
             HirStmt::ForRange {
                 var,
@@ -1575,6 +1628,12 @@ fn collect_block_constraints(
                         )?;
                     }
                 }
+                // Issue #359 (Part 2 of #118): snapshot the pre-loop
+                // binding names so the loop variable and body-only
+                // bindings can be tracked as maybe-bound after the loop
+                // (a `for` loop may execute zero times).
+                let pre_existing: HashSet<String> =
+                    env.bindings.keys().cloned().collect();
                 if let Some(existing) = env.bindings.get(var).cloned() {
                     unify_terms(
                         existing,
@@ -1587,15 +1646,22 @@ fn collect_block_constraints(
                 } else {
                     env.bindings.insert(var.clone(), Ok(Ty::Int));
                 }
+                let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
                     constraints,
-                    env,
+                    &mut body_env,
                     body,
                     return_term.clone(),
                 )?;
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
+                // The loop variable itself is maybe-bound after the loop
+                // if it was newly introduced (the loop may not execute).
+                if !pre_existing.contains(var) {
+                    env.maybe_bindings.insert(var.clone());
+                }
             }
             HirStmt::ForList { var, list: _, body } => {
                 // Unlike `ForRange`, we have no concrete `Ty::Int` fact to
@@ -1607,19 +1673,32 @@ fn collect_block_constraints(
                 // (it *is* locally bound, just not solver-typed); real
                 // element-type checking happens in the second, real check
                 // pass (`check_with_signatures`).
+                // Issue #359 (Part 2 of #118): snapshot the pre-loop binding
+                // names so the loop variable and body-only bindings can be
+                // tracked as maybe-bound after the loop (a `for` loop may
+                // execute zero times).
+                let pre_existing: HashSet<String> =
+                    env.bindings.keys().cloned().collect();
                 if !env.bindings.contains_key(var) {
                     let term = fresh_term(parents, concrete);
                     env.bindings.insert(var.clone(), term);
                 }
+                let mut body_env = env.clone();
                 collect_block_constraints(
                     signatures,
                     parents,
                     concrete,
                     constraints,
-                    env,
+                    &mut body_env,
                     body,
                     return_term.clone(),
                 )?;
+                solver::join_loop_body_solver(env, &body_env, &pre_existing);
+                // The loop variable itself is maybe-bound after the loop
+                // if it was newly introduced (the loop may not execute).
+                if !pre_existing.contains(var) {
+                    env.maybe_bindings.insert(var.clone());
+                }
             }
             HirStmt::Return(value) => {
                 let Some(return_term) = return_term.clone() else {
@@ -2109,6 +2188,7 @@ fn infer_function_signatures_with_solver(
         bindings: HashMap::new(),
         local_names: &[],
         defs_rebound: HashSet::new(),
+        maybe_bindings: HashSet::new(),
     };
     for item in &hir.items {
         match item {
@@ -2142,6 +2222,7 @@ fn infer_function_signatures_with_solver(
             bindings: globals.bindings.clone(),
             local_names,
             defs_rebound: globals.defs_rebound.clone(),
+            maybe_bindings: globals.maybe_bindings.clone(),
         };
         for local_name in local_names.iter().copied() {
             env.bindings.remove(local_name);
@@ -2151,6 +2232,7 @@ fn infer_function_signatures_with_solver(
             // colliding with a def-rebound module name would otherwise skip
             // the mirror gate and be mislabeled "not bound before this use".
             env.defs_rebound.remove(local_name);
+            env.maybe_bindings.remove(local_name);
         }
         // Use the current item's own parameter names, not the last-inserted
         // signature's names (#386): a redefined method shares its mangled
@@ -5910,6 +5992,7 @@ mod tests {
         let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
             bindings: HashMap::new(),
             local_names: &[],
         };
@@ -5948,6 +6031,7 @@ mod tests {
         let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
             bindings: HashMap::from([("y".to_string(), Ok(Ty::Str))]),
             local_names: &["y"],
         };
@@ -5985,6 +6069,7 @@ mod tests {
         let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
             bindings: HashMap::new(),
             local_names: &[],
         };
@@ -6017,6 +6102,7 @@ mod tests {
         let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
             bindings: HashMap::new(),
             local_names: &["y"],
         };
@@ -6053,6 +6139,7 @@ mod tests {
         let mut constraints = SolverConstraints::default();
         let mut env = ConstraintEnvironment {
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
             bindings: HashMap::new(),
             local_names: &["z"],
         };
@@ -6092,6 +6179,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1), HirExpr::IntLiteral(2)]);
 
@@ -6118,6 +6206,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -6145,6 +6234,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::IntLiteral(1)),
@@ -6174,6 +6264,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::Name("missing".to_string())),
@@ -6203,6 +6294,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::IntLiteral(1)),
@@ -6235,6 +6327,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![
             HirExpr::FloatLiteral(1.0),
@@ -6266,6 +6359,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -6297,6 +6391,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![
             HirExpr::IntLiteral(1),
@@ -6332,6 +6427,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![
             HirExpr::IntLiteral(1),
@@ -6363,6 +6459,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![]);
 
@@ -6393,6 +6490,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![HirExpr::ListLiteral(vec![
             HirExpr::IntLiteral(1),
@@ -6425,6 +6523,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListLiteral(vec![
             HirExpr::IntLiteral(1),
@@ -6458,6 +6557,7 @@ mod tests {
             bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::Name("xs".to_string())),
@@ -6490,6 +6590,7 @@ mod tests {
             bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::Name("x".to_string())),
@@ -6524,6 +6625,7 @@ mod tests {
             bindings: HashMap::from([("xs".to_string(), unresolved)]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::Name("xs".to_string())),
@@ -6556,6 +6658,7 @@ mod tests {
             bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Str))))]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListPop {
             list: "xs".to_string(),
@@ -6587,6 +6690,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListPop {
             list: "xs".to_string(),
@@ -6618,6 +6722,7 @@ mod tests {
             bindings: HashMap::from([("xs".to_string(), Ok(Ty::Int))]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListPop {
             list: "xs".to_string(),
@@ -6650,6 +6755,7 @@ mod tests {
             bindings: HashMap::from([("xs".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListAppend {
             list: "xs".to_string(),
@@ -6682,6 +6788,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Subscript {
             base: Box::new(HirExpr::ListLiteral(vec![HirExpr::IntLiteral(1)])),
@@ -6800,6 +6907,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Slice {
             base: Box::new(HirExpr::IntLiteral(1)),
@@ -6833,6 +6941,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Slice {
             base: Box::new(HirExpr::IntLiteral(1)),
@@ -6864,6 +6973,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Slice {
             base: Box::new(HirExpr::Name("missing".to_string())),
@@ -6895,6 +7005,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Slice {
             base: Box::new(HirExpr::IntLiteral(1)),
@@ -6926,6 +7037,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListAppend {
             list: "lst".to_string(),
@@ -6955,6 +7067,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListAppend {
             list: "lst".to_string(),
@@ -6990,6 +7103,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::ListPop {
             list: "lst".to_string(),
@@ -7019,6 +7133,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::DictGetOrDefault {
             dict: "d".to_string(),
@@ -7049,6 +7164,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::DictGetOrDefault {
             dict: "d".to_string(),
@@ -7079,6 +7195,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::DictGetOrDefault {
             dict: "d".to_string(),
@@ -7109,6 +7226,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::SetAdd {
             set: "s".to_string(),
@@ -7138,6 +7256,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::SetAdd {
             set: "s".to_string(),
@@ -7172,6 +7291,7 @@ mod tests {
             bindings: HashMap::from([("lst".to_string(), Ok(Ty::List(Box::new(Ty::Int))))]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "len".to_string(),
@@ -7207,6 +7327,7 @@ mod tests {
             bindings: HashMap::from([("lst".to_string(), unresolved)]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "len".to_string(),
@@ -7236,6 +7357,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "len".to_string(),
@@ -7266,6 +7388,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "len".to_string(),
@@ -7302,6 +7425,7 @@ mod tests {
             bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "float".to_string(),
@@ -7336,6 +7460,7 @@ mod tests {
             bindings: HashMap::from([("x".to_string(), unresolved)]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "float".to_string(),
@@ -7365,6 +7490,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "float".to_string(),
@@ -7395,6 +7521,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "float".to_string(),
@@ -7436,6 +7563,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "float".to_string(),
@@ -7465,6 +7593,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["i"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let body = vec![HirStmt::ForList {
             var: "i".to_string(),
@@ -7496,6 +7625,7 @@ mod tests {
             bindings: HashMap::from([("i".to_string(), Ok(Ty::Int))]),
             local_names: &["i"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let body = vec![HirStmt::ForList {
             var: "i".to_string(),
@@ -7527,6 +7657,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["i", "z"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let body = vec![HirStmt::ForList {
             var: "i".to_string(),
@@ -12613,6 +12744,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "ValueError".to_string(),
@@ -12641,6 +12773,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "Exception".to_string(),
@@ -12672,6 +12805,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "totally_undefined".to_string(),
@@ -12705,6 +12839,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "ValueError".to_string(),
@@ -12944,6 +13079,7 @@ mod tests {
             )]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "len".to_string(),
@@ -12973,6 +13109,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::DictLiteral(vec![(
             HirExpr::StringLiteral("a".to_string()),
@@ -13002,6 +13139,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::DictLiteral(vec![(
             HirExpr::Name("missing".to_string()),
@@ -13031,6 +13169,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::DictLiteral(vec![(
             HirExpr::StringLiteral("a".to_string()),
@@ -13060,6 +13199,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let body = vec![HirStmt::DictSet {
             dict: "x".to_string(),
@@ -13089,6 +13229,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let body = vec![HirStmt::DictSet {
             dict: "x".to_string(),
@@ -13120,6 +13261,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let body = vec![HirStmt::DictSet {
             dict: "x".to_string(),
@@ -14365,6 +14507,7 @@ mod tests {
             bindings: HashMap::from([("s".to_string(), Ok(Ty::Set(Box::new(Ty::Int))))]),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::Call {
             callee: "len".to_string(),
@@ -14394,6 +14537,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::SetLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -14420,6 +14564,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::SetLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -14608,6 +14753,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &[],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::TupleLiteral(vec![HirExpr::IntLiteral(1)]);
 
@@ -14634,6 +14780,7 @@ mod tests {
             bindings: HashMap::new(),
             local_names: &["missing"],
             defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
         };
         let expr = HirExpr::TupleLiteral(vec![HirExpr::Name("missing".to_string())]);
 
@@ -21573,5 +21720,525 @@ mod tests {
             type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
         assert!(check_and_resolve(&hir).is_ok());
+    }
+
+    // ---- Issue #359 (Part 2 of #118): solver definite-assignment tracking ----
+
+    #[test]
+    fn solver_if_no_else_marks_body_only_binding_as_maybe() {
+        // `def _f(cond: bool):` with `if cond: x = 1` (no else) — x is
+        // maybe-bound. The solver should track x in `maybe_bindings` so
+        // `return x` does not unify the return type with x's type.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+            local_names: &["cond", "x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        let body = vec![HirStmt::If {
+            test: HirExpr::Name("cond".to_string()),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(env.maybe_bindings.contains("x"));
+        assert!(env.bindings.contains_key("x"));
+    }
+
+    #[test]
+    fn solver_if_with_else_marks_both_branch_binding_as_definite() {
+        // `if cond: x = 1` + `else: x = 2` — both branches bind x, so x
+        // is definitely bound (not in `maybe_bindings`).
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+            local_names: &["cond", "x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        let body = vec![HirStmt::If {
+            test: HirExpr::Name("cond".to_string()),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            }],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(!env.maybe_bindings.contains("x"));
+        assert!(env.bindings.contains_key("x"));
+    }
+
+    #[test]
+    fn solver_if_no_else_does_not_leak_binding_into_orelse() {
+        // Before #359, both branches shared the same env, so a binding
+        // from the body leaked into the orelse. With cloning, the orelse
+        // branch should NOT see x from the body.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+            local_names: &["cond", "x", "y"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        // Body assigns x; orelse assigns y. After the if, both x and y
+        // should be maybe-bound (each was introduced by only one branch).
+        let body = vec![HirStmt::If {
+            test: HirExpr::Name("cond".to_string()),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+            orelse: vec![HirStmt::Assign {
+                target: "y".to_string(),
+                value: HirExpr::IntLiteral(2),
+            }],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(env.maybe_bindings.contains("x"));
+        assert!(env.maybe_bindings.contains("y"));
+        assert!(env.bindings.contains_key("x"));
+        assert!(env.bindings.contains_key("y"));
+    }
+
+    #[test]
+    fn solver_while_loop_marks_body_only_binding_as_maybe() {
+        // A `while` body may execute zero times, so x assigned only in
+        // the body is maybe-bound after the loop.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+            local_names: &["cond", "x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        let body = vec![HirStmt::While {
+            test: HirExpr::Name("cond".to_string()),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(env.maybe_bindings.contains("x"));
+        assert!(env.bindings.contains_key("x"));
+    }
+
+    #[test]
+    fn solver_for_range_marks_loop_variable_as_maybe() {
+        // A `for` loop may execute zero times, so the loop variable is
+        // maybe-bound after the loop (if newly introduced).
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["i"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        let body = vec![HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::IntLiteral(1),
+            body: vec![],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(env.maybe_bindings.contains("i"));
+        assert_eq!(env.bindings.get("i"), Some(&Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn solver_for_range_body_only_binding_is_maybe() {
+        // A binding introduced only in the for-loop body is maybe-bound
+        // after the loop (the loop may not execute).
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::new(),
+            local_names: &["i", "x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        let body = vec![HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::IntLiteral(1),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        assert!(env.maybe_bindings.contains("i"));
+        assert!(env.maybe_bindings.contains("x"));
+    }
+
+    #[test]
+    fn solver_for_range_pre_existing_binding_stays_definite() {
+        // A binding that existed before the loop stays definite (not in
+        // maybe_bindings) after the loop.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
+            local_names: &["i", "x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        let body = vec![HirStmt::ForRange {
+            var: "i".to_string(),
+            start: HirExpr::IntLiteral(0),
+            stop: HirExpr::IntLiteral(3),
+            step: HirExpr::IntLiteral(1),
+            body: vec![HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(1),
+            }],
+        }];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        // x was pre-existing → stays definite (not maybe)
+        assert!(!env.maybe_bindings.contains("x"));
+        // i was newly introduced → maybe
+        assert!(env.maybe_bindings.contains("i"));
+    }
+
+    #[test]
+    fn solver_maybe_bound_name_skips_unification_in_name_arm() {
+        // A maybe-bound name returns Ok(None) from the Name arm, so
+        // `return x` does not unify the return type with x's type.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
+            local_names: &["x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::from(["x".to_string()]),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &HirExpr::Name("x".to_string()),
+        )
+        .unwrap();
+
+        // Ok(None) — the type term is not available for unification
+        assert_eq!(term, None);
+    }
+
+    #[test]
+    fn solver_unconditional_assignment_upgrades_maybe_to_definite() {
+        // Issue #359: an unconditional assignment after a maybe-binding
+        // join upgrades the name back to definitely bound, mirroring the
+        // validation pass's contract: `if c: x = 1; x = 2; return x` is
+        // valid because `x = 2` makes `x` definitely bound.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut constraints = SolverConstraints::default();
+        let mut env = ConstraintEnvironment {
+            bindings: HashMap::from([("cond".to_string(), Ok(Ty::Bool))]),
+            local_names: &["cond", "x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+        let body = vec![
+            HirStmt::If {
+                test: HirExpr::Name("cond".to_string()),
+                body: vec![HirStmt::Assign {
+                    target: "x".to_string(),
+                    value: HirExpr::IntLiteral(1),
+                }],
+                orelse: vec![],
+            },
+            // Unconditional assignment upgrades x to definitely bound
+            HirStmt::Assign {
+                target: "x".to_string(),
+                value: HirExpr::IntLiteral(2),
+            },
+        ];
+
+        collect_block_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut constraints,
+            &mut env,
+            &body,
+            None,
+        )
+        .unwrap();
+
+        // x should NOT be in maybe_bindings after the unconditional assignment
+        assert!(!env.maybe_bindings.contains("x"));
+        assert!(env.bindings.contains_key("x"));
+    }
+
+    #[test]
+    fn solver_definitely_bound_name_returns_its_term() {
+        // A definitely-bound name (not in maybe_bindings) returns its
+        // type term as before.
+        let signatures = HashMap::new();
+        let mut parents = Vec::new();
+        let mut concrete = Vec::new();
+        let mut binops = Vec::new();
+        let env = ConstraintEnvironment {
+            bindings: HashMap::from([("x".to_string(), Ok(Ty::Int))]),
+            local_names: &["x"],
+            defs_rebound: HashSet::new(),
+            maybe_bindings: HashSet::new(),
+        };
+
+        let term = collect_expr_constraints(
+            &signatures,
+            &mut parents,
+            &mut concrete,
+            &mut binops,
+            &env,
+            &HirExpr::Name("x".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(term, Some(Ok(Ty::Int)));
+    }
+
+    #[test]
+    fn solver_private_helper_with_maybe_bound_return_does_not_infer_wrong_type() {
+        // End-to-end: a private helper with `if cond: x = 1; return x`
+        // should not infer a wrong return type from the maybe-bound x.
+        // The solver conservatively refuses to infer the return type
+        // (T0021 "cannot infer return type") because `return x` skips
+        // unification when x is maybe-bound. With an explicit annotation,
+        // the validation pass catches T0041 separately (see the next test).
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("cond".to_string(), Ty::Bool)],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::If {
+                        test: HirExpr::Name("cond".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                        orelse: vec![],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        // The solver cannot infer the return type because x is maybe-bound
+        // and `return x` skips unification. This is the conservative
+        // behavior the issue requires.
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0021");
+        assert!(err.message.contains("cannot infer return type"));
+    }
+
+    #[test]
+    fn solver_private_helper_with_annotation_catches_t0041_for_maybe_bound() {
+        // End-to-end: with an explicit return annotation, the solver
+        // doesn't need to infer the return type, so the validation pass
+        // runs and catches T0041 for the maybe-bound read of x.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("cond".to_string(), Ty::Bool)],
+                return_ty: Ty::Int,
+                body: vec![
+                    HirStmt::If {
+                        test: HirExpr::Name("cond".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                        orelse: vec![],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "T0041");
+    }
+
+    #[test]
+    fn solver_private_helper_with_both_branches_binding_infers_correctly() {
+        // End-to-end: a private helper with both if-branches binding x
+        // should infer the return type correctly (x is definitely bound).
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("cond".to_string(), Ty::Bool)],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::If {
+                        test: HirExpr::Name("cond".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                        orelse: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(2),
+                        }],
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        assert!(check(&hir).is_ok());
+    }
+
+    #[test]
+    fn solver_private_helper_with_unconditional_upgrade_infers_correctly() {
+        // End-to-end: `if c: x = 1; x = 2; return x` — the unconditional
+        // `x = 2` after the maybe-binding `if` upgrades x to definitely
+        // bound, so the solver can infer the return type from `return x`.
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "_helper".to_string(),
+                params: vec![("cond".to_string(), Ty::Bool)],
+                return_ty: Ty::Infer,
+                body: vec![
+                    HirStmt::If {
+                        test: HirExpr::Name("cond".to_string()),
+                        body: vec![HirStmt::Assign {
+                            target: "x".to_string(),
+                            value: HirExpr::IntLiteral(1),
+                        }],
+                        orelse: vec![],
+                    },
+                    HirStmt::Assign {
+                        target: "x".to_string(),
+                        value: HirExpr::IntLiteral(2),
+                    },
+                    HirStmt::Return(Some(HirExpr::Name("x".to_string()))),
+                ],
+            }],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        assert!(check(&hir).is_ok());
     }
 }
