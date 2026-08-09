@@ -123,9 +123,18 @@ wrong report exists anywhere. Result not yet received as of this checkpoint.
    issue #414 (the umbrella CI-noise issue) as the accumulated evidence
    record the user asked for — this project's own convention is to cite
    exact evidence in issue comments rather than leave it in session-local
-   scratch. If it has not yet completed, resume monitoring it (`TaskOutput`
-   or wait for its own completion notification) before doing anything else
-   with it.
+   scratch. If it has not yet completed: do not wait for its completion
+   notification — that notification is scoped to the session that
+   dispatched it and will never reach a different, later session. Instead
+   read `<workflow's own transcript dir>/journal.jsonl` for run
+   `wf_d71a0e2e-f66` directly (each line is one completed `agent()` call's
+   full return value), or re-invoke
+   `Workflow({scriptPath: "<same script path>", resumeFromRunId: "wf_d71a0e2e-f66"})`
+   — every already-completed `agent()` call replays from cache instantly, so
+   this both checks status and safely continues the run in one step,
+   matching `autopilot-async-monitoring/SKILL.md`'s own "check the actual
+   current state directly" rule rather than assuming a notification will
+   arrive.
 2. **D-078 monitoring loop:** zero open pull requests remain as of this
    checkpoint — there is currently nothing to monitor. The natural next
    autonomous step is to re-enter the `issue-select` loop (this project's
@@ -139,10 +148,17 @@ wrong report exists anywhere. Result not yet received as of this checkpoint.
    `issue-implement`'s own step 3 (refresh a plan whose relevant ground has
    shifted) applies before implementing it, not "follow it on faith."
 4. **Task #82** ("run ultra-review over recently-merged PRs after #402
-   lands"): still pending, and cannot be actioned autonomously — `/code-review
-   ultra` is user-triggered and billed, no session can launch it on its own
-   initiative. Left open rather than silently dropped; surfaced to the user
-   once this checkpoint, not held open indefinitely without mention.
+   lands"): still pending. This does *not* refer to the billed, user-triggered
+   `/code-review ultra` cloud command — it refers to this project's own local,
+   autonomous `.claude/skills/ultra-review/SKILL.md` (D-147), which is
+   explicitly designed for standing-directive, no-per-payload-approval
+   invocation (checkpoint via a `ultra-review-checkpoint`-labeled tracking
+   issue, incremental diff since that checkpoint, the pinned D-068 reviewer,
+   triage into candidate issues, autonomous publish bounded at ~15
+   candidates). #402 landed via PR #412
+   ([2026-08-07-07](2026-08-07-07-issue-402-redefinition-fix.md)), well
+   before this checkpoint, so nothing blocks invoking `ultra-review` directly;
+   a fresh session should just run it rather than treat it as unactionable.
 5. `arena-runs/` remains untracked and uncovered by `.gitignore` as of this
    writing (same open question as the prior checkpoint) — still undecided,
    still not blocking anything.
