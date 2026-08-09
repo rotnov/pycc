@@ -507,6 +507,70 @@ fn init_succeeds_on_retry_after_a_late_write_failure_is_fixed() {
     assert!(dir.join("src").join("main.py").is_file());
 }
 
+/// #251: an unavailable current directory (deleted, unmounted, or otherwise
+/// inaccessible after launch) is an invocation/environment error reported
+/// with the exit-2 class and a stable stderr diagnostic, not a Rust panic
+/// (exit 101 with a raw backtrace, the pre-fix behavior). `#[cfg(unix)]`:
+/// only Unix allows a process to `rmdir` its own cwd -- the inode stays
+/// alive until the process exits, but `getcwd(2)` then fails with `ENOENT`,
+/// which is exactly the `std::env::current_dir()` `Err` this test exercises.
+/// The coverage gate runs on macOS (a Unix target), so this test covers the
+/// new `Err` arm for D-014's 100% line/region requirement. A shell wrapper
+/// is used because `Command::current_dir()` requires the directory to exist
+/// at child-start time -- the child must inherit a cwd that is already
+/// deleted, which only `cd && rmdir && exec` can achieve.
+#[cfg(unix)]
+#[test]
+fn init_reports_an_unavailable_cwd_without_panicking() {
+    let dir = std::env::temp_dir().join(format!("pycc_e2e_init_no_cwd_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let pycc = pycc_bin();
+
+    // `sh -c '...' sh "$dir" "$pycc"` — positional args ($1, $2) avoid
+    // shell-escaping issues with temp paths that may contain spaces.
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg("cd \"$1\" && rmdir \"$1\" && exec \"$2\" init")
+        .arg("sh")
+        .arg(&dir)
+        .arg(&pycc)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit 2, got {:?}; stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error: pycc init failed"),
+        "expected the init-failed prefix, got: {stderr}",
+    );
+    assert!(
+        stderr.contains("cannot read current directory"),
+        "expected the cwd-resolution diagnostic, got: {stderr}",
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "the failure must not be a Rust panic: {stderr}",
+    );
+    assert!(
+        !stderr.contains("RUST_BACKTRACE"),
+        "the failure must not include a backtrace hint: {stderr}",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Created"),
+        "no success message should appear on failure: {stdout}",
+    );
+    // No scaffold files created in the parent of the deleted cwd.
+    assert!(!dir.join("pycc.toml").exists());
+    assert!(!dir.join("src").exists());
+}
+
 /// #250: a missing host linker driver is an environment failure reported
 /// with the exit-2 invocation/environment class, not a Rust panic (exit
 /// 101 with a raw backtrace, the pre-fix behavior). `#[cfg(unix)]`: the
