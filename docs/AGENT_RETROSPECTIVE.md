@@ -28,6 +28,63 @@ never a merge gate.
 
 ---
 
+## 2026-08-09 — `ci-watch.sh` covered `mergeStateStatus=BEHIND` but not the rest of GitHub's non-`CLEAN` enum, so a legitimately blocked PR polled silently forever
+
+**What happened:** PR #417 (a docs-only session-log checkpoint) reached a
+state where every required check had completed and passed, but GitHub's
+`mergeStateStatus` was `BLOCKED` — an automated Codex reviewer had left an
+unresolved review thread, and this repository's branch protection has
+`required_conversation_resolution` enabled. `scripts/ci-watch.sh`, running
+under `Monitor` per the `autopilot-async-monitoring` skill, never emitted a
+line: its `poll_once` function checks for `state != OPEN`, `mergeable ==
+CONFLICTING`, `mergeStateStatus == BEHIND`, failed/timed-out/cancelled
+checks, and `pending == 0 && mergeStateStatus == CLEAN` — with no branch for
+"all checks completed, none failing, but `mergeStateStatus` is something
+else." The user noticed the block first (asking about it in chat) and, in
+the same turn, guessed a script bug was responsible for the merge being
+blocked — which conflated two independent things: the block itself was a
+legitimate, separately-real finding (see below), but the *monitoring
+silence* about it was indeed a genuine gap the user's instinct correctly
+flagged.
+
+**Root cause:** the script's terminal-state coverage was built out
+incrementally from the specific failure modes actually observed in past
+sessions (`CONFLICTING`/`DIRTY` prompted the fix behind the 2026-07-26 "CI
+monitoring started before checking the pull-request state" entry above;
+`BEHIND` and failed-checks branches followed similarly) rather than against
+the complete set of values GitHub's `mergeStateStatus` field can actually
+take (`CLEAN`, `BEHIND`, `BLOCKED`, `DIRTY`, `DRAFT`, `HAS_HOOKS`,
+`UNKNOWN`, `UNSTABLE`). Each fix closed the one gap that had just caused
+pain, leaving the untested remainder of the enum — including `BLOCKED`,
+arguably the single most common "everything passed but you still can't
+merge" state — silently unhandled. `scripts/test-ci-watch.sh`'s fixtures
+mirrored the same incremental coverage, so nothing caught the gap before it
+was hit live.
+
+**What fixed it:** added a catch-all branch — `pending == 0 && merge_state
+!= "CLEAN"` (reached only after the `BEHIND` and failed-checks branches
+above it have already handled their own cases) — that reports `PR #$pr:
+BLOCKED -- all checks completed with no failures, but
+mergeStateStatus=$merge_state (not CLEAN) -- ...` and stops polling that
+PR, plus a new fixture asserting this exact line instead of a hang.
+Independently, the PR's actual block (the Codex thread) was a real,
+separate finding worth fixing on its own merits — a session-log entry had
+told a future session to run a plain `issue-implement #416`, which would
+have closed a multi-phase issue prematurely after only its first phase
+merged.
+
+**Lesson:** when a polling/watch script's terminal-state branches are
+derived from "the specific failure we just hit" rather than from the
+target API's actual enum of possible values, audit the full enum once and
+add an explicit catch-all for "recognized-terminal-but-uncategorized"
+rather than trusting the branch list to stay complete by accretion. A
+script whose job is specifically to replace silent waiting with a reported
+signal is worse than no script at all in exactly the states it fails to
+recognize — silence there reads as "still working," not "nothing to
+report."
+
+---
+
 ## 2026-08-07 — Proved a check "unreachable" by varying only one dimension of a two-dimensional equality; nearly deleted live code
 
 **What happened:** diagnosing the D-014 coverage gap regression on `main` (introduced

@@ -48,10 +48,12 @@ timeout is just a backstop). The script polls every `POLL_INTERVAL` seconds
 moment it becomes: `MERGED`/`CLOSED`, `CONFLICTS` (merge base diverged),
 `STALE` (branch fell behind base — e.g. a sibling PR merged first), `CHECK
 FAILED -- <name> (<conclusion>)[, <name> (<conclusion>)...]` (every
-non-passing check is named, not just the first), or `READY` (every check
-green and `mergeStateStatus: CLEAN`). It is silent between polls — no
-per-poll spam, only real terminal events reach the conversation as `Monitor`
-notifications.
+non-passing check is named, not just the first), `BLOCKED` (every check
+completed with none failing, but `mergeStateStatus` is something other than
+`CLEAN`/`BEHIND` — typically an unresolved required review or conversation
+thread under branch protection), or `READY` (every check green and
+`mergeStateStatus: CLEAN`). It is silent between polls — no per-poll spam,
+only real terminal events reach the conversation as `Monitor` notifications.
 
 When every listed failing check in a `CHECK FAILED` line is `CANCELLED`
 (no genuine `FAILURE`/`TIMED_OUT`/`STARTUP_FAILURE` among them), the script
