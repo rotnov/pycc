@@ -762,7 +762,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         }
         let item = match stmt {
             Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
-            other => HirItem::TopLevelStmt(stmt::lower_stmt(other, &aliases, false, false)?),
+            other => HirItem::TopLevelStmt(stmt::lower_stmt(other, &aliases, false, false, None, None)?),
         };
         items.push(item);
     }
@@ -1031,7 +1031,7 @@ fn lower_function(
         None,
         aliases,
     )?;
-    let body = stmt::lower_body(&def.body, aliases, false, true)?;
+    let body = stmt::lower_body(&def.body, aliases, false, true, None, type_param.as_deref())?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
         params,

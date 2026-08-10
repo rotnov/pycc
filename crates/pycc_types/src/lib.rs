@@ -79,6 +79,20 @@ pub struct Environment {
     /// constructor this crate has (`check_with_signatures`,
     /// `concrete_function_environment`) -- see `class::bind_classes`.
     classes: Arc<HashMap<String, HirClassDef>>,
+    /// PEP 695 (#387): the name of the generic *function* currently being
+    /// body-checked, if any. Set by `check_function_in` from the function's
+    /// own signature via `generic_type_param_name`; `None` for a non-generic
+    /// function (and for the module-level environment). Used by
+    /// `check_stmt_in_function`'s `Return` arm to reject a generic function
+    /// returning its *own* `Ty::Param` as a concrete scalar
+    /// (`def bad[T](x: T) -> int: return x`): `is_assignable`'s
+    /// `from == Ty::Param` clause must remain (a non-generic function reading
+    /// a generic class instance's attribute still needs `T` → `int` to pass
+    /// during type checking, before monomorphization substitutes `T`), so the
+    /// function-owned-vs-class-owned distinction is enforced here instead.
+    /// `Option<String>` (not `&str`) because `Environment` is owned/cloned
+    /// per function via `child_for_function`/`clone`.
+    own_type_param: Option<String>,
 }
 
 impl Environment {
@@ -1373,17 +1387,21 @@ fn collect_expr_constraints(
         }
         // PEP 695 (#387): `C[type_arg](args)` — a generic class
         // instantiation. The args are recursed into for constraint
-        // collection, but the expression itself produces no unification
-        // term (mirroring every other container-shaped expression above).
-        // The type_arg is a compile-time `Ty`, not a runtime expression, so
-        // it needs no constraint traversal. The actual type-checking
-        // (verifying the class is generic, the type_arg is scalar, and the
-        // args match `__init__`) happens in `type_check_expr`, not here.
-        HirExpr::GenericClassInstantiate { args, .. } => {
+        // collection. The expression itself produces a concrete
+        // `Ty::Instance(class)` type term (not `Ok(None)` like
+        // container-shaped expressions), because a GCI's result is a
+        // class instance that the solver needs to track so a local
+        // assigned from it (`b = C[int](1)`) gets bound in the solver's
+        // environment. The type_arg is a compile-time `Ty`, not a runtime
+        // expression, so it needs no constraint traversal. The actual
+        // type-checking (verifying the class is generic, the type_arg is
+        // scalar, and the args match `__init__`) happens in `infer_expr_in`,
+        // not here.
+        HirExpr::GenericClassInstantiate { class, args, .. } => {
             for arg in args {
                 collect_expr_constraints(signatures, parents, concrete, binops, env, arg)?;
             }
-            Ok(None)
+            Ok(Some(Ok(Ty::Instance(Box::new(class.clone())))))
         }
     }
 }
@@ -2165,6 +2183,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         defined_functions: HashSet::new(),
         generics: Arc::new(generics),
         classes: Arc::new(hir.class_defs.iter().cloned().collect()),
+        own_type_param: None,
     })
 }
 
@@ -3203,8 +3222,10 @@ fn infer_expr_in(
         // `pycc_types`' `instantiate_generic_call` / `monomorphize`
         // pipeline, reusing PR-13's generic-function infrastructure.
         HirExpr::GenericClassInstantiate { class, .. } => {
-            // Verify the class exists and is generic. A non-generic class
-            // used with `C[int](args)` is a type error.
+            // Verify the class exists. Genericity (the class has a type
+            // parameter) is checked later during monomorphization's rewrite
+            // pass (`rewrite_generic_calls_in_expr`), which rejects a
+            // non-generic class used with `C[int](args)` with T0042.
             if !env.classes.contains_key(class) {
                 return Err(Diagnostic::error(
                     "T0001",
@@ -3226,7 +3247,26 @@ fn is_assignable(from: Ty, to: Ty) -> bool {
     // correct concrete type before MIR/codegen. The `GenericClassInstantiate`
     // expression already validates that the type argument is a scalar
     // (int/float/bool/str) at HIR-lowering time, so this is safe.
+    // Both directions are needed: `to == Ty::Param` for `self.v = arg` where
+    // the attribute slot is `Ty::Param`, and `from == Ty::Param` for
+    // `return self.v` where the attribute read yields `Ty::Param` and the
+    // function's return type is a concrete scalar. A non-generic function
+    // (e.g. `Use.fetch`) that reads a generic class instance's attribute
+    // (`b.v` where `b: Box[T]`) and returns it as `int` also relies on the
+    // `from == Ty::Param` direction: during type checking `b.v` is still
+    // `Ty::Param` (monomorphization has not yet substituted it).
+    //
+    // The `from == Ty::Param` direction is, however, unsafe for a *generic
+    // function's own* type parameter: `def bad[T](x: T) -> int: return x`
+    // would pass here (T assignable to int) then panic at codegen once T is
+    // substituted with `str` at the call site. That case is rejected
+    // separately in `check_generic_function_in` / `check_function_in` via
+    // the threaded `own_type_param` context (see `check_stmt_in_function`'s
+    // `Return` arm), not by narrowing this clause -- `is_assignable` has no
+    // call-site context to distinguish a class-owned `Ty::Param` from a
+    // function-owned one.
     || matches!(to, Ty::Param(_)) && matches!(from, Ty::Int | Ty::Float | Ty::Bool | Ty::Str)
+    || matches!(from, Ty::Param(_)) && matches!(to, Ty::Int | Ty::Float | Ty::Bool | Ty::Str)
 }
 
 fn numeric_result_type(op: BinOpKind, left: Ty, right: Ty) -> Result<Ty, Diagnostic> {
@@ -3903,6 +3943,18 @@ fn check_function_in(
         ));
     }
     let mut env = module_env.child_for_function(local_names);
+    // PEP 695 (#387): record the function's own type-parameter name (if any)
+    // so `check_stmt_in_function`'s `Return` arm can reject a generic
+    // function returning its own `Ty::Param` as a concrete scalar. Errors
+    // from `generic_type_param_name` (multiple params, container-position
+    // occurrence) are suppressed here with `.ok()`: a generic function
+    // reaching `check_function_in` through `check_generic_function_in` has
+    // already been validated by that function's own
+    // `generic_type_param_name` call, and a non-generic function returns
+    // `Ok(None)` unconditionally.
+    env.own_type_param = generic_type_param_name(params, return_ty)
+        .ok()
+        .flatten();
     if !signature_was_registered {
         env.bind_function(
             name.clone(),
@@ -3985,6 +4037,35 @@ fn check_stmt_in_function(
                     ),
                     Span::new(0, 0),
                 ).with_help(format!("return a `{}` value", return_ty.name())));
+            }
+            // PEP 695 (#387): `is_assignable`'s `from == Ty::Param` clause
+            // lets a generic function's own `Ty::Param` pass as any concrete
+            // scalar (the clause is needed for non-generic functions reading
+            // generic class instance attributes). Narrow that here: if the
+            // returned value is the *current function's own* `Ty::Param` and
+            // the declared return type is a concrete scalar, reject -- after
+            // monomorphization `T` is substituted with the call-site scalar,
+            // which may not match the declared return type (e.g.
+            // `def bad[T](x: T) -> int: return x` called as `bad("s")`).
+            // A class-owned `Ty::Param` (the function has no own type param)
+            // is not rejected here -- monomorphization of the class
+            // substitutes it before codegen.
+            if let (Some(own), Ty::Param(actual_name)) = (&env.own_type_param, &actual)
+                && own.as_str() == actual_name.as_ref()
+                && matches!(return_ty, Ty::Int | Ty::Float | Ty::Bool | Ty::Str)
+            {
+                return Err(Diagnostic::error(
+                    "T0022",
+                    format!(
+                        "expected return type `{}`, got `{}`",
+                        return_ty.name(),
+                        actual.name()
+                    ),
+                    Span::new(0, 0),
+                ).with_help(format!(
+                    "a generic function's type parameter `{own}` is not guaranteed to be `{}` at every call site",
+                    return_ty.name()
+                )));
             }
             Ok(())
         }
@@ -5372,6 +5453,24 @@ fn collect_generic_class_instantiations_from_expr(
     }
 }
 
+/// PEP 695 (#387): Traverses a `CompIter` for `GenericClassInstantiate`
+/// expressions. `CompIter::Range` carries three `HirExpr`s (`start`, `stop`,
+/// `step`) that can each contain a GCI (e.g. `range(C[int](0), 10)`).
+/// `CompIter::Name` holds only a bare `String`, so it cannot contain one.
+fn collect_generic_class_instantiations_from_comp_iter(
+    iter: &CompIter,
+    out: &mut Vec<(String, Ty)>,
+) {
+    match iter {
+        CompIter::Range { start, stop, step } => {
+            for sub in [start, stop, step] {
+                collect_generic_class_instantiations_from_expr(sub, out);
+            }
+        }
+        CompIter::Name(_) => {}
+    }
+}
+
 /// PEP 695 (#387): Recursively collects `(class_name, type_arg)` pairs from
 /// `GenericClassInstantiate` expressions reachable from a statement.
 fn collect_generic_class_instantiations_from_stmt(
@@ -5420,14 +5519,16 @@ fn collect_generic_class_instantiations_from_stmt(
             collect_generic_class_instantiations_from_expr(key, out);
             collect_generic_class_instantiations_from_expr(value, out);
         }
-        HirStmt::ListCompAssign { elt, cond, .. }
-        | HirStmt::SetCompAssign { elt, cond, .. } => {
+        HirStmt::ListCompAssign { elt, cond, iter, .. }
+        | HirStmt::SetCompAssign { elt, cond, iter, .. } => {
+            collect_generic_class_instantiations_from_comp_iter(iter, out);
             collect_generic_class_instantiations_from_expr(elt, out);
             if let Some(c) = cond {
                 collect_generic_class_instantiations_from_expr(c, out);
             }
         }
-        HirStmt::DictCompAssign { key, value, cond, .. } => {
+        HirStmt::DictCompAssign { key, value, cond, iter, .. } => {
+            collect_generic_class_instantiations_from_comp_iter(iter, out);
             collect_generic_class_instantiations_from_expr(key, out);
             collect_generic_class_instantiations_from_expr(value, out);
             if let Some(c) = cond {
@@ -5490,14 +5591,22 @@ fn instantiate_generic_class_methods(
         // Monomorphize each method: find its HirItem::Function in hir.items
         // by its mangled name (e.g. "C.__init__"), substitute T with
         // type_arg, rename to the new mangled class name, and register.
+        // #386 rebind semantics: class lowering retains multiple same-named
+        // method items (the latest definition wins at runtime), and the
+        // method table entry was replaced to point at the latest mangled
+        // name on redefinition. Since the mangled name is identical across
+        // redefinitions, `rfind` (reverse find) specializes the *last*
+        // matching `HirItem::Function` -- the one whose body actually runs
+        // -- rather than `find`'s first match, which would specialize a
+        // stale, shadowed definition.
         let mut mangled_methods: Vec<(String, String)> = Vec::new();
         for (method_name, original_mangled) in &class_def.methods {
-            // The `find` filter already guarantees the item is a
+            // The `rfind` filter already guarantees the item is a
             // `HirItem::Function`, so the destructuring cannot fail — the
             // `else { continue }` handles only the `None` case (method not
             // found in `hir.items`).
             let Some(HirItem::Function { name: _, params, return_ty, body }) =
-                hir.items.iter().find(|item| matches!(
+                hir.items.iter().rfind(|item| matches!(
                     item,
                     HirItem::Function { name, .. } if name == original_mangled
                 ))
@@ -5520,20 +5629,15 @@ fn instantiate_generic_class_methods(
             // Register the method's signature in env so infer_expr_in can
             // resolve calls to it.
             env.bind_function(new_mangled.clone(), param_tys, substituted_return.clone());
-            // Also substitute Self references in the method body: a method
-            // that returns `Self` or uses the class name as a type now
-            // refers to the monomorphized class. This is done by
-            // substitute_ty on Ty::Instance(class_name) -> Ty::Instance(mangled_class).
-            // However, substitute_body only substitutes Ty::Param, not
-            // Ty::Instance. The Self/class-name resolution happens at
+            // substitute_body_with_class (called above) already rewrites
+            // both `Ty::Param` → `type_arg` and `Ty::Instance(class_name)`
+            // → `Ty::Instance(mangled_class)` in the method body's
+            // annotations. Self/class-name resolution happened at
             // annotation_to_ty time (HIR lowering), where `Self` and the
-            // class name both become `Ty::Instance(class_name)`. At
-            // monomorphization time, the method body's types are already
-            // concrete `Ty::Instance(class_name)`, which is correct — the
-            // instance type is the same regardless of the type parameter
-            // substitution (the type parameter only affects scalar slots,
-            // not the instance's nominal type). So no additional
-            // substitution is needed here.
+            // class name both became `Ty::Instance(class_name)`, and
+            // substitute_body_with_class rewrites those to the mangled
+            // monomorphized class name. No further substitution is needed
+            // here.
             let specialized = HirItem::Function {
                 name: new_mangled.clone(),
                 params: substituted_params,
@@ -5570,6 +5674,65 @@ fn instantiate_generic_class_methods(
     }
 }
 
+/// PEP 695 (#387): Pass 2b per-item worker — rewrites any
+/// `GenericClassInstantiate` expressions that survived inside one
+/// monomorphized generic-class method body. Extracted from `monomorphize`'s
+/// Pass 2b loop so that the defense-in-depth non-`Function` arm (all
+/// instantiations are `HirItem::Function` in practice) is a `match` arm in
+/// a standalone function that a direct unit test can cover, rather than an
+/// `if let` whose never-taken false branch would carry an uncovered
+/// continuation region under the 100%-coverage gate (D-014).
+///
+/// Clones the function's params/body out of `instantiations[i]` so the
+/// immutable borrow ends before `rewrite_generic_calls_in_stmt` takes
+/// `&mut instantiations` (it may push new instantiations for a GCI inside
+/// the body that triggers another class monomorphization).
+fn rewrite_generic_calls_in_instantiation(
+    env: &mut Environment,
+    i: usize,
+    instantiations: &mut Vec<GenericInstantiation>,
+    seen: &mut HashSet<String>,
+) -> Result<(), Diagnostic> {
+    let (name, params, return_ty, body) = match &instantiations[i].specialized {
+        HirItem::Function { name, params, return_ty, body } => (
+            name.clone(),
+            params.clone(),
+            return_ty.clone(),
+            body.clone(),
+        ),
+        // All instantiations are `HirItem::Function` (created by
+        // `instantiate_generic_call` or `instantiate_generic_class_methods`).
+        // This arm is defense-in-depth, covered by a direct unit test.
+        _ => return Ok(()),
+    };
+    let local_names: Vec<String> = params.iter().map(|(n, _)| n.clone()).collect();
+    let local_names_refs: Vec<&str> = local_names.iter().map(|s| s.as_str()).collect();
+    let mut fn_env = env.child_for_function(&local_names_refs);
+    for (param_name, param_ty) in &params {
+        fn_env.bind(param_name.clone(), param_ty.clone());
+    }
+    let mut new_body = body;
+    for stmt in new_body.iter_mut() {
+        rewrite_generic_calls_in_stmt(
+            &mut fn_env,
+            &local_names_refs,
+            stmt,
+            instantiations,
+            seen,
+        )?;
+    }
+    // Direct assignment avoids a second `if let` (whose never-taken false
+    // branch would carry an uncovered region under D-014). All instantiations
+    // are `HirItem::Function`, so this reconstruction is always valid.
+    instantiations[i].specialized = HirItem::Function {
+        name,
+        params,
+        return_ty,
+        body: new_body,
+    };
+    Ok(())
+}
+
 fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     let generics: HashMap<String, HirItem> = hir
         .items
@@ -5584,7 +5747,7 @@ fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
             _ => None,
         })
         .collect();
-    if generics.is_empty() {
+    if generics.is_empty() && !hir.class_defs.iter().any(|(_, cd)| cd.type_param.is_some()) {
         // PR-13 final review (I1): `type_aliases` is emptied here exactly as
         // it is on the monomorphized path below, so a resolved module's own
         // `type_aliases` value never depends on whether the module happened
@@ -5730,6 +5893,30 @@ fn monomorphize(hir: &HirModule) -> Result<HirModule, Diagnostic> {
     }
 
     let mut items = rewritten.into_iter().flatten().collect::<Vec<_>>();
+    // PEP 695 (#387): Pass 2b — rewrite any `GenericClassInstantiate`
+    // expressions that survived inside monomorphized generic-class method
+    // bodies. Pass 2 only iterates over the original `hir.items`, not the
+    // `instantiations` appended below, so a GCI nested inside a generic
+    // class method (e.g. `class C[T]: def f(self): b = D[int](1)`) would
+    // survive into the monomorphized copy and panic at MIR lowering. Run
+    // the same `rewrite_generic_calls_in_stmt` over each instantiation's
+    // body before appending it, using a fresh child environment seeded
+    // with the instantiation's own (already-substituted) parameter types.
+    // Process by index because `rewrite_generic_calls_in_stmt` may push
+    // new instantiations (a GCI inside a monomorphized body triggers
+    // another class monomorphization), extending the vector we're walking.
+    //
+    // The per-item work is extracted into `rewrite_generic_calls_in_instantiation`
+    // so that the defense-in-depth non-`Function` arm (all instantiations
+    // are `HirItem::Function` in practice) is a `match` arm in a standalone
+    // function that a direct unit test can cover, rather than an `if let`
+    // whose never-taken false branch would carry an uncovered continuation
+    // region under the 100%-coverage gate (D-014).
+    let mut i = 0;
+    while i < instantiations.len() {
+        rewrite_generic_calls_in_instantiation(&mut env, i, &mut instantiations, &mut seen)?;
+        i += 1;
+    }
     for instantiation in instantiations {
         items.push(instantiation.specialized);
     }
@@ -19262,6 +19449,28 @@ mod tests {
     }
 
     #[test]
+    fn check_generic_function_rejects_returning_own_param_as_a_concrete_scalar() {
+        // `def bad[T](x: T) -> int: return x` -- a generic function returning
+        // its *own* `Ty::Param` as a concrete scalar must be rejected with
+        // T0022: after monomorphization `T` is substituted with the call-site
+        // scalar (e.g. `str`), which would not match the declared `int` return
+        // type and panic at codegen. `is_assignable`'s `from == Ty::Param`
+        // clause lets this pass structurally (the clause is needed for
+        // non-generic functions reading generic class instance attributes),
+        // so `check_stmt_in_function`'s `Return` arm narrows it via the
+        // threaded `own_type_param` context.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let func = HirItem::Function {
+            name: "bad".to_string(),
+            params: vec![("x".to_string(), param.clone())],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let err = check_generic_function(&func).unwrap_err();
+        assert_eq!(err.code, "T0022");
+    }
+
+    #[test]
     fn check_generic_function_rejects_two_distinct_type_parameters() {
         // Defense in depth (`crates/pycc_hir`'s own frontend arity gate
         // already prevents this from real source, Task 1): a
@@ -22775,6 +22984,140 @@ mod tests {
         );
     }
 
+    // Bug 2 (#387): a generic class whose methods have no `Ty::Param` in
+    // their signatures (e.g. `class Marker[T]: def __init__(self) -> None:
+    // self.x = 0`) must still be monomorphized. Before the fix,
+    // `monomorphize`'s early return (`generics.is_empty()`) skipped
+    // `instantiate_generic_class_methods` entirely, leaving the
+    // `GenericClassInstantiate` expression unrewritten and panicking at MIR
+    // lowering.
+    #[test]
+    fn check_and_resolve_monomorphizes_a_generic_class_with_no_param_in_methods() {
+        let class_def = HirClassDef {
+            name: "Marker".to_string(),
+            attrs: vec![("x".to_string(), Ty::Int)],
+            methods: vec![("__init__".to_string(), "Marker.__init__".to_string())],
+            type_param: Some("T".to_string()),
+        };
+        let init = HirItem::Function {
+            name: "Marker.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Marker".to_string()))),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "x".to_string(),
+                value: HirExpr::IntLiteral(0),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "Marker".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("Marker".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // The monomorphized __init__ should exist.
+        assert!(
+            find_function(&resolved, "0gen_Marker__T_int.__init__").is_some(),
+            "monomorphized __init__ should exist even with no Ty::Param in methods"
+        );
+        // The GenericClassInstantiate should be rewritten to an ordinary Call.
+        assert!(resolved.items.iter().any(|item| matches!(
+            item,
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::Call { callee, .. }))
+            if callee == "0gen_Marker__T_int"
+        )));
+    }
+
+    // Bug 3 (#387): when a generic class has a redefined method (two
+    // `HirItem::Function` items with the same mangled name, per #386 rebind
+    // semantics), `instantiate_generic_class_methods` must specialize the
+    // *last* matching item (the one whose body actually runs), not the first.
+    // Before the fix, `find` returned the first (stale, shadowed) definition.
+    #[test]
+    fn check_and_resolve_monomorphizes_the_last_redefined_method_of_a_generic_class() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let class_def = HirClassDef {
+            name: "C".to_string(),
+            attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![
+                ("__init__".to_string(), "C.__init__".to_string()),
+                ("fetch".to_string(), "C.fetch".to_string()),
+            ],
+            type_param: Some("T".to_string()),
+        };
+        let init = HirItem::Function {
+            name: "C.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("C".to_string()))),
+                ("v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "v".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        };
+        // First `fetch` definition — returns 1.
+        let fetch_first = HirItem::Function {
+            name: "C.fetch".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("C".to_string()))),
+            ],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(1)))],
+        };
+        // Second `fetch` definition — returns 2 (the rebind, should win).
+        let fetch_second = HirItem::Function {
+            name: "C.fetch".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("C".to_string()))),
+            ],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::IntLiteral(2)))],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                fetch_first,
+                fetch_second,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "C".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(42)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("C".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // The monomorphized fetch should return 2 (the last definition), not 1.
+        let mono_fetch = find_function(&resolved, "0gen_C__T_int.fetch")
+            .expect("monomorphized fetch should exist");
+        // The inner `matches!` uses a guard (`if n == 2`) rather than a bare
+        // pattern so that llvm-cov does not flag the implicit `_ => false` arm
+        // as an uncovered region under D-014 — the guard's own true/false
+        // branch is the tracked region, and it is exercised here.
+        assert!(matches!(
+            mono_fetch,
+            HirItem::Function { body, .. }
+            if matches!(&body[0], HirStmt::Return(Some(HirExpr::IntLiteral(n))) if *n == 2)
+        ), "monomorphized fetch should use the last (rebind) definition's body");
+    }
+
     #[test]
     fn type_check_expr_rejects_generic_class_instantiate_for_undefined_class() {
         // Exercises `type_check_expr`'s `GenericClassInstantiate` arm's
@@ -24316,5 +24659,333 @@ mod tests {
         // The monomorphized __init__ should exist exactly once despite the
         // duplicate method entry — `seen.insert` prevented the second push.
         assert_eq!(count_function(&resolved, "0gen_D__T_int.__init__"), 1);
+    }
+
+    // -- Pass 2b: GCI inside a monomorphized generic-class method body -----
+
+    #[test]
+    fn check_and_resolve_rewrites_a_generic_class_instantiate_inside_a_generic_class_method_body() {
+        // Exercises Pass 2b in `monomorphize` (the `while i < instantiations.len()`
+        // loop): a generic class method body contains a `GenericClassInstantiate`
+        // that survives `substitute_body_with_class` (which only substitutes
+        // `Ty::Param`/`Ty::Instance` in annotations, not GCI expressions).
+        // Pass 2b rewrites that GCI into an ordinary `HirExpr::Call` to the
+        // mangled class name before appending the instantiation.
+        //
+        // `Box[T]` with `__init__(self, v: T) -> None` and `self.v = v`.
+        // `Maker[T]` with `__init__(self, v: T) -> None`, `self.v = v`, and a
+        // method `fetch(self) -> T` whose body contains `b = Box[int](42);
+        // return b.v`. `fetch` is itself generic (return type `T`), so Pass 2
+        // skips it (it's in `generics`) and only Pass 2b rewrites its body.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let box_init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                ("v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "v".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        };
+        let box_class_def = HirClassDef {
+            name: "Box".to_string(),
+            attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+            type_param: Some("T".to_string()),
+        };
+        let maker_init = HirItem::Function {
+            name: "Maker.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Maker".to_string()))),
+                ("v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "v".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        };
+        let maker_fetch = HirItem::Function {
+            name: "Maker.fetch".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Maker".to_string()))),
+            ],
+            return_ty: param,
+            body: vec![
+                HirStmt::Assign {
+                    target: "b".to_string(),
+                    value: HirExpr::GenericClassInstantiate {
+                        class: "Box".to_string(),
+                        type_arg: Ty::Int,
+                        args: vec![HirExpr::IntLiteral(42)],
+                    },
+                },
+                HirStmt::Return(Some(HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("b".to_string())),
+                    attr: "v".to_string(),
+                })),
+            ],
+        };
+        let maker_class_def = HirClassDef {
+            name: "Maker".to_string(),
+            attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![
+                ("__init__".to_string(), "Maker.__init__".to_string()),
+                ("fetch".to_string(), "Maker.fetch".to_string()),
+            ],
+            type_param: Some("T".to_string()),
+        };
+        let hir = HirModule {
+            items: vec![
+                box_init,
+                maker_init,
+                maker_fetch,
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "m".to_string(),
+                    value: HirExpr::GenericClassInstantiate {
+                        class: "Maker".to_string(),
+                        type_arg: Ty::Int,
+                        args: vec![HirExpr::IntLiteral(7)],
+                    },
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                ("Box".to_string(), box_class_def),
+                ("Maker".to_string(), maker_class_def),
+            ],
+        };
+        // `check` must accept the module.
+        assert!(check(&hir).is_ok());
+        // `check_and_resolve` must monomorphize without panicking or erroring.
+        let resolved = check_and_resolve(&hir).unwrap();
+        // Both monomorphized classes should exist.
+        assert!(
+            find_function(&resolved, "0gen_Box__T_int.__init__").is_some(),
+            "monomorphized Box.__init__ should exist"
+        );
+        assert!(
+            find_function(&resolved, "0gen_Maker__T_int.__init__").is_some(),
+            "monomorphized Maker.__init__ should exist"
+        );
+        // The monomorphized `fetch` should exist and its body's GCI should
+        // have been rewritten to an ordinary `HirExpr::Call` to the mangled
+        // Box class name.
+        let mono_fetch = find_function(&resolved, "0gen_Maker__T_int.fetch")
+            .expect("monomorphized Maker.fetch should exist");
+        assert!(matches!(
+            mono_fetch,
+            HirItem::Function { body, .. }
+            if matches!(&body[0], HirStmt::Assign { value: HirExpr::Call { callee, .. }, .. }
+                if callee == "0gen_Box__T_int")
+        ));
+    }
+
+    #[test]
+    fn check_and_resolve_propagates_an_error_from_pass_2b_rewrite() {
+        // Exercises the `?` error propagation in Pass 2b's
+        // `rewrite_generic_calls_in_stmt(...)?` call. A monomorphized generic
+        // class method body contains a `GenericClassInstantiate` for a
+        // non-generic class `D` (which exists but has `type_param: None`).
+        // `check` passes because `type_check_expr`'s GCI arm only verifies
+        // class existence, not genericity. `monomorphize`'s
+        // `instantiate_generic_class_methods` skips `D` (no `type_param`), so
+        // the GCI survives into the monomorphized `Maker.fetch` body. Pass 2b
+        // then calls `rewrite_generic_calls_in_expr`, which finds `D` in
+        // `env`, sees `type_param: None`, and returns T0042 — the `?`
+        // propagates it out of `monomorphize`.
+        let param = Ty::Param(Box::new("T".to_string()));
+        let d_init = HirItem::Function {
+            name: "D.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("D".to_string()))),
+                ("v".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "v".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        };
+        let d_class_def = HirClassDef {
+            name: "D".to_string(),
+            attrs: vec![("v".to_string(), Ty::Int)],
+            methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+            type_param: None, // Not generic!
+        };
+        let maker_init = HirItem::Function {
+            name: "Maker.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Maker".to_string()))),
+                ("v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "v".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        };
+        let maker_fetch = HirItem::Function {
+            name: "Maker.fetch".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Maker".to_string()))),
+            ],
+            return_ty: param,
+            body: vec![
+                HirStmt::Assign {
+                    target: "b".to_string(),
+                    value: HirExpr::GenericClassInstantiate {
+                        class: "D".to_string(),
+                        type_arg: Ty::Int,
+                        args: vec![HirExpr::IntLiteral(42)],
+                    },
+                },
+                HirStmt::Return(Some(HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("b".to_string())),
+                    attr: "v".to_string(),
+                })),
+            ],
+        };
+        let maker_class_def = HirClassDef {
+            name: "Maker".to_string(),
+            attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![
+                ("__init__".to_string(), "Maker.__init__".to_string()),
+                ("fetch".to_string(), "Maker.fetch".to_string()),
+            ],
+            type_param: Some("T".to_string()),
+        };
+        let hir = HirModule {
+            items: vec![
+                d_init,
+                maker_init,
+                maker_fetch,
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "m".to_string(),
+                    value: HirExpr::GenericClassInstantiate {
+                        class: "Maker".to_string(),
+                        type_arg: Ty::Int,
+                        args: vec![HirExpr::IntLiteral(7)],
+                    },
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                ("D".to_string(), d_class_def),
+                ("Maker".to_string(), maker_class_def),
+            ],
+        };
+        // `check` should pass — `D` exists, and `is_assignable(Int, Param("T"))`
+        // accepts the `return b.v` (D.v is Int, return type is Param("T")).
+        assert!(check(&hir).is_ok());
+        // `check_and_resolve` should fail with T0042 — Pass 2b's
+        // `rewrite_generic_calls_in_expr` finds `D` is not generic.
+        let err = check_and_resolve(&hir).unwrap_err();
+        assert_eq!(err.code, "T0042");
+        assert!(err.message.contains("class `D` is not generic"));
+    }
+
+    // -- collect_generic_class_instantiations_from_comp_iter --------------
+
+    #[test]
+    fn collect_generic_class_instantiations_from_comp_iter_finds_a_gci_in_a_range_start() {
+        // Exercises `collect_generic_class_instantiations_from_comp_iter`'s
+        // `CompIter::Range` arm with a `GenericClassInstantiate` in the
+        // `start` position (e.g. `range(C[int](0), 10)`). Called both
+        // directly and through `collect_generic_class_instantiations_from_stmt`
+        // (via a `ListCompAssign`), since the latter is the real call site.
+        let gci = gci_expr();
+        let iter = CompIter::Range {
+            start: gci.clone(),
+            stop: HirExpr::IntLiteral(10),
+            step: HirExpr::IntLiteral(1),
+        };
+        // Direct call.
+        let mut out = Vec::new();
+        collect_generic_class_instantiations_from_comp_iter(&iter, &mut out);
+        assert_eq!(out, vec![("C".to_string(), Ty::Int)]);
+        // Indirect call through the statement-level collector.
+        let stmt = HirStmt::ListCompAssign {
+            target: "xs".to_string(),
+            var: "_v0".to_string(),
+            iter: CompIter::Range {
+                start: gci,
+                stop: HirExpr::IntLiteral(10),
+                step: HirExpr::IntLiteral(1),
+            },
+            cond: None,
+            elt: Box::new(HirExpr::Name("_v0".to_string())),
+        };
+        let mut out2 = Vec::new();
+        collect_generic_class_instantiations_from_stmt(&stmt, &mut out2);
+        assert_eq!(out2, vec![("C".to_string(), Ty::Int)]);
+        // `CompIter::Name` holds no expression, so it yields nothing.
+        let name_iter = CompIter::Name("xs".to_string());
+        let mut out3 = Vec::new();
+        collect_generic_class_instantiations_from_comp_iter(&name_iter, &mut out3);
+        assert!(out3.is_empty());
+    }
+
+    // -- is_assignable from == Ty::Param clause (line 3240) ----------------
+
+    #[test]
+    fn is_assignable_accepts_a_param_typed_value_assigned_to_a_scalar() {
+        // Directly exercises the `from == Ty::Param` clause at line 3240:
+        // `matches!(from, Ty::Param(_)) && matches!(to, Ty::Int | Ty::Float |
+        // Ty::Bool | Ty::Str)`. This is the `return self.v` direction where
+        // the attribute read yields `Ty::Param` and the function's return
+        // type is a concrete scalar.
+        let param = Ty::Param(Box::new("T".to_string()));
+        assert!(is_assignable(param.clone(), Ty::Int));
+        assert!(is_assignable(param.clone(), Ty::Float));
+        assert!(is_assignable(param.clone(), Ty::Bool));
+        assert!(is_assignable(param, Ty::Str));
+        // A non-scalar `to` should NOT match the Param branch.
+        assert!(!is_assignable(
+            Ty::Param(Box::new("T".to_string())),
+            Ty::List(Box::new(Ty::Int)),
+        ));
+    }
+
+    // -- rewrite_generic_calls_in_instantiation non-Function arm -----------
+
+    #[test]
+    fn rewrite_generic_calls_in_instantiation_skips_a_non_function_item() {
+        // Exercises the defense-in-depth `_ => return Ok(())` arm in
+        // `rewrite_generic_calls_in_instantiation`. All instantiations are
+        // `HirItem::Function` in practice (created by
+        // `instantiate_generic_call` or `instantiate_generic_class_methods`),
+        // so this arm is unreachable through `check_and_resolve`. Calling the
+        // helper directly with a `GenericInstantiation` whose `specialized` is
+        // a `HirItem::TopLevelStmt` covers the arm without affecting the
+        // monomorphization pipeline.
+        let mut env = Environment::new();
+        let mut instantiations = vec![GenericInstantiation {
+            mangled_name: "ghost".to_string(),
+            specialized: HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::IntLiteral(1))),
+            return_ty: Ty::None,
+        }];
+        let mut seen = HashSet::new();
+        let result = rewrite_generic_calls_in_instantiation(
+            &mut env,
+            0,
+            &mut instantiations,
+            &mut seen,
+        );
+        assert!(result.is_ok());
+        // The non-Function item should be unchanged (the helper returns
+        // early without modifying it). Verified via the mangled name rather
+        // than a `matches!` on the variant to avoid an uncovered `_ => false`
+        // arm in the test's own coverage.
+        assert_eq!(instantiations[0].mangled_name, "ghost");
     }
 }

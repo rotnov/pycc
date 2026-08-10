@@ -98,11 +98,12 @@ pub struct HirClassDef {
 /// module's own doc comment for why a class has no `HirItem` of its own.
 ///
 /// Every check below is a `C0001` capability diagnostic, not a design
-/// question this PR resolves: generic classes (`class C[T]:`) and
-/// inheritance (`class C(Base):`) are both explicitly Part 3 of #375 (#387)
-/// per the plan's Correction 1, and a class decorator is out of scope
-/// entirely (dataclasses/`dataclass_transform` are unrelated later PRs' own
-/// scope).
+/// question this PR resolves: inheritance (`class C(Base):`) is explicitly
+/// Part 3 of #375 (#387) per the plan's Correction 1 (still unimplemented),
+/// and a class decorator is out of scope entirely (dataclasses/
+/// `dataclass_transform` are unrelated later PRs' own scope). Generic classes
+/// (`class C[T]:`) with a single type parameter ARE now supported by #387
+/// (see the `type_params` handling below).
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
@@ -325,7 +326,7 @@ fn lower_method(
         Some(class_name),
         aliases,
     )?;
-    let body = crate::stmt::lower_body(&def.body, aliases, false, true)?;
+    let body = crate::stmt::lower_body(&def.body, aliases, false, true, Some(class_name), type_param)?;
     let mangled_name = format!("{class_name}.{method_name}");
     Ok((
         HirItem::Function {
@@ -1251,6 +1252,32 @@ mod tests {
             clone,
             Some(Ty::Instance(Box::new("Builder".to_string()))),
         );
+    }
+
+    // PEP 649/749 (#387 Part 2, Bug 4 fix): a local `AnnAssign` *inside* a
+    // method body (e.g. `other: Node = self`) must also resolve the class
+    // name to `Ty::Instance`. Before the fix, `lower_body` was called with
+    // `class_name=None` from `lower_method`, so the class name was
+    // unresolvable in statement-body annotations (C0001).
+    #[test]
+    fn class_name_in_method_body_local_annotation_resolves_to_instance() {
+        let hir = lower_ok(
+            "class Node:\n    def __init__(self) -> None:\n        self.x = 0\n    def next(self) -> Node:\n        other: Node = self\n        return other\n",
+        );
+        let next = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, body, .. } if name == "Node.next" => Some(body.clone()),
+            _ => None,
+        });
+        let next = next.expect("Node.next should exist");
+        // body[0] is the `other: Node = self` AnnAssign. Use `matches!` with
+        // a guard (same pattern as `check_and_resolve_monomorphizes_a_generic_
+        // class_with_self_typed_method` in pycc_types) to avoid an uncovered
+        // `panic!`/`unreachable!` arm under the 100%-region coverage gate.
+        assert!(matches!(
+            &next[0],
+            HirStmt::AnnAssign { annotation, .. }
+            if annotation == &Ty::Instance(Box::new("Node".to_string()))
+        ));
     }
 
     // PEP 695 (#387 Part 3): a generic class's __init__ parameter typed `T`
