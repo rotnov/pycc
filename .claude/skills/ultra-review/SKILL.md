@@ -225,11 +225,26 @@ a filed finding has a public, citable file:line worth attributing):
      Never blame whoever last touched a pre-existing line for a defect the current diff
      merely exposed.
    - If false, the blamed line was introduced within
-     `<checkpoint-sha>..<default-branch-tip>` — read its trailers with
-     `git log -1 --format=%B <blamed-sha>`, apply
-     `re.compile(r'^[Cc]o-[Aa]uthored-[Bb]y:\s*(.+?)\s*<', re.MULTILINE)`, and collect
-     the **distinct** names found (a squash-merged commit can repeat the identical
-     trailer line several times; that is one distinct name, not several):
+     `<checkpoint-sha>..<default-branch-tip>` — isolate its actual trailer block first,
+     rather than scanning the whole commit body, with
+     `git log -1 --format=%B <blamed-sha> | git interpret-trailers --parse --no-divider`.
+     `--parse` is Git's documented alias for `--only-trailers --only-input --unfold`: it
+     emits only the message's real trailing trailer lines and drops any trailer-shaped
+     text that merely appears earlier in the body as quoted prose or an example — this
+     repository's own commit messages routinely quote
+     `Co-Authored-By: <Model> <email>` as documentation, which scanning the full body
+     would misattribute. `--no-divider` is required in addition to `--parse`: without it,
+     `git interpret-trailers` treats a bare `---` line as a `format-patch`-style divider
+     and stops parsing there, and this repository's own `SKILL.md`/agent front matter —
+     quoted verbatim in commit bodies just as often as the trailer syntax itself — opens
+     and closes with exactly that `---` line, which would silently truncate the scan
+     before it ever reaches the real trailing trailer block. From that already-trailer-scoped output, select the
+     `Co-Authored-By`-keyed line(s) case-insensitively — a real trailer key can be
+     spelled in any case, e.g. `CO-AUTHORED-BY:`, and `git interpret-trailers`
+     preserves the key's original casing rather than normalizing it — with
+     `re.compile(r'^co-authored-by:\s*(.+?)\s*<', re.MULTILINE | re.IGNORECASE)`, and
+     collect the **distinct** names found (a squash-merged commit can repeat the
+     identical trailer line several times; that is one distinct name, not several):
      - Zero names → `unattributed`. **Never fall back to the commit's own author or
        committer identity** — most commits in this repository carry no trailer at all,
        and falling back to `%an`/`%cn` would silently attribute most defects to the
