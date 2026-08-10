@@ -50,6 +50,8 @@ pub(crate) fn lower_stmt(
     aliases: &[(String, Ty)],
     in_loop: bool,
     in_function: bool,
+    class_name: Option<&str>,
+    type_param: Option<&str>,
 ) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
         Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value, in_function)?),
@@ -162,7 +164,7 @@ pub(crate) fn lower_stmt(
                     pycc_ast::expr_range(&ann.target),
                 ));
             }
-            let annotation = annotation_to_ty(&ann.annotation, None, aliases)?;
+            let annotation = annotation_to_ty(&ann.annotation, type_param, class_name, aliases)?;
             let value = ann
                 .value
                 .as_deref()
@@ -176,12 +178,14 @@ pub(crate) fn lower_stmt(
         }
         Stmt::If(if_stmt) => HirStmt::If {
             test: lower_expr(&if_stmt.test, in_function)?,
-            body: lower_body(&if_stmt.body, aliases, in_loop, in_function)?,
+            body: lower_body(&if_stmt.body, aliases, in_loop, in_function, class_name, type_param)?,
             orelse: lower_elif_else_clauses(
                 &if_stmt.elif_else_clauses,
                 aliases,
                 in_loop,
                 in_function,
+                class_name,
+                type_param,
             )?,
         },
         Stmt::While(while_stmt) => {
@@ -193,7 +197,7 @@ pub(crate) fn lower_stmt(
             }
             HirStmt::While {
                 test: lower_expr(&while_stmt.test, in_function)?,
-                body: lower_body(&while_stmt.body, aliases, true, in_function)?,
+                body: lower_body(&while_stmt.body, aliases, true, in_function, class_name, type_param)?,
             }
         }
         Stmt::For(for_stmt) => {
@@ -236,7 +240,7 @@ pub(crate) fn lower_stmt(
                 return Ok(HirStmt::ForList {
                     var: var.id.to_string(),
                     list: list_name.id.as_str().to_string(),
-                    body: lower_body(&for_stmt.body, aliases, true, in_function)?,
+                    body: lower_body(&for_stmt.body, aliases, true, in_function, class_name, type_param)?,
                 });
             }
             let Expr::Call(call) = for_stmt.iter.as_ref() else {
@@ -278,7 +282,7 @@ pub(crate) fn lower_stmt(
                 start,
                 stop,
                 step,
-                body: lower_body(&for_stmt.body, aliases, true, in_function)?,
+                body: lower_body(&for_stmt.body, aliases, true, in_function, class_name, type_param)?,
             }
         }
         Stmt::Return(ret) => HirStmt::Return(
@@ -323,9 +327,11 @@ pub(crate) fn lower_body(
     aliases: &[(String, Ty)],
     in_loop: bool,
     in_function: bool,
+    class_name: Option<&str>,
+    type_param: Option<&str>,
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     body.iter()
-        .map(|stmt| lower_stmt(stmt, aliases, in_loop, in_function))
+        .map(|stmt| lower_stmt(stmt, aliases, in_loop, in_function, class_name, type_param))
         .collect()
 }
 
@@ -334,6 +340,8 @@ pub(crate) fn lower_elif_else_clauses(
     aliases: &[(String, Ty)],
     in_loop: bool,
     in_function: bool,
+    class_name: Option<&str>,
+    type_param: Option<&str>,
 ) -> Result<Vec<HirStmt>, Diagnostic> {
     let Some((first, rest)) = clauses.split_first() else {
         return Ok(vec![]);
@@ -341,15 +349,15 @@ pub(crate) fn lower_elif_else_clauses(
     match &first.test {
         Some(test) => Ok(vec![HirStmt::If {
             test: lower_expr(test, in_function)?,
-            body: lower_body(&first.body, aliases, in_loop, in_function)?,
-            orelse: lower_elif_else_clauses(rest, aliases, in_loop, in_function)?,
+            body: lower_body(&first.body, aliases, in_loop, in_function, class_name, type_param)?,
+            orelse: lower_elif_else_clauses(rest, aliases, in_loop, in_function, class_name, type_param)?,
         }]),
         None => {
             assert!(
                 rest.is_empty(),
                 "pycc_hir: an else clause must be the last elif_else_clause"
             );
-            lower_body(&first.body, aliases, in_loop, in_function)
+            lower_body(&first.body, aliases, in_loop, in_function, class_name, type_param)
         }
     }
 }

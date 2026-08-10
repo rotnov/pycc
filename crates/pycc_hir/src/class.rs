@@ -83,6 +83,12 @@ pub struct HirClassDef {
     pub name: String,
     pub attrs: Vec<(String, Ty)>,
     pub methods: Vec<(String, String)>,
+    /// PEP 695 (#387): the class's single type parameter name, if it is a
+    /// generic class (`class C[T]:`). `None` for a non-generic class. At
+    /// instantiation site (`C[int](args)`), this parameter is substituted
+    /// with the concrete type, reusing PR-13's `Ty::Param` call-site-
+    /// substitution mechanism (D-133/D-134).
+    pub type_param: Option<String>,
 }
 
 /// Lowers a module-level `class Foo: ...` statement (D-154). Returns the
@@ -92,11 +98,12 @@ pub struct HirClassDef {
 /// module's own doc comment for why a class has no `HirItem` of its own.
 ///
 /// Every check below is a `C0001` capability diagnostic, not a design
-/// question this PR resolves: generic classes (`class C[T]:`) and
-/// inheritance (`class C(Base):`) are both explicitly Part 3 of #375 (#387)
-/// per the plan's Correction 1, and a class decorator is out of scope
-/// entirely (dataclasses/`dataclass_transform` are unrelated later PRs' own
-/// scope).
+/// question this PR resolves: inheritance (`class C(Base):`) is explicitly
+/// Part 3 of #375 (#387) per the plan's Correction 1 (still unimplemented),
+/// and a class decorator is out of scope entirely (dataclasses/
+/// `dataclass_transform` are unrelated later PRs' own scope). Generic classes
+/// (`class C[T]:`) with a single type parameter ARE now supported by #387
+/// (see the `type_params` handling below).
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
@@ -104,12 +111,22 @@ pub(crate) fn lower_class(
     if !def.decorator_list.is_empty() {
         return Err(unsupported("class decorators are not supported yet", def.range));
     }
-    if def.type_params.is_some() {
-        return Err(unsupported(
-            "a generic class (`class C[T]:`) is not supported yet",
-            def.range,
-        ));
-    }
+    // PEP 695 (#387): a generic class (`class C[T]:`) with exactly one type
+    // parameter is now supported, reusing PR-13's `Ty::Param` call-site-
+    // substitution mechanism (D-133/D-134). More than one type parameter is
+    // rejected, matching PR-13's own generic-function scoping.
+    let type_param: Option<String> = match def.type_params.as_deref() {
+        None => None,
+        Some(type_params) => match type_params.type_params.as_slice() {
+            [single] => Some(crate::type_param_name(single, def.range)?.to_string()),
+            _ => {
+                return Err(unsupported(
+                    "generic classes with more than one type parameter are not supported yet",
+                    def.range,
+                ));
+            }
+        },
+    };
     if let Some(arguments) = def.arguments.as_deref()
         && (!arguments.args.is_empty() || !arguments.keywords.is_empty())
     {
@@ -154,7 +171,12 @@ pub(crate) fn lower_class(
                 method_def.range,
             ));
         }
-        let (item, params) = lower_method(method_def, &class_name, aliases)?;
+        let (item, params) = lower_method(
+            method_def,
+            &class_name,
+            type_param.as_deref(),
+            aliases,
+        )?;
         if method_name == "__init__" {
             init_seen = true;
             attrs = collect_init_attrs(&method_def.body, &params)?;
@@ -187,6 +209,7 @@ pub(crate) fn lower_class(
             name: class_name,
             attrs,
             methods,
+            type_param,
         },
         items,
     ))
@@ -218,6 +241,7 @@ pub(crate) fn lower_class(
 fn lower_method(
     def: &pycc_ast::StmtFunctionDef,
     class_name: &str,
+    type_param: Option<&str>,
     aliases: &[(String, Ty)],
 ) -> Result<(HirItem, Vec<(String, Ty)>), Diagnostic> {
     if def.is_async {
@@ -290,17 +314,19 @@ fn lower_method(
         rest,
         params_is_public,
         method_name,
-        None,
+        type_param,
+        Some(class_name),
         aliases,
     )?);
     let return_ty = crate::lower_return_annotation(
         def.returns.as_deref(),
         is_public,
         method_name,
-        None,
+        type_param,
+        Some(class_name),
         aliases,
     )?;
-    let body = crate::stmt::lower_body(&def.body, aliases, false, true)?;
+    let body = crate::stmt::lower_body(&def.body, aliases, false, true, Some(class_name), type_param)?;
     let mangled_name = format!("{class_name}.{method_name}");
     Ok((
         HirItem::Function {
@@ -443,7 +469,15 @@ fn slot_ty_from_init_rhs(value: &Expr, params: &[(String, Ty)]) -> Result<Ty, Di
                 // reachable this way to exercise it against). Rejecting
                 // here, structurally, keeps every attribute type this PR's
                 // own `pycc_codegen`/`pycc_rt` slices actually implement.
-                Some(ty @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Str)) => Ok(ty),
+                //
+                // PEP 695 (#387): `Ty::Param` is also accepted — a generic
+                // class's `__init__` parameter typed `T` seeds a slot with
+                // `Ty::Param("T")`, which is substituted with a concrete
+                // scalar type at monomorphization time (reusing PR-13's
+                // D-133/D-134 call-site-substitution mechanism). At runtime
+                // the slot is still a single `i64` word, so the type
+                // parameter is purely compile-time.
+                Some(ty @ (Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Param(_))) => Ok(ty),
                 Some(other) => Err(unsupported(
                     format!(
                         "`self.<attr> = {}` cannot establish an attribute of type `{}` yet \
@@ -507,8 +541,18 @@ mod tests {
     }
 
     #[test]
-    fn a_generic_class_is_unsupported() {
-        assert_c0001("class C[T]:\n    def __init__(self) -> None:\n        return\n");
+    fn a_generic_class_with_one_type_param_is_supported() {
+        // PEP 695 (#387): `class C[T]:` with exactly one type parameter is
+        // now supported. The type parameter `T` is recorded in
+        // `HirClassDef::type_param` for later monomorphization.
+        let hir = lower_ok("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n");
+        assert_eq!(hir.class_defs.len(), 1);
+        assert_eq!(hir.class_defs[0].1.type_param, Some("T".to_string()));
+    }
+
+    #[test]
+    fn a_generic_class_with_two_type_params_is_unsupported() {
+        assert_c0001("class C[T, U]:\n    def __init__(self) -> None:\n        return\n");
     }
 
     #[test]
@@ -964,6 +1008,7 @@ mod tests {
                     ("y".to_string(), Ty::Int),
                 ],
                 methods: vec![("__init__".to_string(), "Point.__init__".to_string())],
+                type_param: None,
             }
         );
         // Direct value comparison, not a `let PATTERN = .. else { panic!(..) }`
@@ -1133,5 +1178,133 @@ mod tests {
         // on here.
         let hir = lower_ok("class C:\n    def __init__(self) -> None:\n        self.x.y = 0\n");
         assert_eq!(hir.class_defs[0].1.attrs, Vec::<(String, Ty)>::new());
+    }
+
+    // PEP 673 (#387 Part 1): `Self` as a method return-type annotation
+    // resolves to the class's own instance type at HIR-lowering time.
+    #[test]
+    fn self_return_annotation_resolves_to_class_instance() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        return\n    def clone(self) -> Self:\n        return self\n",
+        );
+        assert_eq!(hir.class_defs.len(), 1);
+        // The `clone` method should be lowered as a function with return
+        // type `Ty::Instance("C")`.
+        let clone = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, return_ty, .. } if name == "C.clone" => Some(return_ty),
+            _ => None,
+        });
+        assert_eq!(
+            clone,
+            Some(&Ty::Instance(Box::new("C".to_string()))),
+            "Self return annotation should resolve to Ty::Instance(\"C\")"
+        );
+    }
+
+    // PEP 673 (#387 Part 1): `Self` as a method parameter annotation also
+    // resolves to the class's own instance type.
+    #[test]
+    fn self_param_annotation_resolves_to_class_instance() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self, value: int) -> None:\n        self.value = value\n    def merge(self, other: Self) -> None:\n        self.value = other.value\n",
+        );
+        // The `merge` method's `other` parameter should be typed
+        // `Ty::Instance("C")`.
+        let merge = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, params, .. } if name == "C.merge" => Some(params.clone()),
+            _ => None,
+        });
+        let merge = merge.expect("C.merge should exist");
+        // params[0] is `self`, params[1] is `other`
+        assert_eq!(merge[1].1, Ty::Instance(Box::new("C".to_string())));
+    }
+
+    // PEP 649/749 (#387 Part 2): self-referential deferred annotations. A
+    // class's method may use the class's own name as a parameter type
+    // annotation, even though the class is not fully defined at that point
+    // in source.
+    #[test]
+    fn class_name_in_own_method_annotation_resolves_to_instance() {
+        let hir = lower_ok(
+            "class Node:\n    def __init__(self, value: int) -> None:\n        self.value = value\n    def update(self, other: Node) -> None:\n        self.value = other.value\n",
+        );
+        let update = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, params, .. } if name == "Node.update" => Some(params.clone()),
+            _ => None,
+        });
+        let update = update.expect("Node.update should exist");
+        // params[1] is `other` with type `Ty::Instance("Node")`
+        assert_eq!(update[1].1, Ty::Instance(Box::new("Node".to_string())));
+    }
+
+    // PEP 649/749 (#387 Part 2): the class name also works as a return
+    // type annotation in its own methods.
+    #[test]
+    fn class_name_as_own_return_annotation_resolves_to_instance() {
+        let hir = lower_ok(
+            "class Builder:\n    def __init__(self) -> None:\n        self.count = 0\n    def clone(self) -> Builder:\n        return self\n",
+        );
+        let clone = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, return_ty, .. } if name == "Builder.clone" => Some(return_ty.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            clone,
+            Some(Ty::Instance(Box::new("Builder".to_string()))),
+        );
+    }
+
+    // PEP 649/749 (#387 Part 2, Bug 4 fix): a local `AnnAssign` *inside* a
+    // method body (e.g. `other: Node = self`) must also resolve the class
+    // name to `Ty::Instance`. Before the fix, `lower_body` was called with
+    // `class_name=None` from `lower_method`, so the class name was
+    // unresolvable in statement-body annotations (C0001).
+    #[test]
+    fn class_name_in_method_body_local_annotation_resolves_to_instance() {
+        let hir = lower_ok(
+            "class Node:\n    def __init__(self) -> None:\n        self.x = 0\n    def next(self) -> Node:\n        other: Node = self\n        return other\n",
+        );
+        let next = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, body, .. } if name == "Node.next" => Some(body.clone()),
+            _ => None,
+        });
+        let next = next.expect("Node.next should exist");
+        // body[0] is the `other: Node = self` AnnAssign. Use `matches!` with
+        // a guard (same pattern as `check_and_resolve_monomorphizes_a_generic_
+        // class_with_self_typed_method` in pycc_types) to avoid an uncovered
+        // `panic!`/`unreachable!` arm under the 100%-region coverage gate.
+        assert!(matches!(
+            &next[0],
+            HirStmt::AnnAssign { annotation, .. }
+            if annotation == &Ty::Instance(Box::new("Node".to_string()))
+        ));
+    }
+
+    // PEP 695 (#387 Part 3): a generic class's __init__ parameter typed `T`
+    // seeds an attribute slot with `Ty::Param("T")`, which is substituted
+    // at monomorphization time.
+    #[test]
+    fn generic_class_init_param_seeds_param_typed_slot() {
+        let hir = lower_ok(
+            "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\n",
+        );
+        assert_eq!(hir.class_defs[0].1.type_param, Some("T".to_string()));
+        assert_eq!(
+            hir.class_defs[0].1.attrs,
+            vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))]
+        );
+    }
+
+    // PEP 695 (#387 Part 3): `TypeVarTuple` (`*Ts`) and `ParamSpec` (`**P`)
+    // type parameters are not supported — `type_param_name`'s `?` error path
+    // (the uncovered region at line 120) is exercised by both forms.
+    #[test]
+    fn a_generic_class_with_a_type_var_tuple_is_unsupported() {
+        assert_c0001("class C[*Ts]:\n    def __init__(self) -> None:\n        return\n");
+    }
+
+    #[test]
+    fn a_generic_class_with_a_param_spec_is_unsupported() {
+        assert_c0001("class C[**P]:\n    def __init__(self) -> None:\n        return\n");
     }
 }

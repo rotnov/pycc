@@ -354,6 +354,20 @@ pub enum HirExpr {
         method: String,
         args: Vec<HirExpr>,
     },
+    /// `C[type_arg](args)` (PEP 695, #387): instantiation of a generic class
+    /// with an explicit type argument. `class` is the generic class's name,
+    /// `type_arg` is the resolved concrete type (a scalar `Ty` — int/float/
+    /// bool/str — resolved at HIR-lowering time from the subscript's slice
+    /// expression), and `args` are the constructor arguments. Reuses PR-13's
+    /// `Ty::Param` call-site-substitution mechanism (D-133/D-134): at
+    /// monomorphization time, the class's methods are specialized with `T`
+    /// substituted by `type_arg`, and this expression is rewritten into an
+    /// ordinary `HirExpr::Call` to the specialized class's mangled name.
+    GenericClassInstantiate {
+        class: String,
+        type_arg: Ty,
+        args: Vec<HirExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -748,7 +762,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
         }
         let item = match stmt {
             Stmt::FunctionDef(def) => lower_function(def, &aliases)?,
-            other => HirItem::TopLevelStmt(stmt::lower_stmt(other, &aliases, false, false)?),
+            other => HirItem::TopLevelStmt(stmt::lower_stmt(other, &aliases, false, false, None, None)?),
         };
         items.push(item);
     }
@@ -924,7 +938,7 @@ fn lower_type_alias_stmt(
         .name
         .as_name_expr()
         .expect("ruff always parses a `type` statement's name as Expr::Name");
-    let ty = annotation_to_ty(&type_alias.value, None, aliases)?;
+    let ty = annotation_to_ty(&type_alias.value, None, None, aliases)?;
     Ok(Some((name.id.to_string(), ty)))
 }
 
@@ -969,7 +983,7 @@ fn lower_legacy_type_alias_ann_assign(
     let Expr::Name(target) = ann.target.as_ref() else {
         return Ok(None);
     };
-    let ty = annotation_to_ty(value, None, aliases)?;
+    let ty = annotation_to_ty(value, None, None, aliases)?;
     Ok(Some((target.id.to_string(), ty)))
 }
 
@@ -1014,9 +1028,10 @@ fn lower_function(
         is_public,
         def.name.as_str(),
         type_param.as_deref(),
+        None,
         aliases,
     )?;
-    let body = stmt::lower_body(&def.body, aliases, false, true)?;
+    let body = stmt::lower_body(&def.body, aliases, false, true, None, type_param.as_deref())?;
     Ok(HirItem::Function {
         name: def.name.to_string(),
         params,
@@ -1036,7 +1051,7 @@ fn lower_function(
 /// the `pycc_ast` facade for the `Ranged` trait for no benefit here (the
 /// arity-gate rejection just above already reports the same function-level
 /// span for the analogous "too many type parameters" case).
-fn type_param_name<R>(type_param: &pycc_ast::TypeParam, def_range: R) -> Result<&str, Diagnostic>
+pub(crate) fn type_param_name<R>(type_param: &pycc_ast::TypeParam, def_range: R) -> Result<&str, Diagnostic>
 where
     std::ops::Range<u32>: From<R>,
 {
@@ -1091,7 +1106,7 @@ fn lower_params(
             parameters.range,
         ));
     }
-    lower_arg_list(&parameters.args, is_public, fn_name, type_param, aliases)
+    lower_arg_list(&parameters.args, is_public, fn_name, type_param, None, aliases)
 }
 
 /// Lowers a plain positional-parameter list (no `/`/`*`/`**`/keyword-only
@@ -1109,6 +1124,7 @@ pub(crate) fn lower_arg_list(
     is_public: bool,
     fn_name: &str,
     type_param: Option<&str>,
+    class_name: Option<&str>,
     aliases: &[(String, Ty)],
 ) -> Result<Vec<(String, Ty)>, Diagnostic> {
     args.iter()
@@ -1121,7 +1137,7 @@ pub(crate) fn lower_arg_list(
             }
             let name = param.parameter.name.as_str();
             match &param.parameter.annotation {
-                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann, type_param, aliases)?)),
+                Some(ann) => Ok((name.to_string(), annotation_to_ty(ann, type_param, class_name, aliases)?)),
                 None if is_public => Err(Diagnostic::error(
                     "T0001",
                     format!(
@@ -1140,10 +1156,11 @@ fn lower_return_annotation(
     is_public: bool,
     fn_name: &str,
     type_param: Option<&str>,
+    class_name: Option<&str>,
     aliases: &[(String, Ty)],
 ) -> Result<Ty, Diagnostic> {
     match returns {
-        Some(ann) => annotation_to_ty(ann, type_param, aliases),
+        Some(ann) => annotation_to_ty(ann, type_param, class_name, aliases),
         None if is_public => Err(Diagnostic::error(
             "T0001",
             format!("public function `{fn_name}` needs a return type annotation"),
@@ -1159,15 +1176,41 @@ fn lower_return_annotation(
 /// source order): checked as the last resort for a bare name before falling
 /// through to the `C0001` "not supported yet" catch-all, so an alias name
 /// resolves exactly like any other recognized bare-name annotation.
+///
+/// `class_name` is the enclosing class's name when lowering a method's
+/// annotations (PEP 673 `Self` and PEP 649/749 self-referential deferred
+/// annotations, #387): `Some(name)` makes both `"Self"` and the class's own
+/// name resolve to `Ty::Instance(Box::new(name))` — the same type `self`
+/// has. `None` for top-level functions and all other annotation contexts
+/// (module-level `AnnAssign`, type aliases), where `"Self"` and a bare class
+/// name remain unrecognized (C0001), matching CPython's own scope rule that
+/// `Self` is only valid inside a class body.
 fn annotation_to_ty(
     annotation: &Expr,
     type_param: Option<&str>,
+    class_name: Option<&str>,
     aliases: &[(String, Ty)],
 ) -> Result<Ty, Diagnostic> {
     match annotation {
         Expr::NoneLiteral(_) => Ok(Ty::None),
         Expr::Name(name) if Some(name.id.as_str()) == type_param => {
             Ok(Ty::Param(Box::new(name.id.to_string())))
+        }
+        // PEP 673 (#387): `Self` inside a class method's annotation resolves
+        // to the enclosing class's instance type — the same type `self` has.
+        // Outside a class (`class_name` is `None`), `"Self"` falls through to
+        // the alias/C0001 path below, matching CPython's own scoping rule.
+        Expr::Name(name) if name.id.as_str() == "Self" && class_name.is_some() => {
+            Ok(Ty::Instance(Box::new(class_name.unwrap().to_string())))
+        }
+        // PEP 649/749 (#387): a method's return-type annotation may reference
+        // the enclosing class's own name (self-referential deferred
+        // annotation, e.g. `class Node: def next(self) -> Node: ...`). Inside
+        // a class body (`class_name` is `Some`), the class's own name resolves
+        // to `Ty::Instance(class_name)`. This is specifically for the
+        // self-referential case — cross-class references are not in scope.
+        Expr::Name(name) if Some(name.id.as_str()) == class_name => {
+            Ok(Ty::Instance(Box::new(name.id.to_string())))
         }
         Expr::Name(name) => match name.id.as_str() {
             "int" => Ok(Ty::Int),
@@ -4644,6 +4687,118 @@ mod tests {
         let diagnostic = lower_checked(&module).unwrap_err();
 
         assert_eq!(diagnostic.code, "C0001");
+    }
+
+    // -- PEP 695 generic class instantiation (#387) -----------------------
+
+    /// Helper: lowers source that defines a generic class `C[T]` and then
+    /// uses `C[<type_arg>](<args>)` at module scope, returning the lowered
+    /// HIR so the test can inspect the `GenericClassInstantiate` expression.
+    fn lower_generic_class_instantiation(source: &str) -> crate::HirModule {
+        let module = pycc_parser_test_helper::parse(source);
+        lower_checked(&module).expect("test fixture should lower successfully")
+    }
+
+    #[test]
+    fn generic_class_instantiation_lowers_with_int_type_arg() {
+        let hir = lower_generic_class_instantiation(
+            "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[int](1)\n",
+        );
+        // The last item should be a top-level ExprStmt wrapping a
+        // GenericClassInstantiate with class "C", type_arg Int, and one arg.
+        let last = hir.items.last().expect("should have items");
+        assert!(matches!(
+            last,
+            HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                class,
+                type_arg,
+                args,
+            })) if class == "C" && *type_arg == Ty::Int && args.len() == 1 && args[0] == HirExpr::IntLiteral(1)
+        ));
+    }
+
+    #[test]
+    fn generic_class_instantiation_lowers_with_float_bool_and_str_type_args() {
+        for (source, expected_ty) in [
+            ("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[float](1)\n", Ty::Float),
+            ("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[bool](1)\n", Ty::Bool),
+            ("class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[str](1)\n", Ty::Str),
+        ] {
+            let hir = lower_generic_class_instantiation(source);
+            let last = hir.items.last().expect("should have items");
+            assert!(matches!(
+                last,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    type_arg, ..
+                })) if *type_arg == expected_ty
+            ));
+        }
+    }
+
+    #[test]
+    fn generic_class_instantiation_rejects_a_non_name_type_arg() {
+        // `C[1](args)` — the slice is a number literal, not a bare name.
+        assert_capability_error_message(
+            "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[1](1)\n",
+            "a generic class type argument must be a bare type name",
+        );
+    }
+
+    #[test]
+    fn generic_class_instantiation_rejects_an_unrecognized_type_arg_name() {
+        // `C[unknown](args)` — the name is not one of int/float/bool/str.
+        assert_capability_error_message(
+            "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[unknown](1)\n",
+            "a generic class type argument `unknown` is not supported yet",
+        );
+    }
+
+    #[test]
+    fn generic_class_instantiation_rejects_a_non_name_subscript_base() {
+        // `(1 + 2)[int](args)` — the subscript base is a BinOp, not a bare
+        // name, so the "calling a subscript expression" rejection fires.
+        assert_capability_error_message(
+            "(1 + 2)[int](1)\n",
+            "calling a subscript expression is not supported yet",
+        );
+    }
+
+    #[test]
+    fn generic_class_instantiation_propagates_an_arg_lowering_error() {
+        // `C[int](lambda: 1)` — the arg `lambda: 1` is an unsupported
+        // expression that `lower_expr` rejects. This exercises the `?` on
+        // the `.collect::<Result<Vec<_>, _>>()?` at expr.rs line 352,
+        // propagating the error from the arg's `lower_expr` call.
+        assert_capability_error_message(
+            "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nC[int](lambda: 1)\n",
+            "expression kind not supported yet",
+        );
+    }
+
+    #[test]
+    fn rename_name_in_expr_handles_generic_class_instantiate_in_comprehension() {
+        // A list comprehension whose `elt` is a `GenericClassInstantiate`
+        // expression exercises `rename_name_in_expr`'s
+        // `GenericClassInstantiate` arm: the loop variable `x` inside the
+        // instantiation's args is renamed to the comprehension's synthesized
+        // variable. The expression must lower successfully and produce a
+        // `ListCompAssign` whose `elt` is a `GenericClassInstantiate`.
+        let hir = lower_generic_class_instantiation(
+            "class C[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nxs = [C[int](x) for x in range(3)]\n",
+        );
+        // Find the ListCompAssign statement.
+        let comp = hir.items.iter().find_map(|item| match item {
+            HirItem::TopLevelStmt(HirStmt::ListCompAssign { elt, .. }) => Some(elt.clone()),
+            _ => None,
+        });
+        let elt = comp.expect("should find a ListCompAssign");
+        // The elt should be a GenericClassInstantiate — proving
+        // rename_name_in_expr's GenericClassInstantiate arm was traversed.
+        assert!(
+            matches!(elt.as_ref(), HirExpr::GenericClassInstantiate { class, type_arg, .. }
+                if class == "C" && *type_arg == Ty::Int),
+            "expected GenericClassInstantiate elt, got {elt:?}",
+        );
     }
 }
 

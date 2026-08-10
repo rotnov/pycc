@@ -557,3 +557,53 @@ fn bool_int_runtime_identity_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("bool_int_runtime_identity_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/bool_int_runtime_identity.py");
 }
+
+// PEP 673 (#387 Part 1): `Self` as a method return-type annotation. A
+// method returning `Self` yields the class's own instance type, exactly
+// like CPython 3.14's deferred-evaluation semantics.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0673_self_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0673_self.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0673_self_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0673_self.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0673_self_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0673_self.py");
+}
+
+// PEP 649/749 (#387 Part 2): self-referential deferred annotations. A
+// class's method may use the class's own name as a parameter/return type
+// annotation, even though the class is not fully defined at the point the
+// annotation text appears in source. CPython 3.14 defers evaluation by
+// default; pycc resolves the class name at HIR-lowering time since the class
+// name is already in scope within its own body.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0649_deferred_ann_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0649_deferred_ann.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0649_deferred_ann_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0649_deferred_ann.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0649_deferred_ann_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0649_deferred_ann.py");
+}
+
+// PEP 695 (#387 Part 3): scoped generic classes with one type parameter.
+// `class C[T]:` defines a generic class; `C[int](args)` instantiates it
+// with a concrete scalar type. pycc monomorphizes the class's methods at
+// each call site, reusing PR-13's D-133/D-134 call-site-substitution
+// infrastructure.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn pep_0695_generic_classes_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pep_0695_generic_classes.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("pep_0695_generic_classes_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/pep_0695_generic_classes.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("pep_0695_generic_classes_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0695_generic_classes.py");
+}

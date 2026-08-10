@@ -282,6 +282,7 @@ mod tests {
                         ("__init__".to_string(), "Point.__init__".to_string()),
                         ("bump".to_string(), "Point.bump".to_string()),
                     ],
+                    type_param: None,
                 },
             )],
         }
@@ -679,6 +680,7 @@ mod tests {
                         ("bump".to_string(), "Point.bump".to_string()),
                         ("_touch".to_string(), "Point._touch".to_string()),
                     ],
+                    type_param: None,
                 },
             )],
         };
@@ -740,6 +742,7 @@ mod tests {
                     name: "Point".to_string(),
                     attrs: vec![("x".to_string(), Ty::Int)],
                     methods: vec![("__init__".to_string(), "Point.__init__".to_string())],
+                    type_param: None,
                 },
             )],
         };
@@ -1005,6 +1008,7 @@ mod tests {
                     ("__init__".to_string(), "Counter.__init__".to_string()),
                     ("add".to_string(), "Counter.add".to_string()),
                 ],
+                type_param: None,
             },
         ));
         check_and_resolve(&hir).expect(
@@ -1100,6 +1104,7 @@ mod tests {
                 name: "Ghost".to_string(),
                 attrs: vec![],
                 methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
+                type_param: None,
             },
         );
         let _ = super::resolve_instantiation(&env, "Ghost", &[]);
@@ -1115,6 +1120,7 @@ mod tests {
                 name: "Ghost".to_string(),
                 attrs: vec![],
                 methods: vec![("foo".to_string(), "Ghost.foo".to_string())],
+                type_param: None,
             },
         );
         let _ = super::resolve_method_call(

@@ -1144,6 +1144,19 @@ fn lower_expr(
                 ty,
             }
         }
+        // PEP 695 (#387): `GenericClassInstantiate` should never reach MIR
+        // — `pycc_types::monomorphize` rewrites every
+        // `GenericClassInstantiate` expression to an ordinary
+        // `HirExpr::Call` to the mangled class name before MIR lowering
+        // runs. If this arm is reached, it indicates a bug in the
+        // monomorphization pass.
+        HirExpr::GenericClassInstantiate { class, .. } => {
+            panic!(
+                "pycc_mir: internal error: `GenericClassInstantiate` for class `{class}` \
+                 reached MIR lowering -- pycc_types::monomorphize should have rewritten it \
+                 to an ordinary `HirExpr::Call` before this point"
+            )
+        }
     }
 }
 
@@ -3929,6 +3942,7 @@ mod tests {
                         ("__init__".to_string(), "Point.__init__".to_string()),
                         ("bump".to_string(), "Point.bump".to_string()),
                     ],
+                    type_param: None,
                 },
             )],
         }
@@ -4046,6 +4060,7 @@ mod tests {
                         ("__init__".to_string(), "Counter.__init__".to_string()),
                         ("add".to_string(), "Counter.add".to_string()),
                     ],
+                    type_param: None,
                 },
             )],
         };
@@ -4332,6 +4347,29 @@ mod tests {
                 value: HirExpr::IntLiteral(1),
             }),
         ]);
+        let _ = build(&hir);
+    }
+
+    // PEP 695 (#387): `GenericClassInstantiate` should never reach MIR —
+    // `pycc_types::monomorphize` rewrites every such expression to an
+    // ordinary `HirExpr::Call` before MIR lowering runs. This test bypasses
+    // the type checker with a hand-built HIR to exercise the panic arm,
+    // matching this file's own established internal-error-test convention.
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: `GenericClassInstantiate` for class `C` reached MIR lowering")]
+    fn generic_class_instantiate_reaching_mir_panics_with_an_internal_error() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::GenericClassInstantiate {
+                    class: "C".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                },
+            ))],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
         let _ = build(&hir);
     }
 }

@@ -177,7 +177,7 @@ For each newly observed upstream release:
 | [654](https://peps.python.org/pep-0654/) | `except*` + `ExceptionGroup` | syntax | `py311/pep_0654_except_star.py` | ☐ |
 | [655](https://peps.python.org/pep-0655/) | `Required` / `NotRequired` | typing | `py311/pep_0655_required.py` | ☐ |
 | [657](https://peps.python.org/pep-0657/) | Fine-grained error locations | rt | (drives pycc diagnostics UX) | ☐ |
-| [673](https://peps.python.org/pep-0673/) | `Self` | typing | `py311/pep_0673_self.py` | ☐ |
+| [673](https://peps.python.org/pep-0673/) | `Self` as method return/param annotation (#387 Part 1) — resolves to the class's own instance type at HIR-lowering time | typing | `pep_0673_self.py` | ☐ |
 | [675](https://peps.python.org/pep-0675/) | `LiteralString` | typing | `py311/pep_0675_literalstring.py` | ☐ |
 | [681](https://peps.python.org/pep-0681/) | `dataclass_transform` | typing | `py311/pep_0681_dc_transform.py` | ☐ |
 
@@ -188,7 +188,7 @@ For each newly observed upstream release:
 | [688](https://peps.python.org/pep-0688/) | `Buffer` type | typing | `py312/pep_0688_buffer.py` | ☐ |
 | [692](https://peps.python.org/pep-0692/) | `Unpack[TypedDict]` for `**kwargs` | typing | `py312/pep_0692_kwargs.py` | ☐ |
 | [695](https://peps.python.org/pep-0695/) | **`type` statement + generic functions** `def f[T](x: T) -> T` (v0.2 scope per D-088 — no class support exists yet) | typing | `pep_0695_generics.py` | ✅ |
-| [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (needs v0.3's class model) | typing | `py312/pep_0695_generic_classes.py` | ☐ |
+| [695](https://peps.python.org/pep-0695/) | Generic classes `class C[T]` (#387 Part 3) — single type param, scalar-only instantiation, monomorphized at compile time | typing | `pep_0695_generic_classes.py` | ☐ |
 | [698](https://peps.python.org/pep-0698/) | `@override` | typing | `py312/pep_0698_override.py` | ☐ |
 | [701](https://peps.python.org/pep-0701/) | Formalized f-string grammar | syntax | `py312/pep_0701_fstring_grammar.py` | ☐ |
 | [709](https://peps.python.org/pep-0709/) | Comprehension inlining semantics -- pycc has no bytecode/frame model to "inline" the way CPython's own PEP 709 change does; this row instead verifies the one CPython-observable, statically-testable guarantee PEP 709 depends on: a comprehension's own loop variable does not leak into an enclosing same-named binding (D-117/D-120) | sem | `pep_0709_comp_inline.py` | ✅ |
@@ -213,7 +213,7 @@ the pinned interpreter's own GIL only for CPython-backed operations (D-128).*
 
 | PEP | Feature | Cat | Test | St |
 |---|---|---|---|---|
-| [649](https://peps.python.org/pep-0649/)/[749](https://peps.python.org/pep-0749/) | **Deferred annotations** — pycc reads annotations exactly per 3.14 semantics | typing | `py314/pep_0649_deferred_ann.py` | ☐ |
+| [649](https://peps.python.org/pep-0649/)/[749](https://peps.python.org/pep-0749/) | **Deferred annotations** — pycc reads annotations exactly per 3.14 semantics; self-referential class-name annotations in own methods work (#387 Part 2) | typing | `pep_0649_deferred_ann.py` | ☐ |
 | [734](https://peps.python.org/pep-0734/) | Subinterpreters in stdlib | rt | `py314/pep_0734_interpreters.py` | ☐ |
 | [750](https://peps.python.org/pep-0750/) | **Template strings (t-strings)** | syntax | `py314/pep_0750_tstrings.py` | ☐ |
 | [758](https://peps.python.org/pep-0758/) | `except A, B:` without parentheses | syntax | `py314/pep_0758_except_noparens.py` | ☐ |
