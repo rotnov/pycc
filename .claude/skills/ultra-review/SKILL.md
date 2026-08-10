@@ -281,6 +281,10 @@ Cumulative by model: <name>: <count>, <name>: <count>, unattributed: <count>, am
 <!-- /ultra-review-checkpoint -->
 ```
 
+The `runs` label in the `Cumulative` line is a fixed literal regardless of count
+(`1 runs`, `12 runs`) — deliberate, to keep the field a stable, greppable string rather
+than adding conditional singular/plural grammar to a machine-parsed line.
+
 - **`Counting started`** is written once — the first time a run writes this new format
   — and never changes again. It records the sha and timestamp this same write is using
   for `Last reviewed commit`/`Reviewed at`, not the repository's first-ever commit; see
@@ -289,6 +293,16 @@ Cumulative by model: <name>: <count>, <name>: <count>, unattributed: <count>, am
   empty-diff run (step 3 already stops before reaching here) and a concurrency-aborted
   run (the "Changed" branch above) both never increment it. Add this run's own
   `R=1, F=<findings>, M=<filed>, K=<deduped>` to the fresh-read values.
+- **Migration:** when the fresh read (like step 2's own earlier read) predates this
+  format — it carries none of the `Counting started`/`Cumulative`/`Cumulative by model`
+  lines at all, not merely zero values for them — treat every cumulative counter as
+  absent/zero for this run's own computation, so "add this run's own contribution to the
+  fresh-read values" reduces to writing this run's own `R=1, F=<findings>, M=<filed>,
+  K=<deduped>` outright. This single write is simultaneously the migration and the first
+  counted run: `Counting started` is set as described above (this write's own new
+  `Last reviewed commit`/`Reviewed at`, not the old checkpoint's sha), never to the old
+  body's sha. There is no separate transitional format between the old three-line body
+  and this step's steady-state shape — matching step 2's bootstrap case exactly.
 - **`Cumulative by model`** lists a bucket only once its cumulative count is nonzero;
   omit the whole line when every bucket is still zero. Bucket key is the trailer's name
   string exactly as it appears (no normalization). Sort buckets alphabetically,
