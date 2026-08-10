@@ -1,5 +1,5 @@
 pub use ruff_python_ast::{
-    Arguments, CmpOp, Comprehension, ConversionFlag, ElifElseClause, Expr, ExprBinOp,
+    Arguments, CmpOp, Comprehension, ConversionFlag, Decorator, ElifElseClause, Expr, ExprBinOp,
     ExprBooleanLiteral, ExprCall, ExprCompare, ExprContext, ExprDictComp, ExprFString,
     ExprListComp, ExprName, ExprNumberLiteral, ExprSetComp, ExprSlice, ExprStringLiteral,
     ExprUnaryOp, Identifier, InterpolatedElement, InterpolatedStringElement,

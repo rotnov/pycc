@@ -859,6 +859,7 @@ version = "0.1.0"
 dependencies = [
  "pycc_diag",
  "pycc_hir",
+ "pycc_mir",
  "pycc_std",
 ]
 

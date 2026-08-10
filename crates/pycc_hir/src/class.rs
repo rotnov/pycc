@@ -54,7 +54,7 @@
 //! single-pass scope.
 
 use crate::{HirItem, Ty, lower_arg_list, unsupported};
-use pycc_ast::{Expr, Number, Stmt};
+use pycc_ast::{Decorator, Expr, Number, Stmt};
 use pycc_diag::Diagnostic;
 
 /// Method names that collide with `crates/pycc_hir/src/expr.rs`'s own
@@ -83,12 +83,115 @@ pub struct HirClassDef {
     pub name: String,
     pub attrs: Vec<(String, Ty)>,
     pub methods: Vec<(String, String)>,
+    /// `@property` definitions (#377): each entry records a property's
+    /// attribute name, the mangled getter method name, and (if present) the
+    /// mangled setter method name. Property methods are lowered into
+    /// ordinary mangled `HirItem::Function`s (just like regular methods) but
+    /// are NOT entered into `methods` -- they are accessed via attribute
+    /// syntax (`obj.x`), not method-call syntax (`obj.x()`). The type
+    /// checker resolves `obj.x` reads/writes against this table, and MIR
+    /// lowering rewrites property-shaped `AttrGet`/`AttrSet` into ordinary
+    /// `MirExpr::Call`s to the getter/setter's mangled name, reusing the
+    /// existing method-call infrastructure with no new MIR/codegen variant.
+    pub properties: Vec<PropertyDef>,
     /// PEP 695 (#387): the class's single type parameter name, if it is a
     /// generic class (`class C[T]:`). `None` for a non-generic class. At
     /// instantiation site (`C[int](args)`), this parameter is substituted
     /// with the concrete type, reusing PR-13's `Ty::Param` call-site-
     /// substitution mechanism (D-133/D-134).
     pub type_param: Option<String>,
+}
+
+/// A single `@property` definition (#377): the attribute name exposed to
+/// user code (e.g. `"x"` in `obj.x`), the mangled getter method name
+/// (e.g. `"C.x"`, the same `<Class>.<name>` mangling a regular method
+/// uses), and -- if a `@<name>.setter` method was also defined -- the
+/// mangled setter method name (e.g. `"C.x.setter"`, using a `.setter`
+/// suffix that a real Python identifier can never contain, so it cannot
+/// collide with a regular method's mangled name).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyDef {
+    pub name: String,
+    pub getter: String,
+    pub setter: Option<String>,
+}
+
+/// How a class-body `def` is classified by its decorator list (#377):
+/// a regular method (no decorator or an unrecognized one -- the latter is
+/// rejected), a `@property` getter, or a `@<name>.setter` setter for the
+/// property named `<name>`. `lower_class` uses this to decide the method's
+/// mangled name and which table (`methods` vs `properties`) it belongs to.
+enum MethodKind {
+    Regular,
+    /// `@property` getter for the attribute named `prop_name` (which is
+    /// also the method's own source name, e.g. `def x(self) -> int` with
+    /// `@property` is a getter for attribute `"x"`).
+    PropertyGetter { prop_name: String },
+    /// `@<prop_name>.setter` setter for the property named `prop_name`.
+    /// The method's own source name must match `prop_name` (this is
+    /// validated in `classify_decorator`).
+    PropertySetter { prop_name: String },
+}
+
+/// Classifies a method's decorator list (#377). Returns:
+/// - `Regular` if the list is empty.
+/// - `PropertyGetter` if the single decorator is `@property` (a bare name
+///   `property`).
+/// - `PropertySetter` if the single decorator is `@<name>.setter` (an
+///   attribute access on a bare name, where the attribute is `"setter"`).
+///   The method's own source name must match `<name>` -- a mismatch
+///   (e.g. `@x.setter def y(self, v): ...`) is rejected with `C0001`,
+///   matching the common Python idiom where the setter's method name
+///   matches the property name.
+/// - Any other decorator shape (multiple decorators, a call-shaped
+///   decorator, a different attribute name) is rejected with `C0001`,
+///   preserving the pre-#377 "method decorators are not supported yet"
+///   diagnostic for everything outside `@property`/`@<name>.setter`.
+fn classify_decorator(
+    decorator_list: &[Decorator],
+    method_name: &str,
+    range: std::ops::Range<u32>,
+) -> Result<MethodKind, Diagnostic> {
+    if decorator_list.is_empty() {
+        return Ok(MethodKind::Regular);
+    }
+    if decorator_list.len() > 1 {
+        return Err(unsupported("method decorators are not supported yet", range));
+    }
+    let decorator = &decorator_list[0];
+    match &decorator.expression {
+        // `@property` -- a bare name `property`.
+        Expr::Name(name) if name.id.as_str() == "property" => Ok(MethodKind::PropertyGetter {
+            prop_name: method_name.to_string(),
+        }),
+        // `@<name>.setter` -- an attribute access on a bare name, where
+        // the attribute is `"setter"`.
+        Expr::Attribute(attr) => {
+            let Expr::Name(base_name) = attr.value.as_ref() else {
+                return Err(unsupported("method decorators are not supported yet", range));
+            };
+            if attr.attr.as_str() != "setter" {
+                return Err(unsupported("method decorators are not supported yet", range));
+            }
+            let prop_name = base_name.id.as_str().to_string();
+            // The decorator name must match the method's own source name
+            // (e.g. `@x.setter def x(self, v): ...`, not `@x.setter def
+            // y(self, v): ...`). This is the overwhelmingly common idiom;
+            // the uncommon mismatch case is rejected rather than
+            // silently supporting a shape this PR does not need.
+            if prop_name != method_name {
+                return Err(unsupported(
+                    format!(
+                        "a `@{prop_name}.setter` decorator must decorate a method named \
+                         `{prop_name}`, not `{method_name}`"
+                    ),
+                    range,
+                ));
+            }
+            Ok(MethodKind::PropertySetter { prop_name })
+        }
+        _ => Err(unsupported("method decorators are not supported yet", range)),
+    }
 }
 
 /// Lowers a module-level `class Foo: ...` statement (D-154). Returns the
@@ -139,6 +242,7 @@ pub(crate) fn lower_class(
     let mut methods: Vec<(String, String)> = Vec::new();
     let mut items: Vec<HirItem> = Vec::new();
     let mut attrs: Vec<(String, Ty)> = Vec::new();
+    let mut properties: Vec<PropertyDef> = Vec::new();
     let mut init_seen = false;
     for stmt in &def.body {
         let Stmt::FunctionDef(method_def) = stmt else {
@@ -171,30 +275,130 @@ pub(crate) fn lower_class(
                 method_def.range,
             ));
         }
+        // #377: classify the method's decorator list to determine whether
+        // it is a regular method, a `@property` getter, or a
+        // `@<name>.setter` setter. `lower_method` uses this to compute the
+        // correct mangled name (a setter uses a `.setter` suffix to avoid
+        // colliding with the getter's mangled name, since both share the
+        // same source method name).
+        let kind = classify_decorator(
+            &method_def.decorator_list,
+            &method_name,
+            method_def.range.into(),
+        )?;
         let (item, params) = lower_method(
             method_def,
             &class_name,
             type_param.as_deref(),
             aliases,
+            &kind,
         )?;
         if method_name == "__init__" {
             init_seen = true;
             attrs = collect_init_attrs(&method_def.body, &params)?;
         }
-        let mangled = format!("{class_name}.{method_name}");
-        // #386: rebind semantics for non-`__init__` method redefinition.
-        // Both definitions share the same mangled `<ClassName>.<method>`
-        // name, so PR #358's function-pointer slot infrastructure already
-        // handles the actual rebind at the codegen level (the second `def`'s
-        // source-order execution stores the new function's address into the
-        // slot). Here, replacing the method table entry on redefinition
-        // rather than appending a duplicate keeps the table clean -- the
-        // mangled name is the same either way, so `resolve_method_call` and
-        // MIR lowering's `.methods.iter().find(..)` resolve identically.
-        if let Some(entry) = methods.iter_mut().find(|(name, _)| name == &method_name) {
-            *entry = (method_name.clone(), mangled.clone());
-        } else {
-            methods.push((method_name.clone(), mangled));
+        match &kind {
+            MethodKind::Regular => {
+                let mangled = format!("{class_name}.{method_name}");
+                // #377: reject a regular method whose name collides with an
+                // existing property. Both would share the same `<Class>.<name>`
+                // mangled symbol, and the stale method table entry would let
+                // `obj.name()` (method-call syntax) resolve to the property
+                // getter function — silently accepting a call shape that
+                // CPython rejects after the property shadows the method.
+                if properties.iter().any(|p| p.name == method_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@property` named `{method_name}` is already defined in this \
+                             class -- a method cannot shadow a property of the same name"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                // #386: rebind semantics for non-`__init__` method
+                // redefinition. Both definitions share the same mangled
+                // `<ClassName>.<method>` name, so PR #358's function-
+                // pointer slot infrastructure already handles the actual
+                // rebind at the codegen level (the second `def`'s source-
+                // order execution stores the new function's address into
+                // the slot). Here, replacing the method table entry on
+                // redefinition rather than appending a duplicate keeps the
+                // table clean -- the mangled name is the same either way,
+                // so `resolve_method_call` and MIR lowering's
+                // `.methods.iter().find(..)` resolve identically.
+                if let Some(entry) =
+                    methods.iter_mut().find(|(name, _)| name == &method_name)
+                {
+                    *entry = (method_name.clone(), mangled.clone());
+                } else {
+                    methods.push((method_name.clone(), mangled));
+                }
+            }
+            // #377: a `@property` getter. The getter's mangled name is
+            // `<Class>.<name>` (the same scheme a regular method uses),
+            // but it is NOT entered into `methods` -- it is accessed via
+            // attribute syntax (`obj.x`), not method-call syntax
+            // (`obj.x()`). A duplicate getter for the same property name
+            // is rejected (a property is defined once, not rebound).
+            MethodKind::PropertyGetter { prop_name } => {
+                // #377: reject a property getter whose name collides with an
+                // existing method. Both would share the same `<Class>.<name>`
+                // mangled symbol, and the method table entry would let
+                // `obj.name()` (method-call syntax) resolve to the property
+                // getter function — silently accepting a call shape that
+                // CPython rejects after the property shadows the method.
+                if methods.iter().any(|(name, _)| name == prop_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a method named `{prop_name}` is already defined in this class -- \
+                             a `@property` getter cannot shadow a method of the same name"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                if properties.iter().any(|p| &p.name == prop_name) {
+                    return Err(unsupported(
+                        format!(
+                            "a `@property` getter for `{prop_name}` is already defined in \
+                             this class -- redefining a property getter is not supported yet"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                properties.push(PropertyDef {
+                    name: prop_name.clone(),
+                    getter: format!("{class_name}.{prop_name}"),
+                    setter: None,
+                });
+            }
+            // #377: a `@<name>.setter` setter. The setter's mangled name
+            // is `<Class>.<name>.setter` (the `.setter` suffix ensures it
+            // cannot collide with the getter's `<Class>.<name>` mangled
+            // name, since a real Python identifier can never contain a
+            // `.`). The property's getter must already be defined (a
+            // setter without a preceding getter is `C0001`), and a
+            // duplicate setter for the same property is rejected.
+            MethodKind::PropertySetter { prop_name } => {
+                let Some(prop) = properties.iter_mut().find(|p| &p.name == prop_name) else {
+                    return Err(unsupported(
+                        format!(
+                            "a `@{prop_name}.setter` decorator requires a preceding \
+                             `@property` getter for `{prop_name}` in the same class"
+                        ),
+                        method_def.range,
+                    ));
+                };
+                if prop.setter.is_some() {
+                    return Err(unsupported(
+                        format!(
+                            "a setter for property `{prop_name}` is already defined in \
+                             this class -- redefining a property setter is not supported yet"
+                        ),
+                        method_def.range,
+                    ));
+                }
+                prop.setter = Some(format!("{class_name}.{prop_name}.setter"));
+            }
         }
         items.push(item);
     }
@@ -209,6 +413,7 @@ pub(crate) fn lower_class(
             name: class_name,
             attrs,
             methods,
+            properties,
             type_param,
         },
         items,
@@ -243,13 +448,14 @@ fn lower_method(
     class_name: &str,
     type_param: Option<&str>,
     aliases: &[(String, Ty)],
+    kind: &MethodKind,
 ) -> Result<(HirItem, Vec<(String, Ty)>), Diagnostic> {
     if def.is_async {
         return Err(unsupported("an async method is not supported yet", def.range));
     }
-    if !def.decorator_list.is_empty() {
-        return Err(unsupported("method decorators are not supported yet", def.range));
-    }
+    // #377: decorators are now classified by `classify_decorator` in
+    // `lower_class` before this function is called -- the `kind` parameter
+    // carries the result. No additional decorator check is needed here.
     if def.type_params.is_some() {
         return Err(unsupported("a generic method is not supported yet", def.range));
     }
@@ -302,6 +508,29 @@ fn lower_method(
             parameters.range,
         ));
     }
+    // #377: a `@property` getter takes only `self` (no additional
+    // parameters); a `@<name>.setter` setter takes exactly one additional
+    // parameter (the value to assign). A regular method has no arity
+    // constraint beyond the structural checks above.
+    match kind {
+        MethodKind::PropertyGetter { .. } => {
+            if !rest.is_empty() {
+                return Err(unsupported(
+                    "a `@property` getter must take only `self` (no additional parameters)",
+                    parameters.range,
+                ));
+            }
+        }
+        MethodKind::PropertySetter { .. } => {
+            if rest.len() != 1 {
+                return Err(unsupported(
+                    "a `@<name>.setter` setter must take exactly one parameter besides `self`",
+                    parameters.range,
+                ));
+            }
+        }
+        MethodKind::Regular => {}
+    }
     let method_name = def.name.as_str();
     let is_public = !method_name.starts_with('_'); // D-038
     // See this function's own doc comment: `__init__`'s own parameters
@@ -327,7 +556,20 @@ fn lower_method(
         aliases,
     )?;
     let body = crate::stmt::lower_body(&def.body, aliases, false, true, Some(class_name), type_param)?;
-    let mangled_name = format!("{class_name}.{method_name}");
+    // #377: compute the mangled name based on the method kind. A regular
+    // method uses `<Class>.<name>`. A property getter uses the same
+    // `<Class>.<name>` (it is the property's primary mangled name). A
+    // property setter uses `<Class>.<name>.setter` (the `.setter` suffix
+    // prevents collision with the getter, since both share the same source
+    // method name).
+    let mangled_name = match kind {
+        MethodKind::Regular | MethodKind::PropertyGetter { .. } => {
+            format!("{class_name}.{method_name}")
+        }
+        MethodKind::PropertySetter { prop_name } => {
+            format!("{class_name}.{prop_name}.setter")
+        }
+    };
     Ok((
         HirItem::Function {
             name: mangled_name,
@@ -1008,6 +1250,7 @@ mod tests {
                     ("y".to_string(), Ty::Int),
                 ],
                 methods: vec![("__init__".to_string(), "Point.__init__".to_string())],
+                properties: Vec::new(),
                 type_param: None,
             }
         );
@@ -1044,6 +1287,224 @@ mod tests {
                     },
                 ],
             }
+        );
+    }
+
+    // -- @property lowering (#377) ------------------------------------------
+
+    #[test]
+    fn a_property_getter_lowers_into_the_property_table() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        self._x = 0\n    @property\n    def x(self) -> int:\n        return self._x\n",
+        );
+        let (_, class_def) = &hir.class_defs[0];
+        assert_eq!(class_def.properties.len(), 1);
+        assert_eq!(
+            class_def.properties[0],
+            crate::PropertyDef {
+                name: "x".to_string(),
+                getter: "C.x".to_string(),
+                setter: None,
+            }
+        );
+        // The getter is NOT in the methods table (accessed via attribute
+        // syntax, not method-call syntax).
+        assert!(!class_def.methods.iter().any(|(name, _)| name == "x"));
+    }
+
+    #[test]
+    fn a_property_getter_and_setter_lower_into_one_property_entry() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        self._x = 0\n    @property\n    def x(self) -> int:\n        return self._x\n    @x.setter\n    def x(self, v: int) -> None:\n        self._x = v\n",
+        );
+        let (_, class_def) = &hir.class_defs[0];
+        assert_eq!(class_def.properties.len(), 1);
+        assert_eq!(
+            class_def.properties[0],
+            crate::PropertyDef {
+                name: "x".to_string(),
+                getter: "C.x".to_string(),
+                setter: Some("C.x.setter".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_property_getter_function_is_emitted_with_the_mangled_name() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        self._x = 0\n    @property\n    def x(self) -> int:\n        return self._x\n",
+        );
+        assert!(
+            hir.items
+                .iter()
+                .any(|item| matches!(item, HirItem::Function { name, .. } if name == "C.x")),
+            "getter function `C.x` should be in items"
+        );
+    }
+
+    #[test]
+    fn a_property_setter_function_is_emitted_with_the_setter_mangled_name() {
+        let hir = lower_ok(
+            "class C:\n    def __init__(self) -> None:\n        self._x = 0\n    @property\n    def x(self) -> int:\n        return self._x\n    @x.setter\n    def x(self, v: int) -> None:\n        self._x = v\n",
+        );
+        assert!(
+            hir.items
+                .iter()
+                .any(|item| matches!(item, HirItem::Function { name, .. } if name == "C.x.setter")),
+            "setter function `C.x.setter` should be in items"
+        );
+    }
+
+    #[test]
+    fn an_unrecognized_method_decorator_is_still_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @staticmethod\n    def f(self) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
+    fn multiple_decorators_on_a_method_are_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    @staticmethod\n    def f(self) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
+    fn a_property_getter_with_extra_parameters_is_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self, extra: int) -> int:\n        return 0\n",
+        );
+    }
+
+    #[test]
+    fn a_property_setter_with_no_value_parameter_is_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 0\n    @x.setter\n    def x(self) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
+    fn a_property_setter_with_two_value_parameters_is_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 0\n    @x.setter\n    def x(self, a: int, b: int) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
+    fn a_setter_without_a_preceding_getter_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @x.setter\n    def x(self, v: int) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("requires a preceding `@property` getter"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_duplicate_property_getter_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 0\n    @property\n    def x(self) -> int:\n        return 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("already defined"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_duplicate_property_setter_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 0\n    @x.setter\n    def x(self, v: int) -> None:\n        return\n    @x.setter\n    def x(self, v: int) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("already defined"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_property_getter_shadowing_a_method_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    def x(self) -> int:\n        return 1\n    @property\n    def x(self) -> int:\n        return 2\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot shadow a method"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_method_shadowing_a_property_getter_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 2\n    def x(self) -> int:\n        return 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot shadow a property"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_setter_decorator_name_not_matching_the_method_name_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 0\n    @x.setter\n    def y(self, v: int) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("must decorate a method named `x`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_non_setter_attribute_decorator_is_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @x.deleter\n    def x(self) -> None:\n        return\n",
+        );
+    }
+
+    #[test]
+    fn a_call_shaped_decorator_is_rejected() {
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property()\n    def x(self) -> int:\n        return 0\n",
+        );
+    }
+
+    #[test]
+    fn a_setter_decorator_with_a_chained_attribute_base_is_rejected() {
+        // `@a.b.setter` -- the decorator expression is an attribute access
+        // (`(a.b).setter`) whose own base is *not* a bare `Expr::Name`
+        // (it's `Expr::Attribute(Name("a"), "b")`). This exercises
+        // `classify_decorator`'s `let Expr::Name(base_name) =
+        // attr.value.as_ref() else { ... }` rejection arm -- distinct from
+        // `a_non_setter_attribute_decorator_is_rejected` above, which
+        // exercises the `attr.attr != "setter"` arm, and from
+        // `a_setter_decorator_name_not_matching_the_method_name_is_rejected`,
+        // which exercises the name-mismatch arm.
+        assert_c0001(
+            "class C:\n    def __init__(self) -> None:\n        return\n    @property\n    def x(self) -> int:\n        return 0\n    @a.b.setter\n    def x(self, v: int) -> None:\n        return\n",
         );
     }
 

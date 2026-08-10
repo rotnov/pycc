@@ -868,10 +868,34 @@ fn lower_stmt(
         },
         // D-154 (Part 1 of #375): `base.attr = value`, resolved to a
         // compile-time slot index exactly like `MirExpr::AttrGet` above.
+        // #377: if `attr` is a `@property` with a setter, the assignment is
+        // rewritten to an ordinary `MirStmt::ExprStmt(MirExpr::Call)` to
+        // the setter's mangled name (with `base` as `self` and `value` as
+        // the setter's parameter), reusing the existing method-call/codegen
+        // infrastructure with no new MIR/codegen variant. A read-only
+        // property (no setter) never reaches here -- `pycc_types::check`
+        // rejects it with `T0044` before MIR lowering runs.
         HirStmt::AttrSet { base, attr, value } => {
             let base = lower_expr(base, scopes, classes);
             let value = lower_expr(value, scopes, classes);
             let class_def = class_def_of(&base, classes);
+            // #377: check properties before regular attribute slots.
+            if let Some(prop) = class_def.properties.iter().find(|p| p.name == *attr) {
+                let setter = prop.setter.as_ref().unwrap_or_else(|| {
+                    panic!(
+                        "pycc_mir: internal error: property `{attr}` on class `{}` has no setter \
+                         -- pycc_types::check should have rejected this assignment before it \
+                         reached pycc_mir",
+                        class_def.name
+                    )
+                });
+                let ty = lookup(scopes, &format!("$fn:{setter}"));
+                return MirStmt::ExprStmt(MirExpr::Call {
+                    callee: setter.clone(),
+                    args: vec![base, value],
+                    ty,
+                });
+            }
             let (slot, _) = class_def
                 .attrs
                 .iter()
@@ -1092,9 +1116,22 @@ fn lower_expr(
         // D-154 (Part 1 of #375): `base.attr` -- resolved to a compile-time
         // slot index against the base's class's `HirClassDef`, per the
         // class-instance-layout ADR (never a runtime string-keyed lookup).
+        // #377: if `attr` is a `@property`, the access is rewritten to an
+        // ordinary `MirExpr::Call` to the getter's mangled name (with `base`
+        // as `self`), reusing the existing method-call/codegen infrastructure
+        // with no new MIR/codegen variant.
         HirExpr::AttrGet { base, attr } => {
             let base = lower_expr(base, scopes, classes);
             let class_def = class_def_of(&base, classes);
+            // #377: check properties before regular attribute slots.
+            if let Some(prop) = class_def.properties.iter().find(|p| p.name == *attr) {
+                let ty = lookup(scopes, &format!("$fn:{}", prop.getter));
+                return MirExpr::Call {
+                    callee: prop.getter.clone(),
+                    args: vec![base],
+                    ty,
+                };
+            }
             let (slot, (_, ty)) = class_def
                 .attrs
                 .iter()
@@ -3943,6 +3980,7 @@ mod tests {
                         ("bump".to_string(), "Point.bump".to_string()),
                     ],
                     type_param: None,
+                    properties: Vec::new(),
                 },
             )],
         }
@@ -4061,6 +4099,7 @@ mod tests {
                         ("add".to_string(), "Counter.add".to_string()),
                     ],
                     type_param: None,
+                    properties: Vec::new(),
                 },
             )],
         };
@@ -4347,6 +4386,77 @@ mod tests {
                 value: HirExpr::IntLiteral(1),
             }),
         ]);
+        let _ = build(&hir);
+    }
+
+    // #377: a read-only `@property` (no setter) should never reach MIR
+    // lowering -- `pycc_types::check` rejects the assignment with `T0044`
+    // before MIR runs. This test bypasses the type checker with a hand-built
+    // HIR to exercise the panic arm, matching this file's own established
+    // internal-error-test convention (see e.g.
+    // `attr_set_of_an_undeclared_attribute_panics_with_an_internal_error`
+    // above).
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: property `val` on class `Box` has no setter")]
+    fn attr_set_on_a_read_only_property_panics_with_an_internal_error() {
+        use pycc_hir::{HirClassDef, PropertyDef};
+        let self_ty = Ty::Instance(Box::new("Box".to_string()));
+        let init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "_val".to_string(),
+                    value: HirExpr::IntLiteral(0),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let getter = HirItem::Function {
+            name: "Box.val".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("self".to_string())),
+                attr: "_val".to_string(),
+            }))],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                getter,
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "b".to_string(),
+                    value: HirExpr::Call {
+                        callee: "Box".to_string(),
+                        args: vec![],
+                    },
+                }),
+                HirItem::TopLevelStmt(HirStmt::AttrSet {
+                    base: HirExpr::Name("b".to_string()),
+                    attr: "val".to_string(),
+                    value: HirExpr::IntLiteral(42),
+                }),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "Box".to_string(),
+                HirClassDef {
+                    name: "Box".to_string(),
+                    attrs: vec![("_val".to_string(), Ty::Int)],
+                    methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+                    properties: vec![PropertyDef {
+                        name: "val".to_string(),
+                        getter: "Box.val".to_string(),
+                        setter: None,
+                    }],
+                    type_param: None,
+                },
+            )],
+        };
         let _ = build(&hir);
     }
 

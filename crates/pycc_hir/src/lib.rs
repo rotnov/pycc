@@ -5,7 +5,7 @@ mod class;
 mod expr;
 mod stmt;
 
-pub use class::HirClassDef;
+pub use class::{HirClassDef, PropertyDef};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
