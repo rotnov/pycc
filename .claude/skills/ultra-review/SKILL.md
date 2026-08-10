@@ -238,7 +238,16 @@ a filed finding has a public, citable file:line worth attributing):
      and stops parsing there, and this repository's own `SKILL.md`/agent front matter —
      quoted verbatim in commit bodies just as often as the trailer syntax itself — opens
      and closes with exactly that `---` line, which would silently truncate the scan
-     before it ever reaches the real trailing trailer block. From that already-trailer-scoped output, select the
+     before it ever reaches the real trailing trailer block.
+     - This `git log | git interpret-trailers` pipeline can also fail outright — not
+       merely return zero trailers, but exit non-zero, for any reason (for example
+       `--no-divider` being unrecognized by a `git` older than the version that
+       introduced it). On any non-zero exit from this pipeline for a filed finding,
+       bucket that finding as `unattributed (extraction failed)` in this run's own
+       report and continue — never let one unresolvable citation stop the run or
+       step 9's checkpoint write.
+
+     From that already-trailer-scoped output, select the
      `Co-Authored-By`-keyed line(s) case-insensitively — a real trailer key can be
      spelled in any case, e.g. `CO-AUTHORED-BY:`, and `git interpret-trailers`
      preserves the key's original casing rather than normalizing it — with
@@ -350,9 +359,10 @@ The checkpoint range reviewed, the reviewer's raw findings, which were filed (wi
 issue numbers and URLs) versus deduped as already-tracked versus dropped for missing
 evidence, the new checkpoint state — including the updated `Cumulative` totals and the
 `Cumulative by model` per-model breakdown — and, if the batch-size guard tripped, the
-full undispatched batch for a human to review. Report this run's own two report-only
-attribution annotation counts (findings bucketed `unattributed (history check failed)`
-and findings bucketed `unattributed (blame failed)`, step 8) alongside the checkpoint's
+full undispatched batch for a human to review. Report this run's own three report-only
+attribution annotation counts (findings bucketed `unattributed (history check failed)`,
+findings bucketed `unattributed (blame failed)`, and findings bucketed
+`unattributed (extraction failed)`, step 8) alongside the checkpoint's
 persisted buckets — they explain any gap between this run's filed-finding count and the
 sum of buckets the checkpoint actually recorded for it, without being counted in the
 checkpoint themselves. If step 9's concurrency check aborted the write, report that
