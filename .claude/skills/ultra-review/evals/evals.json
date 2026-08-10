@@ -24,6 +24,18 @@
       "prompt": "27 candidate issues survive the dedup pass in a single run.",
       "expected_output": "When more than roughly 15 candidate issues survive dedup in one run, stop short of filing any of them and report the batch for a human to look at, rather than auto-filing a flood.",
       "runner": "oversized-batch-stops-before-filing"
+    },
+    {
+      "id": 5,
+      "prompt": "A fresh re-read of the checkpoint issue immediately before writing shows a different `Last reviewed commit` than the sha this run read back in step 2 -- a concurrent run already advanced the checkpoint while this run was in flight.",
+      "expected_output": "Because the reviewed ranges may overlap in that case, this run does not write the checkpoint at all -- the Cumulative counters take a permanent undercount for this run's own contribution instead of a retry.",
+      "runner": "concurrent-checkpoint-write-detected-and-aborted"
+    },
+    {
+      "id": 6,
+      "prompt": "A filed finding's blamed commit carries zero Co-Authored-By trailers, and a second filed finding's blamed commit carries two distinct Co-Authored-By trailers naming different collaborators.",
+      "expected_output": "The first finding is bucketed as unattributed (no trailer to attribute to, and the commit's own author is never used as a fallback); the second is bucketed as ambiguous (two distinct names, never guess between them).",
+      "runner": "attribution-falls-back-to-unattributed-or-ambiguous"
     }
   ]
 }

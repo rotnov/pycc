@@ -165,3 +165,4 @@ current.
 | [D-156](./D-156-status-page-freshness-check-two-signal-design.md) | Enforce GitHub Pages status/landing freshness with a two-signal ROADMAP.md diff check (#401) | accepted |
 | [D-157](./D-157-pep-673-649-749-695-self-deferred-ann-generic-classes.md) | PEP 673 Self, PEP 649/749 self-referential deferred annotations, PEP 695 scoped generic classes | accepted |
 | [D-158](./D-158-property-as-hir-level-attr-access-rewrite.md) | Property as HIR-level attribute-access rewrite (no new MIR/codegen variant) | accepted |
+| [D-159](./D-159-ultra-review-cumulative-stats-and-model-attribution.md) | Add cumulative run statistics and per-model defect attribution to the `ultra-review` checkpoint | accepted |
