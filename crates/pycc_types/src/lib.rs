@@ -5754,6 +5754,8 @@ fn instantiate_generic_class_methods(
             .collect::<Vec<_>>();
         let new_class_def = HirClassDef {
             name: mangled_class.clone(),
+            bases: Vec::new(),
+            mro: vec![mangled_class.clone()],
             attrs: substituted_attrs,
             methods: mangled_methods,
             type_param: None, // The monomorphized class is not generic.
@@ -23026,6 +23028,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -23086,6 +23090,8 @@ mod tests {
     fn check_and_resolve_monomorphizes_a_generic_class_with_no_param_in_methods() {
         let class_def = HirClassDef {
             name: "Marker".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Marker".to_string()],
             attrs: vec![("x".to_string(), Ty::Int)],
             methods: vec![("__init__".to_string(), "Marker.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -23141,6 +23147,8 @@ mod tests {
         let param = Ty::Param(Box::new("T".to_string()));
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![
                 ("__init__".to_string(), "C.__init__".to_string()),
@@ -23219,6 +23227,8 @@ mod tests {
         let param = Ty::Param(Box::new("T".to_string()));
         let class_def = HirClassDef {
             name: "Box".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Box".to_string()],
             attrs: vec![("_v".to_string(), param.clone())],
             methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -23296,6 +23306,8 @@ mod tests {
         let param = Ty::Param(Box::new("T".to_string()));
         let class_def = HirClassDef {
             name: "Box".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Box".to_string()],
             attrs: vec![("_v".to_string(), param.clone())],
             methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -23389,6 +23401,8 @@ mod tests {
     fn check_and_resolve_monomorphizes_properties_with_missing_functions() {
         let class_def = HirClassDef {
             name: "Box".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Box".to_string()],
             attrs: vec![("_v".to_string(), Ty::Int)],
             methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -23452,6 +23466,8 @@ mod tests {
         let param = Ty::Param(Box::new("T".to_string()));
         let class_def = HirClassDef {
             name: "Box".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Box".to_string()],
             attrs: vec![("_v".to_string(), param.clone())],
             methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -23560,6 +23576,8 @@ mod tests {
         let param = Ty::Param(Box::new("T".to_string()));
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -24204,6 +24222,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![
                 ("__init__".to_string(), "C.__init__".to_string()),
@@ -24308,6 +24328,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![
                 ("__init__".to_string(), "C.__init__".to_string()),
@@ -24375,6 +24397,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -24499,6 +24523,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -24575,6 +24601,8 @@ mod tests {
         };
         let d_class_def = HirClassDef {
             name: "D".to_string(),
+            bases: Vec::new(),
+            mro: vec!["D".to_string()],
             attrs: vec![("x".to_string(), Ty::Int)],
             methods: vec![("__init__".to_string(), "D.__init__".to_string())],
             type_param: None, // Not generic!
@@ -24622,6 +24650,8 @@ mod tests {
         let self_ty = Ty::Instance(Box::new("E".to_string()));
         let class_def = HirClassDef {
             name: "E".to_string(),
+            bases: Vec::new(),
+            mro: vec!["E".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![
                 ("__init__".to_string(), "E.__init__".to_string()),
@@ -24770,6 +24800,8 @@ mod tests {
         let self_ty = Ty::Instance(Box::new("F".to_string()));
         let class_def = HirClassDef {
             name: "F".to_string(),
+            bases: Vec::new(),
+            mro: vec!["F".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![
                 ("__init__".to_string(), "F.__init__".to_string()),
@@ -24846,6 +24878,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -24918,6 +24952,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -24982,6 +25018,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -25045,6 +25083,8 @@ mod tests {
         };
         let class_def = HirClassDef {
             name: "D".to_string(),
+            bases: Vec::new(),
+            mro: vec!["D".to_string()],
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![
                 ("__init__".to_string(), "D.__init__".to_string()),
@@ -25117,6 +25157,8 @@ mod tests {
         };
         let box_class_def = HirClassDef {
             name: "Box".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Box".to_string()],
             attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
             type_param: Some("T".to_string()),
@@ -25158,6 +25200,8 @@ mod tests {
         };
         let maker_class_def = HirClassDef {
             name: "Maker".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Maker".to_string()],
             attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![
                 ("__init__".to_string(), "Maker.__init__".to_string()),
@@ -25242,6 +25286,8 @@ mod tests {
         };
         let d_class_def = HirClassDef {
             name: "D".to_string(),
+            bases: Vec::new(),
+            mro: vec!["D".to_string()],
             attrs: vec![("v".to_string(), Ty::Int)],
             methods: vec![("__init__".to_string(), "D.__init__".to_string())],
             type_param: None, // Not generic!
@@ -25283,6 +25329,8 @@ mod tests {
         };
         let maker_class_def = HirClassDef {
             name: "Maker".to_string(),
+            bases: Vec::new(),
+            mro: vec!["Maker".to_string()],
             attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![
                 ("__init__".to_string(), "Maker.__init__".to_string()),

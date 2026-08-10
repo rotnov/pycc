@@ -669,7 +669,7 @@ pub fn lower_checked(module: &ModModule) -> Result<HirModule, Diagnostic> {
             continue;
         }
         if let Stmt::ClassDef(def) = stmt {
-            let (class_def, mut method_items) = class::lower_class(def, &aliases)?;
+            let (class_def, mut method_items) = class::lower_class(def, &aliases, &class_defs)?;
             // D-154 Part 1's own post-merge review finding: two module-level
             // classes sharing a name would each lower their own `__init__`
             // (and any other same-named method) to the identical mangled
