@@ -303,11 +303,17 @@ than adding conditional singular/plural grammar to a machine-parsed line.
   `Last reviewed commit`/`Reviewed at`, not the old checkpoint's sha), never to the old
   body's sha. There is no separate transitional format between the old three-line body
   and this step's steady-state shape — matching step 2's bootstrap case exactly.
-- **`Cumulative by model`** lists a bucket only once its cumulative count is nonzero;
-  omit the whole line when every bucket is still zero. Bucket key is the trailer's name
-  string exactly as it appears (no normalization). Sort buckets alphabetically,
-  case-insensitive, by name, with `unattributed` and `ambiguous` always last in that
-  fixed order — each still shown only when nonzero, same as any other bucket.
+- **`Cumulative by model`** accumulates the same way `Cumulative` does, one bucket at a
+  time: each bucket's new count is that bucket's fresh-read count plus this run's own
+  step 8 contribution to that bucket (a bucket absent from the fresh read, including
+  every bucket on a migration write per the Migration bullet above, starts from zero).
+  Never compute this line from this run's own step 8 results alone — doing so would
+  discard every prior run's accumulated per-model counts on the shared checkpoint.
+  Once accumulated, list a bucket only once its cumulative count is nonzero; omit the
+  whole line when every bucket is still zero. Bucket key is the trailer's name string
+  exactly as it appears (no normalization). Sort buckets alphabetically, case-insensitive,
+  by name, with `unattributed` and `ambiguous` always last in that fixed order — each
+  still shown only when nonzero, same as any other bucket.
 - **No backfill:** this feature counts only runs from its own first write forward.
   Do not backfill counts for issues #422/#423/#424 or for any run that predates this
   format — those earlier runs' individual finding/filed/deduped counts are not
