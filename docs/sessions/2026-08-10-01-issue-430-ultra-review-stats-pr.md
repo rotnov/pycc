@@ -12,10 +12,10 @@ resolving mid-run.
   re-verified immediately before writing this entry. This is a new tip since
   the task branch's own original base (`927f018e4aade92523b033e529268d10ddae3b8d`) —
   PR #431 merged mid-session.
-- This clone (`/Users/denis/projects/pycc-proto`, `main`): fast-forwarded to the
+- This clone (`<repo>`, `main`): fast-forwarded to the
   tip above; was one commit behind before the update in this checkpoint.
 - Task work happened in the isolated worktree
-  `/Users/denis/projects/pycc-worktrees/issue-430-ultra-review-stats`, branch
+  `<worktree>`, branch
   `issue-430-ultra-review-stats`, now pushed and tracking
   `origin/issue-430-ultra-review-stats` at `a0c9922c394e33a6819af39f5f3554aa6c09f4a7`.
 - **PR #438** (`https://github.com/rotnov/pycc/pull/438`), "Add cumulative
