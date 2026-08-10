@@ -163,3 +163,4 @@ current.
 | [D-154](./D-154-class-instance-runtime-layout-stays-opaque.md) | Class instance runtime layout stays opaque with FFI-only accessors (#385, Part 1 of #375) | accepted |
 | [D-155](./D-155-stop-exact-pinning-the-claude-side-ievo-reviewer.md) | Stop exact-pinning the Claude-side ievo reviewer to a commit | accepted |
 | [D-156](./D-156-status-page-freshness-check-two-signal-design.md) | Enforce GitHub Pages status/landing freshness with a two-signal ROADMAP.md diff check (#401) | accepted |
+| [D-157](./D-157-pep-673-649-749-695-self-deferred-ann-generic-classes.md) | PEP 673 Self, PEP 649/749 self-referential deferred annotations, PEP 695 scoped generic classes | accepted |

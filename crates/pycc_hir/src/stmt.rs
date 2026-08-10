@@ -162,7 +162,7 @@ pub(crate) fn lower_stmt(
                     pycc_ast::expr_range(&ann.target),
                 ));
             }
-            let annotation = annotation_to_ty(&ann.annotation, None, aliases)?;
+            let annotation = annotation_to_ty(&ann.annotation, None, None, aliases)?;
             let value = ann
                 .value
                 .as_deref()

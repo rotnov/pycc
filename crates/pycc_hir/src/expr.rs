@@ -34,10 +34,39 @@
 //! literal that reproduces current behavior.
 
 use crate::{
-    BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, context_invalid, unsupported,
+    BinOpKind, CmpOpKind, CompIter, FStringPart, HirExpr, HirStmt, Ty, context_invalid, unsupported,
 };
 use pycc_ast::{CmpOp, Expr, Number, Operator};
 use pycc_diag::Diagnostic;
+
+/// Resolves a PEP 695 generic-class type argument (the `int` in `C[int]`)
+/// to a `Ty`. PEP 695 generic class instantiation is scoped to scalar-only
+/// types (D-133/D-134), so only `int`/`float`/`bool`/`str` are recognized —
+/// matching `annotation_to_ty`'s own bare-name-to-`Ty` mapping for those
+/// four scalars, without needing the full `aliases`/`type_param`/`class_name`
+/// context `annotation_to_ty` threads for method annotations.
+fn type_arg_name_to_ty(slice: &Expr) -> Result<Ty, Diagnostic> {
+    let Expr::Name(name) = slice else {
+        return Err(unsupported(
+            "a generic class type argument must be a bare type name (int/float/bool/str) \
+             so far -- subscript expressions are not supported yet",
+            pycc_ast::expr_range(slice),
+        ));
+    };
+    match name.id.as_str() {
+        "int" => Ok(Ty::Int),
+        "float" => Ok(Ty::Float),
+        "bool" => Ok(Ty::Bool),
+        "str" => Ok(Ty::Str),
+        other => Err(unsupported(
+            format!(
+                "a generic class type argument `{other}` is not supported yet \
+                 -- only int/float/bool/str are (D-133/D-134 scalar-only scope)"
+            ),
+            pycc_ast::expr_range(slice),
+        )),
+    }
+}
 
 pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diagnostic> {
     let lowered = match expr {
@@ -295,6 +324,35 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                 return Ok(HirExpr::MethodCall {
                     base: Box::new(lower_expr(&attr.value, in_function)?),
                     method: attr.attr.to_string(),
+                    args,
+                });
+            }
+            // PEP 695 (#387): `C[int](args)` — a generic class instantiation.
+            // The call's func is a `Subscript` with a bare-name base (the
+            // class name) and a bare-name slice (the type argument). The
+            // type argument is resolved to a `Ty` here, at HIR-lowering
+            // time, using the same bare-name-to-`Ty` mapping
+            // `annotation_to_ty` uses for scalar types (int/float/bool/str)
+            // — no `aliases` context is needed since PEP 695 generic class
+            // instantiation is scoped to scalar-only types (D-133/D-134).
+            if let Expr::Subscript(sub) = call.func.as_ref() {
+                let Expr::Name(class_name) = sub.value.as_ref() else {
+                    return Err(unsupported(
+                        "calling a subscript expression is not supported yet \
+                         (only a generic class instantiation `C[type](args)` is)",
+                        pycc_ast::expr_range(&call.func),
+                    ));
+                };
+                let type_arg = type_arg_name_to_ty(&sub.slice)?;
+                let args = call
+                    .arguments
+                    .args
+                    .iter()
+                    .map(|e| lower_expr(e, in_function))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(HirExpr::GenericClassInstantiate {
+                    class: class_name.id.as_str().to_string(),
+                    type_arg,
                     args,
                 });
             }
@@ -579,6 +637,13 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
             method,
             args: args.into_iter().map(recurse).collect(),
         },
+        HirExpr::GenericClassInstantiate { class, type_arg, args } => {
+            HirExpr::GenericClassInstantiate {
+                class,
+                type_arg,
+                args: args.into_iter().map(recurse).collect(),
+            }
+        }
     }
 }
 
