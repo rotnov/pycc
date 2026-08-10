@@ -55,7 +55,7 @@
 
 use crate::{HirItem, Ty, lower_arg_list, unsupported};
 use pycc_ast::{Decorator, Expr, Number, Stmt};
-use pycc_diag::Diagnostic;
+use pycc_diag::{Diagnostic, Span};
 
 /// Method names that collide with `crates/pycc_hir/src/expr.rs`'s own
 /// hand-recognized container-method call syntax (`Expr::Call` over
@@ -81,6 +81,17 @@ const CONTAINER_METHOD_NAMES: [&str; 4] = ["append", "pop", "get", "add"];
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirClassDef {
     pub name: String,
+    /// Direct base class names, in source order from the class header
+    /// (`class C(A, B):` → `["A", "B"]`). Empty for a class with no bases.
+    /// Part 1 of #432: inheritance machinery.
+    pub bases: Vec<String>,
+    /// The computed C3 linearization (MRO) for this class: the class's own
+    /// name first, followed by its bases' MROs in C3 order. For a class with
+    /// no bases, this is `[self_name]`. Computed at HIR-lowering time by
+    /// `compute_c3_mro` and stored here so every downstream consumer
+    /// (`pycc_types`, `pycc_mir`) resolves methods/attributes/properties
+    /// through the same MRO without re-deriving it. Part 1 of #432.
+    pub mro: Vec<String>,
     pub attrs: Vec<(String, Ty)>,
     pub methods: Vec<(String, String)>,
     /// `@property` definitions (#377): each entry records a property's
@@ -122,7 +133,13 @@ pub struct PropertyDef {
 /// property named `<name>`. `lower_class` uses this to decide the method's
 /// mangled name and which table (`methods` vs `properties`) it belongs to.
 enum MethodKind {
-    Regular,
+    /// A regular method (no decorator, or `@override`). `is_override` is
+    /// `true` when the method is decorated `@override` (PEP 698) -- the
+    /// method is still lowered as an ordinary mangled `HirItem::Function`
+    /// exactly like a non-override regular method, but `lower_class`
+    /// additionally verifies the method name exists in at least one base
+    /// class's methods or properties (emitting T0031 if not).
+    Regular { is_override: bool },
     /// `@property` getter for the attribute named `prop_name` (which is
     /// also the method's own source name, e.g. `def x(self) -> int` with
     /// `@property` is a getter for attribute `"x"`).
@@ -133,8 +150,10 @@ enum MethodKind {
     PropertySetter { prop_name: String },
 }
 
-/// Classifies a method's decorator list (#377). Returns:
-/// - `Regular` if the list is empty.
+/// Classifies a method's decorator list (#377, #432). Returns:
+/// - `Regular { is_override: false }` if the list is empty.
+/// - `Regular { is_override: true }` if the single decorator is `@override`
+///   (a bare name `override`, PEP 698).
 /// - `PropertyGetter` if the single decorator is `@property` (a bare name
 ///   `property`).
 /// - `PropertySetter` if the single decorator is `@<name>.setter` (an
@@ -146,14 +165,15 @@ enum MethodKind {
 /// - Any other decorator shape (multiple decorators, a call-shaped
 ///   decorator, a different attribute name) is rejected with `C0001`,
 ///   preserving the pre-#377 "method decorators are not supported yet"
-///   diagnostic for everything outside `@property`/`@<name>.setter`.
+///   diagnostic for everything outside `@property`/`@<name>.setter`/
+///   `@override`.
 fn classify_decorator(
     decorator_list: &[Decorator],
     method_name: &str,
     range: std::ops::Range<u32>,
 ) -> Result<MethodKind, Diagnostic> {
     if decorator_list.is_empty() {
-        return Ok(MethodKind::Regular);
+        return Ok(MethodKind::Regular { is_override: false });
     }
     if decorator_list.len() > 1 {
         return Err(unsupported("method decorators are not supported yet", range));
@@ -164,6 +184,12 @@ fn classify_decorator(
         Expr::Name(name) if name.id.as_str() == "property" => Ok(MethodKind::PropertyGetter {
             prop_name: method_name.to_string(),
         }),
+        // `@override` -- a bare name `override` (PEP 698). The method is
+        // still a regular method; `lower_class` verifies the method name
+        // exists in at least one base class.
+        Expr::Name(name) if name.id.as_str() == "override" => {
+            Ok(MethodKind::Regular { is_override: true })
+        }
         // `@<name>.setter` -- an attribute access on a bare name, where
         // the attribute is `"setter"`.
         Expr::Attribute(attr) => {
@@ -194,22 +220,101 @@ fn classify_decorator(
     }
 }
 
+/// Computes the C3 linearization (MRO) for a class with the given name and
+/// direct bases, using the already-defined classes' own MROs. This is the
+/// standard C3 algorithm from <https://en.wikipedia.org/wiki/C3_linearization>:
+///
+/// `L[C] = C + merge(L[B1], L[B2], ..., [B1, B2, ...])`
+///
+/// where `merge` repeatedly takes the head of the first non-empty list that
+/// does not appear in the tail of any other list, and appends it to the
+/// result. If no such element exists, the linearization is impossible (a
+/// conflicting inheritance order) and `None` is returned.
+///
+/// `defined_classes` maps each already-defined class name to its own
+/// `HirClassDef` (which carries its own `mro`). Every base in `bases` must
+/// already be present in `defined_classes` -- `lower_class` validates this
+/// before calling this function.
+fn compute_c3_mro(
+    class_name: &str,
+    bases: &[String],
+    defined_classes: &[(String, HirClassDef)],
+) -> Option<Vec<String>> {
+    if bases.is_empty() {
+        return Some(vec![class_name.to_string()]);
+    }
+    // Collect each base's own MRO (already computed, since bases must be
+    // defined before the derived class).
+    let mut sequences: Vec<Vec<String>> = Vec::with_capacity(bases.len() + 1);
+    for base_name in bases {
+        let base_def = defined_classes
+            .iter()
+            .find(|(name, _)| name == base_name)
+            .map(|(_, def)| def)
+            .expect("base class must be defined before the derived class");
+        sequences.push(base_def.mro.clone());
+    }
+    // The last sequence is the list of base names themselves.
+    sequences.push(bases.to_vec());
+    let mut result = vec![class_name.to_string()];
+    loop {
+        // Remove empty sequences.
+        sequences.retain(|s| !s.is_empty());
+        if sequences.is_empty() {
+            return Some(result);
+        }
+        // Find the first head that does not appear in the tail of any
+        // other sequence.
+        let mut chosen: Option<String> = None;
+        for seq in &sequences {
+            let candidate = &seq[0];
+            let in_tail = sequences.iter().any(|s| {
+                s.iter().skip(1).any(|elem| elem == candidate)
+            });
+            if !in_tail {
+                chosen = Some(candidate.clone());
+                break;
+            }
+        }
+        let Some(candidate) = chosen else {
+            // C3 linearization is impossible -- a conflicting inheritance
+            // order. This is a "circular or inconsistent MRO" error.
+            return None;
+        };
+        result.push(candidate.clone());
+        // Remove the chosen element from the head of every sequence that
+        // starts with it.
+        for seq in &mut sequences {
+            if seq[0] == candidate {
+                seq.remove(0);
+            }
+        }
+    }
+}
+
 /// Lowers a module-level `class Foo: ...` statement (D-154). Returns the
 /// class's own declared shape (for `HirModule::class_defs`) alongside every
 /// method it defines, already lowered into ordinary mangled
 /// `HirItem::Function`s ready to append to `HirModule::items` -- see this
 /// module's own doc comment for why a class has no `HirItem` of its own.
 ///
+/// `defined_classes` is the list of already-lowered class definitions (name
+/// → `HirClassDef`), in source order. Inheritance validation (unknown base,
+/// circular inheritance, generic-class-as-base) uses this to check each base
+/// class against the classes defined earlier in the module, matching Python's
+/// own source-order class-body execution (a base class must be defined before
+/// the derived class that inherits from it).
+///
 /// Every check below is a `C0001` capability diagnostic, not a design
-/// question this PR resolves: inheritance (`class C(Base):`) is explicitly
-/// Part 3 of #375 (#387) per the plan's Correction 1 (still unimplemented),
-/// and a class decorator is out of scope entirely (dataclasses/
-/// `dataclass_transform` are unrelated later PRs' own scope). Generic classes
-/// (`class C[T]:`) with a single type parameter ARE now supported by #387
-/// (see the `type_params` handling below).
+/// question this PR resolves: a class decorator is out of scope entirely
+/// (dataclasses/`dataclass_transform` are unrelated later PRs' own scope).
+/// Generic classes (`class C[T]:`) with a single type parameter ARE now
+/// supported by #387 (see the `type_params` handling below). Inheritance
+/// (`class C(Base):`) is now supported by #432 (Part 1).
 pub(crate) fn lower_class(
     def: &pycc_ast::StmtClassDef,
     aliases: &[(String, Ty)],
+    defined_classes: &[(String, HirClassDef)],
 ) -> Result<(HirClassDef, Vec<HirItem>), Diagnostic> {
     if !def.decorator_list.is_empty() {
         return Err(unsupported("class decorators are not supported yet", def.range));
@@ -230,15 +335,104 @@ pub(crate) fn lower_class(
             }
         },
     };
-    if let Some(arguments) = def.arguments.as_deref()
-        && (!arguments.args.is_empty() || !arguments.keywords.is_empty())
-    {
+    // #432: parse base class names from the class header's positional
+    // arguments (`class C(A, B):` → `["A", "B"]`). Keyword arguments
+    // (e.g. `metaclass=Meta`) are still rejected, and a non-`Expr::Name`
+    // positional base (e.g. `class C(SomeMod.Base):`) is also rejected --
+    // only a bare name is supported as a base class for now.
+    let mut bases: Vec<String> = Vec::new();
+    if let Some(arguments) = def.arguments.as_deref() {
+        if !arguments.keywords.is_empty() {
+            return Err(unsupported(
+                "keyword arguments in a class header (e.g. `metaclass=`) are not supported yet",
+                def.range,
+            ));
+        }
+        for arg in arguments.args.iter() {
+            let Expr::Name(name) = arg else {
+                return Err(unsupported(
+                    "a base class must be a bare name (e.g. `class C(Base):`), not an \
+                     attribute access or other expression",
+                    pycc_ast::expr_range(arg),
+                ));
+            };
+            let base_name = name.id.to_string();
+            // Reject duplicate bases in the same class header.
+            if bases.contains(&base_name) {
+                return Err(unsupported(
+                    format!(
+                        "class `{}` lists base `{base_name}` more than once -- duplicate bases \
+                         are not supported",
+                        def.name.as_str()
+                    ),
+                    def.range,
+                ));
+            }
+            bases.push(base_name);
+        }
+    }
+    let class_name = def.name.to_string();
+    // #432: A generic class (from #387) with base classes is not supported
+    // yet — `instantiate_generic_class_methods` creates a monomorphized
+    // `HirClassDef` with empty `bases`/`mro`, silently dropping inheritance.
+    // Reject this early with a clear error rather than letting it fail with
+    // a confusing T0044 downstream.
+    if type_param.is_some() && !bases.is_empty() {
         return Err(unsupported(
-            "class inheritance (`class C(Base):`) is not supported yet",
+            format!(
+                "generic class `{class_name}` with base classes is not supported yet -- \
+                 generic classes cannot inherit from other classes in this version"
+            ),
             def.range,
         ));
     }
-    let class_name = def.name.to_string();
+    // #432: validate each base class against the already-defined classes.
+    for base_name in &bases {
+        let Some(base_def) = defined_classes.iter().find(|(name, _)| name == base_name) else {
+            return Err(unsupported(
+                format!(
+                    "class `{class_name}` inherits from unknown class `{base_name}` -- base \
+                     classes must be defined earlier in the same module"
+                ),
+                def.range,
+            ));
+        };
+        // Generic classes (from #387) with a type_param cannot be used as
+        // base classes yet.
+        if base_def.1.type_param.is_some() {
+            return Err(unsupported(
+                format!(
+                    "class `{class_name}` cannot inherit from generic class `{base_name}` -- \
+                     generic classes as bases are not supported yet"
+                ),
+                def.range,
+            ));
+        }
+        // Reject circular inheritance: if the base class already lists this
+        // class in its own MRO, then inheriting from it would create a
+        // cycle.
+        if base_def.1.mro.contains(&class_name) {
+            return Err(unsupported(
+                format!(
+                    "class `{class_name}` cannot inherit from `{base_name}` -- circular \
+                     inheritance is not supported"
+                ),
+                def.range,
+            ));
+        }
+    }
+    // #432: compute the C3 linearization (MRO). A `None` return means the
+    // inheritance order is inconsistent (a C3 conflict), which is also
+    // rejected as a circular/inconsistent inheritance error.
+    let mro = compute_c3_mro(&class_name, &bases, defined_classes).ok_or_else(|| {
+        unsupported(
+            format!(
+                "class `{class_name}` has an inconsistent method resolution order (MRO) -- \
+                 the C3 linearization of its base classes is impossible"
+            ),
+            def.range,
+        )
+    })?;
     let mut methods: Vec<(String, String)> = Vec::new();
     let mut items: Vec<HirItem> = Vec::new();
     let mut attrs: Vec<(String, Ty)> = Vec::new();
@@ -298,7 +492,46 @@ pub(crate) fn lower_class(
             attrs = collect_init_attrs(&method_def.body, &params)?;
         }
         match &kind {
-            MethodKind::Regular => {
+            MethodKind::Regular { is_override } => {
+                // #432: if `@override` is present, verify the method name
+                // exists in at least one base class's methods or
+                // properties (walking the MRO, excluding the current class
+                // itself). If no matching base method exists, emit T0031.
+                if *is_override {
+                    let found_in_base = mro.iter().skip(1).any(|mro_class| {
+                        // Every class in the MRO (except the first, which is
+                        // `class_name` itself and is skipped) was placed there
+                        // by `compute_c3_mro`, which only references classes
+                        // from `defined_classes` -- so this lookup always
+                        // succeeds. Using `.expect()` (whose panic path lives
+                        // in libcore, outside this crate's instrumented
+                        // regions) instead of a `let .. else { return false
+                        // }` avoids a permanently-uncovered else branch under
+                        // D-014's 100%-region coverage gate.
+                        let (_, base_def) =
+                            defined_classes.iter().find(|(name, _)| name == mro_class)
+                                .expect("every class in the MRO must be in defined_classes");
+                        base_def.methods.iter().any(|(name, _)| name == &method_name)
+                            || base_def
+                                .properties
+                                .iter()
+                                .any(|p| p.name == method_name)
+                    });
+                    if !found_in_base {
+                        return Err(Diagnostic::error(
+                            "T0031",
+                            format!(
+                                "`@override` on method `{class_name}.{method_name}` does not \
+                                 override any method or property of the same name in a base \
+                                 class"
+                            ),
+                            Span::new(
+                                u32::from(method_def.range.start()),
+                                u32::from(method_def.range.end()),
+                            ),
+                        ));
+                    }
+                }
                 let mangled = format!("{class_name}.{method_name}");
                 // #377: reject a regular method whose name collides with an
                 // existing property. Both would share the same `<Class>.<name>`
@@ -403,14 +636,31 @@ pub(crate) fn lower_class(
         items.push(item);
     }
     if !methods.iter().any(|(name, _)| name == "__init__") {
-        return Err(unsupported(
-            "a class without an `__init__` method is not supported yet",
-            def.range,
-        ));
+        // #432: a derived class without its own `__init__` inherits the
+        // base class's `__init__` -- check the MRO for a class that has one.
+        // The MRO is ordered most-derived-first, so the first `__init__`
+        // found is the one that would be called (matching CPython's own
+        // MRO-based constructor resolution).
+        let has_inherited_init = mro.iter().skip(1).any(|mro_class| {
+            defined_classes
+                .iter()
+                .find(|(name, _)| name == mro_class)
+                .map(|(_, cd)| cd.methods.iter().any(|(mn, _)| mn == "__init__"))
+                .unwrap_or(false)
+        });
+        if !has_inherited_init {
+            return Err(unsupported(
+                "a class without an `__init__` method is not supported yet \
+                 (and no base class in its MRO provides one)",
+                def.range,
+            ));
+        }
     }
     Ok((
         HirClassDef {
             name: class_name,
+            bases,
+            mro,
             attrs,
             methods,
             properties,
@@ -529,7 +779,7 @@ fn lower_method(
                 ));
             }
         }
-        MethodKind::Regular => {}
+        MethodKind::Regular { .. } => {}
     }
     let method_name = def.name.as_str();
     let is_public = !method_name.starts_with('_'); // D-038
@@ -563,7 +813,7 @@ fn lower_method(
     // prevents collision with the getter, since both share the same source
     // method name).
     let mangled_name = match kind {
-        MethodKind::Regular | MethodKind::PropertyGetter { .. } => {
+        MethodKind::Regular { .. } | MethodKind::PropertyGetter { .. } => {
             format!("{class_name}.{method_name}")
         }
         MethodKind::PropertySetter { prop_name } => {
@@ -798,8 +1048,21 @@ mod tests {
     }
 
     #[test]
-    fn a_class_with_a_positional_base_is_unsupported() {
-        assert_c0001("class C(Base):\n    def __init__(self) -> None:\n        return\n");
+    fn a_class_with_an_unknown_base_is_unsupported() {
+        // #432: `class C(Base):` where `Base` is not defined earlier in the
+        // module is rejected with C0001 (unknown base class).
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C(Base):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("inherits from unknown class `Base`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
     }
 
     #[test]
@@ -1245,6 +1508,8 @@ mod tests {
             *class_def,
             HirClassDef {
                 name: "Point".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Point".to_string()],
                 attrs: vec![
                     ("x".to_string(), Ty::Int),
                     ("y".to_string(), Ty::Int),
@@ -1767,5 +2032,252 @@ mod tests {
     #[test]
     fn a_generic_class_with_a_param_spec_is_unsupported() {
         assert_c0001("class C[**P]:\n    def __init__(self) -> None:\n        return\n");
+    }
+
+    // -- #432: inheritance, C3 MRO, @override, inherited __init__ -----------
+
+    #[test]
+    fn single_inheritance_produces_correct_mro() {
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        return\n    def f(self) -> int:\n        return 1\nclass B(A):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let (_, b_def) = &hir.class_defs[1];
+        assert_eq!(b_def.bases, vec!["A".to_string()]);
+        assert_eq!(b_def.mro, vec!["B".to_string(), "A".to_string()]);
+    }
+
+    #[test]
+    fn multiple_inheritance_produces_c3_mro() {
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        return\nclass B:\n    def __init__(self) -> None:\n        return\nclass C(A, B):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let (_, c_def) = &hir.class_defs[2];
+        assert_eq!(c_def.bases, vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(c_def.mro, vec!["C".to_string(), "A".to_string(), "B".to_string()]);
+    }
+
+    #[test]
+    fn diamond_inheritance_produces_correct_c3_mro() {
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        return\nclass B(A):\n    def __init__(self) -> None:\n        return\nclass C(A):\n    def __init__(self) -> None:\n        return\nclass D(B, C):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let (_, d_def) = &hir.class_defs[3];
+        // C3: D, B, C, A
+        assert_eq!(d_def.mro, vec!["D".to_string(), "B".to_string(), "C".to_string(), "A".to_string()]);
+    }
+
+    #[test]
+    fn circular_inheritance_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class A(B):\n    def __init__(self) -> None:\n        return\nclass B(A):\n    def __init__(self) -> None:\n        return\n",
+        );
+        // The first class `A(B)` is rejected because `B` is not yet defined.
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("inherits from unknown class `B`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn duplicate_bases_are_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        return\nclass B(A, A):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("lists base `A` more than once"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn inheriting_from_a_generic_class_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class A[T]:\n    def __init__(self, x: T) -> None:\n        self.x = x\nclass B(A):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("cannot inherit from generic class `A`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_generic_class_with_base_classes_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class Base:\n    def __init__(self) -> None:\n        return\nclass C[T](Base):\n    def __init__(self, x: T) -> None:\n        self.x = x\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("generic class `C` with base classes"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn override_on_a_valid_method_lowers_successfully() {
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        return\n    def f(self) -> int:\n        return 1\nclass B(A):\n    def __init__(self) -> None:\n        return\n    @override\n    def f(self) -> int:\n        return 2\n",
+        );
+        let (_, b_def) = &hir.class_defs[1];
+        assert!(b_def.methods.iter().any(|(name, _)| name == "f"));
+    }
+
+    #[test]
+    fn override_on_a_nonexistent_method_is_t0031() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        return\n    def f(self) -> int:\n        return 1\nclass B(A):\n    def __init__(self) -> None:\n        return\n    @override\n    def g(self) -> int:\n        return 2\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "T0031");
+        assert!(
+            diagnostic.message.contains("does not override"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn override_on_a_property_is_valid() {
+        let hir = lower_ok(
+            "class A:\n    def __init__(self) -> None:\n        self._x = 0\n    @property\n    def x(self) -> int:\n        return self._x\nclass B(A):\n    def __init__(self) -> None:\n        return\n    @override\n    def x(self) -> int:\n        return 42\n",
+        );
+        let (_, b_def) = &hir.class_defs[1];
+        // The @override-decorated method `x` is a regular method (not a
+        // property), and it overrides the property `x` from `A`.
+        assert!(b_def.methods.iter().any(|(name, _)| name == "x"));
+    }
+
+    #[test]
+    fn a_derived_class_without_init_inherits_base_init() {
+        let hir = lower_ok(
+            "class A:\n    def __init__(self, x: int) -> None:\n        self.x = x\nclass B(A):\n    def f(self) -> int:\n        return self.x\n",
+        );
+        let (_, b_def) = &hir.class_defs[1];
+        // B has no __init__ of its own, but inherits A's.
+        assert!(!b_def.methods.iter().any(|(name, _)| name == "__init__"));
+        assert_eq!(b_def.mro, vec!["B".to_string(), "A".to_string()]);
+    }
+
+    #[test]
+    fn a_class_without_init_and_without_base_init_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        return\nclass B(A):\n    pass\n",
+        );
+        // `pass` in a class body is C0001 (not a def), so this is rejected
+        // before the __init__ check even runs.
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+    }
+
+    #[test]
+    fn a_class_with_no_bases_and_no_init_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C:\n    def f(self) -> int:\n        return 1\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("no base class in its MRO provides one"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_non_name_base_class_expression_is_unsupported() {
+        // #432: `class C(SomeMod.Base):` parses `SomeMod.Base` as an
+        // `Expr::Attribute`, not an `Expr::Name` -- only a bare name is
+        // supported as a base class for now.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class C(SomeMod.Base):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("a base class must be a bare name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn an_inconsistent_c3_mro_is_rejected() {
+        // #432: a classic C3 linearization conflict. `C(A, B)` gives MRO
+        // [C, A, B] and `D(B, A)` gives MRO [D, B, A]. `E(C, D)` then has
+        // no valid C3 merge: after choosing C and D, the remaining
+        // sequences [A, B] and [B, A] have no head that does not appear in
+        // the other's tail, so `compute_c3_mro` returns `None`.
+        let module = crate::pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        return\nclass B:\n    def __init__(self) -> None:\n        return\nclass C(A, B):\n    def __init__(self) -> None:\n        return\nclass D(B, A):\n    def __init__(self) -> None:\n        return\nclass E(C, D):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("inconsistent method resolution order (MRO)"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn circular_inheritance_in_mro_is_rejected() {
+        // #432: circular inheritance (A's MRO contains B, and B inherits
+        // from A) is impossible through normal source-order processing --
+        // a base class must be defined before the derived class that
+        // inherits from it, so A's MRO can never contain B before B is
+        // even defined. This test bypasses `lower_checked` (which processes
+        // classes in source order) and calls `lower_class` directly with a
+        // hand-built `defined_classes` whose "A" entry already lists "B"
+        // in its MRO, exercising the defensive circular-inheritance check
+        // that is otherwise unreachable from any real source program.
+        //
+        // The `find_map` includes a leading non-class statement so its
+        // `_ => None` arm is exercised (not just the `ClassDef` arm),
+        // matching this file's own established coverage-gate convention
+        // (see e.g. `a_subclass_clone_body_is_substituted` above).
+        let module = crate::pycc_parser_test_helper::parse(
+            "def _dummy() -> None:\n    return\nclass B(A):\n    def __init__(self) -> None:\n        return\n",
+        );
+        let def = module
+            .body
+            .iter()
+            .find_map(|stmt| match stmt {
+                pycc_ast::Stmt::ClassDef(def) => Some(def),
+                _ => None,
+            })
+            .expect("test fixture must contain a class definition");
+        let fake_a = HirClassDef {
+            name: "A".to_string(),
+            bases: Vec::new(),
+            mro: vec!["A".to_string(), "B".to_string()],
+            attrs: vec![],
+            methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+            type_param: None,
+            properties: Vec::new(),
+        };
+        let defined_classes = vec![("A".to_string(), fake_a)];
+        let diagnostic = super::lower_class(def, &[], &defined_classes).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic
+                .message
+                .contains("circular inheritance is not supported"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
     }
 }

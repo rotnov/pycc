@@ -638,3 +638,26 @@ fn property_setter_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("property_setter_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/property_setter.py");
 }
+
+// #432: basic single inheritance with method override. A derived class
+// overrides a base class method; the derived method is called (static
+// dispatch via the C3 MRO). A third class inherits without overriding,
+// demonstrating inherited method resolution.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn inheritance_basic_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/inheritance_basic.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("inheritance_basic_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/inheritance_basic.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("inheritance_basic_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/inheritance_basic.py");
+}
+
+// PEP 698 (#432): `@override` decorator. pycc treats `@override` as a
+// built-in decorator name (no import required), while CPython 3.14
+// requires `from typing import override`. Since pycc does not yet support
+// imports, a byte-for-byte conformance fixture is not possible until
+// import support lands (v0.4). The @override behavior is covered by the
+// integration tests in tests/issue_432_inheritance.rs instead.

@@ -107,15 +107,35 @@ fn check_call_args(callee: &str, arg_tys: &[Ty], param_tys: &[Ty]) -> Result<(),
 
 /// Resolves `ClassName(args)` (instantiation) -- called by
 /// `infer_expr_in`'s `HirExpr::Call` arm only after `env.lookup_class`
-/// confirms `class_name` is a real, registered class, so the mangled
-/// `<ClassName>.__init__` function this looks up is always present (every
-/// `HirClassDef` requires an `__init__`, per `pycc_hir::class::lower_class`).
+/// confirms `class_name` is a real, registered class. #432: the `__init__`
+/// is resolved via the MRO -- a derived class without its own `__init__`
+/// inherits the base class's constructor. The MRO is ordered
+/// most-derived-first, so the first `__init__` found is the one called.
 pub(crate) fn resolve_instantiation(
     env: &Environment,
     class_name: &str,
     arg_tys: &[Ty],
 ) -> Result<Ty, Diagnostic> {
-    let mangled = format!("{class_name}.__init__");
+    let class_def = env.lookup_class(class_name).unwrap_or_else(|| {
+        panic!(
+            "pycc_types: internal error: class `{class_name}` was not registered -- \
+             infer_expr_in should have checked lookup_class before calling this"
+        )
+    });
+    // #432: walk the MRO to find the first class with an `__init__` method.
+    let mangled = class_def.mro.iter().find_map(|mro_class| {
+        let mro_def = env.lookup_class(mro_class)?;
+        if mro_def.methods.iter().any(|(mn, _)| mn == "__init__") {
+            Some(format!("{mro_class}.__init__"))
+        } else {
+            None
+        }
+    }).unwrap_or_else(|| {
+        panic!(
+            "pycc_types: internal error: no `__init__` found in class `{class_name}`'s MRO -- \
+             pycc_hir::lower_class should have rejected this before it reached pycc_types"
+        )
+    });
     let (param_tys, _return_ty) = env.lookup_function(&mangled).unwrap_or_else(|| {
         panic!(
             "pycc_types: internal error: `{mangled}` was not registered as an ordinary \
@@ -140,36 +160,58 @@ pub(crate) fn resolve_instantiation(
 /// method's return type, not a slot type. This mirrors CPython's own
 /// observable behavior, where a property descriptor intercepts attribute
 /// access before the instance's `__dict__`/slot table is consulted.
+///
+/// #432: walks the class's MRO (C3 linearization) in order, checking each
+/// class's property table and attribute slots. The first class in the MRO
+/// that declares the attribute (or a property of that name) wins, matching
+/// CPython's own MRO-based attribute resolution.
 pub(crate) fn resolve_attr_get(env: &Environment, base_ty: &Ty, attr: &str) -> Result<Ty, Diagnostic> {
     let Ty::Instance(class_name) = base_ty else {
         return Err(t0043_not_an_instance("read an attribute", base_ty));
     };
     let class_def = expect_class(env, class_name);
-    // #377: check properties before regular attribute slots, matching
-    // CPython's descriptor protocol precedence (a property descriptor
-    // intercepts attribute access before `__dict__`).
-    if let Some(prop) = class_def.properties.iter().find(|p| p.name == attr) {
-        let (_, return_ty) = env.lookup_function(&prop.getter).unwrap_or_else(|| {
-            panic!(
-                "pycc_types: internal error: property getter `{}` is in class `{class_name}`'s \
-                 own property table but was not registered as an ordinary function",
-                prop.getter
-            )
-        });
-        return Ok(return_ty.clone());
+    // #432/#377: walk the MRO for property lookup first (matching CPython's
+    // descriptor protocol precedence — a property descriptor intercepts
+    // attribute access before `__dict__`), across ALL classes in the MRO,
+    // then fall back to regular attribute slots. This matches the MIR
+    // lowering's own properties-first-across-full-MRO logic exactly,
+    // avoiding a type-checker/MIR disagreement when a derived class has a
+    // regular attr with the same name as a base class property.
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some(prop) = mro_def.properties.iter().find(|p| p.name == attr) {
+            let (_, return_ty) = env.lookup_function(&prop.getter).unwrap_or_else(|| {
+                panic!(
+                    "pycc_types: internal error: property getter `{}` is in class `{mro_class}`'s \
+                     own property table but was not registered as an ordinary function",
+                    prop.getter
+                )
+            });
+            return Ok(return_ty.clone());
+        }
     }
-    class_def
-        .attrs
-        .iter()
-        .find(|(name, _)| name == attr)
-        .map(|(_, ty)| ty.clone())
-        .ok_or_else(|| t0044_unknown_member("attribute", class_name, attr))
+    // No property matched in any class — now check regular attribute slots
+    // by walking the MRO in order (most-derived first, so a re-declared
+    // attr uses the most-derived type).
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, ty)) = mro_def.attrs.iter().find(|(name, _)| name == attr) {
+            return Ok(ty.clone());
+        }
+    }
+    Err(t0044_unknown_member("attribute", class_name, attr))
 }
 
 /// Resolves `base.method(args)` against `base_ty`, checking the call's
 /// arguments against the method's own resolved signature (excluding
 /// `self`, exactly like `resolve_instantiation` excludes it from a
 /// constructor call) and returning the method's return type.
+///
+/// #432: walks the class's MRO (C3 linearization) in order, checking each
+/// class's method table. The first class in the MRO that declares the
+/// method wins, matching CPython's own MRO-based method resolution. A
+/// subclass method shadows a base class method of the same name (the
+/// subclass appears first in the MRO).
 pub(crate) fn resolve_method_call(
     env: &Environment,
     base_ty: &Ty,
@@ -180,18 +222,23 @@ pub(crate) fn resolve_method_call(
         return Err(t0043_not_an_instance("call a method", base_ty));
     };
     let class_def = expect_class(env, class_name);
-    let Some((_, mangled)) = class_def.methods.iter().find(|(name, _)| name == method) else {
-        return Err(t0044_unknown_member("method", class_name, method));
-    };
-    let (param_tys, return_ty) = env.lookup_function(mangled).unwrap_or_else(|| {
-        panic!(
-            "pycc_types: internal error: `{mangled}` is in class `{class_name}`'s own \
-             method table but was not registered as an ordinary function"
-        )
-    });
-    let method_param_tys = &param_tys[1..]; // exclude `self`
-    check_call_args(method, arg_tys, method_param_tys)?;
-    Ok(return_ty.clone())
+    // #432: walk the MRO in order. The first class that declares the
+    // method wins.
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
+        if let Some((_, mangled)) = mro_def.methods.iter().find(|(name, _)| name == method) {
+            let (param_tys, return_ty) = env.lookup_function(mangled).unwrap_or_else(|| {
+                panic!(
+                    "pycc_types: internal error: `{mangled}` is in class `{mro_class}`'s own \
+                     method table but was not registered as an ordinary function"
+                )
+            });
+            let method_param_tys = &param_tys[1..]; // exclude `self`
+            check_call_args(method, arg_tys, method_param_tys)?;
+            return Ok(return_ty.clone());
+        }
+    }
+    Err(t0044_unknown_member("method", class_name, method))
 }
 
 /// Checks `base.attr = value` (`HirStmt::AttrSet`), shared between module
@@ -209,6 +256,9 @@ pub(crate) fn resolve_method_call(
 /// two may differ, though they usually match). This mirrors CPython's own
 /// observable behavior, where `obj.x = value` invokes the property's
 /// `__set__` descriptor method, not a bare slot write.
+///
+/// #432: property lookup walks the MRO, so a property defined in a base
+/// class is found when setting an attribute on a derived class instance.
 pub(crate) fn check_attr_set(
     env: &Environment,
     local_names: &[&str],
@@ -217,53 +267,58 @@ pub(crate) fn check_attr_set(
     value: &HirExpr,
 ) -> Result<(), Diagnostic> {
     let base_ty = infer_expr_in(env, local_names, base)?;
-    // #377: check properties before regular attribute slots. A property
-    // setter has its own parameter type (the value the setter accepts),
-    // which may differ from the getter's return type -- so the value is
-    // checked against the setter's parameter, not `resolve_attr_get`'s
-    // getter-return-type result.
+    // #432/#377: walk the MRO for property lookup first (matching
+    // `resolve_attr_get`'s own properties-first-across-full-MRO logic and
+    // the MIR lowering's own logic), across ALL classes in the MRO, then
+    // fall back to regular attribute slots. A property setter has its own
+    // parameter type (the value the setter accepts), which may differ from
+    // the getter's return type -- so the value is checked against the
+    // setter's parameter, not `resolve_attr_get`'s getter-return-type.
     if let Ty::Instance(class_name) = &base_ty {
         let class_def = expect_class(env, class_name);
-        if let Some(prop) = class_def.properties.iter().find(|p| p.name == attr) {
-            let value_ty = infer_expr_in(env, local_names, value)?;
-            let Some(setter_mangled) = &prop.setter else {
-                return Err(Diagnostic::error(
-                    "T0044",
-                    format!(
-                        "property `{attr}` of class `{class_name}` is read-only (has no setter)"
-                    ),
-                    Span::new(0, 0),
-                ));
-            };
-            let (param_tys, _) = env.lookup_function(setter_mangled).unwrap_or_else(|| {
-                panic!(
-                    "pycc_types: internal error: property setter `{setter_mangled}` is in class \
-                     `{class_name}`'s own property table but was not registered as an ordinary \
-                     function"
-                )
-            });
-            let setter_param_ty = &param_tys[1]; // exclude `self`
-            if !is_assignable(value_ty.clone(), setter_param_ty.clone()) {
-                return Err(Diagnostic::error(
-                    "T0021",
-                    format!(
-                        "cannot assign `{}` to property `{attr}` (setter expects `{}`)",
-                        value_ty.name(),
-                        setter_param_ty.name()
-                    ),
-                    Span::new(0, 0),
-                )
-                .with_help(format!(
-                    "change the value to `{}` (the setter's expected type), or the \
-                     setter's parameter annotation to `{}` (the actual type)",
-                    setter_param_ty.name(),
-                    value_ty.name()
-                )));
+        for mro_class in &class_def.mro {
+            let mro_def = expect_class(env, mro_class);
+            if let Some(prop) = mro_def.properties.iter().find(|p| p.name == attr) {
+                let value_ty = infer_expr_in(env, local_names, value)?;
+                let Some(setter_mangled) = &prop.setter else {
+                    return Err(Diagnostic::error(
+                        "T0044",
+                        format!(
+                            "property `{attr}` of class `{mro_class}` is read-only (has no setter)"
+                        ),
+                        Span::new(0, 0),
+                    ));
+                };
+                let (param_tys, _) = env.lookup_function(setter_mangled).unwrap_or_else(|| {
+                    panic!(
+                        "pycc_types: internal error: property setter `{setter_mangled}` is in class \
+                         `{mro_class}`'s own property table but was not registered as an ordinary \
+                         function"
+                    )
+                });
+                let setter_param_ty = &param_tys[1]; // exclude `self`
+                if !is_assignable(value_ty.clone(), setter_param_ty.clone()) {
+                    return Err(Diagnostic::error(
+                        "T0021",
+                        format!(
+                            "cannot assign `{}` to property `{attr}` (setter expects `{}`)",
+                            value_ty.name(),
+                            setter_param_ty.name()
+                        ),
+                        Span::new(0, 0),
+                    )
+                    .with_help(format!(
+                        "change the value to `{}` (the setter's expected type), or the \
+                         setter's parameter annotation to `{}` (the actual type)",
+                        setter_param_ty.name(),
+                        value_ty.name()
+                    )));
+                }
+                return Ok(());
             }
-            return Ok(());
         }
     }
-    // Regular attribute slot (existing behavior).
+    // Regular attribute slot -- `resolve_attr_get` already walks the MRO.
     let attr_ty = resolve_attr_get(env, &base_ty, attr)?;
     let value_ty = infer_expr_in(env, local_names, value)?;
     if !is_assignable(value_ty.clone(), attr_ty.clone()) {
@@ -351,6 +406,8 @@ mod tests {
                 "Point".to_string(),
                 HirClassDef {
                     name: "Point".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["Point".to_string()],
                     attrs: vec![("x".to_string(), Ty::Int), ("y".to_string(), Ty::Int)],
                     methods: vec![
                         ("__init__".to_string(), "Point.__init__".to_string()),
@@ -749,6 +806,8 @@ mod tests {
                 "Point".to_string(),
                 HirClassDef {
                     name: "Point".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["Point".to_string()],
                     attrs: vec![("x".to_string(), Ty::Int)],
                     methods: vec![
                         ("__init__".to_string(), "Point.__init__".to_string()),
@@ -816,6 +875,8 @@ mod tests {
                 "Point".to_string(),
                 HirClassDef {
                     name: "Point".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["Point".to_string()],
                     attrs: vec![("x".to_string(), Ty::Int)],
                     methods: vec![("__init__".to_string(), "Point.__init__".to_string())],
                     type_param: None,
@@ -1080,6 +1141,8 @@ mod tests {
             "Counter".to_string(),
             HirClassDef {
                 name: "Counter".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Counter".to_string()],
                 attrs: vec![("n".to_string(), Ty::Int)],
                 methods: vec![
                     ("__init__".to_string(), "Counter.__init__".to_string()),
@@ -1180,8 +1243,49 @@ mod tests {
             "Ghost".to_string(),
             HirClassDef {
                 name: "Ghost".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Ghost".to_string()],
                 attrs: vec![],
                 methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+            },
+        );
+        let _ = super::resolve_instantiation(&env, "Ghost", &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "class `Ghost` was not registered")]
+    fn resolve_instantiation_panics_when_the_class_is_not_registered() {
+        // #432: `resolve_instantiation` is only called after
+        // `infer_expr_in`'s own `lookup_class` confirms the class exists,
+        // so reaching it with an unregistered class name is an internal
+        // error. This test bypasses the normal entry point and calls
+        // `resolve_instantiation` directly with a bare `Environment`.
+        let env = crate::Environment::new();
+        let _ = super::resolve_instantiation(&env, "Ghost", &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "no `__init__` found in class `Ghost`'s MRO")]
+    fn resolve_instantiation_panics_when_no_init_is_in_the_mro() {
+        // #432: `lower_class` rejects a class with no `__init__` anywhere
+        // in its MRO before it reaches `pycc_types`, so this panic is an
+        // internal error. This test bypasses the normal entry point and
+        // binds a class whose MRO contains no `__init__` method. The MRO
+        // also includes `Phantom` (not registered), exercising the `?`
+        // arm of the `find_map` closure -- `Ghost` is found but has no
+        // `__init__`, then `Phantom` is not found, so `find_map` returns
+        // `None` and the `unwrap_or_else` panic fires.
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "Ghost".to_string(),
+            HirClassDef {
+                name: "Ghost".to_string(),
+                bases: vec!["Phantom".to_string()],
+                mro: vec!["Ghost".to_string(), "Phantom".to_string()],
+                attrs: vec![],
+                methods: vec![("f".to_string(), "Ghost.f".to_string())],
                 type_param: None,
                 properties: Vec::new(),
             },
@@ -1197,6 +1301,8 @@ mod tests {
             "Ghost".to_string(),
             HirClassDef {
                 name: "Ghost".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Ghost".to_string()],
                 attrs: vec![],
                 methods: vec![("foo".to_string(), "Ghost.foo".to_string())],
                 type_param: None,
@@ -1226,6 +1332,8 @@ mod tests {
             "Ghost".to_string(),
             HirClassDef {
                 name: "Ghost".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Ghost".to_string()],
                 attrs: vec![],
                 methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
                 type_param: None,
@@ -1259,6 +1367,8 @@ mod tests {
             "Ghost".to_string(),
             HirClassDef {
                 name: "Ghost".to_string(),
+                bases: Vec::new(),
+                mro: vec!["Ghost".to_string()],
                 attrs: vec![],
                 methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
                 type_param: None,
@@ -1341,6 +1451,8 @@ mod tests {
                 "Box".to_string(),
                 HirClassDef {
                     name: "Box".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["Box".to_string()],
                     attrs: vec![("_val".to_string(), Ty::Int)],
                     methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
                     properties: vec![PropertyDef {
@@ -1390,6 +1502,8 @@ mod tests {
                 "Box".to_string(),
                 HirClassDef {
                     name: "Box".to_string(),
+                    bases: Vec::new(),
+                    mro: vec!["Box".to_string()],
                     attrs: vec![("_val".to_string(), Ty::Int)],
                     methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
                     properties: vec![PropertyDef {
@@ -1663,6 +1777,365 @@ mod tests {
                 value: HirExpr::IntLiteral(42),
             }),
         ]);
+        let resolved = check_and_resolve(&hir).expect("check_and_resolve should succeed");
+        let _mir = pycc_mir::build(&resolved);
+    }
+
+    // -- #432: MRO-aware type checking --------------------------------------
+
+    /// Builds an `Animal` base class with a `name` attribute and a `speak`
+    /// method, plus a `Dog` derived class with its own `speak` override,
+    /// plus `extra_items` for each test's own exercise.
+    fn inheritance_module(extra_items: Vec<HirItem>) -> HirModule {
+        let animal_ty = Ty::Instance(Box::new("Animal".to_string()));
+        let dog_ty = Ty::Instance(Box::new("Dog".to_string()));
+        let animal_init = HirItem::Function {
+            name: "Animal.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), animal_ty.clone()),
+                ("name".to_string(), Ty::Str),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "name".to_string(),
+                    value: HirExpr::Name("name".to_string()),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let animal_speak = HirItem::Function {
+            name: "Animal.speak".to_string(),
+            params: vec![("self".to_string(), animal_ty.clone())],
+            return_ty: Ty::Str,
+            body: vec![HirStmt::Return(Some(HirExpr::StringLiteral(
+                "...".to_string(),
+            )))],
+        };
+        let dog_init = HirItem::Function {
+            name: "Dog.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), dog_ty.clone()),
+                ("name".to_string(), Ty::Str),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "name".to_string(),
+                    value: HirExpr::Name("name".to_string()),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let dog_speak = HirItem::Function {
+            name: "Dog.speak".to_string(),
+            params: vec![("self".to_string(), dog_ty.clone())],
+            return_ty: Ty::Str,
+            body: vec![HirStmt::Return(Some(HirExpr::StringLiteral(
+                "Woof".to_string(),
+            )))],
+        };
+        let mut items = vec![animal_init, animal_speak, dog_init, dog_speak];
+        items.extend(extra_items);
+        HirModule {
+            items,
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                (
+                    "Animal".to_string(),
+                    HirClassDef {
+                        name: "Animal".to_string(),
+                        bases: Vec::new(),
+                        mro: vec!["Animal".to_string()],
+                        attrs: vec![("name".to_string(), Ty::Str)],
+                        methods: vec![
+                            ("__init__".to_string(), "Animal.__init__".to_string()),
+                            ("speak".to_string(), "Animal.speak".to_string()),
+                        ],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+                (
+                    "Dog".to_string(),
+                    HirClassDef {
+                        name: "Dog".to_string(),
+                        bases: vec!["Animal".to_string()],
+                        mro: vec!["Dog".to_string(), "Animal".to_string()],
+                        attrs: vec![("name".to_string(), Ty::Str)],
+                        methods: vec![
+                            ("__init__".to_string(), "Dog.__init__".to_string()),
+                            ("speak".to_string(), "Dog.speak".to_string()),
+                        ],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn derived_class_inherits_base_attribute_through_mro() {
+        // `d.name` on a `Dog` instance resolves `name` through the MRO --
+        // `Dog` declares it, so it's found on the first MRO entry.
+        let hir = inheritance_module(vec![
+            top_level(HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::Call {
+                    callee: "Dog".to_string(),
+                    args: vec![HirExpr::StringLiteral("Rex".to_string())],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("d".to_string())),
+                    attr: "name".to_string(),
+                }],
+            })),
+        ]);
+        check(&hir).expect("inherited attribute read should type-check");
+    }
+
+    #[test]
+    fn derived_class_method_call_resolves_through_mro() {
+        // `d.speak()` on a `Dog` instance resolves to `Dog.speak` (the
+        // override), not `Animal.speak`.
+        let hir = inheritance_module(vec![
+            top_level(HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::Call {
+                    callee: "Dog".to_string(),
+                    args: vec![HirExpr::StringLiteral("Rex".to_string())],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("d".to_string())),
+                method: "speak".to_string(),
+                args: vec![],
+            })),
+        ]);
+        check(&hir).expect("method call on derived class should type-check");
+    }
+
+    #[test]
+    fn derived_class_instantiation_with_inherited_init_type_checks() {
+        // A `Dog` instance is created with `(name: str)` -- the `__init__`
+        // is `Dog.__init__`, which takes `(self, name: str)`.
+        let hir = inheritance_module(vec![
+            top_level(HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::Call {
+                    callee: "Dog".to_string(),
+                    args: vec![HirExpr::StringLiteral("Rex".to_string())],
+                },
+            }),
+        ]);
+        check(&hir).expect("derived class instantiation should type-check");
+    }
+
+    #[test]
+    fn derived_class_instantiation_with_wrong_arg_type_is_rejected() {
+        let hir = inheritance_module(vec![
+            top_level(HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::Call {
+                    callee: "Dog".to_string(),
+                    args: vec![HirExpr::IntLiteral(42)],
+                },
+            }),
+        ]);
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    /// Builds a `Base` class with `__init__` and a `Derived` class with no
+    /// `__init__` of its own (inheriting `Base.__init__`).
+    fn inherited_init_module(extra_items: Vec<HirItem>) -> HirModule {
+        let base_ty = Ty::Instance(Box::new("Base".to_string()));
+        let base_init = HirItem::Function {
+            name: "Base.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), base_ty.clone()),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "x".to_string(),
+                    value: HirExpr::Name("x".to_string()),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let mut items = vec![base_init];
+        items.extend(extra_items);
+        HirModule {
+            items,
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                (
+                    "Base".to_string(),
+                    HirClassDef {
+                        name: "Base".to_string(),
+                        bases: Vec::new(),
+                        mro: vec!["Base".to_string()],
+                        attrs: vec![("x".to_string(), Ty::Int)],
+                        methods: vec![("__init__".to_string(), "Base.__init__".to_string())],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+                (
+                    "Derived".to_string(),
+                    HirClassDef {
+                        name: "Derived".to_string(),
+                        bases: vec!["Base".to_string()],
+                        mro: vec!["Derived".to_string(), "Base".to_string()],
+                        attrs: Vec::new(),
+                        methods: Vec::new(),
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn derived_class_without_init_inherits_base_init_for_instantiation() {
+        // `Derived(42)` should resolve to `Base.__init__` via the MRO and
+        // type-check against its `(self, x: int)` parameter list.
+        let hir = inherited_init_module(vec![
+            top_level(HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::Call {
+                    callee: "Derived".to_string(),
+                    args: vec![HirExpr::IntLiteral(42)],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("d".to_string())),
+                    attr: "x".to_string(),
+                }],
+            })),
+        ]);
+        check(&hir).expect("inherited __init__ instantiation should type-check");
+    }
+
+    #[test]
+    fn derived_class_without_init_instantiation_wrong_arg_type_is_rejected() {
+        let hir = inherited_init_module(vec![
+            top_level(HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::Call {
+                    callee: "Derived".to_string(),
+                    args: vec![HirExpr::StringLiteral("wrong".to_string())],
+                },
+            }),
+        ]);
+        assert_eq!(check(&hir).unwrap_err().code, "T0021");
+    }
+
+    #[test]
+    fn inherited_attribute_read_resolves_through_check_and_resolve() {
+        // Full pipeline: `check_and_resolve` → MIR build, exercising the
+        // MIR lowering's MRO-aware attribute resolution.
+        let hir = inherited_init_module(vec![
+            top_level(HirStmt::Assign {
+                target: "d".to_string(),
+                value: HirExpr::Call {
+                    callee: "Derived".to_string(),
+                    args: vec![HirExpr::IntLiteral(42)],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("d".to_string())),
+                    attr: "x".to_string(),
+                }],
+            })),
+        ]);
+        let resolved = check_and_resolve(&hir).expect("check_and_resolve should succeed");
+        let _mir = pycc_mir::build(&resolved);
+    }
+
+    #[test]
+    fn inherited_method_call_resolves_through_check_and_resolve() {
+        // Full pipeline for a method call that resolves to a base class
+        // method via the MRO.
+        let base_ty = Ty::Instance(Box::new("Base".to_string()));
+        let base_init = HirItem::Function {
+            name: "Base.__init__".to_string(),
+            params: vec![("self".to_string(), base_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![HirStmt::Return(None)],
+        };
+        let base_greet = HirItem::Function {
+            name: "Base.greet".to_string(),
+            params: vec![("self".to_string(), base_ty.clone())],
+            return_ty: Ty::Str,
+            body: vec![HirStmt::Return(Some(HirExpr::StringLiteral(
+                "hi".to_string(),
+            )))],
+        };
+        let hir = HirModule {
+            items: vec![
+                base_init,
+                base_greet,
+                top_level(HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::Call {
+                        callee: "Derived".to_string(),
+                        args: vec![],
+                    },
+                }),
+                top_level(HirStmt::ExprStmt(HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Name("d".to_string())),
+                    method: "greet".to_string(),
+                    args: vec![],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                (
+                    "Base".to_string(),
+                    HirClassDef {
+                        name: "Base".to_string(),
+                        bases: Vec::new(),
+                        mro: vec!["Base".to_string()],
+                        attrs: Vec::new(),
+                        methods: vec![
+                            ("__init__".to_string(), "Base.__init__".to_string()),
+                            ("greet".to_string(), "Base.greet".to_string()),
+                        ],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+                (
+                    "Derived".to_string(),
+                    HirClassDef {
+                        name: "Derived".to_string(),
+                        bases: vec!["Base".to_string()],
+                        mro: vec!["Derived".to_string(), "Base".to_string()],
+                        attrs: Vec::new(),
+                        methods: Vec::new(),
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+            ],
+        };
         let resolved = check_and_resolve(&hir).expect("check_and_resolve should succeed");
         let _mir = pycc_mir::build(&resolved);
     }

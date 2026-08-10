@@ -314,13 +314,13 @@ def describe(n: int) -> str:
         severity: Severity::Error,
         summary: "`@override` without matching base method",
         explanation: "\
-T0031 is reserved for a method decorated `@override` (PEP 698, `typing.\
-override`) that does not actually override a same-named method on any base \
-class. It is not currently emitted: pycc has no class/inheritance support \
-in its frontend yet (PEP 698 is unchecked in `docs/PYTHON_STANDARDS.md`'s \
-own conformance table), so neither `@override` nor the base-class lookup it \
-depends on exist to check. The registry entry reserves this code's meaning \
-ahead of class support landing.",
+T0031 is emitted when a method decorated `@override` (PEP 698, `typing.\
+override`) does not actually override a same-named method or property on \
+any base class in the class's MRO. The check walks the MRO (excluding the \
+current class itself) looking for a method or property with the same name \
+as the `@override`-decorated method. If no match is found, T0031 is \
+reported. This catches typos in method names that are intended to override \
+a base class method but don't actually match any base class member.",
         example: "\
 class Base:
     def run(self) -> None: ...
