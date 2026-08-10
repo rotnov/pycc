@@ -540,6 +540,61 @@ class AlphaSkillEvalTests(unittest.TestCase):
         self.assertTrue(evals.ultra_review_batch_within_guard(candidate_count=15))
         self.assertFalse(evals.ultra_review_batch_within_guard(candidate_count=16))
 
+    def test_ultra_review_checkpoint_write_is_safe(self) -> None:
+        self.assertTrue(
+            evals.ultra_review_checkpoint_write_is_safe("abc123", "abc123")
+        )
+        self.assertFalse(
+            evals.ultra_review_checkpoint_write_is_safe("abc123", "def456")
+        )
+
+    def test_ultra_review_attribution_bucket(self) -> None:
+        # Outside the reviewed range: always unattributed, even with trailer
+        # names present -- a pre-existing line's trailers are never consulted.
+        self.assertEqual(
+            evals.ultra_review_attribution_bucket(False, ["Claude Sonnet 5"]),
+            "unattributed",
+        )
+        self.assertEqual(
+            evals.ultra_review_attribution_bucket(False, []), "unattributed"
+        )
+        # Inside the range, zero trailer names: unattributed, never falls
+        # back to the commit's own author/committer identity.
+        self.assertEqual(
+            evals.ultra_review_attribution_bucket(True, []), "unattributed"
+        )
+        # Inside the range, exactly one distinct name: attributed to it.
+        self.assertEqual(
+            evals.ultra_review_attribution_bucket(True, ["Claude Sonnet 5"]),
+            "Claude Sonnet 5",
+        )
+        # A squash-merged commit repeating the identical trailer line several
+        # times is one distinct name, not several -- still attributed, not
+        # ambiguous.
+        self.assertEqual(
+            evals.ultra_review_attribution_bucket(
+                True, ["Claude Sonnet 5", "Claude Sonnet 5"]
+            ),
+            "Claude Sonnet 5",
+        )
+        # Two or more distinct names: ambiguous, never guess between them.
+        self.assertEqual(
+            evals.ultra_review_attribution_bucket(True, ["Claude Sonnet 5", "Codex"]),
+            "ambiguous",
+        )
+        # A single resolved name that cannot serialize into the checkpoint's
+        # `Cumulative by model` line (a literal `,` or `:`) folds into
+        # ambiguous instead of unattributed -- it was resolved, just not
+        # safely serializable.
+        self.assertEqual(
+            evals.ultra_review_attribution_bucket(True, ["Doe, Jane"]),
+            "ambiguous",
+        )
+        self.assertEqual(
+            evals.ultra_review_attribution_bucket(True, ["Model: X"]),
+            "ambiguous",
+        )
+
     def test_ultra_review_eval_fails_when_a_contract_phrase_is_missing(
         self,
     ) -> None:

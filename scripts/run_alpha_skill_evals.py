@@ -70,6 +70,8 @@ EXPECTED_RUNNERS = {
         "empty-diff-checkpoint-not-advanced",
         "deduped-finding-never-refiled",
         "oversized-batch-stops-before-filing",
+        "concurrent-checkpoint-write-detected-and-aborted",
+        "attribution-falls-back-to-unattributed-or-ambiguous",
     },
 }
 LOCKED_RESEARCH_CASES = {
@@ -129,6 +131,8 @@ ULTRA_REVIEW_CONTRACT = (
     "a concrete `file:line`",
     "GitHub-native checkpoint",
     "stop short of filing any of them",
+    "the reviewed ranges may overlap",
+    "Never fall back to the commit's own author",
 )
 CommandRunner = Callable[
     [list[str], Path],
@@ -308,7 +312,7 @@ def ultra_review_severity_priority(severity: str) -> str:
 
 
 def ultra_review_checkpoint_should_advance(*, diff_is_empty: bool) -> bool:
-    """ultra-review step 3/8: an empty diff since the last checkpoint is a
+    """ultra-review step 3/9: an empty diff since the last checkpoint is a
     clean no-op -- no dispatch, and the checkpoint issue is left untouched."""
     return not diff_is_empty
 
@@ -330,6 +334,43 @@ def ultra_review_batch_within_guard(*, candidate_count: int) -> bool:
     candidate count exceeds this threshold stops short of filing any of them
     and reports the batch instead of auto-filing a flood."""
     return candidate_count <= ULTRA_REVIEW_BATCH_GUARD_THRESHOLD
+
+
+def ultra_review_checkpoint_write_is_safe(orig_sha: str, fresh_sha: str) -> bool:
+    """ultra-review step 9's overlapping-range guard: a fresh re-read of the
+    checkpoint issue immediately before writing must still show the same
+    `Last reviewed commit` this run read back in step 2. A mismatch means a
+    concurrent run already advanced the checkpoint, so this run must not
+    write at all -- writing on top would double-count whatever range the
+    concurrent run already reviewed."""
+    return orig_sha == fresh_sha
+
+
+def ultra_review_attribution_bucket(
+    blamed_sha_is_in_range: bool, trailer_names: list[str]
+) -> str:
+    """ultra-review step 8's per-finding attribution bucket. A blamed line
+    outside the reviewed range is always `unattributed`, regardless of any
+    trailer names supplied -- a pre-existing line's trailers are never
+    consulted. Inside the range: zero distinct trailer names is
+    `unattributed`; exactly one distinct name is attributed to that name,
+    unless it contains a literal `,` or `:` (unsafe to serialize into the
+    checkpoint's `Cumulative by model` line, so it folds into `ambiguous`
+    instead); two or more distinct names is `ambiguous`. Names are
+    deduplicated before counting -- a squash-merged commit can repeat an
+    identical `Co-Authored-By` trailer line several times, and that is one
+    distinct name, not several."""
+    if not blamed_sha_is_in_range:
+        return "unattributed"
+    distinct_names = set(trailer_names)
+    if not distinct_names:
+        return "unattributed"
+    if len(distinct_names) > 1:
+        return "ambiguous"
+    (name,) = distinct_names
+    if "," in name or ":" in name:
+        return "ambiguous"
+    return name
 
 
 def run_command(
@@ -923,6 +964,31 @@ def run_ultra_review_case(case: dict[str, Any], skill_text: str) -> None:
         required = ("stop short of filing any of them", "report the batch")
         if within_guard:
             raise EvalError(f"{runner_name} let an oversized batch pass the guard")
+    elif runner_name == "concurrent-checkpoint-write-detected-and-aborted":
+        safe_when_unchanged = ultra_review_checkpoint_write_is_safe("abc123", "abc123")
+        safe_when_changed = ultra_review_checkpoint_write_is_safe("abc123", "def456")
+        required = ("reviewed ranges may overlap", "does not write")
+        if not safe_when_unchanged or safe_when_changed:
+            raise EvalError(
+                f"{runner_name} did not detect the overlapping-range race correctly"
+            )
+    elif runner_name == "attribution-falls-back-to-unattributed-or-ambiguous":
+        zero_names = ultra_review_attribution_bucket(True, [])
+        two_names = ultra_review_attribution_bucket(
+            True, ["Claude Sonnet 5", "Codex"]
+        )
+        out_of_range = ultra_review_attribution_bucket(False, ["Claude Sonnet 5"])
+        escaped_name = ultra_review_attribution_bucket(True, ["Doe, Jane"])
+        required = ("unattributed", "ambiguous")
+        if (
+            zero_names != "unattributed"
+            or two_names != "ambiguous"
+            or out_of_range != "unattributed"
+            or escaped_name != "ambiguous"
+        ):
+            raise EvalError(
+                f"{runner_name} did not fall back to unattributed/ambiguous correctly"
+            )
     else:
         raise EvalError(f"unknown ultra-review runner {runner_name!r}")
 
