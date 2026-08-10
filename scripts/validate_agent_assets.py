@@ -94,6 +94,8 @@ ALPHA_EVAL_RUNNERS = {
         "empty-diff-checkpoint-not-advanced",
         "deduped-finding-never-refiled",
         "oversized-batch-stops-before-filing",
+        "concurrent-checkpoint-write-detected-and-aborted",
+        "attribution-falls-back-to-unattributed-or-ambiguous",
     },
 }
 PROJECT_ALPHA_SKILLS = {"pycc", "pycc-feedback"}
