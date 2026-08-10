@@ -282,3 +282,62 @@ fn diamond_inheritance_resolves_via_c3_mro() {
         "D's MRO is [D, B, C, A], so B.f should be called"
     );
 }
+
+/// #432: a derived class that adds new attributes while inheriting a
+/// method from the base that accesses base attributes. The slot layout
+/// must be most-base-first so that the inherited method reads the correct
+/// slot (not a slot that shifted due to the derived class's new attrs).
+#[test]
+fn inherited_method_reads_correct_slot_with_derived_attrs() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_issue432_slot_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "slot.py",
+        "class Animal:\n    def __init__(self, name: str) -> None:\n        self.name = name\n    def speak(self) -> str:\n        return self.name\nclass Dog(Animal):\n    def __init__(self, name: str, breed: str) -> None:\n        self.breed = breed\n        self.name = name\nd = Dog(\"Rex\", \"Labrador\")\nprint(d.speak())\nprint(d.name)\nprint(d.breed)\n",
+    );
+    let out = dir.join("slot");
+
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "pycc build should succeed for inherited method with derived attrs"
+    );
+
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(
+        output.stdout, b"Rex\nRex\nLabrador\n",
+        "inherited method speak() should read the correct slot (name, not breed)"
+    );
+}
+
+/// #432: a generic class with base classes is rejected with a clear error.
+#[test]
+fn generic_class_with_bases_is_rejected() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_issue432_generic_base_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "generic_base.py",
+        "class Base:\n    def __init__(self) -> None:\n        return\nclass C[T](Base):\n    def __init__(self, x: T) -> None:\n        self.x = x\n",
+    );
+
+    let output = Command::new(pycc_bin())
+        .args(["check", src.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "pycc check should fail for a generic class with base classes"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("generic class") && stdout.contains("base classes"),
+        "error should mention generic class with base classes, got: {stdout}"
+    );
+}

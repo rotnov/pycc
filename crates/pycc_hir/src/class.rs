@@ -372,6 +372,20 @@ pub(crate) fn lower_class(
         }
     }
     let class_name = def.name.to_string();
+    // #432: A generic class (from #387) with base classes is not supported
+    // yet — `instantiate_generic_class_methods` creates a monomorphized
+    // `HirClassDef` with empty `bases`/`mro`, silently dropping inheritance.
+    // Reject this early with a clear error rather than letting it fail with
+    // a confusing T0044 downstream.
+    if type_param.is_some() && !bases.is_empty() {
+        return Err(unsupported(
+            format!(
+                "generic class `{class_name}` with base classes is not supported yet -- \
+                 generic classes cannot inherit from other classes in this version"
+            ),
+            def.range,
+        ));
+    }
     // #432: validate each base class against the already-defined classes.
     for base_name in &bases {
         let Some(base_def) = defined_classes.iter().find(|(name, _)| name == base_name) else {
@@ -2090,6 +2104,20 @@ mod tests {
         assert_eq!(diagnostic.code, "C0001");
         assert!(
             diagnostic.message.contains("cannot inherit from generic class `A`"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_generic_class_with_base_classes_is_rejected() {
+        let module = crate::pycc_parser_test_helper::parse(
+            "class Base:\n    def __init__(self) -> None:\n        return\nclass C[T](Base):\n    def __init__(self, x: T) -> None:\n        self.x = x\n",
+        );
+        let diagnostic = lower_checked(&module).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(
+            diagnostic.message.contains("generic class `C` with base classes"),
             "unexpected message: {}",
             diagnostic.message
         );

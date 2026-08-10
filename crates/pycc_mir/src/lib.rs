@@ -1298,19 +1298,61 @@ fn class_def_of<'c>(expr: &MirExpr, classes: &'c HashMap<String, HirClassDef>) -
 /// class "wins" (its declaration appears first in the MRO, so its slot type
 /// is the one used), matching CPython's own MRO-based attribute resolution.
 fn mro_attrs(class_def: &HirClassDef, classes: &HashMap<String, HirClassDef>) -> Vec<(String, Ty)> {
+    // #432: Walk the MRO most-base-first so that base class attributes
+    // always occupy consistent low slot indices. This is critical for
+    // inherited methods: when `Animal.speak` reads `self.name`, it
+    // resolves the slot index from `Animal`'s `mro_attrs` (where `name`
+    // is slot 0). If we walked most-derived-first, `Dog`'s `breed` would
+    // get slot 0 and `name` would shift to slot 1 — but `Animal.speak`
+    // would still read slot 0, getting `breed` instead of `name`.
+    //
+    // For re-declared attributes (a derived class re-declaring an attr
+    // with the same name as a base), the most-derived declaration's type
+    // wins — so we do a second pass over the MRO (most-derived-first) to
+    // override types for attrs that were already assigned a slot.
+    //
+    // Collect the MRO defs once (verifying all classes exist) so both
+    // passes share the same lookup and the panic path is only exercised
+    // once.
+    let mro_defs: Vec<&HirClassDef> = class_def
+        .mro
+        .iter()
+        .map(|mro_class| {
+            classes.get(mro_class.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "pycc_mir: internal error: class `{mro_class}` in MRO has no registered \
+                     HirClassDef -- pycc_types::check should have rejected this HIR before it \
+                     reached pycc_mir"
+                )
+            })
+        })
+        .collect();
     let mut result: Vec<(String, Ty)> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for mro_class in &class_def.mro {
-        let mro_def = classes.get(mro_class.as_str()).unwrap_or_else(|| {
-            panic!(
-                "pycc_mir: internal error: class `{mro_class}` in MRO has no registered \
-                 HirClassDef -- pycc_types::check should have rejected this HIR before it \
-                 reached pycc_mir"
-            )
-        });
+    let mut slot_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // Pass 1: assign slots in most-base-first order (reverse MRO).
+    for mro_def in mro_defs.iter().rev() {
         for (name, ty) in &mro_def.attrs {
-            if seen.insert(name.clone()) {
+            if !slot_index.contains_key(name) {
+                slot_index.insert(name.clone(), result.len());
                 result.push((name.clone(), ty.clone()));
+            }
+        }
+    }
+    // Pass 2: override types for re-declared attrs (most-derived wins).
+    // Walk the MRO forward and, for each attr, take the type from the
+    // first (most-derived) class that declares it. We track which attrs
+    // have already been overridden to avoid a less-derived class
+    // overwriting the most-derived type.
+    let mut overridden: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for mro_def in &mro_defs {
+        for (name, ty) in &mro_def.attrs {
+            // `overridden.insert` returns true the first time we see this
+            // attr in pass 2. Since pass 1 already assigned a slot for
+            // every attr in the MRO, `slot_index[name]` always exists
+            // here — direct indexing is safe.
+            if overridden.insert(name.clone()) {
+                let idx = slot_index[name];
+                result[idx].1 = ty.clone();
             }
         }
     }
@@ -4879,5 +4921,101 @@ mod tests {
             })
             .expect("expected an Instantiate node");
         assert_eq!(instantiate.attr_count, 1);
+    }
+
+    #[test]
+    fn mro_attrs_overrides_type_for_a_redeclared_attribute_with_a_different_type() {
+        // #432: when a derived class re-declares an attribute with a
+        // different type than the base, the most-derived declaration's
+        // type wins (pass 2 of `mro_attrs`). This exercises the
+        // `result[idx].1 = ty.clone()` line in the second pass.
+        use pycc_hir::HirClassDef;
+        let self_ty = Ty::Instance(Box::new("Derived".to_string()));
+        let init = HirItem::Function {
+            name: "Derived.__init__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "x".to_string(),
+                    value: HirExpr::FloatLiteral(1.0),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let base_init = HirItem::Function {
+            name: "Base.__init__".to_string(),
+            params: vec![("self".to_string(), Ty::Instance(Box::new("Base".to_string())))],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "x".to_string(),
+                    value: HirExpr::IntLiteral(0),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let hir = HirModule {
+            items: vec![
+                base_init,
+                init,
+                HirItem::TopLevelStmt(HirStmt::Assign {
+                    target: "d".to_string(),
+                    value: HirExpr::Call {
+                        callee: "Derived".to_string(),
+                        args: vec![],
+                    },
+                }),
+                // AttrGet on `d.x` triggers `mro_attrs`, which walks the
+                // MRO and overrides `x`'s type from Int (Base) to Float
+                // (Derived) in the second pass.
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("d".to_string())),
+                    attr: "x".to_string(),
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                (
+                    "Base".to_string(),
+                    HirClassDef {
+                        name: "Base".to_string(),
+                        bases: Vec::new(),
+                        mro: vec!["Base".to_string()],
+                        attrs: vec![("x".to_string(), Ty::Int)],
+                        methods: vec![("__init__".to_string(), "Base.__init__".to_string())],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+                (
+                    "Derived".to_string(),
+                    HirClassDef {
+                        name: "Derived".to_string(),
+                        bases: vec!["Base".to_string()],
+                        mro: vec!["Derived".to_string(), "Base".to_string()],
+                        attrs: vec![("x".to_string(), Ty::Float)],
+                        methods: vec![("__init__".to_string(), "Derived.__init__".to_string())],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+            ],
+        };
+        let mir = build(&hir);
+        // The AttrGet node should have type Float (Derived's declaration
+        // wins), not Int (Base's declaration).
+        let attr_get = mir
+            .items
+            .iter()
+            .find_map(|item| match item {
+                MirItem::TopLevelStmt(MirStmt::ExprStmt(MirExpr::AttrGet { ty, .. })) => Some(ty.clone()),
+                _ => None,
+            })
+            .expect("expected an AttrGet node");
+        assert_eq!(attr_get, Ty::Float, "re-declared attribute should use the most-derived type (Float)");
     }
 }

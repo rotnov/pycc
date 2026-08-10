@@ -170,14 +170,15 @@ pub(crate) fn resolve_attr_get(env: &Environment, base_ty: &Ty, attr: &str) -> R
         return Err(t0043_not_an_instance("read an attribute", base_ty));
     };
     let class_def = expect_class(env, class_name);
-    // #432: walk the MRO in order. For each class in the MRO, check its
-    // property table first (matching CPython's descriptor protocol
-    // precedence), then its attribute slots. The first match wins.
+    // #432/#377: walk the MRO for property lookup first (matching CPython's
+    // descriptor protocol precedence — a property descriptor intercepts
+    // attribute access before `__dict__`), across ALL classes in the MRO,
+    // then fall back to regular attribute slots. This matches the MIR
+    // lowering's own properties-first-across-full-MRO logic exactly,
+    // avoiding a type-checker/MIR disagreement when a derived class has a
+    // regular attr with the same name as a base class property.
     for mro_class in &class_def.mro {
         let mro_def = expect_class(env, mro_class);
-        // #377: check properties before regular attribute slots, matching
-        // CPython's descriptor protocol precedence (a property descriptor
-        // intercepts attribute access before `__dict__`).
         if let Some(prop) = mro_def.properties.iter().find(|p| p.name == attr) {
             let (_, return_ty) = env.lookup_function(&prop.getter).unwrap_or_else(|| {
                 panic!(
@@ -188,6 +189,12 @@ pub(crate) fn resolve_attr_get(env: &Environment, base_ty: &Ty, attr: &str) -> R
             });
             return Ok(return_ty.clone());
         }
+    }
+    // No property matched in any class — now check regular attribute slots
+    // by walking the MRO in order (most-derived first, so a re-declared
+    // attr uses the most-derived type).
+    for mro_class in &class_def.mro {
+        let mro_def = expect_class(env, mro_class);
         if let Some((_, ty)) = mro_def.attrs.iter().find(|(name, _)| name == attr) {
             return Ok(ty.clone());
         }
@@ -260,11 +267,13 @@ pub(crate) fn check_attr_set(
     value: &HirExpr,
 ) -> Result<(), Diagnostic> {
     let base_ty = infer_expr_in(env, local_names, base)?;
-    // #432: walk the MRO for property lookup, matching `resolve_attr_get`'s
-    // own MRO walk. A property setter has its own parameter type (the value
-    // the setter accepts), which may differ from the getter's return type --
-    // so the value is checked against the setter's parameter, not
-    // `resolve_attr_get`'s getter-return-type result.
+    // #432/#377: walk the MRO for property lookup first (matching
+    // `resolve_attr_get`'s own properties-first-across-full-MRO logic and
+    // the MIR lowering's own logic), across ALL classes in the MRO, then
+    // fall back to regular attribute slots. A property setter has its own
+    // parameter type (the value the setter accepts), which may differ from
+    // the getter's return type -- so the value is checked against the
+    // setter's parameter, not `resolve_attr_get`'s getter-return-type.
     if let Ty::Instance(class_name) = &base_ty {
         let class_def = expect_class(env, class_name);
         for mro_class in &class_def.mro {
