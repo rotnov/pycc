@@ -134,11 +134,30 @@ pub(crate) fn resolve_instantiation(
 /// Shared by `infer_expr_in`'s `HirExpr::AttrGet` arm and `check_stmt`'s
 /// `HirStmt::AttrSet` arm (which also needs `base`'s attribute type, to
 /// check the assigned value against it).
+///
+/// #377: a `@property` getter is checked *before* the regular attribute
+/// slot table -- `obj.x` where `x` is a property resolves to the getter
+/// method's return type, not a slot type. This mirrors CPython's own
+/// observable behavior, where a property descriptor intercepts attribute
+/// access before the instance's `__dict__`/slot table is consulted.
 pub(crate) fn resolve_attr_get(env: &Environment, base_ty: &Ty, attr: &str) -> Result<Ty, Diagnostic> {
     let Ty::Instance(class_name) = base_ty else {
         return Err(t0043_not_an_instance("read an attribute", base_ty));
     };
     let class_def = expect_class(env, class_name);
+    // #377: check properties before regular attribute slots, matching
+    // CPython's descriptor protocol precedence (a property descriptor
+    // intercepts attribute access before `__dict__`).
+    if let Some(prop) = class_def.properties.iter().find(|p| p.name == attr) {
+        let (_, return_ty) = env.lookup_function(&prop.getter).unwrap_or_else(|| {
+            panic!(
+                "pycc_types: internal error: property getter `{}` is in class `{class_name}`'s \
+                 own property table but was not registered as an ordinary function",
+                prop.getter
+            )
+        });
+        return Ok(return_ty.clone());
+    }
     class_def
         .attrs
         .iter()
@@ -182,6 +201,14 @@ pub(crate) fn resolve_method_call(
 /// for the attribute-type lookup, so a base that isn't a class instance or
 /// an attribute name the class never declares produces the identical
 /// `T0043`/`T0044` diagnostic an attribute *read* would.
+///
+/// #377: if `attr` is a `@property`, the check is redirected to the
+/// property's setter: a read-only property (no setter) is rejected with
+/// `T0044`, and a property with a setter checks the assigned value against
+/// the setter's own parameter type (not the getter's return type -- the
+/// two may differ, though they usually match). This mirrors CPython's own
+/// observable behavior, where `obj.x = value` invokes the property's
+/// `__set__` descriptor method, not a bare slot write.
 pub(crate) fn check_attr_set(
     env: &Environment,
     local_names: &[&str],
@@ -190,6 +217,53 @@ pub(crate) fn check_attr_set(
     value: &HirExpr,
 ) -> Result<(), Diagnostic> {
     let base_ty = infer_expr_in(env, local_names, base)?;
+    // #377: check properties before regular attribute slots. A property
+    // setter has its own parameter type (the value the setter accepts),
+    // which may differ from the getter's return type -- so the value is
+    // checked against the setter's parameter, not `resolve_attr_get`'s
+    // getter-return-type result.
+    if let Ty::Instance(class_name) = &base_ty {
+        let class_def = expect_class(env, class_name);
+        if let Some(prop) = class_def.properties.iter().find(|p| p.name == attr) {
+            let value_ty = infer_expr_in(env, local_names, value)?;
+            let Some(setter_mangled) = &prop.setter else {
+                return Err(Diagnostic::error(
+                    "T0044",
+                    format!(
+                        "property `{attr}` of class `{class_name}` is read-only (has no setter)"
+                    ),
+                    Span::new(0, 0),
+                ));
+            };
+            let (param_tys, _) = env.lookup_function(setter_mangled).unwrap_or_else(|| {
+                panic!(
+                    "pycc_types: internal error: property setter `{setter_mangled}` is in class \
+                     `{class_name}`'s own property table but was not registered as an ordinary \
+                     function"
+                )
+            });
+            let setter_param_ty = &param_tys[1]; // exclude `self`
+            if !is_assignable(value_ty.clone(), setter_param_ty.clone()) {
+                return Err(Diagnostic::error(
+                    "T0021",
+                    format!(
+                        "cannot assign `{}` to property `{attr}` (setter expects `{}`)",
+                        value_ty.name(),
+                        setter_param_ty.name()
+                    ),
+                    Span::new(0, 0),
+                )
+                .with_help(format!(
+                    "change the value to `{}` (the setter's expected type), or the \
+                     setter's parameter annotation to `{}` (the actual type)",
+                    setter_param_ty.name(),
+                    value_ty.name()
+                )));
+            }
+            return Ok(());
+        }
+    }
+    // Regular attribute slot (existing behavior).
     let attr_ty = resolve_attr_get(env, &base_ty, attr)?;
     let value_ty = infer_expr_in(env, local_names, value)?;
     if !is_assignable(value_ty.clone(), attr_ty.clone()) {
@@ -283,6 +357,7 @@ mod tests {
                         ("bump".to_string(), "Point.bump".to_string()),
                     ],
                     type_param: None,
+                    properties: Vec::new(),
                 },
             )],
         }
@@ -681,6 +756,7 @@ mod tests {
                         ("_touch".to_string(), "Point._touch".to_string()),
                     ],
                     type_param: None,
+                    properties: Vec::new(),
                 },
             )],
         };
@@ -743,6 +819,7 @@ mod tests {
                     attrs: vec![("x".to_string(), Ty::Int)],
                     methods: vec![("__init__".to_string(), "Point.__init__".to_string())],
                     type_param: None,
+                    properties: Vec::new(),
                 },
             )],
         };
@@ -1009,6 +1086,7 @@ mod tests {
                     ("add".to_string(), "Counter.add".to_string()),
                 ],
                 type_param: None,
+                properties: Vec::new(),
             },
         ));
         check_and_resolve(&hir).expect(
@@ -1105,6 +1183,7 @@ mod tests {
                 attrs: vec![],
                 methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
                 type_param: None,
+                properties: Vec::new(),
             },
         );
         let _ = super::resolve_instantiation(&env, "Ghost", &[]);
@@ -1121,6 +1200,7 @@ mod tests {
                 attrs: vec![],
                 methods: vec![("foo".to_string(), "Ghost.foo".to_string())],
                 type_param: None,
+                properties: Vec::new(),
             },
         );
         let _ = super::resolve_method_call(
@@ -1129,5 +1209,461 @@ mod tests {
             "foo",
             &[],
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "was not registered as an ordinary function")]
+    fn resolve_attr_get_panics_when_a_property_getter_is_not_registered() {
+        // #377: a property's getter is in the class's own property table
+        // but was never registered in `Environment::functions` -- the
+        // "declared shape and Environment disagree" scenario
+        // `resolve_attr_get`'s own doc comment names as unreachable from
+        // any real `check`-validated program, mirroring
+        // `resolve_instantiation_panics_when_init_is_not_registered` above.
+        use pycc_hir::PropertyDef;
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "Ghost".to_string(),
+            HirClassDef {
+                name: "Ghost".to_string(),
+                attrs: vec![],
+                methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
+                type_param: None,
+                properties: vec![PropertyDef {
+                    name: "x".to_string(),
+                    getter: "Ghost.x".to_string(),
+                    setter: None,
+                }],
+            },
+        );
+        let _ = super::resolve_attr_get(
+            &env,
+            &Ty::Instance(Box::new("Ghost".to_string())),
+            "x",
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "was not registered as an ordinary function")]
+    fn check_attr_set_panics_when_a_property_setter_is_not_registered() {
+        // #377: a property's setter is in the class's own property table
+        // but was never registered in `Environment::functions` -- the
+        // "declared shape and Environment disagree" scenario
+        // `check_attr_set`'s own doc comment names as unreachable from
+        // any real `check`-validated program, mirroring
+        // `resolve_method_call_panics_when_the_method_is_not_registered`
+        // above.
+        use pycc_hir::PropertyDef;
+        let mut env = crate::Environment::new();
+        env.bind_class(
+            "Ghost".to_string(),
+            HirClassDef {
+                name: "Ghost".to_string(),
+                attrs: vec![],
+                methods: vec![("__init__".to_string(), "Ghost.__init__".to_string())],
+                type_param: None,
+                properties: vec![PropertyDef {
+                    name: "x".to_string(),
+                    getter: "Ghost.x".to_string(),
+                    setter: Some("Ghost.x.setter".to_string()),
+                }],
+            },
+        );
+        // `base` must infer as a `Ghost` instance so `check_attr_set`
+        // reaches the property branch; `value` must infer successfully so
+        // the `?` on `infer_expr_in` (line 228) does not short-circuit
+        // before the setter lookup panic.
+        env.bind_function("Ghost.__init__".to_string(), vec![Ty::Instance(Box::new("Ghost".to_string()))], Ty::None);
+        env.bind("b".to_string(), Ty::Instance(Box::new("Ghost".to_string())));
+        let _ = super::check_attr_set(
+            &env,
+            &[],
+            &HirExpr::Name("b".to_string()),
+            "x",
+            &HirExpr::IntLiteral(42),
+        );
+    }
+
+    // -- @property type checking (#377) -------------------------------------
+
+    /// Builds a `Box` class with a read-write `@property` `val` backed by
+    /// the `_val` slot, plus `extra_items`/`extra_stmts` for each test's
+    /// own exercise. The getter returns `self._val` (int); the setter
+    /// accepts an `int` and stores it.
+    fn property_module(extra_items: Vec<HirItem>) -> HirModule {
+        use pycc_hir::PropertyDef;
+        let self_ty = Ty::Instance(Box::new("Box".to_string()));
+        let init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "_val".to_string(),
+                    value: HirExpr::IntLiteral(0),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let getter = HirItem::Function {
+            name: "Box.val".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("self".to_string())),
+                attr: "_val".to_string(),
+            }))],
+        };
+        let setter = HirItem::Function {
+            name: "Box.val.setter".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("v".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "_val".to_string(),
+                    value: HirExpr::Name("v".to_string()),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let mut items = vec![init, getter, setter];
+        items.extend(extra_items);
+        HirModule {
+            items,
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "Box".to_string(),
+                HirClassDef {
+                    name: "Box".to_string(),
+                    attrs: vec![("_val".to_string(), Ty::Int)],
+                    methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+                    properties: vec![PropertyDef {
+                        name: "val".to_string(),
+                        getter: "Box.val".to_string(),
+                        setter: Some("Box.val.setter".to_string()),
+                    }],
+                    type_param: None,
+                },
+            )],
+        }
+    }
+
+    /// Like `property_module` but the property has no setter (read-only).
+    fn read_only_property_module(extra_items: Vec<HirItem>) -> HirModule {
+        use pycc_hir::PropertyDef;
+        let self_ty = Ty::Instance(Box::new("Box".to_string()));
+        let init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "_val".to_string(),
+                    value: HirExpr::IntLiteral(0),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let getter = HirItem::Function {
+            name: "Box.val".to_string(),
+            params: vec![("self".to_string(), self_ty)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("self".to_string())),
+                attr: "_val".to_string(),
+            }))],
+        };
+        let mut items = vec![init, getter];
+        items.extend(extra_items);
+        HirModule {
+            items,
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![(
+                "Box".to_string(),
+                HirClassDef {
+                    name: "Box".to_string(),
+                    attrs: vec![("_val".to_string(), Ty::Int)],
+                    methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+                    properties: vec![PropertyDef {
+                        name: "val".to_string(),
+                        getter: "Box.val".to_string(),
+                        setter: None,
+                    }],
+                    type_param: None,
+                },
+            )],
+        }
+    }
+
+    #[test]
+    fn a_property_getter_read_type_checks() {
+        let hir = property_module(vec![
+            top_level(HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::Call {
+                    callee: "Box".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("b".to_string())),
+                    attr: "val".to_string(),
+                }],
+            })),
+        ]);
+        check(&hir).expect("a property getter read should type-check");
+    }
+
+    #[test]
+    fn a_property_setter_assignment_type_checks() {
+        let hir = property_module(vec![
+            top_level(HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::Call {
+                    callee: "Box".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::AttrSet {
+                base: HirExpr::Name("b".to_string()),
+                attr: "val".to_string(),
+                value: HirExpr::IntLiteral(42),
+            }),
+        ]);
+        check(&hir).expect("a property setter assignment should type-check");
+    }
+
+    #[test]
+    fn a_read_only_property_assignment_is_rejected() {
+        let hir = read_only_property_module(vec![
+            top_level(HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::Call {
+                    callee: "Box".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::AttrSet {
+                base: HirExpr::Name("b".to_string()),
+                attr: "val".to_string(),
+                value: HirExpr::IntLiteral(42),
+            }),
+        ]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0044");
+        assert!(
+            diagnostic.message.contains("read-only"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_property_setter_type_mismatch_is_rejected() {
+        let hir = property_module(vec![
+            top_level(HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::Call {
+                    callee: "Box".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::AttrSet {
+                base: HirExpr::Name("b".to_string()),
+                attr: "val".to_string(),
+                value: HirExpr::StringLiteral("nope".to_string()),
+            }),
+        ]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn a_property_setter_assignment_with_an_ill_typed_value_propagates_the_value_error() {
+        // Exercises `check_attr_set`'s `?` on `infer_expr_in` for the
+        // *value* expression (line 228) -- distinct from
+        // `a_property_setter_type_mismatch_is_rejected` above, where the
+        // value infers successfully (`Ty::Str`) and the rejection happens
+        // later at the `is_assignable` check (line 246). Here the value is
+        // an undefined name, so `infer_expr_in` itself returns `Err`
+        // before the setter's parameter type is ever consulted.
+        let hir = property_module(vec![
+            top_level(HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::Call {
+                    callee: "Box".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::AttrSet {
+                base: HirExpr::Name("b".to_string()),
+                attr: "val".to_string(),
+                value: HirExpr::Name("undefined_name".to_string()),
+            }),
+        ]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "T0021");
+        assert!(
+            diagnostic.message.contains("undefined_name"),
+            "unexpected message: {}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_property_getter_read_inside_a_method_body_type_checks() {
+        // A method that reads the property via `self.val` -- exercises
+        // `resolve_attr_get`'s property check from within a function body
+        // (pass 3), not just top-level (pass 2).
+        let self_ty = Ty::Instance(Box::new("Box".to_string()));
+        let reader = HirItem::Function {
+            name: "Box.read_val".to_string(),
+            params: vec![("self".to_string(), self_ty)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("self".to_string())),
+                attr: "val".to_string(),
+            }))],
+        };
+        let mut hir = property_module(vec![]);
+        // Add the reader method to items and to the class's method table.
+        // `.expect(...)`, not `if let Some(...)` -- the latter's implicit
+        // else (the no-match arm) is its own hand-written region, never
+        // executed because `property_module` always defines `Box` -- this
+        // crate's own established coverage-gate convention (see
+        // `lower_ok`'s own doc comment in `pycc_hir::class::tests`) is
+        // `.expect()`, whose panic path lives in libcore, outside this
+        // crate's instrumented regions.
+        hir.items.push(reader);
+        let (_, cd) = hir
+            .class_defs
+            .iter_mut()
+            .find(|(n, _)| n == "Box")
+            .expect("property_module always defines Box");
+        cd.methods.push(("read_val".to_string(), "Box.read_val".to_string()));
+        hir.items.push(top_level(HirStmt::Assign {
+            target: "b".to_string(),
+            value: HirExpr::Call {
+                callee: "Box".to_string(),
+                args: vec![],
+            },
+        }));
+        hir.items.push(top_level(HirStmt::ExprStmt(HirExpr::Call {
+            callee: "print".to_string(),
+            args: vec![HirExpr::MethodCall {
+                base: Box::new(HirExpr::Name("b".to_string())),
+                method: "read_val".to_string(),
+                args: vec![],
+            }],
+        })));
+        check(&hir).expect("a property read inside a method body should type-check");
+    }
+
+    #[test]
+    fn a_property_setter_assignment_inside_a_method_body_type_checks() {
+        // A method that writes the property via `self.val = v` -- exercises
+        // `check_attr_set`'s property check from within a function body.
+        let self_ty = Ty::Instance(Box::new("Box".to_string()));
+        let writer = HirItem::Function {
+            name: "Box.write_val".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty),
+                ("v".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::None,
+            body: vec![
+                HirStmt::AttrSet {
+                    base: HirExpr::Name("self".to_string()),
+                    attr: "val".to_string(),
+                    value: HirExpr::Name("v".to_string()),
+                },
+                HirStmt::Return(None),
+            ],
+        };
+        let mut hir = property_module(vec![]);
+        hir.items.push(writer);
+        // `.expect(...)`, not `if let Some(...)` -- see the sibling test
+        // `a_property_getter_read_inside_a_method_body_type_checks` above
+        // for the coverage-gate rationale.
+        let (_, cd) = hir
+            .class_defs
+            .iter_mut()
+            .find(|(n, _)| n == "Box")
+            .expect("property_module always defines Box");
+        cd.methods
+            .push(("write_val".to_string(), "Box.write_val".to_string()));
+        hir.items.push(top_level(HirStmt::Assign {
+            target: "b".to_string(),
+            value: HirExpr::Call {
+                callee: "Box".to_string(),
+                args: vec![],
+            },
+        }));
+        hir.items.push(top_level(HirStmt::ExprStmt(HirExpr::MethodCall {
+            base: Box::new(HirExpr::Name("b".to_string())),
+            method: "write_val".to_string(),
+            args: vec![HirExpr::IntLiteral(99)],
+        })));
+        check(&hir).expect("a property write inside a method body should type-check");
+    }
+
+    #[test]
+    fn a_property_getter_read_resolves_through_check_and_resolve() {
+        // Exercises the full `check_and_resolve` → MIR pipeline for a
+        // property getter read, ensuring the MIR lowering's property
+        // rewrite (AttrGet → Call) produces valid MIR.
+        let hir = property_module(vec![
+            top_level(HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::Call {
+                    callee: "Box".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::ExprStmt(HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Name("b".to_string())),
+                    attr: "val".to_string(),
+                }],
+            })),
+        ]);
+        let resolved = check_and_resolve(&hir).expect("check_and_resolve should succeed");
+        // Build MIR from the resolved HIR -- this exercises the MIR
+        // lowering's property rewrite (AttrGet → MirExpr::Call).
+        let _mir = pycc_mir::build(&resolved);
+    }
+
+    #[test]
+    fn a_property_setter_assignment_resolves_through_check_and_resolve() {
+        // Exercises the full `check_and_resolve` → MIR pipeline for a
+        // property setter assignment, ensuring the MIR lowering's property
+        // rewrite (AttrSet → ExprStmt(Call)) produces valid MIR.
+        let hir = property_module(vec![
+            top_level(HirStmt::Assign {
+                target: "b".to_string(),
+                value: HirExpr::Call {
+                    callee: "Box".to_string(),
+                    args: vec![],
+                },
+            }),
+            top_level(HirStmt::AttrSet {
+                base: HirExpr::Name("b".to_string()),
+                attr: "val".to_string(),
+                value: HirExpr::IntLiteral(42),
+            }),
+        ]);
+        let resolved = check_and_resolve(&hir).expect("check_and_resolve should succeed");
+        let _mir = pycc_mir::build(&resolved);
     }
 }

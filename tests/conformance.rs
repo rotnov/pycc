@@ -607,3 +607,34 @@ fn pep_0695_generic_classes_matches_cpython_3_14_6_byte_for_byte() {
         run_conformance_fixture_with_profile("pep_0695_generic_classes_release", &fixture, true);
     assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/pep_0695_generic_classes.py");
 }
+
+// #377: `@property` getter -- `obj.x` is transparently rewritten to
+// `obj.x()` (a call to the getter method) at the HIR/MIR level. The
+// fixture exercises a read-only property on a class with a backing slot.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn property_basic_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/property_basic.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("property_basic_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/property_basic.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("property_basic_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/property_basic.py");
+}
+
+// #377: `@property` getter + `@<name>.setter` -- `obj.x = value` is
+// transparently rewritten to `obj._set_x(value)` (a call to the setter
+// method) at the HIR/MIR level. The fixture exercises a read-write
+// property with a backing slot.
+#[test]
+#[ignore = "requires a pinned python3.14 (CPython 3.14.6) oracle on PATH"]
+fn property_setter_matches_cpython_3_14_6_byte_for_byte() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/property_setter.py");
+    let (debug_pycc, debug_cpython) =
+        run_conformance_fixture_with_profile("property_setter_debug", &fixture, false);
+    assert_eq!(debug_pycc, debug_cpython, "pycc (--debug) and CPython 3.14.6 disagree on tests/fixtures/property_setter.py");
+    let (release_pycc, release_cpython) =
+        run_conformance_fixture_with_profile("property_setter_release", &fixture, true);
+    assert_eq!(release_pycc, release_cpython, "pycc (--release) and CPython 3.14.6 disagree on tests/fixtures/property_setter.py");
+}

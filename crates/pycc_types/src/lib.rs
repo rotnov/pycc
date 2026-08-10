@@ -7,6 +7,7 @@ use pycc_hir::CmpOpKind;
 pub use pycc_hir::Ty;
 use pycc_hir::{
     BinOpKind, CompIter, FStringPart, HirClassDef, HirExpr, HirItem, HirModule, HirStmt,
+    PropertyDef,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -5654,6 +5655,94 @@ fn instantiate_generic_class_methods(
             mangled_methods.push((method_name.clone(), new_mangled));
         }
 
+        // #377: Monomorphize properties. Each property's getter and setter
+        // are ordinary `HirItem::Function` items with mangled names like
+        // `Box.v` and `Box.v.setter`. They are NOT in the class's `methods`
+        // table (they're in `properties`), so the method monomorphization
+        // loop above does not handle them. We monomorphize them here by
+        // finding their `HirItem::Function` in `hir.items`, substituting the
+        // type parameter, and renaming to the mangled class name. The
+        // monomorphized property entries point at the new mangled names.
+        let mut monomorphized_properties: Vec<PropertyDef> = Vec::new();
+        for prop in &class_def.properties {
+            let new_getter = format!("{mangled_class}.{}", prop.name);
+            if let Some(HirItem::Function { name: _, params, return_ty, body }) =
+                hir.items.iter().rfind(|item| matches!(
+                    item,
+                    HirItem::Function { name, .. } if name == &prop.getter
+                ))
+            {
+                let substituted_params = params
+                    .iter()
+                    .map(|(pn, ty)| {
+                        (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                    })
+                    .collect::<Vec<_>>();
+                let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
+                let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+                let param_tys = substituted_params
+                    .iter()
+                    .map(|(_, ty)| ty.clone())
+                    .collect::<Vec<_>>();
+                env.bind_function(new_getter.clone(), param_tys, substituted_return.clone());
+                let specialized = HirItem::Function {
+                    name: new_getter.clone(),
+                    params: substituted_params,
+                    return_ty: substituted_return,
+                    body: substituted_body,
+                };
+                if seen.insert(new_getter.clone()) {
+                    instantiations.push(GenericInstantiation {
+                        mangled_name: new_getter.clone(),
+                        specialized,
+                        return_ty: Ty::Instance(Box::new(mangled_class.clone())),
+                    });
+                }
+            }
+            let new_setter = prop.setter.as_ref().map(|s| {
+                let new_s = format!("{mangled_class}.{}.setter", prop.name);
+                if let Some(HirItem::Function { name: _, params, return_ty, body }) =
+                    hir.items.iter().rfind(|item| matches!(
+                        item,
+                        HirItem::Function { name, .. } if name == s
+                    ))
+                {
+                    let substituted_params = params
+                        .iter()
+                        .map(|(pn, ty)| {
+                            (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                        })
+                        .collect::<Vec<_>>();
+                    let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
+                    let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+                    let param_tys = substituted_params
+                        .iter()
+                        .map(|(_, ty)| ty.clone())
+                        .collect::<Vec<_>>();
+                    env.bind_function(new_s.clone(), param_tys, substituted_return.clone());
+                    let specialized = HirItem::Function {
+                        name: new_s.clone(),
+                        params: substituted_params,
+                        return_ty: substituted_return,
+                        body: substituted_body,
+                    };
+                    if seen.insert(new_s.clone()) {
+                        instantiations.push(GenericInstantiation {
+                            mangled_name: new_s.clone(),
+                            specialized,
+                            return_ty: Ty::Instance(Box::new(mangled_class.clone())),
+                        });
+                    }
+                }
+                new_s
+            });
+            monomorphized_properties.push(PropertyDef {
+                name: prop.name.clone(),
+                getter: new_getter,
+                setter: new_setter,
+            });
+        }
+
         // Register the monomorphized class in env.classes with mangled
         // method names and substituted attribute types.
         let substituted_attrs = class_def
@@ -5668,6 +5757,7 @@ fn instantiate_generic_class_methods(
             attrs: substituted_attrs,
             methods: mangled_methods,
             type_param: None, // The monomorphized class is not generic.
+            properties: monomorphized_properties,
         };
         env.bind_class(mangled_class.clone(), new_class_def.clone());
         new_class_defs.push((mangled_class, new_class_def));
@@ -22939,6 +23029,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         HirModule {
             items: vec![
@@ -22998,6 +23089,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Int)],
             methods: vec![("__init__".to_string(), "Marker.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Marker.__init__".to_string(),
@@ -23055,6 +23147,7 @@ mod tests {
                 ("fetch".to_string(), "C.fetch".to_string()),
             ],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
@@ -23118,6 +23211,325 @@ mod tests {
         ), "monomorphized fetch should use the last (rebind) definition's body");
     }
 
+    // #377: A generic class with a @property getter should monomorphize
+    // the property's getter function and copy the PropertyDef into the
+    // monomorphized class's property table with the mangled getter name.
+    #[test]
+    fn check_and_resolve_monomorphizes_a_generic_class_property_getter() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let class_def = HirClassDef {
+            name: "Box".to_string(),
+            attrs: vec![("_v".to_string(), param.clone())],
+            methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: vec![PropertyDef {
+                name: "val".to_string(),
+                getter: "Box.val".to_string(),
+                setter: None,
+            }],
+        };
+        let init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                ("v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "_v".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        };
+        let getter = HirItem::Function {
+            name: "Box.val".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+            ],
+            return_ty: param.clone(),
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("self".to_string())),
+                attr: "_v".to_string(),
+            }))],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                getter,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "Box".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(42)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("Box".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // The monomorphized getter should exist.
+        let mono_getter = find_function(&resolved, "0gen_Box__T_int.val")
+            .expect("monomorphized property getter should exist");
+        // Use `matches!` with a guard rather than `if let`/`let else` so that
+        // llvm-cov does not flag the implicit else branch as uncovered under
+        // D-014 — the guard's own true branch is the tracked region.
+        assert!(
+            matches!(mono_getter, HirItem::Function { return_ty, .. } if *return_ty == Ty::Int),
+            "monomorphized getter should be a Function returning Int"
+        );
+        // The monomorphized class should have the property in its table.
+        let mono_class = resolved.class_defs.iter()
+            .find(|(n, _)| n == "0gen_Box__T_int")
+            .expect("monomorphized class should exist");
+        assert_eq!(mono_class.1.properties.len(), 1);
+        assert_eq!(mono_class.1.properties[0].name, "val");
+        assert_eq!(mono_class.1.properties[0].getter, "0gen_Box__T_int.val");
+        assert!(mono_class.1.properties[0].setter.is_none());
+    }
+
+    // #377: A generic class with a @property getter AND setter should
+    // monomorphize both functions and copy the PropertyDef with both
+    // mangled names.
+    #[test]
+    fn check_and_resolve_monomorphizes_a_generic_class_property_getter_and_setter() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let class_def = HirClassDef {
+            name: "Box".to_string(),
+            attrs: vec![("_v".to_string(), param.clone())],
+            methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: vec![PropertyDef {
+                name: "val".to_string(),
+                getter: "Box.val".to_string(),
+                setter: Some("Box.val.setter".to_string()),
+            }],
+        };
+        let init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                ("v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "_v".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        };
+        let getter = HirItem::Function {
+            name: "Box.val".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+            ],
+            return_ty: param.clone(),
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("self".to_string())),
+                attr: "_v".to_string(),
+            }))],
+        };
+        let setter = HirItem::Function {
+            name: "Box.val.setter".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                ("new_v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "_v".to_string(),
+                value: HirExpr::Name("new_v".to_string()),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                getter,
+                setter,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "Box".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(42)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("Box".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // Both monomorphized functions should exist.
+        assert!(
+            find_function(&resolved, "0gen_Box__T_int.val").is_some(),
+            "monomorphized property getter should exist"
+        );
+        assert!(
+            find_function(&resolved, "0gen_Box__T_int.val.setter").is_some(),
+            "monomorphized property setter should exist"
+        );
+        // The monomorphized class should have the property with both names.
+        let mono_class = resolved.class_defs.iter()
+            .find(|(n, _)| n == "0gen_Box__T_int")
+            .expect("monomorphized class should exist");
+        assert_eq!(mono_class.1.properties.len(), 1);
+        assert_eq!(mono_class.1.properties[0].getter, "0gen_Box__T_int.val");
+        assert_eq!(
+            mono_class.1.properties[0].setter.as_ref().unwrap(),
+            "0gen_Box__T_int.val.setter"
+        );
+    }
+
+    // #377: If a property's getter or setter function is in the class's
+    // property table but NOT in hir.items (an internal inconsistency), the
+    // monomorphization silently skips the missing function and still creates
+    // the PropertyDef with the mangled name. This covers the `if let Some`
+    // else paths for both getter and setter.
+    #[test]
+    fn check_and_resolve_monomorphizes_properties_with_missing_functions() {
+        let class_def = HirClassDef {
+            name: "Box".to_string(),
+            attrs: vec![("_v".to_string(), Ty::Int)],
+            methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: vec![PropertyDef {
+                name: "val".to_string(),
+                getter: "Box.val".to_string(),
+                setter: Some("Box.val.setter".to_string()),
+            }],
+        };
+        let init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "_v".to_string(),
+                value: HirExpr::IntLiteral(0),
+            }],
+        };
+        // Note: no getter or setter HirItem::Function in hir.items —
+        // the property table references them but they don't exist.
+        let hir = HirModule {
+            items: vec![
+                init,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "Box".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("Box".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // The PropertyDef should still be created with mangled names, even
+        // though the functions themselves were not monomorphized.
+        let mono_class = resolved.class_defs.iter()
+            .find(|(n, _)| n == "0gen_Box__T_int")
+            .expect("monomorphized class should exist");
+        assert_eq!(mono_class.1.properties.len(), 1);
+        assert_eq!(mono_class.1.properties[0].getter, "0gen_Box__T_int.val");
+        assert_eq!(
+            mono_class.1.properties[0].setter.as_ref().unwrap(),
+            "0gen_Box__T_int.val.setter"
+        );
+        // The monomorphized getter/setter functions should NOT exist.
+        assert!(find_function(&resolved, "0gen_Box__T_int.val").is_none());
+        assert!(find_function(&resolved, "0gen_Box__T_int.val.setter").is_none());
+    }
+
+    // #377: A class_def with a duplicate property entry causes the second
+    // iteration to produce the same mangled getter/setter name, so
+    // `seen.insert` returns false and the `instantiations.push` is skipped
+    // for both getter and setter.
+    #[test]
+    fn check_and_resolve_dedups_property_getter_and_setter_monomorphization() {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let class_def = HirClassDef {
+            name: "Box".to_string(),
+            attrs: vec![("_v".to_string(), param.clone())],
+            methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: vec![
+                PropertyDef {
+                    name: "val".to_string(),
+                    getter: "Box.val".to_string(),
+                    setter: Some("Box.val.setter".to_string()),
+                },
+                // Duplicate entry — same property name and mangled names.
+                PropertyDef {
+                    name: "val".to_string(),
+                    getter: "Box.val".to_string(),
+                    setter: Some("Box.val.setter".to_string()),
+                },
+            ],
+        };
+        let init = HirItem::Function {
+            name: "Box.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                ("v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "_v".to_string(),
+                value: HirExpr::Name("v".to_string()),
+            }],
+        };
+        let getter = HirItem::Function {
+            name: "Box.val".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+            ],
+            return_ty: param.clone(),
+            body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Name("self".to_string())),
+                attr: "_v".to_string(),
+            }))],
+        };
+        let setter = HirItem::Function {
+            name: "Box.val.setter".to_string(),
+            params: vec![
+                ("self".to_string(), Ty::Instance(Box::new("Box".to_string()))),
+                ("new_v".to_string(), param.clone()),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "_v".to_string(),
+                value: HirExpr::Name("new_v".to_string()),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                getter,
+                setter,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "Box".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(42)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("Box".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // Exactly one monomorphized getter and one setter (deduped).
+        let getter_count = count_function(&resolved, "0gen_Box__T_int.val");
+        let setter_count = count_function(&resolved, "0gen_Box__T_int.val.setter");
+        assert_eq!(getter_count, 1, "getter should be monomorphized exactly once");
+        assert_eq!(setter_count, 1, "setter should be monomorphized exactly once");
+    }
+
     #[test]
     fn type_check_expr_rejects_generic_class_instantiate_for_undefined_class() {
         // Exercises `type_check_expr`'s `GenericClassInstantiate` arm's
@@ -23151,6 +23563,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
@@ -23797,6 +24210,7 @@ mod tests {
                 ("merge".to_string(), "C.merge".to_string()),
             ],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -23900,6 +24314,7 @@ mod tests {
                 ("process".to_string(), "C.process".to_string()),
             ],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -23963,6 +24378,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let caller = HirItem::Function {
             name: "f".to_string(),
@@ -24086,6 +24502,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let hir = HirModule {
             items: vec![init],
@@ -24161,6 +24578,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Int)],
             methods: vec![("__init__".to_string(), "D.__init__".to_string())],
             type_param: None, // Not generic!
+            properties: Vec::new(),
         };
         // A generic function — prevents `monomorphize` from returning early.
         let identity = HirItem::Function {
@@ -24210,6 +24628,7 @@ mod tests {
                 ("ghost".to_string(), "E.ghost".to_string()), // No matching HirItem!
             ],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let init = HirItem::Function {
             name: "E.__init__".to_string(),
@@ -24357,6 +24776,7 @@ mod tests {
                 ("ghost".to_string(), "F.ghost".to_string()), // No matching HirItem!
             ],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let init = HirItem::Function {
             name: "F.__init__".to_string(),
@@ -24429,6 +24849,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         // Private function with inferred types — forces the solver path.
         let f = HirItem::Function {
@@ -24500,6 +24921,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -24563,6 +24985,7 @@ mod tests {
             attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         // Generic function `g[T]` whose body contains `C[int](g(1))` —
         // the arg `g(1)` is a self-call, which `reject_generic_calls_in_expr`
@@ -24629,6 +25052,7 @@ mod tests {
                 ("__init__".to_string(), "D.__init__".to_string()),
             ],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         // A generic function forces `check_and_resolve` → `monomorphize`
         // → `instantiate_generic_class_methods`.
@@ -24696,6 +25120,7 @@ mod tests {
             attrs: vec![("v".to_string(), Ty::Param(Box::new("T".to_string())))],
             methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let maker_init = HirItem::Function {
             name: "Maker.__init__".to_string(),
@@ -24739,6 +25164,7 @@ mod tests {
                 ("fetch".to_string(), "Maker.fetch".to_string()),
             ],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -24819,6 +25245,7 @@ mod tests {
             attrs: vec![("v".to_string(), Ty::Int)],
             methods: vec![("__init__".to_string(), "D.__init__".to_string())],
             type_param: None, // Not generic!
+            properties: Vec::new(),
         };
         let maker_init = HirItem::Function {
             name: "Maker.__init__".to_string(),
@@ -24862,6 +25289,7 @@ mod tests {
                 ("fetch".to_string(), "Maker.fetch".to_string()),
             ],
             type_param: Some("T".to_string()),
+            properties: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
