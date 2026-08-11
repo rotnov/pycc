@@ -4974,6 +4974,28 @@ mod tests {
         let err = lower_checked(&module).unwrap_err();
         assert_eq!(err.code, "C0001");
     }
+
+    #[test]
+    fn super_attr_assignment_is_c0001() {
+        // #448: `super().attr = value` is rejected with a dedicated C0001
+        // diagnostic that names super() attribute assignment, not the
+        // confusing bare-super() message.
+        let module = pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        super().x = 1\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("super().attr = value"),
+            "should mention super().attr = value, got: {}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("bare `super()`"),
+            "should not use the bare-super() message, got: {}",
+            err.message
+        );
+    }
 }
 
 #[cfg(test)]

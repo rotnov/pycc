@@ -61,7 +61,12 @@ status: accepted
   - **`super().attr` (attribute read) works correctly.** The attribute is
     resolved starting from the next class in the defining class's MRO, and
     the slot index is computed from the full MRO's flat layout (the same
-    index the base class's own methods would use).
+    index the base class's own methods would use). `resolve_super_attr_get`
+    rejects `super().attr` with `T0021` when an intervening class in the MRO
+    (between the current class and the declaring base class) redeclares the
+    attribute with a different type — the shared slot will contain the
+    redeclared value at runtime, so reading it as the base type would be a
+    type-safety violation.
   - **No new MIR or codegen nodes.** `super().method()` lowers to
     `MirExpr::Call` and `super().attr` lowers to `MirExpr::AttrGet` or
     `MirExpr::Call` (for properties), reusing existing infrastructure.

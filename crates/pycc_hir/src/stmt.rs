@@ -38,8 +38,8 @@
 //! `expr.rs`-side flag the way that framing might suggest.
 
 use crate::expr::{
-    lower_dict_comp_assign, lower_expr, lower_list_comp_assign, lower_range_call,
-    lower_set_comp_assign,
+    is_zero_arg_super_call, lower_dict_comp_assign, lower_expr, lower_list_comp_assign,
+    lower_range_call, lower_set_comp_assign,
 };
 use crate::{HirStmt, Ty, annotation_to_ty, context_invalid, unsupported};
 use pycc_ast::{ElifElseClause, Expr, Stmt};
@@ -125,11 +125,29 @@ pub(crate) fn lower_stmt(
                 // and is covered by
                 // `assigning_to_a_tuple_unpacking_target_is_unsupported` in
                 // `crates/pycc_hir/src/lib.rs`.
-                Expr::Attribute(attr) => HirStmt::AttrSet {
-                    base: lower_expr(&attr.value, in_function, class_name)?,
-                    attr: attr.attr.to_string(),
-                    value: lower_expr(&assign.value, in_function, class_name)?,
-                },
+                Expr::Attribute(attr) => {
+                    // #448: `super().attr = value` — super() attribute
+                    // assignment is not implemented in this version. Without
+                    // this special case, `super().attr = value` would lower
+                    // the `super()` base through the generic `lower_expr`
+                    // path, which rejects a bare `super()` with a confusing
+                    // "a bare `super()` expression is not supported" message
+                    // that doesn't name the actual unsupported operation
+                    // (attribute assignment through super()). Emit a dedicated
+                    // C0001 diagnostic instead.
+                    if is_zero_arg_super_call(&attr.value) {
+                        return Err(unsupported(
+                            "super().attr = value is not supported yet — super() attribute \
+                             assignment is not implemented in this version",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    }
+                    HirStmt::AttrSet {
+                        base: lower_expr(&attr.value, in_function, class_name)?,
+                        attr: attr.attr.to_string(),
+                        value: lower_expr(&assign.value, in_function, class_name)?,
+                    }
+                }
                 other => {
                     return Err(unsupported(
                         format!("only assigning to a bare name is supported so far: {other:?}"),

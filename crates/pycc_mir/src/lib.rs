@@ -1204,10 +1204,13 @@ fn lower_expr(
             // the same slot offset the base class's own methods would use
             // is reused here — `self` is the same object either way.
             if matches!(base.as_ref(), HirExpr::Super) {
-                let current = current_class.expect(
-                    "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a \
-                     method body -- pycc_hir::lower_expr should have rejected this with C0001"
-                );
+                let current = match current_class {
+                    Some(c) => c,
+                    None => panic!(
+                        "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a \
+                         method body -- pycc_hir::lower_expr should have rejected this with C0001"
+                    ),
+                };
                 let self_expr = self_expr(scopes);
                 let class_def = &classes[current];
                 let current_pos = class_def
@@ -1320,10 +1323,13 @@ fn lower_expr(
             // no vtable, no runtime dispatch (D-006 static-dispatch framing,
             // per the #433 ADR).
             if matches!(base.as_ref(), HirExpr::Super) {
-                let current = current_class.expect(
-                    "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a \
-                     method body -- pycc_hir::lower_expr should have rejected this with C0001"
-                );
+                let current = match current_class {
+                    Some(c) => c,
+                    None => panic!(
+                        "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a \
+                         method body -- pycc_hir::lower_expr should have rejected this with C0001"
+                    ),
+                };
                 let self_expr = self_expr(scopes);
                 let class_def = &classes[current];
                 let current_pos = class_def
@@ -4905,6 +4911,49 @@ mod tests {
         let hir = HirModule {
             items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
                 HirExpr::Super,
+            ))],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let _ = build(&hir);
+    }
+
+    // #449: `current_class.expect(...)` panic paths in the Super-base blocks
+    // of `HirExpr::AttrGet` and `HirExpr::MethodCall`. A `HirExpr::Super` as
+    // the base of an `AttrGet` or `MethodCall` at top level (outside a method
+    // body, where `current_class` is `None`) should never reach MIR lowering
+    // — HIR lowering rejects it with C0001. These tests bypass the type
+    // checker with a hand-built HIR to exercise the panic arms, matching this
+    // file's own established internal-error-test convention.
+
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a method body")]
+    fn super_attr_get_outside_method_panics_with_an_internal_error() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Super),
+                    attr: "x".to_string(),
+                },
+            ))],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let _ = build(&hir);
+    }
+
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a method body")]
+    fn super_method_call_outside_method_panics_with_an_internal_error() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Super),
+                    method: "f".to_string(),
+                    args: vec![],
+                },
             ))],
             type_aliases: Vec::new(),
             imports: Vec::new(),

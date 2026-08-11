@@ -74,7 +74,7 @@ fn type_arg_name_to_ty(slice: &Expr) -> Result<Ty, Diagnostic> {
 /// `super().method(args)` and `super().attr` respectively, lowering both
 /// to a `HirExpr::Super` base instead of letting the `super` name fall
 /// through to the ordinary (unsupported-builtin) `Call` path.
-fn is_zero_arg_super_call(expr: &Expr) -> bool {
+pub(crate) fn is_zero_arg_super_call(expr: &Expr) -> bool {
     let Expr::Call(call) = expr else {
         return false;
     };
