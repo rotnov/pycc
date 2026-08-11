@@ -275,6 +275,30 @@ pub(crate) fn resolve_super_attr_get(
     for mro_class in super_mro {
         let mro_def = expect_class(env, mro_class);
         if let Some((_, ty)) = mro_def.attrs.iter().find(|(name, _)| name == attr) {
+            // #433 review fix: if a class between the current class and the
+            // declaring class (i.e. in the MRO before super_mro) redeclares
+            // this attribute with a different type, the shared slot will
+            // contain the redeclared value at runtime, not the base type's
+            // value. Reject this to avoid a type-safety violation.
+            for before_class in &class_def.mro[..current_pos + 1] {
+                let before_def = expect_class(env, before_class);
+                if let Some((_, before_ty)) = before_def.attrs.iter().find(|(n, _)| n == attr) {
+                    if before_ty != ty {
+                        return Err(Diagnostic::error(
+                            "T0021",
+                            format!(
+                                "super().{attr} has type `{}` in class `{mro_class}` but is \
+                                 redeclared as `{}` in class `{before_class}` — the shared \
+                                 attribute slot will contain the redeclared type at runtime, \
+                                 so super().{attr} would read the wrong type",
+                                ty.name(),
+                                before_ty.name(),
+                            ),
+                            Span::new(0, 0),
+                        ));
+                    }
+                }
+            }
             return Ok(ty.clone());
         }
     }
@@ -1540,6 +1564,75 @@ mod tests {
                     bases: vec!["A".to_string()],
                     mro: vec!["B".to_string(), "A".to_string()],
                     attrs: vec![],
+                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+        });
+        assert_eq!(
+            super::resolve_super_attr_get(&env, "x"),
+            Ok(Ty::Int)
+        );
+    }
+
+    #[test]
+    fn resolve_super_attr_get_rejects_redeclared_type_mismatch() {
+        let env = super_env(|env| {
+            env.bind_class(
+                "A".to_string(),
+                HirClassDef {
+                    name: "A".to_string(),
+                    bases: vec![],
+                    mro: vec!["A".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Int)],
+                    methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+            env.bind_class(
+                "B".to_string(),
+                HirClassDef {
+                    name: "B".to_string(),
+                    bases: vec!["A".to_string()],
+                    mro: vec!["B".to_string(), "A".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Str)],
+                    methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+        });
+        let result = super::resolve_super_attr_get(&env, "x");
+        assert!(result.is_err());
+        let diag = result.unwrap_err();
+        assert_eq!(diag.code, "T0021");
+        assert!(diag.message.contains("redeclared"));
+    }
+
+    #[test]
+    fn resolve_super_attr_get_allows_same_type_redeclaration() {
+        let env = super_env(|env| {
+            env.bind_class(
+                "A".to_string(),
+                HirClassDef {
+                    name: "A".to_string(),
+                    bases: vec![],
+                    mro: vec!["A".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Int)],
+                    methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                    type_param: None,
+                    properties: Vec::new(),
+                },
+            );
+            env.bind_class(
+                "B".to_string(),
+                HirClassDef {
+                    name: "B".to_string(),
+                    bases: vec!["A".to_string()],
+                    mro: vec!["B".to_string(), "A".to_string()],
+                    attrs: vec![("x".to_string(), Ty::Int)],
                     methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                     type_param: None,
                     properties: Vec::new(),

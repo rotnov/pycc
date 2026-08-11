@@ -1202,22 +1202,40 @@ fn lower_expr(
                         };
                     }
                 }
-                // Regular attribute slots — use the full MRO's flat layout
-                // for the slot index, exactly like the non-super arm.
+                // Regular attribute slots — the slot index comes from the
+                // full MRO's flat layout (since `self` is the same object),
+                // but the *type* must come from the super_mro slice to match
+                // the type checker's `resolve_super_attr_get`. A derived
+                // class may redeclare an attribute with a different type;
+                // using the full layout's type would pick the most-derived
+                // declaration, but `super().attr` should use the base class's
+                // declaration (#433 review fix).
                 let flat_attrs = mro_attrs(class_def, classes);
-                let (slot, (_, ty)) = flat_attrs
+                let slot = flat_attrs
                     .iter()
                     .enumerate()
                     .find(|(_, (name, _))| name == attr)
+                    .map(|(slot, _)| slot)
                     .expect(
                         "pycc_mir: internal error: attribute not declared on class or any base in \
                          its MRO -- pycc_types::check should have rejected this HIR before it \
                          reached pycc_mir",
                     );
+                let ty = super_mro
+                    .iter()
+                    .find_map(|mro_class| {
+                        let mro_def = &classes[mro_class.as_str()];
+                        mro_def.attrs.iter().find(|(name, _)| name == attr)
+                    })
+                    .map(|(_, ty)| ty.clone())
+                    .expect(
+                        "pycc_mir: internal error: attribute not found in super_mro -- \
+                         pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    );
                 return MirExpr::AttrGet {
                     base: Box::new(self_expr),
                     slot,
-                    ty: ty.clone(),
+                    ty,
                 };
             }
             let base = lower_expr(base, scopes, classes, current_class);
