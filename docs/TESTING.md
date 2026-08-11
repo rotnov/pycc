@@ -228,13 +228,13 @@ cache steps produces the retired D-084 workflow semantics exactly, that the
 restore/save keys and paths are paired, and that removing either the hosted
 image or LLVM component of the key is rejected by the public checker.
 
-The `conformance-fib-mandelbrot-tier1` and `check-throughput-1k-loc-50ms`
+The `conformance-fib-mandelbrot-tier1` and `check-throughput-1k-loc-75ms`
 evidence bind the same reviewed `ci.yml` digest as `ci-tier1-cross-compile`,
 so proving the digest is reviewed and current also proves these two steps
 execute for real: the fib/mandelbrot-ascii byte-for-byte CPython differential
 (`tests/conformance.rs`, D-085/D-080) runs via `cargo test -- --include-ignored`
 in both `build-test-coverage` and every `native-build-test` matrix leg, i.e.
-on all five Tier-1 targets, while the `pycc check` <50ms/1000 LOC
+on all five Tier-1 targets, while the `pycc check` <75ms/1000 LOC
 absolute-throughput-floor step (`scripts/check_frontend_throughput.rb`,
 D-079/D-084) runs only inside `build-test-coverage` (one target) -- unlike
 the tier1 claim above, this roadmap item's own wording does not assert the

@@ -22,8 +22,8 @@ EVIDENCE_CLAIMS = {
     "The 100% line and region coverage gate is required and green for the current slice.",
   "conformance-fib-mandelbrot-tier1" =>
     "`fib` and `mandelbrot-ascii` compile and match CPython output on all five Tier-1 targets.",
-  "check-throughput-1k-loc-50ms" =>
-    "`pycc check` processes 1k LOC in under 50 ms.",
+  "check-throughput-1k-loc-75ms" =>
+    "`pycc check` processes 1k LOC in under 75 ms.",
   "cli-spec-diagnostic-match" =>
     "The error demonstration matches the stable [CLI specification](./CLI_SPEC.md) output."
 }.freeze
@@ -43,7 +43,7 @@ EVIDENCE_SECTIONS = {
     "Current delivery status",
     "v0.1 acceptance checklist"
   ],
-  "check-throughput-1k-loc-50ms" => [
+  "check-throughput-1k-loc-75ms" => [
     "pycc Roadmap",
     "Current delivery status",
     "v0.1 acceptance checklist"

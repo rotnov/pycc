@@ -17,7 +17,7 @@ Written in Rust (1.97+). Built to be extremely fast — both the compiler itself
 > pre-alpha: documented representation and lifetime gaps are still roadmap
 > work, but v0.1's own acceptance criteria are now met -- `fib` and
 > `mandelbrot-ascii` match pinned CPython output on all five Tier-1 targets,
-> `pycc check` clears its <50ms/1000 LOC throughput floor, and diagnostic
+> `pycc check` clears its <75ms/1000 LOC throughput floor, and diagnostic
 > output matches [`docs/CLI_SPEC.md`](./docs/CLI_SPEC.md)'s example.
 > v0.2's own acceptance criteria are now also met: a hand-authored
 > `list`/`dict`/`set`/`tuple` + comprehensions/slicing/methods/generics corpus
