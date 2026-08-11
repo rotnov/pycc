@@ -68,6 +68,10 @@
     "unexpected_requests": {
       "max_requests": 0,
       "description": "No unexpected runtime requests beyond the page document and its declared first-party assets."
+    },
+    "allowed_assets": {
+      "paths": ["styles.css", "site.js", "og.png"],
+      "description": "First-party assets permitted in Lighthouse network requests, relative to the project path /pycc/. The page document itself is always allowed. Any first-party request not in this list (and not the page document) is counted as an unexpected request."
     }
   },
   "compressed_size_treatment": {

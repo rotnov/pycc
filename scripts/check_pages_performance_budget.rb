@@ -424,6 +424,92 @@ def validate_lhr_identity(lhr, page, replicate, base_url, repo_root)
   failures
 end
 
+# ---------------------------------------------------------------------------
+# Network request validation from Lighthouse LHR data
+# ---------------------------------------------------------------------------
+
+def normalize_request_url(url)
+  # Strip query string and fragment for comparison.
+  url.split("?")[0].split("#")[0]
+end
+
+def validate_network_requests(lhr, page, replicate, base_url, budget, manifest)
+  failures = []
+  page_id = page["id"]
+
+  audits = lhr["audits"]
+  return failures unless audits.is_a?(Hash)
+
+  network_audit = audits["network-requests"]
+  # If the network-requests audit is absent (e.g. synthetic test fixtures
+  # without network data), skip validation.  Real Lighthouse output always
+  # includes this audit.
+  return failures unless network_audit.is_a?(Hash)
+
+  items = network_audit.dig("details", "items")
+  return failures unless items.is_a?(Array)
+
+  # Build the set of allowed request URLs (normalized, no query/fragment).
+  expected_url = normalize_request_url("#{base_url}#{page["local_route"].sub(/^\//, '')}")
+  project_path = manifest["project_path"] || "/pycc/"
+  project_prefix = project_path.sub(/^\//, "") # "pycc/"
+
+  allowed_urls = [expected_url, expected_url.chomp("/")]
+  allowed_asset_paths = budget.dig("resource_budgets", "allowed_assets", "paths") || []
+  allowed_asset_paths.each do |asset|
+    allowed_urls << normalize_request_url("#{base_url}#{project_prefix}#{asset}")
+  end
+
+  # Parse the base origin for third-party classification.
+  base_uri = URI(base_url)
+  base_origin = "#{base_uri.scheme}://#{base_uri.host}:#{base_uri.port}"
+
+  third_party_count = 0
+  unexpected_count = 0
+  third_party_urls = []
+  unexpected_urls = []
+
+  items.each do |item|
+    url = item["url"]
+    next unless url
+
+    # Skip non-network schemes (data:, blob:, about:).
+    next if url.start_with?("data:", "blob:", "about:")
+
+    begin
+      item_uri = URI(url)
+    rescue URI::InvalidURIError
+      next # Skip unparseable URLs
+    end
+
+    item_origin = "#{item_uri.scheme}://#{item_uri.host}:#{item_uri.port}"
+
+    if item_origin != base_origin
+      third_party_count += 1
+      third_party_urls << url
+    else
+      # First-party: check if it's in the allowed set.
+      normalized = normalize_request_url(url)
+      unless allowed_urls.include?(normalized)
+        unexpected_count += 1
+        unexpected_urls << url
+      end
+    end
+  end
+
+  tp_max = budget.dig("resource_budgets", "third_party", "max_requests")
+  if tp_max && third_party_count > tp_max
+    failures << "#{page_id} replicate #{replicate}: third-party requests #{third_party_count} exceeds max_requests #{tp_max} (#{third_party_urls.join(', ')})"
+  end
+
+  uq_max = budget.dig("resource_budgets", "unexpected_requests", "max_requests")
+  if uq_max && unexpected_count > uq_max
+    failures << "#{page_id} replicate #{replicate}: unexpected first-party requests #{unexpected_count} exceeds max_requests #{uq_max} (#{unexpected_urls.join(', ')})"
+  end
+
+  failures
+end
+
 def extract_lhr_metric(lhr, audit_id)
   audits = lhr["audits"]
   return nil unless audits.is_a?(Hash)
@@ -512,6 +598,9 @@ def validate_and_gate_lhrs(manifest, budget, lhr_dir, base_url, repo_root)
 
       # Validate identity
       failures.concat(validate_lhr_identity(lhr, page, replicate, base_url, repo_root))
+
+      # Validate network request budgets (third-party and unexpected requests)
+      failures.concat(validate_network_requests(lhr, page, replicate, base_url, budget, manifest))
 
       # Extract metrics
       lcp = extract_lhr_metric(lhr, "largest-contentful-paint")

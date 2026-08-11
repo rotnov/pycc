@@ -32,6 +32,7 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
   # A healthy LHR fixture for a given page and base URL.
   def healthy_lhr(page, base_url, lcp_s: 1.1, cls: 0.0, tbt_s: 0.0, perf: 0.95)
     expected_url = "#{base_url}#{page["local_route"].sub(/^\//, '')}"
+    project_prefix = "pycc/"
     {
       "requestedUrl" => expected_url,
       "mainDocumentUrl" => expected_url,
@@ -52,6 +53,15 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
         "total-blocking-time" => { "numericValue" => tbt_s },
         "document-title" => {
           "details" => { "items" => [{ "title" => page["expected_title"] }] }
+        },
+        "network-requests" => {
+          "details" => {
+            "items" => [
+              { "url" => expected_url, "statusCode" => 200, "resourceType" => "Document", "mimeType" => "text/html" },
+              { "url" => "#{base_url}#{project_prefix}styles.css", "statusCode" => 200, "resourceType" => "Stylesheet", "mimeType" => "text/css" },
+              { "url" => "#{base_url}#{project_prefix}site.js", "statusCode" => 200, "resourceType" => "Script", "mimeType" => "text/javascript" }
+            ]
+          }
         }
       },
       "categories" => {
@@ -512,6 +522,136 @@ class TestCheckPagesPerformanceBudget < Minitest::Test
       refute_empty failures
       assert(failures.any? { |f| f.include?("LHR file reused") || f.include?("LHR content identical") })
     end
+  end
+
+  # ------------------------------------------------------------------
+  # Network request budget enforcement (third-party and unexpected requests)
+  # ------------------------------------------------------------------
+
+  def test_network_requests_pass_on_healthy_site
+    manifest = load_default_manifest
+    budget = load_default_budget
+    base_url = "http://127.0.0.1:9999/"
+    page = manifest["canonical_pages"].first
+    lhr = healthy_lhr(page, base_url)
+    failures = validate_network_requests(lhr, page, 1, base_url, budget, manifest)
+    assert_empty failures
+  end
+
+  def test_network_requests_fail_when_third_party_request_present
+    manifest = load_default_manifest
+    budget = load_default_budget
+    base_url = "http://127.0.0.1:9999/"
+    page = manifest["canonical_pages"].first
+    lhr = healthy_lhr(page, base_url)
+    # Add a third-party request (different origin)
+    lhr["audits"]["network-requests"]["details"]["items"] << {
+      "url" => "https://example.com/analytics.js",
+      "statusCode" => 200,
+      "resourceType" => "Script",
+      "mimeType" => "text/javascript"
+    }
+    failures = validate_network_requests(lhr, page, 1, base_url, budget, manifest)
+    refute_empty failures
+    assert(failures.any? { |f| f.include?("third-party requests") })
+  end
+
+  def test_network_requests_fail_when_unexpected_first_party_request_present
+    manifest = load_default_manifest
+    budget = load_default_budget
+    base_url = "http://127.0.0.1:9999/"
+    page = manifest["canonical_pages"].first
+    lhr = healthy_lhr(page, base_url)
+    # Add an unexpected first-party request (same origin, not in allowed list)
+    lhr["audits"]["network-requests"]["details"]["items"] << {
+      "url" => "#{base_url}pycc/unexpected.js",
+      "statusCode" => 200,
+      "resourceType" => "Script",
+      "mimeType" => "text/javascript"
+    }
+    failures = validate_network_requests(lhr, page, 1, base_url, budget, manifest)
+    refute_empty failures
+    assert(failures.any? { |f| f.include?("unexpected first-party requests") })
+  end
+
+  def test_network_requests_validation_via_gate_with_third_party
+    Dir.mktmpdir do |tmp|
+      manifest = load_default_manifest
+      budget = load_default_budget
+      base_url = "http://127.0.0.1:9999/"
+      write_healthy_lhrs(tmp, manifest, base_url)
+
+      # Add a third-party request to one replicate of the first page
+      page = manifest["canonical_pages"].first
+      path = File.join(tmp, page["id"], "replicate-1.json")
+      lhr = JSON.parse(File.read(path))
+      lhr["audits"]["network-requests"]["details"]["items"] << {
+        "url" => "https://example.com/analytics.js",
+        "statusCode" => 200,
+        "resourceType" => "Script",
+        "mimeType" => "text/javascript"
+      }
+      File.write(path, JSON.generate(lhr))
+
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
+      refute_empty failures
+      assert(failures.any? { |f| f.include?("third-party requests") })
+    end
+  end
+
+  def test_network_requests_validation_via_gate_with_unexpected_request
+    Dir.mktmpdir do |tmp|
+      manifest = load_default_manifest
+      budget = load_default_budget
+      base_url = "http://127.0.0.1:9999/"
+      write_healthy_lhrs(tmp, manifest, base_url)
+
+      # Add an unexpected first-party request to one replicate
+      page = manifest["canonical_pages"].first
+      path = File.join(tmp, page["id"], "replicate-2.json")
+      lhr = JSON.parse(File.read(path))
+      lhr["audits"]["network-requests"]["details"]["items"] << {
+        "url" => "#{base_url}pycc/unexpected.js",
+        "statusCode" => 200,
+        "resourceType" => "Script",
+        "mimeType" => "text/javascript"
+      }
+      File.write(path, JSON.generate(lhr))
+
+      failures = validate_and_gate_lhrs(manifest, budget, tmp, base_url, REPO_ROOT)
+      refute_empty failures
+      assert(failures.any? { |f| f.include?("unexpected first-party requests") })
+    end
+  end
+
+  def test_network_requests_skips_when_audit_absent
+    manifest = load_default_manifest
+    budget = load_default_budget
+    base_url = "http://127.0.0.1:9999/"
+    page = manifest["canonical_pages"].first
+    lhr = healthy_lhr(page, base_url)
+    # Remove the network-requests audit entirely
+    lhr["audits"].delete("network-requests")
+    failures = validate_network_requests(lhr, page, 1, base_url, budget, manifest)
+    # Should skip validation (not fail) when audit is absent
+    assert_empty failures
+  end
+
+  def test_network_requests_allows_og_png
+    manifest = load_default_manifest
+    budget = load_default_budget
+    base_url = "http://127.0.0.1:9999/"
+    page = manifest["canonical_pages"].first
+    lhr = healthy_lhr(page, base_url)
+    # Add og.png request (it's in the allowed_assets list)
+    lhr["audits"]["network-requests"]["details"]["items"] << {
+      "url" => "#{base_url}pycc/og.png",
+      "statusCode" => 200,
+      "resourceType" => "Image",
+      "mimeType" => "image/png"
+    }
+    failures = validate_network_requests(lhr, page, 1, base_url, budget, manifest)
+    assert_empty failures
   end
 
   # ------------------------------------------------------------------

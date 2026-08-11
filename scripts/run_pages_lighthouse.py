@@ -169,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         for page in manifest["canonical_pages"]:
             page_id = page["id"]
             local_route = page["local_route"]
-            url = f"{base_url}{local_route.lstrip('/')}"
+            url = f"{base_url}/{local_route.lstrip('/')}"
             # Ensure trailing slash for directory-index routes.
             if not url.endswith("/"):
                 url += "/"

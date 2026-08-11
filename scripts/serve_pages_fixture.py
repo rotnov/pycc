@@ -4,9 +4,11 @@
 Serves the checked-in ``site/`` tree under the ``/pycc/`` GitHub Pages
 project-path prefix so that ``site/index.html`` is served at ``/pycc/``,
 ``site/status/index.html`` at ``/pycc/status/``, and so on.  The server
-makes no external requests, sets ``Content-Type: text/html; charset=utf-8``
-for HTML files, serves ``site/404.html`` with HTTP 404 for non-existent
-paths, and prints the chosen port to stdout so the CI job can use it.
+makes no external requests, sets the correct ``Content-Type`` based on
+file extension (``text/html; charset=utf-8`` for HTML, ``text/css`` for
+CSS, ``text/javascript`` for JS, etc.), serves ``site/404.html`` with
+HTTP 404 for non-existent paths, and prints the chosen port to stdout so
+the CI job can use it.
 
 Usage::
 
@@ -28,6 +30,30 @@ from typing import Optional
 PROJECT_PATH_PREFIX = "/pycc/"
 HTML_CONTENT_TYPE = "text/html; charset=utf-8"
 
+# Mapping from file extension to MIME content type.
+_CONTENT_TYPE_MAP = {
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".json": "application/json; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".ico": "image/x-icon",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
+
+DEFAULT_CONTENT_TYPE = "application/octet-stream"
+
 
 class PagesFixtureHandler(http.server.BaseHTTPRequestHandler):
     """Serve files from *site_dir* under the ``/pycc/`` prefix."""
@@ -45,6 +71,11 @@ class PagesFixtureHandler(http.server.BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _content_type_for(self, path: Path) -> str:
+        """Return the MIME content type for *path* based on its extension."""
+        ext = path.suffix.lower()
+        return _CONTENT_TYPE_MAP.get(ext, DEFAULT_CONTENT_TYPE)
+
     def _local_path_for_request(self) -> Optional[Path]:
         """Return the filesystem path for *self.path*, or ``None`` if 404."""
         # Strip query string and fragment.
@@ -72,7 +103,7 @@ class PagesFixtureHandler(http.server.BaseHTTPRequestHandler):
     def _serve_file(self, fs_path: Path, status: int = 200) -> None:
         body = fs_path.read_bytes()
         self.send_response(status)
-        self.send_header("Content-Type", HTML_CONTENT_TYPE)
+        self.send_header("Content-Type", self._content_type_for(fs_path))
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -118,13 +149,14 @@ class PagesFixtureHandler(http.server.BaseHTTPRequestHandler):
         if fs_path.is_file():
             size = fs_path.stat().st_size
             self.send_response(200)
-            self.send_header("Content-Type", HTML_CONTENT_TYPE)
+            self.send_header("Content-Type", self._content_type_for(fs_path))
             self.send_header("Content-Length", str(size))
             self.end_headers()
         elif fs_path.is_dir() and (fs_path / "index.html").is_file():
-            size = (fs_path / "index.html").stat().st_size
+            index_path = fs_path / "index.html"
+            size = index_path.stat().st_size
             self.send_response(200)
-            self.send_header("Content-Type", HTML_CONTENT_TYPE)
+            self.send_header("Content-Type", self._content_type_for(index_path))
             self.send_header("Content-Length", str(size))
             self.end_headers()
         else:
