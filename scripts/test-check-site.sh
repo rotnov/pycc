@@ -1218,6 +1218,217 @@ expect_accept(
     "minor whitespace change in comparison cell",
     whitespace_tolerant,
 )
+
+# --- Landing-page projection mutations ---
+
+landing_html = site_dir / "index.html"
+original_landing = landing_html.read_text()
+
+
+def restore_landing():
+    landing_html.write_text(original_landing)
+    claims_json.write_text(original_claims)
+
+
+def expect_reject_landing(description, fn):
+    fn()
+    result = run_checker()
+    restore_landing()
+    if result.returncode == 0:
+        raise SystemExit(
+            f"Validator accepted {description}"
+        )
+
+
+def expect_accept_landing(description, fn):
+    fn()
+    result = run_checker()
+    restore_landing()
+    if result.returncode != 0:
+        raise SystemExit(
+            f"Validator rejected {description}"
+        )
+
+
+# A: Landing HTML pycc Output artifact corrupted (binding)
+def landing_pycc_output_corrupt():
+    landing_html.write_text(
+        original_landing.replace(
+            '<td><span class="yes">Standalone target</span></td>',
+            '<td><span class="yes">C extension</span></td>',
+            1,
+        )
+    )
+
+expect_reject_landing(
+    "landing HTML pycc Output artifact corrupted to C extension",
+    landing_pycc_output_corrupt,
+)
+
+# B: Landing HTML remove mypyc <tr> (entity set)
+def landing_remove_mypyc():
+    start = original_landing.index(
+        '              <tr>\n                <th scope="row">mypyc</th>'
+    )
+    end = original_landing.index("              </tr>\n", start) + len(
+        "              </tr>\n"
+    )
+    landing_html.write_text(original_landing[:start] + original_landing[end:])
+
+expect_reject_landing(
+    "landing HTML mypyc row removed",
+    landing_remove_mypyc,
+)
+
+# C: Landing HTML add extra ExtraTool <tr> (entity set)
+def landing_add_extra_entity():
+    new_row = (
+        "              <tr>\n"
+        '                <th scope="row">ExtraTool</th>\n'
+        "                <td>Some language</td>\n"
+        "                <td>Some output</td>\n"
+        "                <td>Some contract</td>\n"
+        "              </tr>\n"
+    )
+    landing_html.write_text(
+        original_landing.replace(
+            "            </tbody>\n",
+            new_row + "            </tbody>\n",
+            1,
+        )
+    )
+
+expect_reject_landing(
+    "landing HTML extra ExtraTool entity not in projection",
+    landing_add_extra_entity,
+)
+
+# D: claims.json labels.pycc.output_artifact changed without HTML (binding)
+def landing_label_drift():
+    data = json.loads(original_claims)
+    data["landing_projection"]["labels"]["pycc"]["output_artifact"] = (
+        "C extension"
+    )
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject_landing(
+    "claims.json labels.pycc.output_artifact changed without landing HTML",
+    landing_label_drift,
+)
+
+# E: claims.json anchors.pycc.output_artifact changed to absent token (anchor)
+def landing_anchor_absent():
+    data = json.loads(original_claims)
+    data["landing_projection"]["anchors"]["pycc"]["output_artifact"] = (
+        "NonexistentToken"
+    )
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject_landing(
+    "claims.json anchors.pycc.output_artifact set to absent token",
+    landing_anchor_absent,
+)
+
+# F: claims.json pycc html_output_cell drops "Standalone" AND co-updates
+#    the detailed HTML cell to match (cross-projection contradiction)
+def landing_cross_projection_contradiction():
+    data = json.loads(original_claims)
+    for e in data["entities"]:
+        if e["name"] == "pycc":
+            e["html_output_cell"] = e["html_output_cell"].replace(
+                "Standalone ", "", 1
+            )
+    claims_json.write_text(json.dumps(data, indent=2))
+    comp_html.write_text(
+        original_html.replace(
+            "Standalone native executable without CPython for native and pure builds; planned permitted interop bundles a pinned CPython runtime",
+            "native executable without CPython for native and pure builds; planned permitted interop bundles a pinned CPython runtime",
+            1,
+        )
+    )
+
+expect_reject_landing(
+    "cross-projection contradiction: pycc html_output_cell drops Standalone "
+    "with co-updated detailed HTML",
+    landing_cross_projection_contradiction,
+)
+comp_html.write_text(original_html)
+
+# G: claims.json add Cython to labels/anchors without landing <tr> (entity set)
+def landing_add_cython_projection():
+    data = json.loads(original_claims)
+    data["landing_projection"]["labels"]["Cython"] = {
+        "static_model": "Python superset",
+        "output_artifact": "C or C++",
+        "language_contract": "Python superset",
+    }
+    data["landing_projection"]["anchors"]["Cython"] = {
+        "static_model": "superset",
+        "output_artifact": "C",
+        "language_contract": "Python",
+    }
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject_landing(
+    "claims.json Cython added to projection without landing <tr>",
+    landing_add_cython_projection,
+)
+
+# H: Landing HTML remove mini-mark class so >_ is no longer skipped (entity set)
+def landing_remove_mini_mark():
+    landing_html.write_text(
+        original_landing.replace(
+            '<span class="mini-mark">&gt;_</span> pycc',
+            '<span>&gt;_</span> pycc',
+            1,
+        )
+    )
+
+expect_reject_landing(
+    "landing HTML mini-mark class removed, row key becomes '>_ pycc'",
+    landing_remove_mini_mark,
+)
+
+# I: Positive control — minor extra whitespace inside a landing <td> (accept)
+def landing_whitespace_tolerant():
+    landing_html.write_text(
+        original_landing.replace(
+            "<td>Typed subset</td>",
+            "<td>  Typed subset  </td>",
+            1,
+        )
+    )
+
+expect_accept_landing(
+    "minor whitespace change in landing cell",
+    landing_whitespace_tolerant,
+)
+
+# J: claims.json anchors.pycc.output_artifact set to empty string (blank anchor)
+def landing_blank_anchor():
+    data = json.loads(original_claims)
+    data["landing_projection"]["anchors"]["pycc"]["output_artifact"] = ""
+    claims_json.write_text(json.dumps(data, indent=2))
+
+expect_reject_landing(
+    "claims.json anchors.pycc.output_artifact set to empty string",
+    landing_blank_anchor,
+)
+
+# K: Landing HTML swap Static model and Output artifact column headers (header order)
+def landing_swap_col_headers():
+    landing_html.write_text(
+        original_landing.replace(
+            '<th scope="col">Static model</th>\n                <th scope="col">Output artifact</th>',
+            '<th scope="col">Output artifact</th>\n                <th scope="col">Static model</th>',
+            1,
+        )
+    )
+
+expect_reject_landing(
+    "landing HTML column headers swapped (Static model <-> Output artifact)",
+    landing_swap_col_headers,
+)
 PY
 
 cp "$repo_root/site/python-aot-compilers/index.html" \

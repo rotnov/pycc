@@ -86,5 +86,26 @@
         }
       ]
     }
-  ]
+  ],
+  "landing_projection": {
+    "column_sources": {
+      "static_model": "input_contract",
+      "output_artifact": "html_output_cell",
+      "language_contract": "input_contract"
+    },
+    "labels": {
+      "pycc":     { "static_model": "Hard annotations",      "output_artifact": "Standalone target",    "language_contract": "CPython 3.14 target" },
+      "LPython":  { "static_model": "Typed subset",          "output_artifact": "AOT executable",       "language_contract": "CPython-compatible subset" },
+      "Codon":    { "static_model": "Static language",       "output_artifact": "Native code",          "language_contract": "Python-like language" },
+      "Nuitka":   { "static_model": "None required",         "output_artifact": "Executable",           "language_contract": "Standard Python" },
+      "mypyc":    { "static_model": "Strict subset",         "output_artifact": "C extension",          "language_contract": "Standard Python subset" }
+    },
+    "anchors": {
+      "pycc":     { "static_model": "Typed",            "output_artifact": "Standalone",       "language_contract": "3.14" },
+      "LPython":  { "static_model": "subset",          "output_artifact": "AOT",              "language_contract": "CPython-compatible" },
+      "Codon":    { "static_model": "statically",      "output_artifact": "Native",           "language_contract": "Python" },
+      "Nuitka":   { "static_model": "compatibility",   "output_artifact": "Executable",       "language_contract": "Python" },
+      "mypyc":    { "static_model": "strict",          "output_artifact": "C extension",      "language_contract": "subset" }
+    }
+  }
 }
