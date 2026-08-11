@@ -368,6 +368,19 @@ pub enum HirExpr {
         type_arg: Ty,
         args: Vec<HirExpr>,
     },
+    /// Zero-arg `super()` (PEP 3135, #433): represents the implicit
+    /// `super(__class__, self)` reference available inside a method body.
+    /// Only ever appears as the `base` of a `HirExpr::MethodCall` or
+    /// `HirExpr::AttrGet` — a bare `super()` used as a standalone value is
+    /// rejected at HIR-lowering time (it has no useful static-dispatch
+    /// lowering on its own). The enclosing class name is NOT carried here:
+    /// it is recovered downstream from the method's own mangled
+    /// `<ClassName>.<method>` name (type checker) or from the MIR lowering
+    /// context, the same way `self`'s own `Ty::Instance(class_name)` is
+    /// already recovered. `super().method(args)` resolves at compile time to
+    /// the next class after the current one in the MRO (D-006's static-
+    /// dispatch framing — no vtable, no runtime dispatch, per the #433 ADR).
+    Super,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3721,7 +3734,7 @@ mod tests {
         // span-fallback expression at all (D-014's region coverage gate
         // would otherwise flag that fallback as an uncoverable dead
         // branch).
-        let err = lower_comprehension_header(&[]).unwrap_err();
+        let err = lower_comprehension_header(&[], None).unwrap_err();
         assert_eq!(err.code, "C0001");
         assert!(
             err.message
@@ -4277,6 +4290,12 @@ mod tests {
                 args: vec![HirExpr::Name("new".to_string())],
             }
         );
+
+        // Super (#433): carries no names to rename — returned unchanged.
+        assert_eq!(
+            rename_name_in_expr(HirExpr::Super, "old", "new"),
+            HirExpr::Super
+        );
     }
 
     // -- D-135: `type` statement and legacy `TypeAlias` -------------------
@@ -4799,6 +4818,161 @@ mod tests {
                 if class == "C" && *type_arg == Ty::Int),
             "expected GenericClassInstantiate elt, got {elt:?}",
         );
+    }
+
+    // #433: super() lowering tests.
+
+    #[test]
+    fn super_init_lowers_to_method_call_with_super_base() {
+        // `super().__init__()` inside a method body lowers to
+        // `HirExpr::MethodCall { base: Super, method: "__init__", args: [] }`.
+        let module = pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        return\nclass B(A):\n    def __init__(self) -> None:\n        super().__init__()\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        // Find B.__init__'s body.
+        let init = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, body, .. } if name == "B.__init__" => {
+                Some(body.first().cloned())
+            }
+            _ => None,
+        });
+        let stmt = init.flatten().expect("should find B.__init__ with a non-empty body");
+        assert_eq!(
+            stmt,
+            HirStmt::ExprStmt(HirExpr::MethodCall {
+                base: Box::new(HirExpr::Super),
+                method: "__init__".to_string(),
+                args: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn super_method_lowers_to_method_call_with_super_base() {
+        // `super().greet()` inside a method body lowers to
+        // `HirExpr::MethodCall { base: Super, method: "greet", args: [] }`.
+        let module = pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        return\n    def greet(self) -> int:\n        return 1\nclass B(A):\n    def __init__(self) -> None:\n        return\n    def greet(self) -> int:\n        return super().greet()\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        let greet = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, body, .. } if name == "B.greet" => {
+                body.first().cloned()
+            }
+            _ => None,
+        });
+        let stmt = greet.expect("should find B.greet with a non-empty body");
+        assert_eq!(
+            stmt,
+            HirStmt::Return(Some(HirExpr::MethodCall {
+                base: Box::new(HirExpr::Super),
+                method: "greet".to_string(),
+                args: vec![],
+            }))
+        );
+    }
+
+    #[test]
+    fn super_attr_lowers_to_attr_get_with_super_base() {
+        // `super().x` inside a method body lowers to
+        // `HirExpr::AttrGet { base: Super, attr: "x" }`.
+        let module = pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        self.x = 1\nclass B(A):\n    def __init__(self) -> None:\n        super().__init__()\n    def get_x(self) -> int:\n        return super().x\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        let get_x = hir.items.iter().find_map(|item| match item {
+            HirItem::Function { name, body, .. } if name == "B.get_x" => {
+                body.first().cloned()
+            }
+            _ => None,
+        });
+        let stmt = get_x.expect("should find B.get_x with a non-empty body");
+        assert_eq!(
+            stmt,
+            HirStmt::Return(Some(HirExpr::AttrGet {
+                base: Box::new(HirExpr::Super),
+                attr: "x".to_string(),
+            }))
+        );
+    }
+
+    #[test]
+    fn bare_super_outside_method_is_c0001() {
+        // A bare `super()` at top level is rejected with C0001.
+        let module = pycc_parser_test_helper::parse("x = super()\n");
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+        assert!(
+            err.message.contains("bare `super()`"),
+            "should mention bare super(), got: {}", err.message
+        );
+    }
+
+    #[test]
+    fn super_with_arguments_is_not_zero_arg_super() {
+        // `super(A, self)` (two-arg super) is not a zero-arg super() call,
+        // so `is_zero_arg_super_call` returns false — it falls through to
+        // the ordinary `Expr::Call` path, which lowers `super(A, self)` as
+        // a regular call to the `super` builtin. The type checker then
+        // rejects it with C0001 ("call to builtin `super` is valid Python
+        // but not implemented yet"). This test verifies the HIR lowering
+        // succeeds (the rejection happens later, at type-check time).
+        let module = pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        super(A, self).__init__()\n",
+        );
+        let hir = lower_checked(&module).unwrap();
+        // The base of the MethodCall should be a Call to "super", not a Super.
+        assert_eq!(
+            hir.items,
+            vec![HirItem::Function {
+                name: "A.__init__".to_string(),
+                params: vec![("self".to_string(), Ty::Instance(Box::new("A".to_string())))],
+                return_ty: Ty::None,
+                body: vec![HirStmt::ExprStmt(HirExpr::MethodCall {
+                    base: Box::new(HirExpr::Call {
+                        callee: "super".to_string(),
+                        args: vec![
+                            HirExpr::Name("A".to_string()),
+                            HirExpr::Name("self".to_string()),
+                        ],
+                    }),
+                    method: "__init__".to_string(),
+                    args: vec![],
+                })],
+            }]
+        );
+    }
+
+    #[test]
+    fn super_method_outside_method_is_c0001() {
+        // `super().foo()` at top level (outside a method body) is rejected
+        // with C0001 at HIR-lowering time.
+        let module = pycc_parser_test_helper::parse("x = super().foo()\n");
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn super_attr_outside_method_is_c0001() {
+        // `super().foo` at top level (outside a method body) is rejected
+        // with C0001 at HIR-lowering time.
+        let module = pycc_parser_test_helper::parse("x = super().foo\n");
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
+    }
+
+    #[test]
+    fn super_method_with_unsupported_arg_is_c0001() {
+        // `super().foo(x if True else y)` — the ternary argument is an
+        // unsupported expression kind, so `lower_expr` on the argument
+        // returns Err, which the `?` in the super().method() lowering path
+        // propagates as C0001.
+        let module = pycc_parser_test_helper::parse(
+            "class A:\n    def __init__(self) -> None:\n        super().foo(x if True else y)\n",
+        );
+        let err = lower_checked(&module).unwrap_err();
+        assert_eq!(err.code, "C0001");
     }
 }
 

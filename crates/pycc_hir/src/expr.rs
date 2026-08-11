@@ -68,7 +68,29 @@ fn type_arg_name_to_ty(slice: &Expr) -> Result<Ty, Diagnostic> {
     }
 }
 
-pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diagnostic> {
+/// #433: Recognizes a zero-arg `super()` call expression — `Expr::Call`
+/// whose `func` is `Expr::Name("super")` and whose argument list is empty.
+/// Used by `lower_expr`'s `Expr::Call` and `Expr::Attribute` arms to detect
+/// `super().method(args)` and `super().attr` respectively, lowering both
+/// to a `HirExpr::Super` base instead of letting the `super` name fall
+/// through to the ordinary (unsupported-builtin) `Call` path.
+fn is_zero_arg_super_call(expr: &Expr) -> bool {
+    let Expr::Call(call) = expr else {
+        return false;
+    };
+    let Expr::Name(name) = call.func.as_ref() else {
+        return false;
+    };
+    name.id.as_str() == "super"
+        && call.arguments.keywords.is_empty()
+        && call.arguments.args.is_empty()
+}
+
+pub(crate) fn lower_expr(
+    expr: &Expr,
+    in_function: bool,
+    class_name: Option<&str>,
+) -> Result<HirExpr, Diagnostic> {
     let lowered = match expr {
         Expr::NumberLiteral(lit) => match &lit.value {
             Number::Int(i) => {
@@ -92,7 +114,7 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
         Expr::List(list) => HirExpr::ListLiteral(
             list.elts
                 .iter()
-                .map(|e| lower_expr(e, in_function))
+                .map(|e| lower_expr(e, in_function, class_name))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Dict(dict) => HirExpr::DictLiteral(
@@ -106,8 +128,8 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                         ));
                     };
                     Ok((
-                        lower_expr(key, in_function)?,
-                        lower_expr(&item.value, in_function)?,
+                        lower_expr(key, in_function, class_name)?,
+                        lower_expr(&item.value, in_function, class_name)?,
                     ))
                 })
                 .collect::<Result<Vec<_>, _>>()?,
@@ -115,14 +137,14 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
         Expr::Set(set) => HirExpr::SetLiteral(
             set.elts
                 .iter()
-                .map(|e| lower_expr(e, in_function))
+                .map(|e| lower_expr(e, in_function, class_name))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Tuple(tuple) => HirExpr::TupleLiteral(
             tuple
                 .elts
                 .iter()
-                .map(|e| lower_expr(e, in_function))
+                .map(|e| lower_expr(e, in_function, class_name))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Expr::Subscript(sub) => match sub.slice.as_ref() {
@@ -133,29 +155,29 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
             // Python's own grammar, so each is lowered through
             // `Option::map`/`.transpose()` rather than assumed present.
             Expr::Slice(slice) => HirExpr::Slice {
-                base: Box::new(lower_expr(&sub.value, in_function)?),
+                base: Box::new(lower_expr(&sub.value, in_function, class_name)?),
                 start: slice
                     .lower
                     .as_deref()
-                    .map(|e| lower_expr(e, in_function))
+                    .map(|e| lower_expr(e, in_function, class_name))
                     .transpose()?
                     .map(Box::new),
                 stop: slice
                     .upper
                     .as_deref()
-                    .map(|e| lower_expr(e, in_function))
+                    .map(|e| lower_expr(e, in_function, class_name))
                     .transpose()?
                     .map(Box::new),
                 step: slice
                     .step
                     .as_deref()
-                    .map(|e| lower_expr(e, in_function))
+                    .map(|e| lower_expr(e, in_function, class_name))
                     .transpose()?
                     .map(Box::new),
             },
             _ => HirExpr::Subscript {
-                base: Box::new(lower_expr(&sub.value, in_function)?),
-                index: Box::new(lower_expr(&sub.slice, in_function)?),
+                base: Box::new(lower_expr(&sub.value, in_function, class_name)?),
+                index: Box::new(lower_expr(&sub.slice, in_function, class_name)?),
             },
         },
         Expr::Call(call) => {
@@ -166,6 +188,35 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                 ));
             }
             if let Expr::Attribute(attr) = call.func.as_ref() {
+                // #433: `super().method(args)` — recognize a zero-arg
+                // `super()` call as the receiver of a method call, before
+                // any container-method or stdlib fast path. Lower to
+                // `HirExpr::MethodCall { base: Super, method, args }` so
+                // the type checker and MIR lowering can resolve `method`
+                // starting from the next class in the MRO (D-006 static
+                // dispatch, per the #433 ADR). A `super()` outside a
+                // method body (`class_name` is `None`) is rejected here
+                // with C0001, matching CPython's own `RuntimeError: super()
+                // no arguments` / `NameError: __class__` for the same shape.
+                if is_zero_arg_super_call(&attr.value) {
+                    if class_name.is_none() {
+                        return Err(unsupported(
+                            "`super()` outside a method body is not supported",
+                            pycc_ast::expr_range(&attr.value),
+                        ));
+                    }
+                    let args = call
+                        .arguments
+                        .args
+                        .iter()
+                        .map(|e| lower_expr(e, in_function, class_name))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    return Ok(HirExpr::MethodCall {
+                        base: Box::new(HirExpr::Super),
+                        method: attr.attr.to_string(),
+                        args,
+                    });
+                }
                 if attr.attr.as_str() == "append" {
                     let Expr::Name(list_name) = attr.value.as_ref() else {
                         return Err(unsupported(
@@ -184,7 +235,7 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                     };
                     return Ok(HirExpr::ListAppend {
                         list: list_name.id.as_str().to_string(),
-                        value: Box::new(lower_expr(value, in_function)?),
+                        value: Box::new(lower_expr(value, in_function, class_name)?),
                     });
                 }
                 if attr.attr.as_str() == "pop" {
@@ -225,8 +276,8 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                     };
                     return Ok(HirExpr::DictGetOrDefault {
                         dict: dict_name.id.as_str().to_string(),
-                        key: Box::new(lower_expr(key, in_function)?),
-                        default: Box::new(lower_expr(default, in_function)?),
+                        key: Box::new(lower_expr(key, in_function, class_name)?),
+                        default: Box::new(lower_expr(default, in_function, class_name)?),
                     });
                 }
                 if attr.attr.as_str() == "add" {
@@ -247,7 +298,7 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                     };
                     return Ok(HirExpr::SetAdd {
                         set: set_name.id.as_str().to_string(),
-                        value: Box::new(lower_expr(value, in_function)?),
+                        value: Box::new(lower_expr(value, in_function, class_name)?),
                     });
                 }
                 // `math.sqrt(x)`-shaped stdlib intrinsic call (D-136/D-137).
@@ -295,7 +346,7 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                         .arguments
                         .args
                         .iter()
-                        .map(|e| lower_expr(e, in_function))
+                        .map(|e| lower_expr(e, in_function, class_name))
                         .collect::<Result<Vec<_>, _>>()?;
                     return Ok(HirExpr::Call {
                         callee: format!("{}.{}", receiver.id.as_str(), symbol.name),
@@ -319,10 +370,10 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                     .arguments
                     .args
                     .iter()
-                    .map(|e| lower_expr(e, in_function))
+                    .map(|e| lower_expr(e, in_function, class_name))
                     .collect::<Result<Vec<_>, _>>()?;
                 return Ok(HirExpr::MethodCall {
-                    base: Box::new(lower_expr(&attr.value, in_function)?),
+                    base: Box::new(lower_expr(&attr.value, in_function, class_name)?),
                     method: attr.attr.to_string(),
                     args,
                 });
@@ -336,7 +387,7 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
             // — no `aliases` context is needed since PEP 695 generic class
             // instantiation is scoped to scalar-only types (D-133/D-134).
             if let Expr::Subscript(sub) = call.func.as_ref() {
-                let Expr::Name(class_name) = sub.value.as_ref() else {
+                let Expr::Name(gen_class_name) = sub.value.as_ref() else {
                     return Err(unsupported(
                         "calling a subscript expression is not supported yet \
                          (only a generic class instantiation `C[type](args)` is)",
@@ -348,13 +399,28 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                     .arguments
                     .args
                     .iter()
-                    .map(|e| lower_expr(e, in_function))
+                    .map(|e| lower_expr(e, in_function, class_name))
                     .collect::<Result<Vec<_>, _>>()?;
                 return Ok(HirExpr::GenericClassInstantiate {
-                    class: class_name.id.as_str().to_string(),
+                    class: gen_class_name.id.as_str().to_string(),
                     type_arg,
                     args,
                 });
+            }
+            // #433: a bare `super()` not used as a method-call or
+            // attribute-access base (e.g. `x = super()`) has no useful
+            // static-dispatch lowering on its own — reject it here with
+            // C0001 rather than letting `super` fall through to the
+            // known-but-unsupported-builtin path, which would produce a
+            // less precise diagnostic. `super().method()` and `super().attr`
+            // are already handled above (in the `Expr::Attribute` arm of
+            // this `Expr::Call` match), so a bare `super()` reaching here
+            // is genuinely a standalone use.
+            if is_zero_arg_super_call(expr) {
+                return Err(unsupported(
+                    "a bare `super()` expression is not supported — use `super().method()` or `super().attr`",
+                    call.range,
+                ));
             }
             let Expr::Name(callee) = call.func.as_ref() else {
                 return Err(unsupported(
@@ -369,7 +435,7 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                 .arguments
                 .args
                 .iter()
-                .map(|e| lower_expr(e, in_function))
+                .map(|e| lower_expr(e, in_function, class_name))
                 .collect::<Result<Vec<_>, _>>()?;
             HirExpr::Call {
                 callee: callee.id.as_str().to_string(),
@@ -394,8 +460,8 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
             };
             HirExpr::BinOp {
                 op,
-                left: Box::new(lower_expr(&bin_op.left, in_function)?),
-                right: Box::new(lower_expr(&bin_op.right, in_function)?),
+                left: Box::new(lower_expr(&bin_op.left, in_function, class_name)?),
+                right: Box::new(lower_expr(&bin_op.right, in_function, class_name)?),
             }
         }
         Expr::BooleanLiteral(lit) => HirExpr::BoolLiteral(lit.value),
@@ -425,6 +491,7 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                             FStringPart::Interpolation(Box::new(lower_expr(
                                 &interp.expression,
                                 in_function,
+                                class_name,
                             )?))
                         }
                     })
@@ -455,8 +522,8 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
             };
             HirExpr::Compare {
                 op,
-                left: Box::new(lower_expr(&cmp.left, in_function)?),
-                right: Box::new(lower_expr(&cmp.comparators[0], in_function)?),
+                left: Box::new(lower_expr(&cmp.left, in_function, class_name)?),
+                right: Box::new(lower_expr(&cmp.comparators[0], in_function, class_name)?),
             }
         }
         // `math.pi`-shaped bare stdlib constant reference (D-136/D-137),
@@ -489,6 +556,24 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
                     symbol.name
                 )));
             }
+            // #433: `super().attr` — recognize a zero-arg `super()` call as
+            // the base of an attribute access, before the generic fallback
+            // below. Lower to `HirExpr::AttrGet { base: Super, attr }` so
+            // the type checker and MIR lowering can resolve `attr` starting
+            // from the next class in the MRO. Same `class_name.is_none()`
+            // rejection as the `super().method()` arm above.
+            if is_zero_arg_super_call(&attr.value) {
+                if class_name.is_none() {
+                    return Err(unsupported(
+                        "`super()` outside a method body is not supported",
+                        pycc_ast::expr_range(&attr.value),
+                    ));
+                }
+                return Ok(HirExpr::AttrGet {
+                    base: Box::new(HirExpr::Super),
+                    attr: attr.attr.to_string(),
+                });
+            }
             // `base.attr` (D-154, Part 1 of #375): the generic
             // instance-attribute-read fallback, tried only after the
             // stdlib-module case above -- a receiver that *is* a resolvable
@@ -501,7 +586,7 @@ pub(crate) fn lower_expr(expr: &Expr, in_function: bool) -> Result<HirExpr, Diag
             // and defers to `pycc_types` to reject a non-instance base or an
             // attribute name the base's class never declares.
             HirExpr::AttrGet {
-                base: Box::new(lower_expr(&attr.value, in_function)?),
+                base: Box::new(lower_expr(&attr.value, in_function, class_name)?),
                 attr: attr.attr.to_string(),
             }
         }
@@ -644,6 +729,9 @@ pub(crate) fn rename_name_in_expr(expr: HirExpr, from: &str, to: &str) -> HirExp
                 args: args.into_iter().map(recurse).collect(),
             }
         }
+        // #433: `Super` carries no names to rename — it is a compile-time
+        // marker, not a value with sub-expressions.
+        HirExpr::Super => expr,
     }
 }
 
@@ -681,22 +769,23 @@ fn synthesize_comp_var_name(target_start: u32, source_name: &str) -> String {
 pub(crate) fn lower_range_call(
     call: &pycc_ast::ExprCall,
     in_function: bool,
+    class_name: Option<&str>,
 ) -> Result<(HirExpr, HirExpr, HirExpr), Diagnostic> {
     match &*call.arguments.args {
         [stop] => Ok((
             HirExpr::IntLiteral(0),
-            lower_expr(stop, in_function)?,
+            lower_expr(stop, in_function, class_name)?,
             HirExpr::IntLiteral(1),
         )),
         [start, stop] => Ok((
-            lower_expr(start, in_function)?,
-            lower_expr(stop, in_function)?,
+            lower_expr(start, in_function, class_name)?,
+            lower_expr(stop, in_function, class_name)?,
             HirExpr::IntLiteral(1),
         )),
         [start, stop, step] => Ok((
-            lower_expr(start, in_function)?,
-            lower_expr(stop, in_function)?,
-            lower_expr(step, in_function)?,
+            lower_expr(start, in_function, class_name)?,
+            lower_expr(stop, in_function, class_name)?,
+            lower_expr(step, in_function, class_name)?,
         )),
         other => Err(unsupported(
             format!("range() with {} arguments is not supported", other.len()),
@@ -712,7 +801,7 @@ pub(crate) fn lower_range_call(
 /// Any other shape is rejected with the existing generic `C0001` path,
 /// mirroring `Stmt::For`'s own "only `for x in range(...)` or `for x in
 /// <list>` is supported so far" message.
-fn lower_comprehension_iter(iter_expr: &Expr) -> Result<CompIter, Diagnostic> {
+fn lower_comprehension_iter(iter_expr: &Expr, class_name: Option<&str>) -> Result<CompIter, Diagnostic> {
     if let Expr::Name(name) = iter_expr {
         return Ok(CompIter::Name(name.id.as_str().to_string()));
     }
@@ -757,7 +846,7 @@ fn lower_comprehension_iter(iter_expr: &Expr) -> Result<CompIter, Diagnostic> {
     // with zero regression risk, and getting the enclosing-scope split fully
     // right for it is deliberately deferred (see D-149 and its own "out of
     // scope" section).
-    let (start, stop, step) = lower_range_call(call, true)?;
+    let (start, stop, step) = lower_range_call(call, true, class_name)?;
     Ok(CompIter::Range { start, stop, step })
 }
 
@@ -791,6 +880,7 @@ fn lower_comprehension_iter(iter_expr: &Expr) -> Result<CompIter, Diagnostic> {
 /// correct scoping with every existing test still green.
 pub(crate) fn lower_comprehension_header(
     generators: &[pycc_ast::Comprehension],
+    class_name: Option<&str>,
 ) -> Result<(String, String, CompIter, Option<HirExpr>), Diagnostic> {
     // Named `generator`, not `gen` -- `gen` is a reserved keyword as of the
     // 2024 edition (this workspace's own edition, reserved for a future
@@ -825,7 +915,7 @@ pub(crate) fn lower_comprehension_header(
         // implement -- hardcoding `true` here preserves today's exact
         // `C0001`-in-both-scopes behavior byte-for-byte instead of emitting
         // the wrong classification.
-        [single] => Some(lower_expr(single, true)?),
+        [single] => Some(lower_expr(single, true, class_name)?),
         _ => {
             return Err(unsupported(
                 "a comprehension with more than one `if` filter is not supported yet",
@@ -833,7 +923,7 @@ pub(crate) fn lower_comprehension_header(
             ));
         }
     };
-    let iter = lower_comprehension_iter(&generator.iter)?;
+    let iter = lower_comprehension_iter(&generator.iter, class_name)?;
     let source_name = var.id.as_str().to_string();
     let synth_var =
         synthesize_comp_var_name(pycc_ast::expr_range(&generator.target).start, &source_name);
@@ -843,14 +933,15 @@ pub(crate) fn lower_comprehension_header(
 pub(crate) fn lower_list_comp_assign(
     target: &str,
     comp: &pycc_ast::ExprListComp,
+    class_name: Option<&str>,
 ) -> Result<HirStmt, Diagnostic> {
-    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators, class_name)?;
     // Literal `true`: `elt` is lexically inside the comprehension's own
     // scope, same reasoning as `lower_comprehension_header`'s `cond` arm
     // above (D-149 correction 5) -- preserves today's `C0001` classification
     // for a comprehension-internal `yield`/`yield from` in both enclosing
     // scopes.
-    let elt = rename_name_in_expr(lower_expr(&comp.elt, true)?, &source_name, &synth_var);
+    let elt = rename_name_in_expr(lower_expr(&comp.elt, true, class_name)?, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::ListCompAssign {
         target: target.to_string(),
@@ -864,11 +955,12 @@ pub(crate) fn lower_list_comp_assign(
 pub(crate) fn lower_set_comp_assign(
     target: &str,
     comp: &pycc_ast::ExprSetComp,
+    class_name: Option<&str>,
 ) -> Result<HirStmt, Diagnostic> {
-    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators, class_name)?;
     // Literal `true`: same reasoning as `lower_list_comp_assign`'s `elt`
     // above (D-149 correction 5).
-    let elt = rename_name_in_expr(lower_expr(&comp.elt, true)?, &source_name, &synth_var);
+    let elt = rename_name_in_expr(lower_expr(&comp.elt, true, class_name)?, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::SetCompAssign {
         target: target.to_string(),
@@ -882,6 +974,7 @@ pub(crate) fn lower_set_comp_assign(
 pub(crate) fn lower_dict_comp_assign(
     target: &str,
     comp: &pycc_ast::ExprDictComp,
+    class_name: Option<&str>,
 ) -> Result<HirStmt, Diagnostic> {
     // Real Python's dict-comprehension grammar (`{k: v for ...}`) has no
     // `**`-unpacking form the way a plain `Expr::Dict` literal does -- but
@@ -901,12 +994,12 @@ pub(crate) fn lower_dict_comp_assign(
             pycc_ast::expr_range(&comp.value),
         ));
     };
-    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators)?;
+    let (source_name, synth_var, iter, cond) = lower_comprehension_header(&comp.generators, class_name)?;
     // Literal `true` for both `key` and `value`: same reasoning as
     // `lower_list_comp_assign`'s `elt` above (D-149 correction 5) -- `key`
     // and `value` are both lexically inside the comprehension's own scope.
-    let key = rename_name_in_expr(lower_expr(key_expr, true)?, &source_name, &synth_var);
-    let value = rename_name_in_expr(lower_expr(&comp.value, true)?, &source_name, &synth_var);
+    let key = rename_name_in_expr(lower_expr(key_expr, true, class_name)?, &source_name, &synth_var);
+    let value = rename_name_in_expr(lower_expr(&comp.value, true, class_name)?, &source_name, &synth_var);
     let cond = cond.map(|c| rename_name_in_expr(c, &source_name, &synth_var));
     Ok(HirStmt::DictCompAssign {
         target: target.to_string(),

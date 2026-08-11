@@ -546,8 +546,17 @@ fn lower_item(
             return_ty,
             body,
         } => {
+            // #433: extract the class name from a mangled
+            // `<ClassName>.<method>` name so `lower_expr`'s `Super` arm
+            // can resolve the next class in the MRO. A top-level function
+            // name contains no `.`, so `current_class` is `None` for those.
+            let current_class: Option<&str> =
+                name.split('.').next().filter(|prefix| *prefix != name);
             scopes.push(params.iter().cloned().collect());
-            let body = body.iter().map(|s| lower_stmt(s, scopes, classes)).collect();
+            let body = body
+                .iter()
+                .map(|s| lower_stmt(s, scopes, classes, current_class))
+                .collect();
             scopes.pop();
             MirItem::Function {
                 name: name.clone(),
@@ -556,7 +565,9 @@ fn lower_item(
                 body,
             }
         }
-        HirItem::TopLevelStmt(stmt) => MirItem::TopLevelStmt(lower_stmt(stmt, scopes, classes)),
+        HirItem::TopLevelStmt(stmt) => {
+            MirItem::TopLevelStmt(lower_stmt(stmt, scopes, classes, None))
+        }
     }
 }
 
@@ -610,12 +621,13 @@ fn resolve_comp_source(
     var: &str,
     scopes: &mut [HashMap<String, Ty>],
     classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
 ) -> (CompSource, Ty) {
     match iter {
         CompIter::Range { start, stop, step } => {
-            let start = lower_expr(start, scopes, classes);
-            let stop = lower_expr(stop, scopes, classes);
-            let step = lower_expr(step, scopes, classes);
+            let start = lower_expr(start, scopes, classes, current_class);
+            let stop = lower_expr(stop, scopes, classes, current_class);
+            let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.to_string(), Ty::Int);
             (CompSource::Range { start, stop, step }, Ty::Int)
         }
@@ -644,11 +656,12 @@ fn lower_stmt(
     stmt: &HirStmt,
     scopes: &mut Vec<HashMap<String, Ty>>,
     classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
 ) -> MirStmt {
     match stmt {
-        HirStmt::ExprStmt(expr) => MirStmt::ExprStmt(lower_expr(expr, scopes, classes)),
+        HirStmt::ExprStmt(expr) => MirStmt::ExprStmt(lower_expr(expr, scopes, classes, current_class)),
         HirStmt::Assign { target, value } => {
-            let value = lower_expr(value, scopes, classes);
+            let value = lower_expr(value, scopes, classes, current_class);
             // The first assignment fixes a binding's representation.
             // In particular, assigning `bool` to an existing `int` is
             // accepted by the type checker but must not silently change the
@@ -664,7 +677,7 @@ fn lower_stmt(
             annotation,
             value: Some(value),
         } => {
-            let value = lower_expr(value, scopes, classes);
+            let value = lower_expr(value, scopes, classes, current_class);
             // `pycc_types::is_assignable` accepts an annotated initializer
             // in exactly two shapes: an exact type match, or a `bool`
             // initializer under an `int` annotation (`bool` is an `int`
@@ -699,13 +712,13 @@ fn lower_stmt(
         }
         HirStmt::AnnAssign { value: None, .. } => MirStmt::NoOp,
         HirStmt::If { test, body, orelse } => MirStmt::If {
-            test: lower_expr(test, scopes, classes),
-            body: body.iter().map(|s| lower_stmt(s, scopes, classes)).collect(),
-            orelse: orelse.iter().map(|s| lower_stmt(s, scopes, classes)).collect(),
+            test: lower_expr(test, scopes, classes, current_class),
+            body: body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect(),
+            orelse: orelse.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect(),
         },
         HirStmt::While { test, body } => MirStmt::While {
-            test: lower_expr(test, scopes, classes),
-            body: body.iter().map(|s| lower_stmt(s, scopes, classes)).collect(),
+            test: lower_expr(test, scopes, classes, current_class),
+            body: body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect(),
         },
         HirStmt::ForRange {
             var,
@@ -714,11 +727,11 @@ fn lower_stmt(
             step,
             body,
         } => {
-            let start = lower_expr(start, scopes, classes);
-            let stop = lower_expr(stop, scopes, classes);
-            let step = lower_expr(step, scopes, classes);
+            let start = lower_expr(start, scopes, classes, current_class);
+            let stop = lower_expr(stop, scopes, classes, current_class);
+            let step = lower_expr(step, scopes, classes, current_class);
             bind_variable(scopes, var.clone(), Ty::Int);
-            let body = body.iter().map(|s| lower_stmt(s, scopes, classes)).collect();
+            let body = body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect();
             MirStmt::ForRange {
                 var: var.clone(),
                 start,
@@ -756,7 +769,7 @@ fn lower_stmt(
             match lookup(scopes, list) {
                 Ty::List(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes)).collect();
+                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect();
                     MirStmt::ForList {
                         var: var.clone(),
                         list: list.clone(),
@@ -765,7 +778,7 @@ fn lower_stmt(
                 }
                 Ty::Dict(kv) => {
                     bind_variable(scopes, var.clone(), kv.0);
-                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes)).collect();
+                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect();
                     MirStmt::ForDict {
                         var: var.clone(),
                         dict: list.clone(),
@@ -780,7 +793,7 @@ fn lower_stmt(
                 // Task 7 fix round).
                 Ty::Set(elem_ty) => {
                     bind_variable(scopes, var.clone(), *elem_ty);
-                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes)).collect();
+                    let body = body.iter().map(|s| lower_stmt(s, scopes, classes, current_class)).collect();
                     MirStmt::ForSet {
                         var: var.clone(),
                         set: list.clone(),
@@ -800,9 +813,9 @@ fn lower_stmt(
             cond,
             elt,
         } => {
-            let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes);
-            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes));
-            let elt = lower_expr(elt, scopes, classes);
+            let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes, current_class);
+            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes, current_class));
+            let elt = lower_expr(elt, scopes, classes, current_class);
             bind_variable(scopes, target.clone(), Ty::List(Box::new(elt.ty())));
             MirStmt::ListCompAssign {
                 target: target.clone(),
@@ -820,9 +833,9 @@ fn lower_stmt(
             cond,
             elt,
         } => {
-            let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes);
-            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes));
-            let elt = lower_expr(elt, scopes, classes);
+            let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes, current_class);
+            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes, current_class));
+            let elt = lower_expr(elt, scopes, classes, current_class);
             bind_variable(scopes, target.clone(), Ty::Set(Box::new(elt.ty())));
             MirStmt::SetCompAssign {
                 target: target.clone(),
@@ -841,10 +854,10 @@ fn lower_stmt(
             key,
             value,
         } => {
-            let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes);
-            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes));
-            let key = lower_expr(key, scopes, classes);
-            let value = lower_expr(value, scopes, classes);
+            let (source, var_ty) = resolve_comp_source(iter, var, scopes, classes, current_class);
+            let cond = cond.as_deref().map(|c| lower_expr(c, scopes, classes, current_class));
+            let key = lower_expr(key, scopes, classes, current_class);
+            let value = lower_expr(value, scopes, classes, current_class);
             bind_variable(
                 scopes,
                 target.clone(),
@@ -860,11 +873,11 @@ fn lower_stmt(
                 value: Box::new(value),
             }
         }
-        HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes, classes))),
+        HirStmt::Return(value) => MirStmt::Return(value.as_ref().map(|v| lower_expr(v, scopes, classes, current_class))),
         HirStmt::DictSet { dict, key, value } => MirStmt::DictSet {
             dict: dict.clone(),
-            key: lower_expr(key, scopes, classes),
-            value: lower_expr(value, scopes, classes),
+            key: lower_expr(key, scopes, classes, current_class),
+            value: lower_expr(value, scopes, classes, current_class),
         },
         // D-154 (Part 1 of #375): `base.attr = value`, resolved to a
         // compile-time slot index exactly like `MirExpr::AttrGet` above.
@@ -876,8 +889,8 @@ fn lower_stmt(
         // property (no setter) never reaches here -- `pycc_types::check`
         // rejects it with `T0044` before MIR lowering runs.
         HirStmt::AttrSet { base, attr, value } => {
-            let base = lower_expr(base, scopes, classes);
-            let value = lower_expr(value, scopes, classes);
+            let base = lower_expr(base, scopes, classes, current_class);
+            let value = lower_expr(value, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
             // #432: walk the MRO for property lookup first (matching
             // `AttrGet`'s own MRO walk), then for regular attribute slots
@@ -928,6 +941,7 @@ fn lower_expr(
     expr: &HirExpr,
     scopes: &[HashMap<String, Ty>],
     classes: &HashMap<String, HirClassDef>,
+    current_class: Option<&str>,
 ) -> MirExpr {
     match expr {
         HirExpr::IntLiteral(n) => MirExpr::IntLiteral(*n),
@@ -949,7 +963,7 @@ fn lower_expr(
             ty: lookup(scopes, name),
         },
         HirExpr::Call { callee, args } => {
-            let args: Vec<MirExpr> = args.iter().map(|a| lower_expr(a, scopes, classes)).collect();
+            let args: Vec<MirExpr> = args.iter().map(|a| lower_expr(a, scopes, classes, current_class)).collect();
             // D-154 (Part 1 of #375): `ClassName(args)` (instantiation)
             // reuses `HirExpr::Call` -- there is no dedicated HIR shape for
             // it (`pycc_hir::class`'s own doc comment) -- so it is resolved
@@ -1028,8 +1042,8 @@ fn lower_expr(
             }
         }
         HirExpr::BinOp { op, left, right } => {
-            let left = lower_expr(left, scopes, classes);
-            let right = lower_expr(right, scopes, classes);
+            let left = lower_expr(left, scopes, classes, current_class);
+            let right = lower_expr(right, scopes, classes, current_class);
             let ty = binop_result_ty(*op, left.ty(), right.ty());
             MirExpr::BinOp {
                 op: *op,
@@ -1040,8 +1054,8 @@ fn lower_expr(
         }
         HirExpr::Compare { op, left, right } => MirExpr::Compare {
             op: *op,
-            left: Box::new(lower_expr(left, scopes, classes)),
-            right: Box::new(lower_expr(right, scopes, classes)),
+            left: Box::new(lower_expr(left, scopes, classes, current_class)),
+            right: Box::new(lower_expr(right, scopes, classes, current_class)),
             ty: Ty::Bool,
         },
         HirExpr::FString(parts) => MirExpr::FString(
@@ -1050,13 +1064,13 @@ fn lower_expr(
                 .map(|p| match p {
                     FStringPart::Literal(s) => MirFStringPart::Literal(s.clone()),
                     FStringPart::Interpolation(e) => {
-                        MirFStringPart::Interpolation(Box::new(lower_expr(e, scopes, classes)))
+                        MirFStringPart::Interpolation(Box::new(lower_expr(e, scopes, classes, current_class)))
                     }
                 })
                 .collect(),
         ),
         HirExpr::ListLiteral(elements) => {
-            MirExpr::ListLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes)).collect())
+            MirExpr::ListLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes, current_class)).collect())
         }
         // `HirExpr::Subscript` is reused unconditionally by `pycc_hir`'s own
         // lowering for both a list read and a dict read (it has no type
@@ -1067,8 +1081,8 @@ fn lower_expr(
         // `MirExpr::Subscript`, mirroring `lower_stmt`'s own `HirStmt::ForList`
         // arm doing the same list/dict routing for iteration.
         HirExpr::Subscript { base, index } => {
-            let base = lower_expr(base, scopes, classes);
-            let index = lower_expr(index, scopes, classes);
+            let base = lower_expr(base, scopes, classes, current_class);
+            let index = lower_expr(index, scopes, classes, current_class);
             match base.ty() {
                 Ty::Dict(_) => MirExpr::DictGet {
                     dict: Box::new(base),
@@ -1082,19 +1096,19 @@ fn lower_expr(
         }
         HirExpr::ListAppend { list, value } => MirExpr::ListAppend {
             list: list.clone(),
-            value: Box::new(lower_expr(value, scopes, classes)),
+            value: Box::new(lower_expr(value, scopes, classes, current_class)),
         },
         HirExpr::DictLiteral(pairs) => MirExpr::DictLiteral(
             pairs
                 .iter()
-                .map(|(k, v)| (lower_expr(k, scopes, classes), lower_expr(v, scopes, classes)))
+                .map(|(k, v)| (lower_expr(k, scopes, classes, current_class), lower_expr(v, scopes, classes, current_class)))
                 .collect(),
         ),
         HirExpr::SetLiteral(elements) => {
-            MirExpr::SetLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes)).collect())
+            MirExpr::SetLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes, current_class)).collect())
         }
         HirExpr::TupleLiteral(elements) => {
-            MirExpr::TupleLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes)).collect())
+            MirExpr::TupleLiteral(elements.iter().map(|e| lower_expr(e, scopes, classes, current_class)).collect())
         }
         // PR-12 Task 8 (D-118): purely structural -- recurse into `base` and
         // every present bound, same as every other MIR-lowering site in this
@@ -1109,10 +1123,10 @@ fn lower_expr(
             stop,
             step,
         } => MirExpr::Slice {
-            base: Box::new(lower_expr(base, scopes, classes)),
-            start: start.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes))),
-            stop: stop.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes))),
-            step: step.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes))),
+            base: Box::new(lower_expr(base, scopes, classes, current_class)),
+            start: start.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
+            stop: stop.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
+            step: step.as_deref().map(|e| Box::new(lower_expr(e, scopes, classes, current_class))),
         },
         // PR-12 Task 11 (D-119): `list`'s element type is resolved via the
         // same `lookup` mechanism every other name reference in this file
@@ -1136,14 +1150,14 @@ fn lower_expr(
             };
             MirExpr::DictGetOrDefault {
                 dict: dict.clone(),
-                key: Box::new(lower_expr(key, scopes, classes)),
-                default: Box::new(lower_expr(default, scopes, classes)),
+                key: Box::new(lower_expr(key, scopes, classes, current_class)),
+                default: Box::new(lower_expr(default, scopes, classes, current_class)),
                 ty: kv.1,
             }
         }
         HirExpr::SetAdd { set, value } => MirExpr::SetAdd {
             set: set.clone(),
-            value: Box::new(lower_expr(value, scopes, classes)),
+            value: Box::new(lower_expr(value, scopes, classes, current_class)),
         },
         // D-154 (Part 1 of #375): `base.attr` -- resolved to a compile-time
         // slot index against the base's class's `HirClassDef`, per the
@@ -1157,7 +1171,74 @@ fn lower_expr(
         // accessed on a derived class instance. The slot index is computed
         // from the MRO's flat attribute layout (`mro_attrs`).
         HirExpr::AttrGet { base, attr } => {
-            let base = lower_expr(base, scopes, classes);
+            // #433: `super().attr` — resolve the attribute starting from
+            // the next class in the current class's MRO, using `self` (the
+            // current function's first parameter) as the instance. The slot
+            // index is still computed from the full MRO's flat layout, so
+            // the same slot offset the base class's own methods would use
+            // is reused here — `self` is the same object either way.
+            if matches!(base.as_ref(), HirExpr::Super) {
+                let current = current_class.expect(
+                    "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a \
+                     method body -- pycc_hir::lower_expr should have rejected this with C0001"
+                );
+                let self_expr = self_expr(scopes);
+                let class_def = &classes[current];
+                let current_pos = class_def
+                    .mro
+                    .iter()
+                    .position(|c| c == current)
+                    .expect("pycc_mir: internal error: class not found in its own MRO");
+                let super_mro = &class_def.mro[current_pos + 1..];
+                // Properties first (matching the non-super AttrGet arm).
+                for mro_class in super_mro {
+                    let mro_def = &classes[mro_class.as_str()];
+                    if let Some(prop) = mro_def.properties.iter().find(|p| p.name == *attr) {
+                        let ty = lookup(scopes, &format!("$fn:{}", prop.getter));
+                        return MirExpr::Call {
+                            callee: prop.getter.clone(),
+                            args: vec![self_expr],
+                            ty,
+                        };
+                    }
+                }
+                // Regular attribute slots — the slot index comes from the
+                // full MRO's flat layout (since `self` is the same object),
+                // but the *type* must come from the super_mro slice to match
+                // the type checker's `resolve_super_attr_get`. A derived
+                // class may redeclare an attribute with a different type;
+                // using the full layout's type would pick the most-derived
+                // declaration, but `super().attr` should use the base class's
+                // declaration (#433 review fix).
+                let flat_attrs = mro_attrs(class_def, classes);
+                let slot = flat_attrs
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (name, _))| name == attr)
+                    .map(|(slot, _)| slot)
+                    .expect(
+                        "pycc_mir: internal error: attribute not declared on class or any base in \
+                         its MRO -- pycc_types::check should have rejected this HIR before it \
+                         reached pycc_mir",
+                    );
+                let ty = super_mro
+                    .iter()
+                    .find_map(|mro_class| {
+                        let mro_def = &classes[mro_class.as_str()];
+                        mro_def.attrs.iter().find(|(name, _)| name == attr)
+                    })
+                    .map(|(_, ty)| ty.clone())
+                    .expect(
+                        "pycc_mir: internal error: attribute not found in super_mro -- \
+                         pycc_types::check should have rejected this HIR before it reached pycc_mir",
+                    );
+                return MirExpr::AttrGet {
+                    base: Box::new(self_expr),
+                    slot,
+                    ty,
+                };
+            }
+            let base = lower_expr(base, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
             // #432: walk the MRO for property lookup first (matching
             // CPython's descriptor protocol precedence), then for regular
@@ -1211,7 +1292,52 @@ fn lower_expr(
         // subclass method shadows a base class method of the same name (the
         // subclass appears first in the MRO).
         HirExpr::MethodCall { base, method, args } => {
-            let base = lower_expr(base, scopes, classes);
+            // #433: `super().method(args)` — resolve the method starting
+            // from the next class in the current class's MRO, using `self`
+            // (the current function's first parameter) as the instance.
+            // Lowers to a direct `MirExpr::Call` to the resolved method's
+            // mangled name, with `self` prepended as the first argument —
+            // no vtable, no runtime dispatch (D-006 static-dispatch framing,
+            // per the #433 ADR).
+            if matches!(base.as_ref(), HirExpr::Super) {
+                let current = current_class.expect(
+                    "pycc_mir: internal error: `HirExpr::Super` reached lower_expr outside a \
+                     method body -- pycc_hir::lower_expr should have rejected this with C0001"
+                );
+                let self_expr = self_expr(scopes);
+                let class_def = &classes[current];
+                let current_pos = class_def
+                    .mro
+                    .iter()
+                    .position(|c| c == current)
+                    .expect("pycc_mir: internal error: class not found in its own MRO");
+                let super_mro = &class_def.mro[current_pos + 1..];
+                let mangled = super_mro.iter().find_map(|mro_class| {
+                    let mro_def = &classes[mro_class.as_str()];
+                    mro_def
+                        .methods
+                        .iter()
+                        .find(|(name, _)| name == method)
+                        .map(|(_, mangled)| mangled.clone())
+                }).expect(
+                    "pycc_mir: internal error: method not declared on class or any base in its \
+                     MRO after the current class -- pycc_types::check should have rejected this \
+                     HIR before it reached pycc_mir",
+                );
+                let ty = lookup(scopes, &format!("$fn:{mangled}"));
+                let mut call_args = Vec::with_capacity(args.len() + 1);
+                call_args.push(self_expr);
+                call_args.extend(
+                    args.iter()
+                        .map(|a| lower_expr(a, scopes, classes, current_class)),
+                );
+                return MirExpr::Call {
+                    callee: mangled,
+                    args: call_args,
+                    ty,
+                };
+            }
+            let base = lower_expr(base, scopes, classes, current_class);
             let class_def = class_def_of(&base, classes);
             // #432: walk the MRO to find the method's mangled name.
             let mangled = class_def.mro.iter().find_map(|mro_class| {
@@ -1238,7 +1364,7 @@ fn lower_expr(
             let ty = lookup(scopes, &format!("$fn:{mangled}"));
             let mut call_args = Vec::with_capacity(args.len() + 1);
             call_args.push(base);
-            call_args.extend(args.iter().map(|a| lower_expr(a, scopes, classes)));
+            call_args.extend(args.iter().map(|a| lower_expr(a, scopes, classes, current_class)));
             MirExpr::Call {
                 callee: mangled,
                 args: call_args,
@@ -1256,6 +1382,17 @@ fn lower_expr(
                 "pycc_mir: internal error: `GenericClassInstantiate` for class `{class}` \
                  reached MIR lowering -- pycc_types::monomorphize should have rewritten it \
                  to an ordinary `HirExpr::Call` before this point"
+            )
+        }
+        // #433: a bare `HirExpr::Super` should never reach MIR lowering —
+        // HIR lowering rejects a standalone `super()` with C0001, and
+        // `super().method()`/`super().attr` are handled by the special-case
+        // blocks above before recursing into `lower_expr` for the base.
+        HirExpr::Super => {
+            panic!(
+                "pycc_mir: internal error: a bare `HirExpr::Super` reached MIR lowering -- \
+                 pycc_hir::lower_expr should have rejected this with C0001, or the \
+                 `MethodCall`/`AttrGet` arms should have intercepted it before recursing"
             )
         }
     }
@@ -1283,6 +1420,20 @@ fn class_def_of<'c>(expr: &MirExpr, classes: &'c HashMap<String, HirClassDef>) -
             "pycc_mir: internal error: class `{class_name}` has no registered HirClassDef -- pycc_types::check should have rejected this HIR before it reached pycc_mir"
         )
     })
+}
+
+/// #433: Builds a `MirExpr::Name` for the current method's `self` parameter,
+/// looked up from the innermost scope. Used by `super().method()` and
+/// `super().attr` lowering to pass the most-derived instance as the implicit
+/// first argument / attribute base. Panics if `self` is not bound in the
+/// current scope (impossible for a method body that reached MIR lowering —
+/// `pycc_hir` always includes `self` as the first parameter of a method).
+fn self_expr(scopes: &[HashMap<String, Ty>]) -> MirExpr {
+    let ty = lookup(scopes, "self");
+    MirExpr::Name {
+        name: "self".to_string(),
+        ty,
+    }
 }
 
 /// #432: Computes the flat attribute-slot layout for a class by walking its
@@ -4634,6 +4785,27 @@ mod tests {
         let _ = build(&hir);
     }
 
+    // #433: a bare `HirExpr::Super` should never reach MIR lowering —
+    // HIR lowering rejects a standalone `super()` with C0001, and
+    // `super().method()`/`super().attr` are handled by the special-case
+    // blocks before recursing into `lower_expr` for the base. This test
+    // bypasses the type checker with a hand-built HIR to exercise the
+    // panic arm, matching this file's own established internal-error-test
+    // convention.
+    #[test]
+    #[should_panic(expected = "pycc_mir: internal error: a bare `HirExpr::Super` reached MIR lowering")]
+    fn bare_super_reaching_mir_panics_with_an_internal_error() {
+        let hir = HirModule {
+            items: vec![HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                HirExpr::Super,
+            ))],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: Vec::new(),
+        };
+        let _ = build(&hir);
+    }
+
     // -- #432: MRO internal-error panic tests --------------------------------
     //
     // Every test below bypasses `pycc_types::check` (which would reject
@@ -5017,5 +5189,300 @@ mod tests {
             })
             .expect("expected an AttrGet node");
         assert_eq!(attr_get, Ty::Float, "re-declared attribute should use the most-derived type (Float)");
+    }
+
+    // #433: super() MIR lowering tests.
+
+    /// Helper: builds a minimal two-class HIR module where `B.__init__`
+    /// calls `super().__init__()` and `B.greet` calls `super().greet()`.
+    fn super_module() -> HirModule {
+        let self_a = Ty::Instance(Box::new("A".to_string()));
+        let self_b = Ty::Instance(Box::new("B".to_string()));
+        HirModule {
+            items: vec![
+                // A.__init__
+                HirItem::Function {
+                    name: "A.__init__".to_string(),
+                    params: vec![("self".to_string(), self_a.clone())],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::AttrSet {
+                        base: HirExpr::Name("self".to_string()),
+                        attr: "x".to_string(),
+                        value: HirExpr::IntLiteral(1),
+                    }],
+                },
+                // A.greet
+                HirItem::Function {
+                    name: "A.greet".to_string(),
+                    params: vec![("self".to_string(), self_a.clone())],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                        base: Box::new(HirExpr::Name("self".to_string())),
+                        attr: "x".to_string(),
+                    }))],
+                },
+                // B.__init__ — calls super().__init__()
+                HirItem::Function {
+                    name: "B.__init__".to_string(),
+                    params: vec![("self".to_string(), self_b.clone())],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::ExprStmt(HirExpr::MethodCall {
+                        base: Box::new(HirExpr::Super),
+                        method: "__init__".to_string(),
+                        args: vec![],
+                    })],
+                },
+                // B.greet — calls super().greet()
+                HirItem::Function {
+                    name: "B.greet".to_string(),
+                    params: vec![("self".to_string(), self_b)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::MethodCall {
+                        base: Box::new(HirExpr::Super),
+                        method: "greet".to_string(),
+                        args: vec![],
+                    }))],
+                },
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                (
+                    "A".to_string(),
+                    HirClassDef {
+                        name: "A".to_string(),
+                        bases: vec![],
+                        mro: vec!["A".to_string()],
+                        attrs: vec![("x".to_string(), Ty::Int)],
+                        methods: vec![
+                            ("__init__".to_string(), "A.__init__".to_string()),
+                            ("greet".to_string(), "A.greet".to_string()),
+                        ],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+                (
+                    "B".to_string(),
+                    HirClassDef {
+                        name: "B".to_string(),
+                        bases: vec!["A".to_string()],
+                        mro: vec!["B".to_string(), "A".to_string()],
+                        attrs: Vec::new(),
+                        methods: vec![
+                            ("__init__".to_string(), "B.__init__".to_string()),
+                            ("greet".to_string(), "B.greet".to_string()),
+                        ],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn super_init_lowers_to_direct_call_to_base_init() {
+        let hir = super_module();
+        let mir = build(&hir);
+        let init = mir.items.iter().find_map(|item| match item {
+            MirItem::Function { name, body, .. } if name == "B.__init__" => body.first(),
+            _ => None,
+        });
+        assert_eq!(
+            init,
+            Some(&MirStmt::ExprStmt(MirExpr::Call {
+                callee: "A.__init__".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "self".to_string(),
+                    ty: Ty::Instance(Box::new("B".to_string())),
+                }],
+                ty: Ty::None,
+            }))
+        );
+    }
+
+    #[test]
+    fn super_method_lowers_to_direct_call_to_base_method() {
+        let hir = super_module();
+        let mir = build(&hir);
+        let greet = mir.items.iter().find_map(|item| match item {
+            MirItem::Function { name, body, .. } if name == "B.greet" => body.first(),
+            _ => None,
+        });
+        assert_eq!(
+            greet,
+            Some(&MirStmt::Return(Some(MirExpr::Call {
+                callee: "A.greet".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "self".to_string(),
+                    ty: Ty::Instance(Box::new("B".to_string())),
+                }],
+                ty: Ty::Int,
+            })))
+        );
+    }
+
+    #[test]
+    fn super_attr_lowers_to_attr_get_with_self_base() {
+        let self_a = Ty::Instance(Box::new("A".to_string()));
+        let self_b = Ty::Instance(Box::new("B".to_string()));
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "A.__init__".to_string(),
+                    params: vec![("self".to_string(), self_a)],
+                    return_ty: Ty::None,
+                    body: vec![HirStmt::AttrSet {
+                        base: HirExpr::Name("self".to_string()),
+                        attr: "x".to_string(),
+                        value: HirExpr::IntLiteral(42),
+                    }],
+                },
+                HirItem::Function {
+                    name: "B.get_x".to_string(),
+                    params: vec![("self".to_string(), self_b)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                        base: Box::new(HirExpr::Super),
+                        attr: "x".to_string(),
+                    }))],
+                },
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                (
+                    "A".to_string(),
+                    HirClassDef {
+                        name: "A".to_string(),
+                        bases: vec![],
+                        mro: vec!["A".to_string()],
+                        attrs: vec![("x".to_string(), Ty::Int)],
+                        methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+                (
+                    "B".to_string(),
+                    HirClassDef {
+                        name: "B".to_string(),
+                        bases: vec!["A".to_string()],
+                        mro: vec!["B".to_string(), "A".to_string()],
+                        attrs: Vec::new(),
+                        methods: vec![("get_x".to_string(), "B.get_x".to_string())],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+            ],
+        };
+        let mir = build(&hir);
+        let get_x = mir.items.iter().find_map(|item| match item {
+            MirItem::Function { name, body, .. } if name == "B.get_x" => body.first(),
+            _ => None,
+        });
+        assert_eq!(
+            get_x,
+            Some(&MirStmt::Return(Some(MirExpr::AttrGet {
+                base: Box::new(MirExpr::Name {
+                    name: "self".to_string(),
+                    ty: Ty::Instance(Box::new("B".to_string())),
+                }),
+                slot: 0,
+                ty: Ty::Int,
+            })))
+        );
+    }
+
+    #[test]
+    fn super_property_lowers_to_call_to_base_getter() {
+        use pycc_hir::PropertyDef;
+        let self_a = Ty::Instance(Box::new("A".to_string()));
+        let self_b = Ty::Instance(Box::new("B".to_string()));
+        let hir = HirModule {
+            items: vec![
+                HirItem::Function {
+                    name: "A.__init__".to_string(),
+                    params: vec![("self".to_string(), self_a.clone())],
+                    return_ty: Ty::None,
+                    body: vec![
+                        HirStmt::AttrSet {
+                            base: HirExpr::Name("self".to_string()),
+                            attr: "_val".to_string(),
+                            value: HirExpr::IntLiteral(0),
+                        },
+                        HirStmt::Return(None),
+                    ],
+                },
+                HirItem::Function {
+                    name: "A.val".to_string(),
+                    params: vec![("self".to_string(), self_a)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                        base: Box::new(HirExpr::Name("self".to_string())),
+                        attr: "_val".to_string(),
+                    }))],
+                },
+                HirItem::Function {
+                    name: "B.get_val".to_string(),
+                    params: vec![("self".to_string(), self_b)],
+                    return_ty: Ty::Int,
+                    body: vec![HirStmt::Return(Some(HirExpr::AttrGet {
+                        base: Box::new(HirExpr::Super),
+                        attr: "val".to_string(),
+                    }))],
+                },
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![
+                (
+                    "A".to_string(),
+                    HirClassDef {
+                        name: "A".to_string(),
+                        bases: vec![],
+                        mro: vec!["A".to_string()],
+                        attrs: vec![("_val".to_string(), Ty::Int)],
+                        methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                        type_param: None,
+                        properties: vec![PropertyDef {
+                            name: "val".to_string(),
+                            getter: "A.val".to_string(),
+                            setter: None,
+                        }],
+                    },
+                ),
+                (
+                    "B".to_string(),
+                    HirClassDef {
+                        name: "B".to_string(),
+                        bases: vec!["A".to_string()],
+                        mro: vec!["B".to_string(), "A".to_string()],
+                        attrs: Vec::new(),
+                        methods: vec![("get_val".to_string(), "B.get_val".to_string())],
+                        type_param: None,
+                        properties: Vec::new(),
+                    },
+                ),
+            ],
+        };
+        let mir = build(&hir);
+        let get_val = mir.items.iter().find_map(|item| match item {
+            MirItem::Function { name, body, .. } if name == "B.get_val" => body.first(),
+            _ => None,
+        });
+        assert_eq!(
+            get_val,
+            Some(&MirStmt::Return(Some(MirExpr::Call {
+                callee: "A.val".to_string(),
+                args: vec![MirExpr::Name {
+                    name: "self".to_string(),
+                    ty: Ty::Instance(Box::new("B".to_string())),
+                }],
+                ty: Ty::Int,
+            })))
+        );
     }
 }

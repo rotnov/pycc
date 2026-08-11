@@ -94,6 +94,17 @@ pub struct Environment {
     /// `Option<String>` (not `&str`) because `Environment` is owned/cloned
     /// per function via `child_for_function`/`clone`.
     own_type_param: Option<String>,
+    /// #433: the name of the class whose method body is currently being
+    /// type-checked, if any. Set by `check_function_in` from the method's
+    /// own mangled `<ClassName>.<method>` name (the `.` separator is unique
+    /// to mangled method names — a real Python identifier can never contain
+    /// one, so the prefix before the first `.` is unambiguously the class
+    /// name). `None` for a top-level function and for the module-level
+    /// environment. Used by `infer_expr_in`'s `HirExpr::Super` arm and by
+    /// `resolve_method_call`/`resolve_attr_get` when the base is `Super` to
+    /// resolve the next class in the MRO after this one (D-006 static
+    /// dispatch, per the #433 ADR — no vtable, no runtime dispatch).
+    current_class: Option<String>,
 }
 
 impl Environment {
@@ -226,6 +237,14 @@ impl Environment {
     /// [`Self::bind_class`].
     pub fn lookup_class(&self, name: &str) -> Option<&HirClassDef> {
         self.classes.get(name)
+    }
+
+    /// #433: Returns the name of the class whose method body is currently
+    /// being type-checked, if any. Set by `check_function_in` from the
+    /// method's mangled `<ClassName>.<method>` name; `None` for a top-level
+    /// function or the module-level environment.
+    pub(crate) fn current_class(&self) -> Option<&str> {
+        self.current_class.as_deref()
     }
 
     fn child_for_function(&self, local_names: &[&str]) -> Self {
@@ -1404,6 +1423,12 @@ fn collect_expr_constraints(
             }
             Ok(Some(Ok(Ty::Instance(Box::new(class.clone())))))
         }
+        // #433: `Super` carries no sub-expressions to recurse into and
+        // produces no unification term — it is a compile-time marker only
+        // meaningful as the base of a `MethodCall`/`AttrGet`, which the
+        // solver's own `MethodCall`/`AttrGet` arms already recurse past
+        // (both return `Ok(None)` after recursing into `base`).
+        HirExpr::Super => Ok(None),
     }
 }
 
@@ -2185,6 +2210,7 @@ fn concrete_function_environment(hir: &HirModule) -> Option<Environment> {
         generics: Arc::new(generics),
         classes: Arc::new(hir.class_defs.iter().cloned().collect()),
         own_type_param: None,
+        current_class: None,
     })
 }
 
@@ -3203,10 +3229,28 @@ fn infer_expr_in(
         // `HirStmt::AttrSet` arm, which needs the identical attribute-type
         // lookup for its own assigned-value check).
         HirExpr::AttrGet { base, attr } => {
+            // #433: `super().attr` — resolve the attribute starting from
+            // the next class in the current class's MRO, not from the
+            // current class itself. The `self` instance retains its actual
+            // (most-derived) type, so the slot index is still computed from
+            // the full MRO's flat layout downstream.
+            if matches!(base.as_ref(), HirExpr::Super) {
+                return class::resolve_super_attr_get(env, attr);
+            }
             let base_ty = infer_expr_in(env, local_names, base)?;
             class::resolve_attr_get(env, &base_ty, attr)
         }
         HirExpr::MethodCall { base, method, args } => {
+            // #433: `super().method(args)` — resolve the method starting
+            // from the next class in the current class's MRO, with `self`
+            // (the most-derived instance) as the implicit first argument.
+            if matches!(base.as_ref(), HirExpr::Super) {
+                let arg_tys = args
+                    .iter()
+                    .map(|arg| infer_expr_in(env, local_names, arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return class::resolve_super_method_call(env, method, &arg_tys);
+            }
             let base_ty = infer_expr_in(env, local_names, base)?;
             let arg_tys = args
                 .iter()
@@ -3236,6 +3280,18 @@ fn infer_expr_in(
             }
             Ok(Ty::Instance(Box::new(class.to_string())))
         }
+        // #433: a bare `HirExpr::Super` should never reach `infer_expr_in`
+        // — HIR lowering rejects a standalone `super()` with C0001, and
+        // `super().method()`/`super().attr` are handled by the `MethodCall`/
+        // `AttrGet` arms below (which special-case a `Super` base before
+        // recursing into `infer_expr_in` for it). This arm is a defense-in-
+        // depth guard for a hand-built HIR that bypasses `lower_expr`'s own
+        // rejection.
+        HirExpr::Super => Err(Diagnostic::error(
+            "C0001",
+            "a bare `super()` expression is not supported — use `super().method()` or `super().attr`".to_string(),
+            Span::new(0, 0),
+        )),
     }
 }
 
@@ -3956,6 +4012,12 @@ fn check_function_in(
     env.own_type_param = generic_type_param_name(params, return_ty)
         .ok()
         .flatten();
+    // #433: extract the class name from a mangled `<ClassName>.<method>`
+    // name so `infer_expr_in`'s `HirExpr::Super` arm can resolve the next
+    // class in the MRO. A top-level function name contains no `.`, so
+    // `current_class` stays `None` for those (and for the module-level
+    // environment, which never goes through `check_function_in`).
+    env.current_class = name.split('.').next().filter(|prefix| *prefix != name).map(String::from);
     if !signature_was_registered {
         env.bind_function(
             name.clone(),
@@ -4657,7 +4719,8 @@ fn reject_generic_calls_in_expr(
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. } => Ok(()),
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => Ok(()),
     }
 }
 
@@ -5143,7 +5206,8 @@ fn rewrite_generic_calls_in_expr(
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. } => infer_expr_in(env, local_names, expr),
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => infer_expr_in(env, local_names, expr),
     }
 }
 
@@ -5450,7 +5514,8 @@ fn collect_generic_class_instantiations_from_expr(
         | HirExpr::BoolLiteral(_)
         | HirExpr::StringLiteral(_)
         | HirExpr::Name(_)
-        | HirExpr::ListPop { .. } => {}
+        | HirExpr::ListPop { .. }
+        | HirExpr::Super => {}
     }
 }
 
@@ -6308,6 +6373,25 @@ mod tests {
             type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
         };
         assert!(check(&hir).is_ok());
+    }
+
+    // #433: a bare `HirExpr::Super` should never reach `infer_expr_in` —
+    // HIR lowering rejects a standalone `super()` with C0001. This test
+    // bypasses HIR lowering with a hand-built HIR to exercise the
+    // defense-in-depth guard.
+    #[test]
+    fn bare_super_in_check_returns_c0001() {
+        let hir = HirModule {
+            items: vec![HirItem::Function {
+                name: "f".to_string(),
+                params: vec![],
+                return_ty: Ty::None,
+                body: vec![HirStmt::ExprStmt(HirExpr::Super)],
+            }],
+            type_aliases: Vec::new(), imports: Vec::new(), class_defs: Vec::new(),
+        };
+        let err = check(&hir).unwrap_err();
+        assert_eq!(err.code, "C0001");
     }
 
     #[test]
@@ -16711,6 +16795,139 @@ mod tests {
         let err = infer_expr_in(&env, &[], &expr).unwrap_err();
         assert_eq!(err.code, "T0021");
         assert!(err.message.contains("cannot call function `foo` before its definition"));
+    }
+
+    #[test]
+    fn infer_expr_in_resolves_super_attr_get() {
+        // Directly exercises the HirExpr::Super arm of infer_expr_in's
+        // HirExpr::AttrGet branch (#433).
+        let mut env = Environment::new();
+        env.current_class = Some("B".to_string());
+        env.bind_class(
+            "A".to_string(),
+            HirClassDef {
+                name: "A".to_string(),
+                bases: vec![],
+                mro: vec!["A".to_string()],
+                attrs: vec![("x".to_string(), Ty::Int)],
+                methods: vec![("__init__".to_string(), "A.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+            },
+        );
+        env.bind_class(
+            "B".to_string(),
+            HirClassDef {
+                name: "B".to_string(),
+                bases: vec!["A".to_string()],
+                mro: vec!["B".to_string(), "A".to_string()],
+                attrs: vec![],
+                methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+            },
+        );
+        let expr = HirExpr::AttrGet {
+            base: Box::new(HirExpr::Super),
+            attr: "x".to_string(),
+        };
+        assert_eq!(infer_expr_in(&env, &[], &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn infer_expr_in_resolves_super_method_call() {
+        // Directly exercises the HirExpr::Super arm of infer_expr_in's
+        // HirExpr::MethodCall branch (#433), including the argument-
+        // inference closure (`.map(|arg| infer_expr_in(...))`).
+        let mut env = Environment::new();
+        env.current_class = Some("B".to_string());
+        env.bind_class(
+            "A".to_string(),
+            HirClassDef {
+                name: "A".to_string(),
+                bases: vec![],
+                mro: vec!["A".to_string()],
+                attrs: vec![],
+                methods: vec![("add".to_string(), "A.add".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+            },
+        );
+        env.bind_class(
+            "B".to_string(),
+            HirClassDef {
+                name: "B".to_string(),
+                bases: vec!["A".to_string()],
+                mro: vec!["B".to_string(), "A".to_string()],
+                attrs: vec![],
+                methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+            },
+        );
+        env.bind_function(
+            "A.add".to_string(),
+            vec![
+                Ty::Instance(Box::new("A".to_string())),
+                Ty::Int,
+            ],
+            Ty::Int,
+        );
+        let expr = HirExpr::MethodCall {
+            base: Box::new(HirExpr::Super),
+            method: "add".to_string(),
+            args: vec![HirExpr::IntLiteral(1)],
+        };
+        assert_eq!(infer_expr_in(&env, &[], &expr), Ok(Ty::Int));
+    }
+
+    #[test]
+    fn infer_expr_in_super_method_call_propagates_arg_error() {
+        // Exercises the `?` error-propagation path in the super().method()
+        // argument-inference closure (`.collect::<Result<Vec<_>, _>>()?`).
+        // An undefined name in the argument list causes `infer_expr_in` to
+        // return `Err`, which the `?` operator propagates.
+        let mut env = Environment::new();
+        env.current_class = Some("B".to_string());
+        env.bind_class(
+            "A".to_string(),
+            HirClassDef {
+                name: "A".to_string(),
+                bases: vec![],
+                mro: vec!["A".to_string()],
+                attrs: vec![],
+                methods: vec![("add".to_string(), "A.add".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+            },
+        );
+        env.bind_class(
+            "B".to_string(),
+            HirClassDef {
+                name: "B".to_string(),
+                bases: vec!["A".to_string()],
+                mro: vec!["B".to_string(), "A".to_string()],
+                attrs: vec![],
+                methods: vec![("__init__".to_string(), "B.__init__".to_string())],
+                type_param: None,
+                properties: Vec::new(),
+            },
+        );
+        env.bind_function(
+            "A.add".to_string(),
+            vec![
+                Ty::Instance(Box::new("A".to_string())),
+                Ty::Int,
+            ],
+            Ty::Int,
+        );
+        let expr = HirExpr::MethodCall {
+            base: Box::new(HirExpr::Super),
+            method: "add".to_string(),
+            args: vec![HirExpr::Name("undefined_var".to_string())],
+        };
+        let err = infer_expr_in(&env, &[], &expr).unwrap_err();
+        assert_eq!(err.code, "T0021");
     }
 
     #[test]

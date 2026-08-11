@@ -54,7 +54,7 @@ pub(crate) fn lower_stmt(
     type_param: Option<&str>,
 ) -> Result<HirStmt, Diagnostic> {
     let lowered = match stmt {
-        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value, in_function)?),
+        Stmt::Expr(expr_stmt) => HirStmt::ExprStmt(lower_expr(&expr_stmt.value, in_function, class_name)?),
         Stmt::Assign(assign) => {
             let [target] = assign.targets.as_slice() else {
                 return Err(unsupported(
@@ -77,12 +77,12 @@ pub(crate) fn lower_stmt(
                     // and falls through to that function's existing
                     // generic "expression kind not supported yet"
                     // catch-all.
-                    Expr::ListComp(comp) => lower_list_comp_assign(name.id.as_str(), comp)?,
-                    Expr::SetComp(comp) => lower_set_comp_assign(name.id.as_str(), comp)?,
-                    Expr::DictComp(comp) => lower_dict_comp_assign(name.id.as_str(), comp)?,
+                    Expr::ListComp(comp) => lower_list_comp_assign(name.id.as_str(), comp, class_name)?,
+                    Expr::SetComp(comp) => lower_set_comp_assign(name.id.as_str(), comp, class_name)?,
+                    Expr::DictComp(comp) => lower_dict_comp_assign(name.id.as_str(), comp, class_name)?,
                     _ => HirStmt::Assign {
                         target: name.id.as_str().to_string(),
-                        value: lower_expr(&assign.value, in_function)?,
+                        value: lower_expr(&assign.value, in_function, class_name)?,
                     },
                 },
                 // `<bare name>[key] = value`, PR-11 Task 3 (D-123): unlike
@@ -106,8 +106,8 @@ pub(crate) fn lower_stmt(
                     };
                     HirStmt::DictSet {
                         dict: base_name.id.as_str().to_string(),
-                        key: lower_expr(&sub.slice, in_function)?,
-                        value: lower_expr(&assign.value, in_function)?,
+                        key: lower_expr(&sub.slice, in_function, class_name)?,
+                        value: lower_expr(&assign.value, in_function, class_name)?,
                     }
                 }
                 // `base.attr = value` (D-154, Part 1 of #375): structurally
@@ -126,9 +126,9 @@ pub(crate) fn lower_stmt(
                 // `assigning_to_a_tuple_unpacking_target_is_unsupported` in
                 // `crates/pycc_hir/src/lib.rs`.
                 Expr::Attribute(attr) => HirStmt::AttrSet {
-                    base: lower_expr(&attr.value, in_function)?,
+                    base: lower_expr(&attr.value, in_function, class_name)?,
                     attr: attr.attr.to_string(),
-                    value: lower_expr(&assign.value, in_function)?,
+                    value: lower_expr(&assign.value, in_function, class_name)?,
                 },
                 other => {
                     return Err(unsupported(
@@ -168,7 +168,7 @@ pub(crate) fn lower_stmt(
             let value = ann
                 .value
                 .as_deref()
-                .map(|e| lower_expr(e, in_function))
+                .map(|e| lower_expr(e, in_function, class_name))
                 .transpose()?;
             HirStmt::AnnAssign {
                 target: name.id.as_str().to_string(),
@@ -177,7 +177,7 @@ pub(crate) fn lower_stmt(
             }
         }
         Stmt::If(if_stmt) => HirStmt::If {
-            test: lower_expr(&if_stmt.test, in_function)?,
+            test: lower_expr(&if_stmt.test, in_function, class_name)?,
             body: lower_body(&if_stmt.body, aliases, in_loop, in_function, class_name, type_param)?,
             orelse: lower_elif_else_clauses(
                 &if_stmt.elif_else_clauses,
@@ -196,7 +196,7 @@ pub(crate) fn lower_stmt(
                 ));
             }
             HirStmt::While {
-                test: lower_expr(&while_stmt.test, in_function)?,
+                test: lower_expr(&while_stmt.test, in_function, class_name)?,
                 body: lower_body(&while_stmt.body, aliases, true, in_function, class_name, type_param)?,
             }
         }
@@ -276,7 +276,7 @@ pub(crate) fn lower_stmt(
                     call.range,
                 ));
             }
-            let (start, stop, step) = lower_range_call(call, in_function)?;
+            let (start, stop, step) = lower_range_call(call, in_function, class_name)?;
             HirStmt::ForRange {
                 var: var.id.to_string(),
                 start,
@@ -288,7 +288,7 @@ pub(crate) fn lower_stmt(
         Stmt::Return(ret) => HirStmt::Return(
             ret.value
                 .as_deref()
-                .map(|e| lower_expr(e, in_function))
+                .map(|e| lower_expr(e, in_function, class_name))
                 .transpose()?,
         ),
         Stmt::Break(_) => {
@@ -348,7 +348,7 @@ pub(crate) fn lower_elif_else_clauses(
     };
     match &first.test {
         Some(test) => Ok(vec![HirStmt::If {
-            test: lower_expr(test, in_function)?,
+            test: lower_expr(test, in_function, class_name)?,
             body: lower_body(&first.body, aliases, in_loop, in_function, class_name, type_param)?,
             orelse: lower_elif_else_clauses(rest, aliases, in_loop, in_function, class_name, type_param)?,
         }]),
