@@ -998,10 +998,18 @@ fn lower_expr(
             // (not value expressions) and would fail to lower as ordinary
             // MIR expressions. The object argument (isinstance's args[0])
             // IS lowered normally to extract its type.
-            if callee == "isinstance" {
+            // A user-defined function named `isinstance`/`issubclass` takes
+            // priority over the builtin (same pattern as `float` — the type
+            // checker's identical guard ensures a user-defined version is
+            // never intercepted here, but the MIR guard is defense-in-depth
+            // and mirrors the `float` builtin's own MIR-side check).
+            let is_user_defined = scopes
+                .iter()
+                .any(|s| s.contains_key(&format!("$fn:{callee}")));
+            if callee == "isinstance" && !is_user_defined {
                 return lower_isinstance(args, scopes, classes, current_class);
             }
-            if callee == "issubclass" {
+            if callee == "issubclass" && !is_user_defined {
                 return lower_issubclass(args, classes);
             }
             let args: Vec<MirExpr> = args.iter().map(|a| lower_expr(a, scopes, classes, current_class)).collect();

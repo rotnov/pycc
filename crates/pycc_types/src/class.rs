@@ -547,6 +547,24 @@ pub(crate) fn check_isinstance(
         )
         .with_help("pass exactly 2 arguments: the object and the class"));
     }
+    // #435 review fix (P1): `isinstance` is a compile-time predicate in
+    // pycc's static-dispatch model — the result is a `BoolLiteral` constant
+    // computed from the operand's declared type. A side-effecting operand
+    // (a function call or class instantiation) would have its effects
+    // silently discarded, changing standard Python semantics. Reject such
+    // operands with `C0001` rather than silently dropping the call.
+    if let HirExpr::Call { .. } = &args[0] {
+        return Err(Diagnostic::error(
+            "C0001",
+            "`isinstance` is a compile-time predicate in pycc and cannot evaluate a \
+             call expression as its first argument (side effects would be lost)",
+            Span::new(0, 0),
+        )
+        .with_help(
+            "assign the call result to a variable first, then pass the variable to \
+             `isinstance`",
+        ));
+    }
     // Infer the object's type normally.
     let obj_ty = infer_expr_in(env, local_names, &args[0])?;
     // Extract class names from the second argument (do NOT infer it as a
@@ -3340,5 +3358,32 @@ mod tests {
         ))]);
         let diagnostic = check(&hir).unwrap_err();
         assert_eq!(diagnostic.code, "T0021");
+    }
+
+    #[test]
+    fn isinstance_with_call_first_arg_is_c0001() {
+        // #435 review fix (P1): `isinstance(D(), D)` — a call expression as
+        // the first argument is rejected with C0001 because pycc's
+        // compile-time `isinstance` would silently discard the call's side
+        // effects. Covers the `if let HirExpr::Call { .. }` branch in
+        // `check_isinstance`.
+        let hir = static_class_module(vec![top_level(HirStmt::ExprStmt(
+            HirExpr::Call {
+                callee: "print".to_string(),
+                args: vec![HirExpr::Call {
+                    callee: "isinstance".to_string(),
+                    args: vec![
+                        HirExpr::Call {
+                            callee: "D".to_string(),
+                            args: vec![],
+                        },
+                        HirExpr::Name("D".to_string()),
+                    ],
+                }],
+            },
+        ))]);
+        let diagnostic = check(&hir).unwrap_err();
+        assert_eq!(diagnostic.code, "C0001");
+        assert!(diagnostic.message.contains("isinstance"));
     }
 }

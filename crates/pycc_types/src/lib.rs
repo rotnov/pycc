@@ -1099,7 +1099,11 @@ fn collect_expr_constraints(
             // arm. The class arguments (bare names or tuples of bare names)
             // produce `Ok(None)` terms in the solver (class names are not
             // value bindings), which is harmless.
-            if callee == "isinstance" || callee == "issubclass" {
+            // A user-defined function named `isinstance`/`issubclass` takes
+            // priority over the builtin (same pattern as `float` above).
+            if (callee == "isinstance" || callee == "issubclass")
+                && !signatures.contains_key(callee)
+            {
                 return Ok(Some(Ok(Ty::Bool)));
             }
             if let Some(symbol) = std_qualified_symbol(callee) {
@@ -2541,10 +2545,14 @@ fn infer_expr_in(
             // (class names are registered in `env.classes`, not
             // `env.bindings`). The object argument (isinstance's args[0]) IS
             // inferred normally.
-            if callee == "isinstance" {
+            // A user-defined function named `isinstance`/`issubclass` takes
+            // priority over the builtin (same pattern as `float` — see the
+            // `a_user_defined_float_function_takes_priority_over_the_builtin`
+            // test and its identical guard in the constraint solver).
+            if callee == "isinstance" && !env.lookup_function(callee).is_some() {
                 return class::check_isinstance(env, local_names, args);
             }
-            if callee == "issubclass" {
+            if callee == "issubclass" && !env.lookup_function(callee).is_some() {
                 return class::check_issubclass(env, args);
             }
             // For a callee that survives D-110's binding gate above, preserve

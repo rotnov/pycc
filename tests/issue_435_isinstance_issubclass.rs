@@ -26,7 +26,7 @@ fn isinstance_true_for_same_class() {
     let src = write_fixture(
         &dir,
         "same.py",
-        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D(), D)\nprint(r)\n",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nd = D()\nr = isinstance(d, D)\nprint(r)\n",
     );
     let out = dir.join("same");
     let status = Command::new(pycc_bin())
@@ -48,7 +48,7 @@ fn isinstance_true_for_base_class() {
     let src = write_fixture(
         &dir,
         "base.py",
-        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(D(), B)\nprint(r)\n",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nd = D()\nr = isinstance(d, B)\nprint(r)\n",
     );
     let out = dir.join("base");
     let status = Command::new(pycc_bin())
@@ -69,7 +69,7 @@ fn isinstance_false_for_unrelated_class() {
     let src = write_fixture(
         &dir,
         "unrelated.py",
-        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(D(), C)\nprint(r)\n",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nd = D()\nr = isinstance(d, C)\nprint(r)\n",
     );
     let out = dir.join("unrelated");
     let status = Command::new(pycc_bin())
@@ -91,7 +91,7 @@ fn isinstance_false_for_subclass() {
     let src = write_fixture(
         &dir,
         "subclass.py",
-        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(B(), D)\nprint(r)\n",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nb = B()\nr = isinstance(b, D)\nprint(r)\n",
     );
     let out = dir.join("subclass");
     let status = Command::new(pycc_bin())
@@ -176,7 +176,7 @@ fn isinstance_with_tuple_of_classes() {
     let src = write_fixture(
         &dir,
         "tuple.py",
-        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(D(), (B, C))\nprint(r)\n",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nd = D()\nr = isinstance(d, (B, C))\nprint(r)\n",
     );
     let out = dir.join("tuple");
     let status = Command::new(pycc_bin())
@@ -197,7 +197,7 @@ fn isinstance_with_tuple_no_match() {
     let src = write_fixture(
         &dir,
         "tuple_no.py",
-        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nr = isinstance(D(), (C,))\nprint(r)\n",
+        "class B:\n    def __init__(self) -> None:\n        self.x = 1\nclass C:\n    def __init__(self) -> None:\n        self.y = 2\nclass D(B):\n    def __init__(self) -> None:\n        super().__init__()\nd = D()\nr = isinstance(d, (C,))\nprint(r)\n",
     );
     let out = dir.join("tuple_no");
     let status = Command::new(pycc_bin())
@@ -222,7 +222,7 @@ fn isinstance_wrong_arg_count() {
     let src = write_fixture(
         &dir,
         "arity.py",
-        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D())\n",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nd = D()\nr = isinstance(d)\n",
     );
     let out = dir.join("arity");
     let output = Command::new(pycc_bin())
@@ -243,7 +243,7 @@ fn isinstance_unknown_class() {
     let src = write_fixture(
         &dir,
         "unknown.py",
-        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D(), UnknownClass)\n",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nd = D()\nr = isinstance(d, UnknownClass)\n",
     );
     let out = dir.join("unknown");
     let output = Command::new(pycc_bin())
@@ -264,7 +264,7 @@ fn isinstance_non_class_second_arg() {
     let src = write_fixture(
         &dir,
         "nonclass.py",
-        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D(), 5)\n",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nd = D()\nr = isinstance(d, 5)\n",
     );
     let out = dir.join("nonclass");
     let output = Command::new(pycc_bin())
@@ -274,6 +274,75 @@ fn isinstance_non_class_second_arg() {
     assert!(!output.status.success(), "pycc build should fail for isinstance with non-class second arg");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("T0021"), "should report T0021 for non-class second arg, got: {stderr}");
+}
+
+/// #435 review fix (P1): `isinstance(D(), D)` — a call expression as the
+/// first argument is rejected with C0001, because pycc's compile-time
+/// `isinstance` would silently discard the call's side effects. The user
+/// must assign the call result to a variable first.
+#[test]
+fn isinstance_with_call_expression_is_rejected() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_isinstance_call_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "call.py",
+        "class D:\n    def __init__(self) -> None:\n        self.x = 1\nr = isinstance(D(), D)\n",
+    );
+    let out = dir.join("call");
+    let output = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "pycc build should fail for isinstance with call expression");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("C0001"), "should report C0001 for call expression, got: {stderr}");
+}
+
+/// #435 review fix (P1): a user-defined function named `isinstance` takes
+/// priority over the compile-time builtin — the call is type-checked and
+/// lowered as an ordinary function call, not intercepted.
+#[test]
+fn user_defined_isinstance_takes_priority_over_builtin() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_user_isinstance_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "user_isinstance.py",
+        "def isinstance(x: int, y: int) -> int:\n    return x + y\nr = isinstance(2, 3)\nprint(r)\n",
+    );
+    let out = dir.join("user_isinstance");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for user-defined isinstance");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"5\n", "user-defined isinstance(2, 3) should return 5");
+}
+
+/// #435 review fix (P1): a user-defined function named `issubclass` takes
+/// priority over the compile-time builtin.
+#[test]
+fn user_defined_issubclass_takes_priority_over_builtin() {
+    let dir = std::env::temp_dir()
+        .join(format!("pycc_435_user_issubclass_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = write_fixture(
+        &dir,
+        "user_issubclass.py",
+        "def issubclass(x: int, y: int) -> int:\n    return x * y\nr = issubclass(4, 5)\nprint(r)\n",
+    );
+    let out = dir.join("user_issubclass");
+    let status = Command::new(pycc_bin())
+        .args(["build", src.to_str().unwrap(), "-o", out.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(status.success(), "pycc build should succeed for user-defined issubclass");
+    let output = Command::new(&out).output().unwrap();
+    assert_eq!(output.stdout, b"20\n", "user-defined issubclass(4, 5) should return 20");
 }
 
 // ===========================================================================
