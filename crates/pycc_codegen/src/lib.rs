@@ -2958,6 +2958,11 @@ fn emit_expr<'ctx>(
                 .into_int_value();
             slot_word_to_scalar(context, builder, raw, ty)
         }
+        MirExpr::NullInstance { .. } => {
+            let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
+            let null_ptr = ptr_type.const_null();
+            Scalar::Instance(null_ptr)
+        }
     }
 }
 
@@ -16851,5 +16856,74 @@ mod tests {
 
         let status = cmd.status().expect("the linker driver should run");
         assert!(status.success(), "linking failed");
+    }
+
+    // -- #436: NullInstance codegen (class method called through a class) --
+
+    /// #436: A `@classmethod` called through a class name (`C.greet(21)`)
+    /// lowers to MIR with a `MirExpr::NullInstance` as the first argument
+    /// (the `cls` receiver). This test verifies that codegen emits a null
+    /// pointer for `NullInstance` and that the resulting binary runs
+    /// correctly, producing the expected output.
+    ///
+    ///     class C:
+    ///         def __init__(self) -> None:
+    ///             return
+    ///         @classmethod
+    ///         def greet(cls, x: int) -> int:
+    ///             return x * 2
+    ///
+    ///     print(C.greet(21))
+    ///
+    /// Expected output: `42`.
+    #[test]
+    fn null_instance_classmethod_codegens_and_runs() {
+        let self_ty = instance_ty("C");
+        let init = MirItem::Function {
+            name: "C.__init__".to_string(),
+            params: vec![("self".to_string(), self_ty.clone())],
+            return_ty: Ty::None,
+            body: vec![MirStmt::Return(None)],
+        };
+        let greet = MirItem::Function {
+            name: "C.greet.classmethod".to_string(),
+            params: vec![
+                ("cls".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::Int,
+            body: vec![MirStmt::Return(Some(MirExpr::BinOp {
+                op: BinOpKind::Mul,
+                left: Box::new(MirExpr::Name {
+                    name: "x".to_string(),
+                    ty: Ty::Int,
+                }),
+                right: Box::new(MirExpr::IntLiteral(2)),
+                ty: Ty::Int,
+            }))],
+        };
+        let mir = MirModule {
+            items: vec![
+                init,
+                greet,
+                MirItem::TopLevelStmt(print_expr(MirExpr::Call {
+                    callee: "C.greet.classmethod".to_string(),
+                    args: vec![
+                        MirExpr::NullInstance {
+                            ty: self_ty,
+                        },
+                        MirExpr::IntLiteral(21),
+                    ],
+                    ty: Ty::Int,
+                })),
+            ],
+        };
+        let dir = tempfile_dir("null_instance_classmethod");
+        let obj_path = dir.join("null_instance_classmethod.o");
+        compile_to_object(&mir, &obj_path, None, false).expect("codegen should succeed");
+        let bin_path = dir.join("null_instance_classmethod");
+        link_object_with_runtime(&obj_path, &bin_path);
+        let output = Command::new(&bin_path).output().expect("binary should run");
+        assert_eq!(output.stdout, b"42\n");
     }
 }

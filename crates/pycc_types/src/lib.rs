@@ -3237,6 +3237,27 @@ fn infer_expr_in(
             if matches!(base.as_ref(), HirExpr::Super) {
                 return class::resolve_super_attr_get(env, attr);
             }
+            // #436: `ClassName.attr` — accessing an attribute on a class
+            // name (not an instance) is not supported. A static or class
+            // method accessed without calling it (e.g. `C.create` instead
+            // of `C.create()`) has no value representation in this
+            // compiler's static-dispatch model. Reject with a clear error
+            // rather than letting `infer_expr_in` on the class name
+            // produce a confusing "name not defined" diagnostic.
+            if let HirExpr::Name(class_name) = base.as_ref()
+                && env.lookup_class(class_name).is_some()
+            {
+                return Err(Diagnostic::error(
+                    "T0044",
+                    format!(
+                        "class `{class_name}` has no attribute named `{attr}` -- \
+                         accessing a class attribute or method without an instance is \
+                         not supported (use `instance.{attr}` or `{class_name}.{attr}()` \
+                         for a static/class method)"
+                    ),
+                    Span::new(0, 0),
+                ));
+            }
             let base_ty = infer_expr_in(env, local_names, base)?;
             class::resolve_attr_get(env, &base_ty, attr)
         }
@@ -3251,11 +3272,40 @@ fn infer_expr_in(
                     .collect::<Result<Vec<_>, _>>()?;
                 return class::resolve_super_method_call(env, method, &arg_tys);
             }
+            // #436: `ClassName.static_method(args)` or
+            // `ClassName.class_method(args)` — a method call on a class
+            // name (not an instance). The base is `HirExpr::Name` referring
+            // to a registered class. Check the static_methods and
+            // class_methods tables before the regular instance-method
+            // resolution (which requires a `Ty::Instance` base and would
+            // reject a bare class name).
+            if let HirExpr::Name(class_name) = base.as_ref()
+                && env.lookup_class(class_name).is_some()
+                && class::has_static_or_class_method(env, class_name, method)
+            {
+                let arg_tys = args
+                    .iter()
+                    .map(|arg| infer_expr_in(env, local_names, arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return class::resolve_static_or_class_method_call(
+                    env, class_name, method, &arg_tys,
+                );
+            }
             let base_ty = infer_expr_in(env, local_names, base)?;
             let arg_tys = args
                 .iter()
                 .map(|arg| infer_expr_in(env, local_names, arg))
                 .collect::<Result<Vec<_>, _>>()?;
+            // #436: static and class methods can also be called on an
+            // instance. Check the static/class method tables before the
+            // regular instance-method resolution.
+            if let Ty::Instance(ref class_name) = base_ty
+                && class::has_static_or_class_method(env, class_name, method)
+            {
+                return class::resolve_static_or_class_method_call(
+                    env, class_name, method, &arg_tys,
+                );
+            }
             class::resolve_method_call(env, &base_ty, method, &arg_tys)
         }
         // PEP 695 (#387): `C[type_arg](args)` — a generic class
@@ -5808,6 +5858,97 @@ fn instantiate_generic_class_methods(
             });
         }
 
+        // #436: Monomorphize static methods. Each static method's
+        // mangled name uses a `.static` suffix; the monomorphized name
+        // replaces the class prefix with the mangled class name. Static
+        // methods have no `self`/`cls` parameter, so only the type
+        // parameter substitution applies.
+        let mut mangled_static_methods: Vec<(String, String)> = Vec::new();
+        for (method_name, original_mangled) in &class_def.static_methods {
+            let Some(HirItem::Function { name: _, params, return_ty, body }) =
+                hir.items.iter().rfind(|item| matches!(
+                    item,
+                    HirItem::Function { name, .. } if name == original_mangled
+                ))
+            else {
+                continue;
+            };
+            let substituted_params = params
+                .iter()
+                .map(|(pn, ty)| {
+                    (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                })
+                .collect::<Vec<_>>();
+            let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
+            let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+            let new_mangled = format!("{mangled_class}.{method_name}.static");
+            let param_tys = substituted_params
+                .iter()
+                .map(|(_, ty)| ty.clone())
+                .collect::<Vec<_>>();
+            env.bind_function(new_mangled.clone(), param_tys, substituted_return.clone());
+            let specialized = HirItem::Function {
+                name: new_mangled.clone(),
+                params: substituted_params,
+                return_ty: substituted_return,
+                body: substituted_body,
+            };
+            if seen.insert(new_mangled.clone()) {
+                instantiations.push(GenericInstantiation {
+                    mangled_name: new_mangled.clone(),
+                    specialized,
+                    return_ty: Ty::Instance(Box::new(mangled_class.clone())),
+                });
+            }
+            mangled_static_methods.push((method_name.clone(), new_mangled));
+        }
+
+        // #436: Monomorphize class methods. Each class method's mangled
+        // name uses a `.classmethod` suffix; the monomorphized name
+        // replaces the class prefix with the mangled class name. Class
+        // methods have a `cls` parameter typed `Ty::Instance(class_name)`,
+        // which `substitute_body_with_class` rewrites to
+        // `Ty::Instance(mangled_class)`.
+        let mut mangled_class_methods: Vec<(String, String)> = Vec::new();
+        for (method_name, original_mangled) in &class_def.class_methods {
+            let Some(HirItem::Function { name: _, params, return_ty, body }) =
+                hir.items.iter().rfind(|item| matches!(
+                    item,
+                    HirItem::Function { name, .. } if name == original_mangled
+                ))
+            else {
+                continue;
+            };
+            let substituted_params = params
+                .iter()
+                .map(|(pn, ty)| {
+                    (pn.clone(), substitute_ty_with_class(ty, type_param_name, type_arg, class_name, &mangled_class))
+                })
+                .collect::<Vec<_>>();
+            let substituted_return = substitute_ty_with_class(return_ty, type_param_name, type_arg, class_name, &mangled_class);
+            let substituted_body = substitute_body_with_class(body, type_param_name, type_arg, class_name, &mangled_class);
+            let new_mangled = format!("{mangled_class}.{method_name}.classmethod");
+            let param_tys = substituted_params
+                .iter()
+                .map(|(_, ty)| ty.clone())
+                .collect::<Vec<_>>();
+            env.bind_function(new_mangled.clone(), param_tys, substituted_return.clone());
+            let specialized = HirItem::Function {
+                name: new_mangled.clone(),
+                params: substituted_params,
+                return_ty: substituted_return,
+                body: substituted_body,
+            };
+            if seen.insert(new_mangled.clone()) {
+                instantiations.push(GenericInstantiation {
+                    mangled_name: new_mangled.clone(),
+                    specialized,
+                    return_ty: Ty::Instance(Box::new(mangled_class.clone())),
+                });
+            }
+            mangled_class_methods.push((method_name.clone(), new_mangled));
+        }
+
         // Register the monomorphized class in env.classes with mangled
         // method names and substituted attribute types.
         let substituted_attrs = class_def
@@ -5825,6 +5966,8 @@ fn instantiate_generic_class_methods(
             methods: mangled_methods,
             type_param: None, // The monomorphized class is not generic.
             properties: monomorphized_properties,
+            static_methods: mangled_static_methods,
+            class_methods: mangled_class_methods,
         };
         env.bind_class(mangled_class.clone(), new_class_def.clone());
         new_class_defs.push((mangled_class, new_class_def));
@@ -16813,6 +16956,8 @@ mod tests {
                 methods: vec![("__init__".to_string(), "A.__init__".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         env.bind_class(
@@ -16825,6 +16970,8 @@ mod tests {
                 methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         let expr = HirExpr::AttrGet {
@@ -16851,6 +16998,8 @@ mod tests {
                 methods: vec![("add".to_string(), "A.add".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         env.bind_class(
@@ -16863,6 +17012,8 @@ mod tests {
                 methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         env.bind_function(
@@ -16899,6 +17050,8 @@ mod tests {
                 methods: vec![("add".to_string(), "A.add".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         env.bind_class(
@@ -16911,6 +17064,8 @@ mod tests {
                 methods: vec![("__init__".to_string(), "B.__init__".to_string())],
                 type_param: None,
                 properties: Vec::new(),
+                static_methods: Vec::new(),
+                class_methods: Vec::new(),
             },
         );
         env.bind_function(
@@ -23251,6 +23406,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         HirModule {
             items: vec![
@@ -23313,6 +23470,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "Marker.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Marker.__init__".to_string(),
@@ -23373,6 +23532,8 @@ mod tests {
             ],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
@@ -23454,6 +23615,8 @@ mod tests {
                 getter: "Box.val".to_string(),
                 setter: None,
             }],
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
@@ -23533,6 +23696,8 @@ mod tests {
                 getter: "Box.val".to_string(),
                 setter: Some("Box.val.setter".to_string()),
             }],
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
@@ -23628,6 +23793,8 @@ mod tests {
                 getter: "Box.val".to_string(),
                 setter: Some("Box.val.setter".to_string()),
             }],
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
@@ -23701,6 +23868,8 @@ mod tests {
                     setter: Some("Box.val.setter".to_string()),
                 },
             ],
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "Box.__init__".to_string(),
@@ -23799,6 +23968,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "C.__init__".to_string(),
@@ -24448,6 +24619,8 @@ mod tests {
             ],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -24554,6 +24727,8 @@ mod tests {
             ],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -24620,6 +24795,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let caller = HirItem::Function {
             name: "f".to_string(),
@@ -24746,6 +24923,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let hir = HirModule {
             items: vec![init],
@@ -24824,6 +25003,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "D.__init__".to_string())],
             type_param: None, // Not generic!
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         // A generic function — prevents `monomorphize` from returning early.
         let identity = HirItem::Function {
@@ -24876,6 +25057,8 @@ mod tests {
             ],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "E.__init__".to_string(),
@@ -25026,6 +25209,8 @@ mod tests {
             ],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let init = HirItem::Function {
             name: "F.__init__".to_string(),
@@ -25068,6 +25253,108 @@ mod tests {
         assert!(find_function(&resolved, "0gen_F__T_int.ghost").is_none());
     }
 
+    #[test]
+    fn instantiate_generic_class_methods_skips_nonexistent_static_method_function() {
+        // Exercises the `continue` at the `else` branch of the static-method
+        // `rfind` in `instantiate_generic_class_methods` — the static_methods
+        // table references a mangled name that has no matching `HirItem`.
+        let self_ty = Ty::Instance(Box::new("F".to_string()));
+        let class_def = HirClassDef {
+            name: "F".to_string(),
+            bases: Vec::new(),
+            mro: vec!["F".to_string()],
+            attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![("__init__".to_string(), "F.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: Vec::new(),
+            static_methods: vec![("ghost".to_string(), "F.ghost.static".to_string())],
+            class_methods: Vec::new(),
+        };
+        let init = HirItem::Function {
+            name: "F.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty),
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "x".to_string(),
+                value: HirExpr::Name("x".to_string()),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                    HirExpr::GenericClassInstantiate {
+                        class: "F".to_string(),
+                        type_arg: Ty::Int,
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                )),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("F".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(find_function(&resolved, "0gen_F__T_int.__init__").is_some());
+        assert!(find_function(&resolved, "0gen_F__T_int.ghost.static").is_none());
+    }
+
+    #[test]
+    fn instantiate_generic_class_methods_skips_nonexistent_class_method_function() {
+        // Exercises the `continue` at the `else` branch of the class-method
+        // `rfind` in `instantiate_generic_class_methods` — the class_methods
+        // table references a mangled name that has no matching `HirItem`.
+        let self_ty = Ty::Instance(Box::new("F".to_string()));
+        let class_def = HirClassDef {
+            name: "F".to_string(),
+            bases: Vec::new(),
+            mro: vec!["F".to_string()],
+            attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![("__init__".to_string(), "F.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: vec![("ghost".to_string(), "F.ghost.classmethod".to_string())],
+        };
+        let init = HirItem::Function {
+            name: "F.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty),
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "x".to_string(),
+                value: HirExpr::Name("x".to_string()),
+            }],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                    HirExpr::GenericClassInstantiate {
+                        class: "F".to_string(),
+                        type_arg: Ty::Int,
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                )),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("F".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        assert!(find_function(&resolved, "0gen_F__T_int.__init__").is_some());
+        assert!(find_function(&resolved, "0gen_F__T_int.ghost.classmethod").is_none());
+    }
+
     // -- collect_expr_constraints GCI ? path (line 1384) ------------------
 
     #[test]
@@ -25101,6 +25388,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         // Private function with inferred types — forces the solver path.
         let f = HirItem::Function {
@@ -25175,6 +25464,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -25241,6 +25532,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "C.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         // Generic function `g[T]` whose body contains `C[int](g(1))` —
         // the arg `g(1)` is a self-call, which `reject_generic_calls_in_expr`
@@ -25310,6 +25603,8 @@ mod tests {
             ],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         // A generic function forces `check_and_resolve` → `monomorphize`
         // → `instantiate_generic_class_methods`.
@@ -25380,6 +25675,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "Box.__init__".to_string())],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let maker_init = HirItem::Function {
             name: "Maker.__init__".to_string(),
@@ -25426,6 +25723,8 @@ mod tests {
             ],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -25509,6 +25808,8 @@ mod tests {
             methods: vec![("__init__".to_string(), "D.__init__".to_string())],
             type_param: None, // Not generic!
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let maker_init = HirItem::Function {
             name: "Maker.__init__".to_string(),
@@ -25555,6 +25856,8 @@ mod tests {
             ],
             type_param: Some("T".to_string()),
             properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: Vec::new(),
         };
         let hir = HirModule {
             items: vec![
@@ -25680,5 +25983,264 @@ mod tests {
         // than a `matches!` on the variant to avoid an uncovered `_ => false`
         // arm in the test's own coverage.
         assert_eq!(instantiations[0].mangled_name, "ghost");
+    }
+
+    // -- #436: generic class monomorphization of static/class methods ------
+
+    /// Builds a generic class `C[T]` with `__init__`, a static method
+    /// `factory(x: int) -> int`, and a class method `greet(cls, x: int) ->
+    /// int`, plus an instantiation `C[int](1)`.
+    fn generic_class_with_static_and_class_methods() -> HirModule {
+        let param = Ty::Param(Box::new("T".to_string()));
+        let self_ty = Ty::Instance(Box::new("C".to_string()));
+        let init = HirItem::Function {
+            name: "C.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("x".to_string(), param),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "x".to_string(),
+                value: HirExpr::Name("x".to_string()),
+            }],
+        };
+        let static_fn = HirItem::Function {
+            name: "C.factory.static".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let class_fn = HirItem::Function {
+            name: "C.greet.classmethod".to_string(),
+            params: vec![
+                ("cls".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let class_def = HirClassDef {
+            name: "C".to_string(),
+            bases: Vec::new(),
+            mro: vec!["C".to_string()],
+            attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![("__init__".to_string(), "C.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: Vec::new(),
+            static_methods: vec![("factory".to_string(), "C.factory.static".to_string())],
+            class_methods: vec![("greet".to_string(), "C.greet.classmethod".to_string())],
+        };
+        HirModule {
+            items: vec![
+                init,
+                static_fn,
+                class_fn,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(HirExpr::GenericClassInstantiate {
+                    class: "C".to_string(),
+                    type_arg: Ty::Int,
+                    args: vec![HirExpr::IntLiteral(1)],
+                })),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("C".to_string(), class_def)],
+        }
+    }
+
+    #[test]
+    fn check_and_resolve_monomorphizes_a_generic_class_static_method() {
+        let hir = generic_class_with_static_and_class_methods();
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // The monomorphized static method should exist.
+        assert!(
+            find_function(&resolved, "0gen_C__T_int.factory.static").is_some(),
+            "monomorphized static method should exist"
+        );
+        // The monomorphized class def should list the static method.
+        let mono_class = resolved
+            .class_defs
+            .iter()
+            .find(|(name, _)| name == "0gen_C__T_int")
+            .expect("monomorphized class def should exist");
+        assert!(
+            mono_class
+                .1
+                .static_methods
+                .iter()
+                .any(|(name, _)| name == "factory"),
+            "monomorphized class def should list the static method"
+        );
+    }
+
+    #[test]
+    fn check_and_resolve_monomorphizes_a_generic_class_class_method() {
+        let hir = generic_class_with_static_and_class_methods();
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // The monomorphized class method should exist.
+        assert!(
+            find_function(&resolved, "0gen_C__T_int.greet.classmethod").is_some(),
+            "monomorphized class method should exist"
+        );
+        // The monomorphized class def should list the class method.
+        let mono_class = resolved
+            .class_defs
+            .iter()
+            .find(|(name, _)| name == "0gen_C__T_int")
+            .expect("monomorphized class def should exist");
+        assert!(
+            mono_class
+                .1
+                .class_methods
+                .iter()
+                .any(|(name, _)| name == "greet"),
+            "monomorphized class def should list the class method"
+        );
+    }
+
+    #[test]
+    fn instantiate_generic_class_methods_skips_duplicate_static_method_entry() {
+        // Exercises the `seen.insert` false branch for static methods at
+        // line 5896 in `instantiate_generic_class_methods`. A class_def with
+        // a duplicate static_methods entry causes the second iteration to
+        // produce the same `new_mangled` name, so `seen.insert` returns
+        // false and the `instantiations.push` is skipped (but
+        // `mangled_static_methods.push` still runs, since it's outside the
+        // `if`).
+        let self_ty = Ty::Instance(Box::new("D".to_string()));
+        let init = HirItem::Function {
+            name: "D.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty),
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "x".to_string(),
+                value: HirExpr::Name("x".to_string()),
+            }],
+        };
+        let static_fn = HirItem::Function {
+            name: "D.factory.static".to_string(),
+            params: vec![("x".to_string(), Ty::Int)],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let class_def = HirClassDef {
+            name: "D".to_string(),
+            bases: Vec::new(),
+            mro: vec!["D".to_string()],
+            attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: Vec::new(),
+            static_methods: vec![
+                ("factory".to_string(), "D.factory.static".to_string()),
+                // Duplicate entry — same method name and mangled name.
+                ("factory".to_string(), "D.factory.static".to_string()),
+            ],
+            class_methods: Vec::new(),
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                static_fn,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                    HirExpr::GenericClassInstantiate {
+                        class: "D".to_string(),
+                        type_arg: Ty::Int,
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                )),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("D".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // The monomorphized static method should exist exactly once despite
+        // the duplicate entry — `seen.insert` prevented the second push.
+        assert_eq!(
+            count_function(&resolved, "0gen_D__T_int.factory.static"),
+            1
+        );
+    }
+
+    #[test]
+    fn instantiate_generic_class_methods_skips_duplicate_class_method_entry() {
+        // Exercises the `seen.insert` false branch for class methods at
+        // line 5942 in `instantiate_generic_class_methods`. A class_def with
+        // a duplicate class_methods entry causes the second iteration to
+        // produce the same `new_mangled` name, so `seen.insert` returns
+        // false and the `instantiations.push` is skipped (but
+        // `mangled_class_methods.push` still runs, since it's outside the
+        // `if`).
+        let self_ty = Ty::Instance(Box::new("D".to_string()));
+        let init = HirItem::Function {
+            name: "D.__init__".to_string(),
+            params: vec![
+                ("self".to_string(), self_ty.clone()),
+                ("x".to_string(), Ty::Param(Box::new("T".to_string()))),
+            ],
+            return_ty: Ty::None,
+            body: vec![HirStmt::AttrSet {
+                base: HirExpr::Name("self".to_string()),
+                attr: "x".to_string(),
+                value: HirExpr::Name("x".to_string()),
+            }],
+        };
+        let class_fn = HirItem::Function {
+            name: "D.greet.classmethod".to_string(),
+            params: vec![
+                ("cls".to_string(), self_ty),
+                ("x".to_string(), Ty::Int),
+            ],
+            return_ty: Ty::Int,
+            body: vec![HirStmt::Return(Some(HirExpr::Name("x".to_string())))],
+        };
+        let class_def = HirClassDef {
+            name: "D".to_string(),
+            bases: Vec::new(),
+            mro: vec!["D".to_string()],
+            attrs: vec![("x".to_string(), Ty::Param(Box::new("T".to_string())))],
+            methods: vec![("__init__".to_string(), "D.__init__".to_string())],
+            type_param: Some("T".to_string()),
+            properties: Vec::new(),
+            static_methods: Vec::new(),
+            class_methods: vec![
+                ("greet".to_string(), "D.greet.classmethod".to_string()),
+                // Duplicate entry — same method name and mangled name.
+                ("greet".to_string(), "D.greet.classmethod".to_string()),
+            ],
+        };
+        let hir = HirModule {
+            items: vec![
+                init,
+                class_fn,
+                HirItem::TopLevelStmt(HirStmt::ExprStmt(
+                    HirExpr::GenericClassInstantiate {
+                        class: "D".to_string(),
+                        type_arg: Ty::Int,
+                        args: vec![HirExpr::IntLiteral(1)],
+                    },
+                )),
+            ],
+            type_aliases: Vec::new(),
+            imports: Vec::new(),
+            class_defs: vec![("D".to_string(), class_def)],
+        };
+        assert!(check(&hir).is_ok());
+        let resolved = check_and_resolve(&hir).unwrap();
+        // The monomorphized class method should exist exactly once despite
+        // the duplicate entry — `seen.insert` prevented the second push.
+        assert_eq!(
+            count_function(&resolved, "0gen_D__T_int.greet.classmethod"),
+            1
+        );
     }
 }
