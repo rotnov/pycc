@@ -153,8 +153,8 @@
     },
     {
       "path": "tests/fixtures/pages-performance-budget.json",
-      "source_path": "tests/fixtures/pages-performance-budget.json",
-      "sha256": "53e566c241f99a89c0c2497d196ed1ec7cf857f07a3eb0bd7d177b5401864957"
+      "source_path": "tests/fixtures/policy-successors/pages-performance-budget-d199-favicon.json",
+      "sha256": "6b19183ea898cfcf5146a88dce223daf18e2ee757cd3c28d59c47f32253053ce"
     },
     {
       "path": "tests/fixtures/pages-performance-manifest.json",
