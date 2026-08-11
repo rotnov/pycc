@@ -157,7 +157,7 @@ D90_RELEASE_PYCC_RT_CI_WORKFLOW_SHA256 =
 # D-100 (below) composes these changes with D-099's cache boundary into the
 # digest that actually activates.
 D91_RELAX_FRONTEND_PERF_MANIFEST_CI_WORKFLOW_SHA256 =
-  "d37f659a2650fdba835e869705f80ed4a7221bc7cbffd3c916a66e2dce88e50c"
+  "f28a428d1e54e12e16bc180d8b4656c5acc3cd04333cd413036066d4abfd1747"
 # D-099: active D84 successor plus a Windows-only vcpkg binary-cache
 # restore/save boundary for D-027's libxml2 build. The exact cache key binds
 # LLVM_VERSION, runner OS/architecture, the hosted runner image version,
@@ -182,7 +182,7 @@ D99_VCPKG_LIBXML2_CACHE_CI_WORKFLOW_SHA256 =
 # D99, was the fix; this array now holds only the final, activated D-100
 # entry since PR-8's own merge is that activation.
 D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256 =
-  "055af533a997905e30648557f63eb3e66a23094be8ff7b8ff1c09c7348230030"
+  "6b502ae3cabe0ab1d5a6d65ceffc0490c1f49f7d4d37090acdb460ce51dc9b47"
 # Active (2026-08-01, D-112): ubuntu-latest frontend-perf-measure/gate.
 # Coexists with D100 until the ci.yml activation PR retires D100 --
 # mirrors D-090/D-091's own coexist-then-retire precedent for this array,
@@ -202,7 +202,7 @@ D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256 =
 # entry only authorizes the shape for a future ci.yml activation (a
 # later, separate round) -- the live ci.yml is untouched by this round.
 D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
-  "69e18b2e11e72bb0285bd557110c278d718ad2b673198f230f90dd1d224b2302"
+  "0176d030004f8be82c5148e86e93df27a1cb287a1b0f34aff1dd10aa36b986f2"
 # Issue #229 (Phase 3): the D114-shaped ci.yml plus a new pages-performance
 # job (hermetic Lighthouse 12.8.2 budget gate) and its ci-gate.needs /
 # fail-step wiring. Coexists with D100/D112/D114 until a later round
@@ -211,7 +211,7 @@ D114_FRONTEND_PERF_THRESHOLD_CI_WORKFLOW_SHA256 =
 # ci.yml activation (Phase 3, PR 5) -- the live ci.yml is untouched by
 # this staging round.
 D229_PAGES_PERFORMANCE_CI_WORKFLOW_SHA256 =
-  "6221bdb983b309bc0b1b44828a37ecdc9a91769812dfff86df693e10ea8d9297"
+  "42a87e33aebc82ab316b0969a793fd5d4746c4d0bf324201c142e543b69f916f"
 REVIEWED_PERF_CI_WORKFLOW_SHA256S = [
   D100_COMPOSE_D91_D99_CI_WORKFLOW_SHA256,
   D112_UBUNTU_FRONTEND_PERF_CI_WORKFLOW_SHA256,

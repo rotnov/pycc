@@ -153,8 +153,8 @@ jobs:
       # carry one-time cold-start/code-signature-validation overhead
       # unrelated to pycc's own compute, which would make this check
       # measure process-spawn noise instead of `pycc check`'s speed.
-      - name: Check pycc check throughput floor (<75ms/1000 LOC, D-084)
-        run: ruby scripts/check_frontend_throughput.rb target/debug/pycc tests/fixtures/pr6_1000_loc_bench.py 75
+      - name: Check pycc check throughput floor (<50ms/1000 LOC, D-084)
+        run: ruby scripts/check_frontend_throughput.rb target/debug/pycc tests/fixtures/pr6_1000_loc_bench.py 50
 
       - name: cargo clippy --workspace
         run: |
