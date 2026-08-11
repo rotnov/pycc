@@ -106,6 +106,13 @@
   fails -- before any other work in this session.
 - The push audit executes the pre-push `main` revision of `scripts/check_main_history.py`, with an immutable reviewed bootstrap fallback when that parent predates the checker; it never executes the revision being audited. Its workflow definition is still supplied by the pushed revision, so treat the job as defense-in-depth: the external repository monitor must verify the workflow content and expected run independently.
 
+## Pull request creation
+
+- When creating pull requests with `gh pr create`, always write the PR body
+  to a temporary file and use `--body-file <path>`. Never inline a heredoc
+  in the `--body` argument — nested quoting in a shell command call is not
+  reliable and will fail on bodies containing apostrophes or backticks.
+
 ## Monitor only live repository events ([D-078](docs/decisions/D-078-external-repository-monitoring-is-checkpointed.md))
 
 - Establish an explicit monitoring checkpoint from the refreshed remote default-branch commit. For every open pull request, record its number, state, draft status, and head commit; for every task-active pull request, also record mergeability, unresolved review threads, and required checks. Report the default-branch commit when monitoring starts or resumes.
