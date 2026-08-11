@@ -12,6 +12,7 @@ for required_file in \
   styles.css \
   site.js \
   og.png \
+  favicon.svg \
   robots.txt \
   sitemap.xml \
   llms.txt \
@@ -27,6 +28,19 @@ do
 done
 
 test -s "$site_dir/og.png"
+
+python3 - "$site_dir/favicon.svg" <<'PY'
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+favicon_path = Path(sys.argv[1])
+if favicon_path.stat().st_size >= 1024:
+    raise SystemExit("favicon.svg must be under 1KB")
+root = ET.parse(favicon_path).getroot()
+if root.tag != "{http://www.w3.org/2000/svg}svg":
+    raise SystemExit("favicon.svg root element must be <svg>")
+PY
 
 python3 - "$site_dir/styles.css" <<'PY'
 from pathlib import Path
@@ -372,6 +386,21 @@ sitemap_link = require_one(
 )
 if sitemap_link.get("href") != "sitemap.xml":
     raise SystemExit("Sitemap link must reference sitemap.xml")
+
+favicon_link = require_one(
+    [
+        link
+        for link in parser.links
+        if "icon" in link.get("rel", "").lower().split()
+    ],
+    "favicon link",
+)
+if favicon_link.get("href") != "favicon.svg":
+    raise SystemExit("Favicon link must reference favicon.svg relatively")
+if favicon_link.get("type") != "image/svg+xml":
+    raise SystemExit("Favicon link must use the image/svg+xml type")
+if set(favicon_link) != {"href", "rel", "type"}:
+    raise SystemExit("favicon.svg must use only href, rel, and type attributes")
 
 stylesheet_link = require_one(
     [
@@ -863,6 +892,22 @@ for path_value in sys.argv[1:]:
     )
     if sitemap.get("href") != "../sitemap.xml":
         raise SystemExit(f"{slug} sitemap link must be ../sitemap.xml")
+
+    favicon = require_one(
+        [
+            link for link in parser.links
+            if "icon" in link.get("rel", "").lower().split()
+        ],
+        f"{slug} favicon link",
+    )
+    if favicon.get("href") != "../favicon.svg":
+        raise SystemExit(f"{slug} favicon link must be ../favicon.svg")
+    if favicon.get("type") != "image/svg+xml":
+        raise SystemExit(f"{slug} favicon link must use the image/svg+xml type")
+    if set(favicon) != {"href", "rel", "type"}:
+        raise SystemExit(
+            f"{slug} favicon link must use only href, rel, and type attributes"
+        )
 
     stylesheet = require_one(
         [

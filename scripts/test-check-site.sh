@@ -1568,4 +1568,204 @@ if ! SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null
   exit 1
 fi
 
+# --- Favicon mutations ---
+
+rm "$fixture_root/site/favicon.svg"
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a site with a missing favicon.svg asset" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
+
+python3 - "$fixture_root/site/favicon.svg" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text("<svg><rect></svg>")
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a malformed favicon.svg" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
+
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+favicon = '<link rel="icon" type="image/svg+xml" href="favicon.svg">'
+assert favicon in content
+path.write_text(content.replace(favicon, "", 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a landing page without a favicon link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+python3 - "$fixture_root/site/architecture/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+favicon = '<link rel="icon" type="image/svg+xml" href="../favicon.svg">'
+assert favicon in content
+path.write_text(content.replace(favicon, "", 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an evidence page without a favicon link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/architecture/index.html" \
+  "$fixture_root/site/architecture/index.html"
+
+python3 - "$fixture_root/site/architecture/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(
+    content.replace(
+        'href="../favicon.svg"',
+        'href="favicon.svg"',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an evidence page with the wrong favicon path" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/architecture/index.html" \
+  "$fixture_root/site/architecture/index.html"
+
+# Wrong type attribute on favicon link
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(
+    content.replace(
+        'type="image/svg+xml"',
+        'type="image/png"',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a favicon link with the wrong type attribute" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Extra attributes on favicon link
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(
+    content.replace(
+        '<link rel="icon" type="image/svg+xml" href="favicon.svg">',
+        '<link rel="icon" type="image/svg+xml" href="favicon.svg" sizes="any">',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a favicon link with extra attributes" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Oversized favicon.svg
+python3 - "$fixture_root/site/favicon.svg" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+# Valid SVG root but exceeding the 1KB limit
+path.write_text(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">'
+    + '<text>' + 'x' * 2048 + '</text>'
+    + '</svg>'
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted an oversized favicon.svg" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
+
+# Valid XML but wrong root tag
+python3 - "$fixture_root/site/favicon.svg" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text('<html xmlns="http://www.w3.org/1999/xhtml"></html>')
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a favicon.svg with a non-SVG root element" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/favicon.svg" "$fixture_root/site/favicon.svg"
+
+# Duplicate favicon link on landing page
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+favicon = '<link rel="icon" type="image/svg+xml" href="favicon.svg">'
+assert favicon in content
+path.write_text(content.replace(favicon, favicon + "\n    " + favicon, 1))
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a landing page with a duplicate favicon link" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
+# Wrong favicon path on landing page (using nested path)
+python3 - "$fixture_root/site/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+content = path.read_text()
+path.write_text(
+    content.replace(
+        'href="favicon.svg"',
+        'href="../favicon.svg"',
+        1,
+    )
+)
+PY
+if SITE_DIR="$fixture_root/site" "$repo_root/scripts/check-site.sh" >/dev/null 2>&1; then
+  echo "Validator accepted a landing page with a nested favicon path" >&2
+  exit 1
+fi
+
+cp "$repo_root/site/index.html" "$fixture_root/site/index.html"
+
 echo "Website validator self-tests passed."
