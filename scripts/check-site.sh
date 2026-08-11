@@ -1034,6 +1034,173 @@ for path_value in sys.argv[1:]:
                     )
 PY
 
+python3 - \
+  "$site_dir/index.html" \
+  "$site_dir/python-aot-compilers/claims.json" <<'PY'
+from html.parser import HTMLParser
+from pathlib import Path
+import json
+import sys
+
+
+landing_path = Path(sys.argv[1])
+claims_path = Path(sys.argv[2])
+claims = json.loads(claims_path.read_text())
+
+
+class LandingTableParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_table = False
+        self.in_tr = False
+        self.in_th = False
+        self.in_td = False
+        self.in_mini_mark = False
+        self.current_cell_text = []
+        self.current_row_header = None
+        self.table_rows = {}
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "table":
+            self.in_table = True
+        elif tag == "tr" and self.in_table:
+            self.in_tr = True
+            self.current_row_header = None
+        elif tag == "th" and self.in_tr:
+            scope = attributes.get("scope", "")
+            if scope == "row":
+                self.in_th = True
+                self.current_cell_text = []
+        elif tag == "td" and self.in_tr:
+            self.in_td = True
+            self.current_cell_text = []
+        elif tag == "span" and self.in_th:
+            if attributes.get("class", "") == "mini-mark":
+                self.in_mini_mark = True
+
+    def handle_endtag(self, tag):
+        if tag == "table":
+            self.in_table = False
+        elif tag == "tr" and self.in_tr:
+            self.in_tr = False
+        elif tag == "th" and self.in_th:
+            self.in_th = False
+            self.current_row_header = "".join(
+                self.current_cell_text
+            ).strip()
+            self.current_cell_text = []
+        elif tag == "td" and self.in_td:
+            self.in_td = False
+            cell_text = " ".join(
+                "".join(self.current_cell_text).split()
+            )
+            if self.current_row_header is not None:
+                self.table_rows.setdefault(
+                    self.current_row_header, []
+                ).append(cell_text)
+            self.current_cell_text = []
+        elif tag == "span" and self.in_mini_mark:
+            self.in_mini_mark = False
+
+    def handle_data(self, data):
+        if self.in_th and not self.in_mini_mark:
+            self.current_cell_text.append(data)
+        if self.in_td:
+            self.current_cell_text.append(data)
+
+
+if "landing_projection" not in claims:
+    raise SystemExit(
+        "claims.json must contain a 'landing_projection' block"
+    )
+projection = claims["landing_projection"]
+for sub in ("column_sources", "labels", "anchors"):
+    if sub not in projection or not projection[sub]:
+        raise SystemExit(
+            f"landing_projection.{sub} must be present and non-empty"
+        )
+column_sources = projection["column_sources"]
+labels = projection["labels"]
+anchors = projection["anchors"]
+
+model_entities = claims["entities"]
+model_names = [e["name"] for e in model_entities]
+model_fields = set(model_entities[0].keys())
+for entity in model_entities:
+    model_fields &= set(entity.keys())
+
+for column, field in column_sources.items():
+    if field not in model_fields:
+        raise SystemExit(
+            f"landing_projection.column_sources.{column} maps to "
+            f"unknown claim field {field!r}"
+        )
+
+parser = LandingTableParser()
+parser.feed(landing_path.read_text())
+landing_rows = parser.table_rows
+
+landing_keys = set(landing_rows.keys())
+label_keys = set(labels.keys())
+if landing_keys != label_keys:
+    missing = label_keys - landing_keys
+    extra = landing_keys - label_keys
+    detail = []
+    if missing:
+        detail.append(f"missing from landing HTML: {sorted(missing)}")
+    if extra:
+        detail.append(f"extra in landing HTML: {sorted(extra)}")
+    raise SystemExit(
+        f"landing entity set mismatch: {'; '.join(detail)}"
+    )
+if not label_keys <= set(model_names):
+    raise SystemExit(
+        "landing_projection.labels entities must be a subset of "
+        "the model entities"
+    )
+
+columns = ["static_model", "output_artifact", "language_contract"]
+for entity_name, cells in landing_rows.items():
+    if len(cells) != len(columns):
+        raise SystemExit(
+            f"landing table row '{entity_name}' has {len(cells)} cells; "
+            f"expected {len(columns)}"
+        )
+    for column, cell_text in zip(columns, cells):
+        expected = labels[entity_name][column]
+        if cell_text != expected:
+            raise SystemExit(
+                f"landing cell mismatch for {entity_name} "
+                f"{column!r}: expected {expected!r}, "
+                f"found {cell_text!r}"
+            )
+
+for entity_name in labels:
+    if entity_name not in anchors:
+        raise SystemExit(
+            f"landing_projection.anchors missing entity {entity_name!r}"
+        )
+    if set(anchors[entity_name].keys()) != set(labels[entity_name].keys()):
+        raise SystemExit(
+            f"landing_projection anchors/labels column mismatch for "
+            f"{entity_name!r}"
+        )
+    entity_record = next(
+        e for e in model_entities if e["name"] == entity_name
+    )
+    for column in columns:
+        anchor = anchors[entity_name][column]
+        field = column_sources[column]
+        claim_value = entity_record[field]
+        if anchor.lower() not in claim_value.lower():
+            raise SystemExit(
+                f"landing anchor for {entity_name} {column!r} "
+                f"({anchor!r}) not found in claim field "
+                f"{field!r}: {claim_value!r}"
+            )
+PY
+
 assert_once "Sitemap: ${canonical}sitemap.xml" "$site_dir/robots.txt"
 
 python3 - \

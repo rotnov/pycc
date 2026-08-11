@@ -135,6 +135,32 @@ from the reviewed model. Binding is structural, not semantic: the validator
 checks HTML↔model consistency and source-URL presence, not that source page
 content supports each claim (semantic binding is #202's domain).
 
+`claims.json` also carries a `landing_projection` block that binds the
+landing-page comparison table (`/`) to the same claim/source model. It has
+three sub-objects: `column_sources` maps each landing column
+(`static_model`, `output_artifact`, `language_contract`) to the single claim
+field it projects from (`input_contract` or `html_output_cell`); `labels`
+holds the exact short strings rendered in the landing `<td>` cells, keyed by
+entity name then column; and `anchors` is the cross-projection link—a token
+that must appear as a case-insensitive substring of the source claim field.
+The landing table is a curated subset: it lists pycc, LPython, Codon, Nuitka,
+and mypyc, and intentionally omits Cython (the page caption reads "Design
+targets, not release claims"). `scripts/check-site.sh` parses the landing
+table (keying rows by `<th scope="row">` text, skipping the pycc row header's
+`mini-mark` span so the key is `"pycc"` not `">_ pycc"`), verifies that the
+landing row keys exactly equal `labels`'s entity set and that this set is a
+subset of the model entities, checks that each row has exactly three `<td>`
+cells whose whitespace-normalized text equals the corresponding `labels`
+value, and enforces cross-projection anchor consistency: for each entity and
+column, `anchors[entity][column]` must be a case-insensitive substring of the
+entity's `column_sources[column]` claim field. This anchor rule is a
+structural token-presence invariant, not semantic content analysis: it catches
+claim-side drift (a detailed claim field edited to drop the anchor token while
+the landing projection keeps its label) and landing-side drift (an HTML cell or
+projection label that no longer matches), but a coordinated five-field edit
+can still evade it; full semantic contradiction detection remains #202's
+domain, the same structural-binding limitation Part 1 documents.
+
 `scripts/check-site.sh` enforces these mechanical requirements locally and in
 the Pages workflow.
 `scripts/test-check-site.sh` proves that the validator accepts the complete
@@ -162,6 +188,20 @@ side only, and relabel maturity in the model while the HTML disagrees; and
 model integrity mutations delete `claims.json`, malform its JSON, remove an
 entity's sources, and set an empty maturity. A positive control verifies that
 minor whitespace changes in comparison cells do not break validation. The
+landing-page projection has its own mutation suite: a binding mutation
+corrupts the pycc `Output artifact` landing cell; entity-set mutations remove
+the mypyc landing row, add an extra `ExtraTool` landing row, and add Cython to
+the projection `labels`/`anchors` without a landing row; a label-drift
+mutation changes `labels.pycc.output_artifact` without updating the landing
+HTML; an anchor mutation sets `anchors.pycc.output_artifact` to a token absent
+from `html_output_cell`; a cross-projection contradiction mutation drops
+"Standalone" from the pycc `html_output_cell` claim field while co-updating
+the detailed HTML cell to match, so both HTML tables still agree with their
+model fields but the landing projection and the detailed claim now contradict
+and the anchor rule catches it; and a mini-mark mutation removes the
+`mini-mark` class from the pycc row-header span so the row key becomes
+`">_ pycc"` and the entity-set check rejects. A positive control verifies
+that minor whitespace changes in landing cells do not break validation. The
 landing-page contract also requires
 exactly one
 relative `styles.css` stylesheet link and exactly one deferred, executable
