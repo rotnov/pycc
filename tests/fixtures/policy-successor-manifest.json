@@ -12,6 +12,11 @@
       "sha256": "edff9d62bef98b62c3f974db9f9ced3217632ad461bb0ba45880011db84f2085"
     },
     {
+      "path": "scripts/check_pages_performance_budget.rb",
+      "source_path": "scripts/check_pages_performance_budget.rb",
+      "sha256": "02fca4252d96881c218fc0e4eb80a979823d6eda2efb5583b4b79faaafe453a5"
+    },
+    {
       "path": "scripts/check_replicated_paired_perf_regression.rb",
       "source_path": "scripts/check_replicated_paired_perf_regression.rb",
       "sha256": "d296e48859b1813685f06244c6d401119de57ec1842fe7c47d8ecbbdb1318c06"
@@ -32,9 +37,24 @@
       "sha256": "55ce7259ff164a43a98187cb7b611794a8417dc3dfddf3f4fb689776ab83adcb"
     },
     {
+      "path": "scripts/run_pages_lighthouse.py",
+      "source_path": "scripts/run_pages_lighthouse.py",
+      "sha256": "47935ac1d2f3b0e23ef1e69fc8ce33e6e40d0a7d0a701a85374313316af41dce"
+    },
+    {
+      "path": "scripts/serve_pages_fixture.py",
+      "source_path": "scripts/serve_pages_fixture.py",
+      "sha256": "765399a928d17375b39240c909cebe58fdf1d790a5c8f3186ff474064dee4dcd"
+    },
+    {
       "path": "scripts/test_check_ci_permissions.rb",
       "source_path": "scripts/test_check_ci_permissions.rb",
       "sha256": "c6120dcd5ac39dba7335aeadc675cfc80312a1936fc8c4b24499ea416707c163"
+    },
+    {
+      "path": "scripts/test_check_pages_performance_budget.rb",
+      "source_path": "scripts/test_check_pages_performance_budget.rb",
+      "sha256": "087a0a96f9a9df08c0bd2de78935e2fa9cecff99ee480064599b6260e7cc146a"
     },
     {
       "path": "scripts/test_check_replicated_paired_perf_regression.rb",
@@ -105,6 +125,16 @@
       "path": "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml",
       "source_path": "tests/fixtures/d99-vcpkg-libxml2-cache-ci.yml",
       "sha256": "f8656c7a525fe8775f90c5afe0950b4706eb043ef6f78f6b66e1f50146fc5366"
+    },
+    {
+      "path": "tests/fixtures/pages-performance-budget.json",
+      "source_path": "tests/fixtures/pages-performance-budget.json",
+      "sha256": "53e566c241f99a89c0c2497d196ed1ec7cf857f07a3eb0bd7d177b5401864957"
+    },
+    {
+      "path": "tests/fixtures/pages-performance-manifest.json",
+      "source_path": "tests/fixtures/pages-performance-manifest.json",
+      "sha256": "57fde016779ffb0690ab3f5939ad16354e7fdfec9c02d56e415c15448f9d984f"
     },
     {
       "path": "tests/fixtures/workflow-policy-search-ledger.yml",
